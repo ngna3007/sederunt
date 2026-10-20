@@ -1,0 +1,13 @@
+---
+name: cmk:agent-vendors
+description: Use when the user asks to "vendor the kit's skills into this repo", "set up agent adapters", "add a coding-agent vendor", "wire skills for Claude Code / Codex / OpenCode / Grok Build / Cursor", or whenever a repo needs one canonical skill set discoverable by multiple coding agents.
+version: 0.2.1
+---
+
+# cmk-agent-vendors
+
+This file is Grok Build's native discovery entry point. Before acting, read
+`.agents/skills/cmk-agent-vendors/SKILL.md` completely and apply it.
+
+The Grok Build adapter supplies discovery only; the shared skill carries the
+guidance.
