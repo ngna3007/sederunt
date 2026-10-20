@@ -15,10 +15,10 @@ export function renderLanding() {
   <style>
     :root { color-scheme: light; }
     * { box-sizing: border-box; }
-    html { overflow-x: clip; background: #071018; }
+    html { overflow-x: clip; background: #050003; }
     body {
       margin: 0;
-      background: #071018;
+      background: #050003;
       color: #ffffff;
       overflow-x: clip;
       font-family: Inter, "Helvetica Neue", Helvetica, sans-serif;
@@ -85,7 +85,7 @@ export function renderLanding() {
       text-transform: uppercase;
     }
     a.btn.quiet {
-      background: rgba(7, 16, 24, 0.62);
+      background: rgba(22, 8, 18, 0.62);
       color: #ffffff;
       backdrop-filter: blur(10px);
     }
@@ -937,9 +937,9 @@ export function renderLanding() {
     }
     const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
     const finePointer = matchMedia("(hover: hover) and (pointer: fine)").matches;
-    const ground = new THREE.Color("#071018");
-    const bodyColor = new THREE.Color(0.86, 0.91, 0.97);
-    const pathLightColor = new THREE.Color("#ff488b");
+    const ground = new THREE.Color("#050003");
+    const bodyColor = new THREE.Color(0.23, 0, 0.12);
+    const pathLightColor = new THREE.Color(0.99, 0.82, 1);
 
     function span(value, start, end, from, to) {
       if (Math.abs(end - start) < 1e-6) return from;
@@ -1125,7 +1125,7 @@ export function renderLanding() {
       renderer.toneMappingExposure = 1;
 
       const scene = new THREE.Scene();
-      scene.fog = new THREE.Fog("#071018", 3.5, 5);
+      scene.fog = new THREE.Fog("#050003", 3.5, 5);
       scene.environmentIntensity = 0.12;
 
       const backdropScene = new THREE.Scene();
@@ -1135,8 +1135,8 @@ export function renderLanding() {
         depthWrite: false,
         depthTest: false,
         uniforms: {
-          uColorA: { value: new THREE.Color("#04070f") },
-          uColorB: { value: new THREE.Color("#16305c") },
+          uColorA: { value: new THREE.Color("#000000") },
+          uColorB: { value: new THREE.Color("#2D0B23") },
           uCenter: { value: new THREE.Vector2(0.2, 0.77) },
           uOffset: { value: 0.08 },
           uSoftness: { value: 0.95 },
@@ -1230,18 +1230,18 @@ export function renderLanding() {
       pmrem.dispose();
 
       RectAreaLightUniformsLib.init();
-      const key = new THREE.DirectionalLight(new THREE.Color(0.8, 0.89, 1), 3);
+      const key = new THREE.DirectionalLight(new THREE.Color(1, 0.5, 0.97), 6);
       key.position.set(-86.96, 30.43, 19.57);
       scene.add(key);
-      const stripFar = new THREE.RectAreaLight("#ffffff", 8, 35.9, 0.7);
+      const stripFar = new THREE.RectAreaLight("#ffffff", 13, 35.9, 0.7);
       stripFar.position.set(-0.67, -3.43, 39.63);
       stripFar.lookAt(63.28, -69.8, -0.38);
       scene.add(stripFar);
-      const stripNear = new THREE.RectAreaLight("#ffffff", 2.8, 0.8, 1.5);
+      const stripNear = new THREE.RectAreaLight("#ffffff", 4.4, 0.8, 1.5);
       stripNear.position.set(-0.27, -0.97, 5.63);
       stripNear.rotation.set(0.21, -2.46, -0.01);
       scene.add(stripNear);
-      const stripTop = new THREE.RectAreaLight("#ffffff", 18, 1.7, 1);
+      const stripTop = new THREE.RectAreaLight("#ffffff", 47.8, 1.7, 1);
       stripTop.position.set(0, 0.94, 26.09);
       stripTop.rotation.set(-1.5, 0, 0);
       scene.add(stripTop);
@@ -1256,7 +1256,7 @@ export function renderLanding() {
       const bodyMaterial = new THREE.MeshStandardMaterial({
         color: bodyColor,
         metalness: 0,
-        roughness: 0.8,
+        roughness: 1,
         envMapIntensity: 0.12,
         side: THREE.DoubleSide
       });
@@ -1273,7 +1273,7 @@ export function renderLanding() {
       const pathRevealMaterial = new THREE.MeshStandardMaterial({
         color: bodyColor,
         metalness: 0,
-        roughness: 0.8,
+        roughness: 1,
         envMapIntensity: 0.12,
         transparent: true,
         side: THREE.DoubleSide
@@ -1282,7 +1282,7 @@ export function renderLanding() {
       const circleRevealMaterial = new THREE.MeshStandardMaterial({
         color: bodyColor,
         metalness: 0,
-        roughness: 0.8,
+        roughness: 1,
         envMapIntensity: 0.12,
         transparent: true,
         side: THREE.DoubleSide
@@ -1346,7 +1346,7 @@ export function renderLanding() {
       const dustGeo = new THREE.BufferGeometry();
       dustGeo.setAttribute("position", new THREE.BufferAttribute(dustBase.slice(), 3));
       const dustMaterial = new THREE.PointsMaterial({
-        color: new THREE.Color("#c5d6ec"),
+        color: new THREE.Color("#ff9ee5"),
         size: 0.1,
         map: softDisc(),
         transparent: true,
@@ -1377,7 +1377,7 @@ export function renderLanding() {
       const lineGeo = new THREE.BufferGeometry();
       lineGeo.setAttribute("position", new THREE.BufferAttribute(linePositions, 3));
       const lineMaterial = new THREE.LineBasicMaterial({
-        color: new THREE.Color("#9eb6d6"),
+        color: new THREE.Color("#f5a3de"),
         transparent: true,
         opacity: 0,
         depthWrite: false
