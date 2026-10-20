@@ -1,0 +1,13 @@
+{
+  "name": "sederunt",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/landing.test.js test/page.test.js"
+  },
+  "dependencies": {
+    "@mysten-incubation/memwal": "^0.1.8",
+    "@mysten/sui": "^2.37.0"
+  }
+}
