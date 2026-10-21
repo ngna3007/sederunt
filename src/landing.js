@@ -1449,7 +1449,6 @@ export function renderLanding() {
       <div>
         <h3>Build</h3>
         <ul>
-          <li><a href="/record">Open the record</a></li>
           <li><a href="#faq">FAQs</a></li>
           <li><a href="https://walrus.xyz/products/walrus-memory/" target="_blank" rel="noopener noreferrer">Walrus Memory <svg width="9" height="9" viewBox="0 0 9 9" fill="none" aria-hidden="true"><path d="M9 0H0V1H9V0Z" fill="currentColor"></path><path d="M8.3 0L0 8.3L0.7 9L9 0.7L8.3 0Z" fill="currentColor"></path><path d="M9 0H8V9H9V0Z" fill="currentColor"></path></svg></a></li>
           <li><a href="https://walrus.xyz/products/walrus-console/" target="_blank" rel="noopener noreferrer">Walrus Console <svg width="9" height="9" viewBox="0 0 9 9" fill="none" aria-hidden="true"><path d="M9 0H0V1H9V0Z" fill="currentColor"></path><path d="M8.3 0L0 8.3L0.7 9L9 0.7L8.3 0Z" fill="currentColor"></path><path d="M9 0H8V9H9V0Z" fill="currentColor"></path></svg></a></li>

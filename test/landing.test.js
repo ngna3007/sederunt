@@ -87,7 +87,8 @@ test("the landing shows the meeting and does not post", () => {
   assert.doesNotMatch(html, /Mina takes the upload retry/);
   assert.doesNotMatch(html, /In the call/);
   assert.doesNotMatch(html, /<dl/);
-  assert.match(html, /href="\/record"/);
+  assert.doesNotMatch(html, /href="\/record"/);
+  assert.doesNotMatch(html, /Open the record/);
   assert.match(html, /animation-timeline: view\(\)/);
   assert.match(html, /prefers-reduced-motion/);
   assert.match(html, /id="field"/);

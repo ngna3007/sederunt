@@ -4,7 +4,6 @@ import { extname, resolve } from "node:path";
 import { createLinearClient } from "./linear/mcp.js";
 import { loadLinearToken } from "./linear/token.js";
 import { renderLanding } from "./landing.js";
-import { renderPage } from "./page.js";
 import { createSession } from "./session.js";
 import { handleUtterance } from "./typed-path.js";
 
@@ -72,21 +71,12 @@ const server = createServer(async (req, res) => {
       send(res, 200, "text/html; charset=utf-8", renderLanding());
       return;
     }
-    if (req.method === "GET" && url.pathname === "/record") {
-      send(res, 200, "text/html; charset=utf-8", renderPage(session));
-      return;
-    }
     if (req.method === "POST" && url.pathname === "/api/typed") {
-      const { text, spokenYes, asForm } = await readRequest(req);
+      const { text, spokenYes } = await readRequest(req);
       const result = await handleUtterance(
         { text, session, spokenYes },
         { linear: await linear(), memory },
       );
-      if (asForm) {
-        res.writeHead(303, { location: "/record" });
-        res.end();
-        return;
-      }
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(result));
       return;
     }
@@ -183,11 +173,11 @@ async function readRequest(req) {
   const type = req.headers["content-type"] || "";
   if (type.includes("application/json")) {
     const body = JSON.parse(raw || "{}");
-    return { text: body.text ?? "", spokenYes: body.yes === true, asForm: false };
+    return { text: body.text ?? "", spokenYes: body.yes === true };
   }
   if (type.includes("application/x-www-form-urlencoded")) {
     const params = new URLSearchParams(raw);
-    return { text: params.get("text") ?? "", spokenYes: params.get("yes") === "true", asForm: true };
+    return { text: params.get("text") ?? "", spokenYes: params.get("yes") === "true" };
   }
-  return { text: raw, spokenYes: false, asForm: false };
+  return { text: raw, spokenYes: false };
 }
