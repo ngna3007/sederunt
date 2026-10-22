@@ -165,9 +165,27 @@
   function view(state) {
     var ws = workspaceOf(state);
     var mine = state.events.filter(function (e) { return e.workspaceId === ws.id; });
+    var rooms = roomsFor(ws.id);
     var selected = null;
     for (var i = 0; i < state.events.length; i++) {
       if (state.events[i].id === state.selectedId) selected = publicEvent(state.events[i]);
+    }
+    if (!selected) {
+      for (var r = 0; r < rooms.length; r++) {
+        if (rooms[r].id !== state.selectedId) continue;
+        selected = {
+          id: rooms[r].id,
+          kind: "room",
+          state: rooms[r].kind,
+          title: rooms[r].title,
+          sentence: rooms[r].last,
+          room: rooms[r].title,
+          who: rooms[r].heard.join(", "),
+          fileName: null,
+          proof: null,
+          cut: null
+        };
+      }
     }
     var model = {
       section: state.section,
@@ -176,7 +194,7 @@
       workspaces: state.workspaces.map(function (w) { return { id: w.id, name: w.name, kind: w.kind }; }),
       modal: state.modal,
       counts: countsFor(mine),
-      rooms: roomsFor(ws.id).map(function (r) {
+      rooms: rooms.map(function (r) {
         return { id: r.id, title: r.title, kind: r.kind, last: r.last, heard: r.heard.slice() };
       }),
       preferences: { linear: state.preferences.linear, calendar: state.preferences.calendar },
@@ -276,7 +294,7 @@
 
   function renderRooms(model) {
     var rows = model.rooms.map(function (r) {
-      return "<tr><td>" + esc(r.title) + "</td><td>" + esc(r.kind) + "</td><td>" + esc(r.heard.join(", ")) + "</td></tr>";
+      return "<tr data-act=\"select\" data-id=\"" + esc(r.id) + "\"><td>" + esc(r.title) + "</td><td>" + esc(r.kind) + "</td><td>" + esc(r.heard.join(", ")) + "</td></tr>";
     }).join("") || "<tr><td colspan=\"3\">No rooms in this workspace.</td></tr>";
     return '<header class="bar"><b>Rooms</b></header><div class="pad"><div class="block"><table><tr><th>Room</th><th>Kind</th><th>Present while the bot was there</th></tr>' + rows + "</table></div></div>";
   }
@@ -310,6 +328,9 @@
       /* selected public events do not carry workspaceId */
     }
     if (!e) return "<p>Select a row.</p>";
+    if (e.kind === "room") {
+      return "<p class=\"k\">" + esc(e.state) + "</p><h2>" + esc(e.title) + "</h2><p>" + esc(e.sentence) + "</p><p>Heard by " + esc(e.who) + "</p>";
+    }
     var extra = "";
     if (e.state === "waiting") {
       extra = '<div class="acts"><button type="button" class="go" data-act="confirm" data-id="' + esc(e.id) + '">Confirm</button><button type="button" data-act="dismiss" data-id="' + esc(e.id) + '">Dismiss</button></div><p>Confirm covers that change only.</p>';

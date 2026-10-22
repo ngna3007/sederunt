@@ -98,4 +98,31 @@ test("home is counts and rooms, history is a different cut, and actions stay sco
   assert.equal(/0x[0-9a-fA-F]{8,}/.test(blob), false);
   assert.equal(blob.includes("MEMWAL"), false);
   assert.equal(blob.includes("private key"), false);
+
+  const el = {
+    innerHTML: "",
+    _fn: null,
+    addEventListener(_type, fn) { this._fn = fn; },
+    contains() { return true; }
+  };
+  api.mount(el);
+  function fire(attrs) {
+    el._fn({
+      target: {
+        getAttribute(name) { return Object.prototype.hasOwnProperty.call(attrs, name) ? attrs[name] : null; },
+        parentNode: el
+      }
+    });
+  }
+  fire({ "data-act": "dismiss-modal" });
+  assert.equal(el.innerHTML.includes("Select a row."), true);
+  const room = el.innerHTML.match(/data-act="select" data-id="([^"]+)"><td>Client call</);
+  assert.ok(room);
+  fire({ "data-act": "select", "data-id": room[1] });
+  const pane = el.innerHTML.slice(el.innerHTML.indexOf('class="pane"'));
+  assert.equal(pane.includes("Client call"), true);
+  assert.equal(pane.includes("meeting"), true);
+  assert.equal(pane.includes("Mina took the call. Noah sent the notes that day."), true);
+  assert.equal(pane.includes("Heard by Noah, Mina, Rowan"), true);
+  assert.equal(pane.includes("Select a row."), false);
 });
