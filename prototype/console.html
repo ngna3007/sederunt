@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Sederunt</title>
+  <link rel="icon" href="data:,">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=Outfit:wght@500&family=Source+Sans+3:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root { --ink:#172b76; --blue:#2458f6; --muted:rgba(23,43,118,.62); --line:#e6e4de; --bg:#f4f3ef; --paper:#fff; }
+    * { box-sizing: border-box; }
+    html, body, #app { height: 100%; margin: 0; }
+    body { font-family: "Source Sans 3", sans-serif; color: var(--ink); background: var(--bg); }
+    .shell { height: 100%; display: grid; grid-template-columns: 220px minmax(0,1fr) 300px; }
+    .rail { background: var(--paper); border-right: 1px solid var(--line); padding: 16px 12px; overflow: auto; }
+    .brand { font-family: Outfit, sans-serif; font-weight: 500; font-size: 18px; letter-spacing: -0.03em; margin-bottom: 12px; }
+    .grp { margin: 14px 0 6px; font-family: "IBM Plex Mono", monospace; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+    .rail button, .filters button, .line button { display: block; width: 100%; text-align: left; height: 32px; margin: 0 0 2px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--ink); font: inherit; font-size: 14px; font-weight: 600; }
+    .rail button.on, .filters button.on, .line button.on { background: #eef3ff; color: var(--blue); }
+    .center { min-width: 0; overflow: auto; }
+    .bar { height: 52px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; background: var(--paper); border-bottom: 1px solid var(--line); }
+    .pad { padding: 16px; }
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px; }
+    .metric { background: var(--paper); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+    .metric span { display: block; color: var(--muted); font-size: 12px; font-weight: 600; }
+    .metric b { display: block; margin-top: 4px; font-size: 28px; letter-spacing: -0.03em; }
+    .block { margin-top: 16px; background: var(--paper); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+    .block h3, .pad h3 { margin: 0; padding: 12px 14px 0; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 10px 14px; border-top: 1px solid var(--line); }
+    th { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+    tr[data-act] { cursor: pointer; }
+    .filters { display: flex; gap: 4px; flex-wrap: wrap; }
+    .filters button { width: auto; }
+    .pane { background: var(--paper); border-left: 1px solid var(--line); padding: 16px; overflow: auto; }
+    .pane h2 { margin: 8px 0; font-family: Outfit, sans-serif; font-weight: 500; font-size: 22px; letter-spacing: -0.03em; }
+    .k { font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--blue); }
+    .shade { position: fixed; inset: 0; background: rgba(8,20,40,.45); display: grid; place-items: center; }
+    .modal { width: min(420px, calc(100% - 32px)); background: #fff; color: var(--ink); border-radius: 16px; padding: 22px; }
+    .modal h2 { margin: 8px 0; font-family: Outfit, sans-serif; font-weight: 500; font-size: 28px; }
+    .go { background: var(--blue); color: #fff; border-radius: 8px; height: 36px; padding: 0 14px; border: 0; font: inherit; font-weight: 600; }
+    .line { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 12px 14px; border-top: 1px solid var(--line); }
+    .line button { width: auto; display: inline-block; }
+    .who-line { color: var(--muted); font-size: 12px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script src="console.js"></script>
+  <script>window.SederuntConsole.mount(document.getElementById("app"));</script>
+</body>
+</html>
