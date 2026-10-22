@@ -125,4 +125,16 @@ test("home is counts and rooms, history is a different cut, and actions stay sco
   assert.equal(pane.includes("Mina took the call. Noah sent the notes that day."), true);
   assert.equal(pane.includes("Heard by Noah, Mina, Rowan"), true);
   assert.equal(pane.includes("Select a row."), false);
+
+  fire({ "data-act": "open-section", "data-section": "rooms" });
+  assert.equal(el.innerHTML.includes("Present while the bot was there"), true);
+  const fromRooms = el.innerHTML.match(/data-act="select" data-id="([^"]+)"><td>Client call<\/td><td>meeting/);
+  assert.ok(fromRooms);
+  fire({ "data-act": "select", "data-id": fromRooms[1] });
+  const roomsPane = el.innerHTML.slice(el.innerHTML.indexOf('class="pane"'));
+  assert.equal(roomsPane.includes("Client call"), true);
+  assert.equal(roomsPane.includes("meeting"), true);
+  assert.equal(roomsPane.includes("Mina took the call. Noah sent the notes that day."), true);
+  assert.equal(roomsPane.includes("Heard by Noah, Mina, Rowan"), true);
+  assert.equal(roomsPane.includes("Select a row."), false);
 });
