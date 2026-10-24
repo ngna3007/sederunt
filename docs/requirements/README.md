@@ -14,6 +14,10 @@ criteria, and the scope boundaries the system is built against.
 - State what must be true and why, not how to build it — the how lives in
   [`../design/`](../design/).
 
+## Documents
+
+- [sederunt.md](./sederunt.md) — what Sederunt must do. Read before changing scope.
+
 ## When to read
 
 Before starting a feature or changing scope — to confirm what the work has to

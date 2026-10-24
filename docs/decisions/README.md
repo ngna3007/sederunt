@@ -21,6 +21,14 @@ context and consequences that make them reviewable later.
 - Update an entry in place while the decision holds; when the choice itself
   changes, add a new entry that supersedes it.
 
+## Records
+
+- [0001-one-process.md](./0001-one-process.md) — one Node process and one write gate.
+- [0002-two-accounts.md](./0002-two-accounts.md) — company and personal are two MemWal accounts.
+- [0003-room-membership.md](./0003-room-membership.md) — the room's member id is the authorization.
+- [0004-write-preference.md](./0004-write-preference.md) — each write tool is ask or do.
+- [0005-walrus-is-the-record.md](./0005-walrus-is-the-record.md) — Walrus is the record. This process does not sponsor gas.
+
 ## When to read
 
 Before proposing an architecture change — to find the constraint you are about

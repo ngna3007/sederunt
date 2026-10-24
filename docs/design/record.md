@@ -1,0 +1,59 @@
+# Design: Record
+
+**Status:** active
+**Owner:** @ngna3007
+**Last updated:** 2026-10-21
+**Scope:** System-wide
+
+## Mission
+
+Keep the decision sentence, name a file without returning its bytes, and prove the Sui object.
+
+## Memory
+
+The adapter calls `MemWal.create` with the delegate key, the account id, `https://relayer.memory.walrus.xyz`, and namespace `sederunt`. Tests use an in-memory fake. They do not call the network.
+
+`remember` takes text. The text is the memory document from [Entities](./entities.md). The idempotency key is at most 255 bytes. `remember` returns a job. The blob id is recorded when the job is done. Until then the decision has no blob id and is not claimed as durable.
+
+`recall` returns decrypted text for the closest matches, limited by the caller and capped by the relayer. The gate parses the document and applies the invite check before any sentence is returned. Default limit is 10. The cap is 100.
+
+`analyze` extracts facts from long text. It is not the path for a short decision, and it does not accept a file.
+
+The public relayer's server wallet pays the WAL storage fee and the SUI gas. This process holds neither token. The relayer sees plaintext during encryption and embedding.
+
+A blob lives for the epochs that write paid. Mainnet epochs are about two weeks. The owner-token API grants `memories.read` only, so this process cannot renew a blob. The decision stores `expiryEpoch` when the relayer provides it. Console does not renew memory blobs. When the epoch passes, the content is gone.
+
+Locate uses public GraphQL to find the certification event and its checkpoint. That checkpoint is a candidate stamp. It is not the proof.
+
+## Files
+
+A file goes to a private Console folder through the Console API. The service private key stays on the machine and off the landing. Reserve returns sponsored transaction bytes. The adapter signs those bytes with the service key and posts the signature. Console attaches the gas sponsor and broadcasts. The service key needs no SUI balance for that call.
+
+The decision's `fileNames` entry is the name people hear. `recall` does not return bytes. Disconnecting Console does not delete memories. Console's Memory tab is metadata. It does not hold the sentence.
+
+New files uploaded through Console renew on their own.
+
+## Proof
+
+Tatum gRPC `GetObject` reads the object. The proof reports:
+
+- the checkpoint sequence
+- the write preference in effect, when the subject is an action
+- the domain status
+
+It does not report an account id or a key.
+
+If the sentence inside the memory document and the object disagree, the object is followed. If the read fails, the status is `unknown`. The adapter does not fall back to a public fullnode. It does not use the Tatum Data API or Storage API.
+
+`acceptCheckpoint` refuses a checkpoint that is not a non-negative integer, and refuses a checkpoint later than the checkpoint at which the result was already knowable.
+
+## Personal notes
+
+A utterance that starts with `private:` or `private note:` is remembered on the personal account. The company delegate is not used for that call. The personal invite set is the speaker's member id.
+
+## Links
+
+- Requirements: [docs/requirements/sederunt.md](../requirements/sederunt.md) — SED-2, SED-5, SED-6, SED-7
+- Decisions: [0002](../decisions/0002-two-accounts.md), [0005](../decisions/0005-walrus-is-the-record.md)
+- Entities: [docs/design/entities.md](./entities.md)
+- System: [docs/design/system.md](./system.md)
