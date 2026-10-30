@@ -7,6 +7,7 @@ export const STATUS_WORDS = Object.freeze([
   "current",
   "clashing",
   "replaced",
+  "unknown",
 ]);
 
 /**

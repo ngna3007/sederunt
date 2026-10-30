@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { authorize } from "../src/domain/allow.js";
 import { clashStatuses } from "../src/domain/clash.js";
+import { checkInvite } from "../src/domain/invite.js";
+import { resolvePreference } from "../src/domain/preference.js";
 import { acceptCheckpoint } from "../src/domain/stamp.js";
-import { itemStatus } from "../src/domain/status.js";
+import { itemStatus, STATUS_WORDS } from "../src/domain/status.js";
 import { blobIdDecimal } from "../src/memory/locate.js";
 
 globalThis.fetch = async () => {
@@ -20,77 +22,115 @@ test("a ticket is filed only when the connector returned an id", () => {
   assert.equal(itemStatus({ kind: "note" }, null), "recorded");
 });
 
-test("a read needs no allow, and a write or delete needs one that covers that tool", () => {
+test("the visible status words are the closed set", () => {
+  assert.deepEqual([...STATUS_WORDS], [
+    "recorded",
+    "filed",
+    "updated",
+    "current",
+    "clashing",
+    "replaced",
+    "unknown",
+  ]);
+});
+
+test("a read ignores preference, and a write runs for do or for the confirmed action", () => {
   assert.deepEqual(
-    authorize({
-      action: "read",
-      tool: "linear.list_issues",
-      standingAllows: [],
-      spokenYes: null,
-    }),
+    authorize({ action: "read", tool: "linear", preference: "ask" }),
     { allowed: true, reason: "read" },
   );
   assert.equal(
-    authorize({
-      action: "write",
-      tool: "linear.create_issue",
-      proposalId: "proposal:venue",
-      standingAllows: [],
-      spokenYes: null,
-    }).allowed,
+    authorize({ action: "read", tool: "calendar", preference: "do" }).reason,
+    "read",
+  );
+  assert.deepEqual(
+    authorize({ action: "write", tool: "linear" }),
+    { allowed: false, reason: "ask" },
+  );
+  assert.equal(
+    authorize({ action: "write", tool: "linear", preference: "ask" }).allowed,
     false,
   );
   assert.equal(
-    authorize({
-      action: "delete",
-      tool: "linear.delete_issue",
-      proposalId: "proposal:drop",
-      standingAllows: [],
-      spokenYes: null,
-    }).allowed,
-    false,
+    authorize({ action: "delete", tool: "linear", preference: "ask" }).reason,
+    "ask",
+  );
+  assert.deepEqual(
+    authorize({ action: "write", tool: "linear", preference: "do" }),
+    { allowed: true, reason: "do" },
   );
   assert.equal(
     authorize({
       action: "write",
-      tool: "linear.create_issue",
-      proposalId: "proposal:venue",
-      standingAllows: [{ tool: "linear.create_issue" }],
-      spokenYes: null,
+      tool: "linear",
+      preference: "ask",
+      confirmed: true,
+      actionId: "action-1",
+      confirmActionId: "action-1",
     }).reason,
-    "standing",
-  );
-  const yes = { proposalId: "proposal:venue", tool: "linear.create_issue" };
-  assert.equal(
-    authorize({
-      action: "write",
-      tool: "linear.create_issue",
-      proposalId: "proposal:venue",
-      standingAllows: [],
-      spokenYes: yes,
-    }).reason,
-    "spoken-yes",
+    "confirmed",
   );
   assert.equal(
     authorize({
       action: "write",
-      tool: "linear.create_issue",
-      proposalId: "proposal:other",
-      standingAllows: [],
-      spokenYes: yes,
+      tool: "linear",
+      preference: "ask",
+      confirmed: true,
+      actionId: "action-1",
+      confirmActionId: "action-2",
     }).allowed,
     false,
+  );
+  assert.equal(authorize({ action: "noop", tool: "linear", preference: "do" }).allowed, false);
+});
+
+test("a room preference wins, and a missing preference is ask", () => {
+  assert.equal(resolvePreference([], "linear", "room-1"), "ask");
+  assert.equal(
+    resolvePreference(
+      [{ tool: "linear", value: "do", roomId: "", replacedBy: null }],
+      "linear",
+      "room-1",
+    ),
+    "do",
   );
   assert.equal(
-    authorize({
-      action: "delete",
-      tool: "linear.delete_issue",
-      proposalId: "proposal:venue",
-      standingAllows: [],
-      spokenYes: yes,
-    }).allowed,
-    false,
+    resolvePreference(
+      [
+        { tool: "linear", value: "do", roomId: "", replacedBy: null },
+        { tool: "linear", value: "ask", roomId: "room-1", replacedBy: null },
+      ],
+      "linear",
+      "room-1",
+    ),
+    "ask",
   );
+  assert.equal(
+    resolvePreference(
+      [{ tool: "linear", value: "do", roomId: "", replacedBy: "preference-2" }],
+      "linear",
+      "",
+    ),
+    "ask",
+  );
+});
+
+test("the newer live preference wins when an older copy is still unmarked", () => {
+  assert.equal(resolvePreference([
+    { id: "preference-1", tool: "linear", value: "ask", roomId: "room-1", replacedBy: null },
+    { id: "preference-2", tool: "linear", value: "do", roomId: "room-1", replacedBy: null },
+  ], "linear", "room-1"), "do");
+  assert.equal(resolvePreference([
+    { id: "preference-2", tool: "linear", value: "do", roomId: "", replacedBy: "preference-3" },
+    { id: "preference-3", tool: "linear", value: "ask", roomId: "", replacedBy: null },
+  ], "linear", ""), "ask");
+});
+
+test("an invite check refuses a missing member and an outsider", () => {
+  assert.equal(checkInvite("", ["rowan"]).reason, "missing-member");
+  assert.equal(checkInvite(null, ["rowan"]).reason, "missing-member");
+  assert.equal(checkInvite("sam", ["rowan", "alex"]).reason, "not-invited");
+  assert.equal(checkInvite("rowan", ["rowan", "alex"]).ok, true);
 });
 
 test("a contradicting decision is clashing, newest does not win, and a replacement stays visible", () => {

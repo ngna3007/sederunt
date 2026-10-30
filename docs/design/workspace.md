@@ -94,7 +94,7 @@ Group is what a room heard. You is what the operator asked. Within either, a row
 
 A waiting record offers Confirm and Dismiss, and the line "Confirm covers that change only." Confirm marks that one record sent. Dismiss marks that one record dismissed. Neither touches a second waiting record.
 
-An access record shows who asked and that no sentence is shown. It does not show the decision.
+An access record shows who asked and that no sentence is shown. It does not show the decision. The company account keeps that row, so it remains after a new process.
 
 ### Other sections
 

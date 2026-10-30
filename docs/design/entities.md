@@ -64,6 +64,8 @@ A meeting or a channel.
 
 Zoom, Google Meet, Teams, and Webex are meeting sources. A Slack huddle is not. A channel is a room whose members are the channel's members, and only when the bot was in the channel.
 
+An accepted meeting join stores a company memory document for that room. The document keeps the room id, kind `meeting`, and the platform name. It does not keep the link. The board shows the room before any decision. A failed join stores nothing.
+
 ## MemoryDocument
 
 The persisted envelope. `remember` stores it as text. `recall` returns it to the gate. The member hears the sentence, not the envelope.
@@ -124,7 +126,32 @@ Stored with the account as a memory document of kind `preference`.
 | roomId | Empty for the account default. Set when a room overrides the account |
 | replacedBy | The newer preference for the same tool and room. The old one stays visible |
 
-The live preference is the one without `replacedBy`. A missing preference means `ask`. The room override wins over the account default for decisions in that room. Changing `do` to `ask` replaces the preference. The next action stops before the connector call.
+The live preference is the one without `replacedBy`. A missing preference means `ask`. The room override wins over the account default for decisions in that room. Changing `do` to `ask` replaces the preference. The next action stops before the connector call. When more than one live preference matches, the highest id wins.
+
+## RoomSetting
+
+Stored with the company account as a memory document. It is not a decision, and it is not a tool preference. A sentence that is not the room command below stays a decision.
+
+| Field | Rule |
+|---|---|
+| roomId | The one room this copy applies to |
+| voice | `short`, `plain`, or `formal`. Missing means `plain` |
+| raiseClash | On, this room raises a clash in the room. It starts off. The switch does not pick a winner, and it does not send from the page |
+| replacedBy | The newer setting for the same room. The old one stays |
+
+The command is `set voice to short|plain|formal in room <id>` or `set clash to on|off in room <id>`. Without a room, nothing is stored. Copying a voice does not change Ask first, the clash, or another room. Changing the clash keeps the voice. Changing Ask first does not change either. The live setting is the one without `replacedBy`. The highest id wins when more than one is live.
+
+## Access
+
+A request that was refused. It is not a decision. The company account stores one row per speaker per room. The kind is `access`.
+
+| Field | Rule |
+|---|---|
+| id | Stable id from the gate |
+| roomId | The room that was asked |
+| speaker | The label of who asked |
+
+The stored text does not include the utterance or a decision sentence. The same speaker in the same room does not add a second row. A missing member stores nothing. A huddle stores nothing. A room with no notes stores nothing. The personal board does not list these rows. The room file hides the block when it is empty.
 
 ## Delivery
 

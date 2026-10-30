@@ -73,7 +73,7 @@ export function createLinearClient(token, fetchImpl = globalThis.fetch) {
         title,
         team: "ROW",
         project: "Sederunt",
-        description: "Filed from the Sederunt typed path after a spoken yes for this write.",
+        description: "Filed from Sederunt after that tool preference allowed this one action.",
       });
       const parsed = parseToolJson(result);
       const identifier = findIdentifier(parsed) || findIdentifier(result);

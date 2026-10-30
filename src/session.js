@@ -4,6 +4,16 @@ export function createSession() {
     spentYes: new Set(),
     items: [],
     standingAllows: [],
+    deliveries: new Set(),
+    decisions: [],
+    actions: [],
+    preferences: [],
+    roomSettings: [],
+    rooms: [],
+    accesses: [],
+    log: [],
+    events: [],
+    nextId: 1,
   };
 }
 

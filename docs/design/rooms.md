@@ -66,7 +66,7 @@ There is no name field and no people field.
 | Any other host | "That link is not Zoom, Google Meet, Teams, or Webex." The dialog stays open |
 | An accepted host | The dialog closes. A block appears with the title "Waiting for the meeting name", kind meeting, the platform taken from the host, no channel, no people yet, and "No decision yet." |
 
-The block does not use the link as the title. The meeting names the room when the bot is in it. Until then the title says it is waiting. People appear for whoever is present while the bot is there. The link is not rendered back, so a query secret on the URL is not shown.
+The block does not use the link as the title. The meeting names the room when the bot is in it. Until then the title says it is waiting. People appear for whoever is present while the bot is there. The link is not rendered back, so a query secret on the URL is not shown. The company account keeps the room, without the link, so the block remains after a reload. A failed join leaves no room.
 
 The bot joins with camera and microphone through the meeting door and stays quiet until addressed. A failed join leaves no decision. The typed door can still carry a delivery, as [access.md](./access.md) already says.
 
@@ -126,7 +126,7 @@ The dialog does not show an account id, a key, a token, a namespace, or the raw 
 
 #### Controls
 
-- Invite check is unchanged: an absent member id returns not-invited and no sentence. The room dialog uses that same refusal.
+- Invite check is unchanged: an absent member id returns not-invited and no sentence. The room dialog uses that same refusal. The company account keeps who asked, without the sentence, so the line remains after a new process. A missing member, a room with no notes, and a huddle store nothing.
 - The company delegate is not used from this surface. A write still goes through the gate after an allow.
 
 ## Constraints
