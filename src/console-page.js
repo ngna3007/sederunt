@@ -70,7 +70,7 @@ export function renderConsolePage(state = {}) {
 <title>Sederunt</title>
 <link rel="stylesheet" href="/console.css">
 </head>
-<body${state.calendarTimeZone ? ` data-calendar-zone="${escapeHtml(state.calendarTimeZone)}"` : ""}>
+<body class="is-reading"${state.calendarTimeZone ? ` data-calendar-zone="${escapeHtml(state.calendarTimeZone)}"` : ""}>
 ${brandSprite()}
 <div class="nav-scrim" id="nav-scrim"></div>
 <div id="rail-tip" class="rail-tip" hidden></div>
@@ -214,6 +214,10 @@ ${slack}
     <div id="overview" hidden>
       <div class="page-head"><div><p class="page-title">Status</p><p class="page-lede">Which tools Sederunt can use, and how the meeting guest listens.</p></div><div class="page-actions"></div></div>
       <p id="connector-split"></p>
+      <div class="settings-card" id="meeting-card"${state.meeting ? " hidden" : ""}>
+        <p class="section-label">Meeting</p>
+        <p id="meeting-card-copy" class="card-help">${state.meeting ? "A meeting is in use." : "No meeting is in use."}</p>
+      </div>
       <div class="settings-card" id="tools-card">
       <p class="section-label">Tools</p>
       <p class="card-help">A tool that is not connected cannot be used from this page.</p>
@@ -222,7 +226,7 @@ ${slack}
           ${calendarIcon}
           <div class="set-copy">
             <strong>Calendar</strong>
-            <p id="cal-conn" class="conn-state off">Not connected.</p>
+            <p id="cal-conn" class="conn-state off">Not connected</p>
             <p id="cal-line" class="sr">Calendar runs automatically.</p>
           </div>
           <button type="button" class="conn-connect" id="cal-connect" data-connect="calendar">Connect</button>
@@ -231,7 +235,7 @@ ${slack}
           ${linearIcon}
           <div class="set-copy">
             <strong>Linear</strong>
-            <p id="lin-conn" class="conn-state off">Not connected.</p>
+            <p id="lin-conn" class="conn-state off">Not connected</p>
             <p id="lin-line" class="sr">Linear runs automatically.</p>
           </div>
           <button type="button" class="conn-connect" id="lin-connect" data-connect="linear">Connect</button>
@@ -240,7 +244,7 @@ ${slack}
           ${channelIcon}
           <div class="set-copy">
             <strong>Slack</strong>
-            <p id="slack-conn" class="conn-state off">Not connected.</p>
+            <p id="slack-conn" class="conn-state off">Not connected</p>
             <p id="slack-note" class="sr">Sederunt answers in a channel it has already joined.</p>
           </div>
           <button type="button" class="conn-connect" id="slack-connect" data-connect="slack">Connect</button>
@@ -310,7 +314,7 @@ ${slack}
       </div>
     </section>
     <section id="history" hidden>
-      <div class="page-head"><div><p class="page-title">History</p><p class="page-lede">What a room heard.</p></div></div>
+      <div class="page-head"><div><p class="page-title">History</p><p class="page-lede">Requests, changes and failures across rooms.</p></div></div>
         <div class="history-tools page-toolbar">
         <label class="search">${searchIcon}<span class="sr">Search history</span><input id="history-search" type="search" placeholder="Search" autocomplete="off"></label>
         <div class="chips" role="group" aria-label="Whose record">
@@ -431,6 +435,7 @@ ${slack}
             <span class="meta-item header-only" hidden><span class="meta-label">Status</span><span id="file-status-badge" class="badge"></span></span>
             <span class="meta-item header-only" hidden><span class="meta-label">Platform</span><span id="file-platform-pill"></span></span>
             <span class="meta-item"><span class="meta-label">Started</span><span id="file-started" class="meta"></span></span>
+            <span class="meta-item header-only" id="file-usage-item" hidden><span class="meta-label">Usage</span><span id="file-usage" class="usage-chip"></span></span>
             <div class="room-actions">
               <button type="button" id="room-menu-btn" class="close" aria-haspopup="menu" aria-expanded="false" aria-controls="room-menu" aria-label="Room actions">${kebabIcon}</button>
               <div id="room-menu" class="menu room-menu" role="menu" hidden>
@@ -465,7 +470,6 @@ ${slack}
               <button type="button" data-left-tab="transcript" aria-selected="true">Transcript</button>
               <button type="button" data-left-tab="config" aria-selected="false">Config</button>
               <button type="button" data-left-tab="raw" aria-selected="false">Raw</button>
-              <button type="button" class="tab-more" aria-label="Transcript actions">⋮</button>
             </div>
             <div id="left-transcript" class="tab-pane left-scroll">
               <div id="file-transcript"></div>
@@ -818,7 +822,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var node = document.getElementById(id);
     if (!node) return;
     var failed = state && state.read === "failed";
-    node.textContent = failed ? "Unknown." : (connected ? "Connected." : "Not connected.");
+    node.textContent = failed ? "Unknown" : (connected ? "Connected" : "Not connected");
     node.className = failed || !connected ? "conn-state off" : "conn-state";
     var connectId = id === "cal-conn" ? "cal-connect" : id === "lin-conn" ? "lin-connect" : id === "slack-conn" ? "slack-connect" : "";
     var connect = connectId ? document.getElementById(connectId) : null;
@@ -876,16 +880,17 @@ if (sessionWhen && sessionWhen.dataset.at) {
       toggle.hidden = true;
       toggle.setAttribute("aria-expanded", "false");
     }
-    if (label) {
-      label.hidden = !showFull;
-      if (showFull) label.textContent = "Rooms";
-    }
-    if (meet) meet.hidden = !showFull;
-    if (slack) slack.hidden = !showFull;
+    if (label) label.hidden = true;
+    if (meet) meet.hidden = true;
+    if (slack) slack.hidden = true;
     var meetKicker = document.getElementById("meet-kicker");
     var channelKicker = document.getElementById("channel-kicker");
-    if (meetKicker) meetKicker.hidden = !(showFull && meet);
-    if (channelKicker) channelKicker.hidden = !(showFull && slack);
+    if (meetKicker) meetKicker.hidden = true;
+    if (channelKicker) channelKicker.hidden = true;
+    var meetingCard = document.getElementById("meeting-card");
+    var meetingCopy = document.getElementById("meeting-card-copy");
+    if (meetingCard) meetingCard.hidden = !meet;
+    if (meetingCopy) meetingCopy.textContent = meet ? "No meeting is in use." : "A meeting is in use.";
     placeDoors(false);
     if (onOnboard) {
       text("crumb-current", "Rooms");
@@ -896,7 +901,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       }
     }
     var statusTitle = document.getElementById("status-title");
-    if (statusTitle) statusTitle.hidden = !showFull;
+    if (statusTitle) statusTitle.hidden = true;
     var blockedNav = !!(document.getElementById("meet-block") && document.getElementById("slack-block"));
     ["rooms", "history", "record", "chat", "people"].forEach(function (name) {
       var nav = document.querySelector(".rail [data-show=" + name + "]");
@@ -1477,7 +1482,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         fullTitle: ident.full,
         meta: ident.meta,
         where: room.platform || "",
-        whenText: ident.when ? (relativeWhen(ident.when) || "") : "",
+        whenText: ident.when ? (relativeWhen(ident.when) || blankMark()) : blankMark(),
         countLine: rows.length ? roomCount(rows) : "",
         people: peopleFor(room.id),
         waitingCount: waitingFor(room.id).length,
@@ -1581,6 +1586,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (room.name) return String(room.name);
     return "";
   }
+
+  function blankMark() { return "\\u2014"; }
 
   function roomIdentity(room) {
     var when = (room && (room.startedAt || room.recordingStart)) || "";
@@ -2400,15 +2407,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var label = onFile ? ((document.getElementById("file-title") || {}).textContent || "Room") : sectionLabel(name);
     setViewTitle(label);
     placeNotice();
-    var topName = document.getElementById("top-name");
-    if (topName && member()) topName.textContent = member();
     var pageName = document.getElementById("account-page-name");
     var shownName = member() || "Account";
     if (pageName) pageName.textContent = shownName;
     var pageRole = document.getElementById("account-page-role");
     var roleLine = (document.getElementById("account-line") || {}).textContent || "";
     if (pageRole) pageRole.textContent = roleLine;
-    text("account-detail-name", shownName);
     text("account-detail-role", roleLine);
     var avatar = document.getElementById("account-page-avatar");
     if (avatar) avatar.textContent = initials(shownName);
@@ -2429,8 +2433,16 @@ if (sessionWhen && sessionWhen.dataset.at) {
       }
     }
     routeQuiet = false;
-    document.body.classList.remove("nav-open");
+    closeNav();
     document.body.classList.toggle("room-open", name === "file");
+  }
+
+  function closeNav() {
+    document.body.classList.remove("nav-open");
+    var toggle = document.getElementById("rail-toggle");
+    if (!toggle || !window.matchMedia("(max-width: 1100px)").matches) return;
+    toggle.setAttribute("aria-pressed", "false");
+    toggle.setAttribute("aria-label", "Open the menu");
   }
 
   function dialogOpen() {
@@ -2644,7 +2656,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (!row) return false;
       if (!roomId) return true;
       var origin = row.origin || {};
-      return !origin.roomId || origin.roomId === roomId;
+      if (origin.roomId && origin.roomId === roomId) return true;
+      var named = roomName(roomOf(roomId));
+      return !!(named && origin.roomName && origin.roomName === named);
     });
   }
 
@@ -2727,7 +2741,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       wrap.className = "activity-group";
       group.rows.forEach(function (row) {
         var line = document.createElement("div");
-        line.className = "activity-row" + (row.kind === "request" ? "" : " activity-child") + (row.superseded || row.outcome === "undone" || row.resolved ? " muted" : "");
+        line.className = "activity-row" + (row.kind === "failure" ? " is-failure" : "") + (row.kind === "request" ? "" : " activity-child") + (row.superseded || row.outcome === "undone" || row.resolved ? " muted" : "");
         line.id = "activity-" + row.id;
         var icon = document.createElement("span");
         icon.className = "activity-icon" + (row.kind === "failure" && !row.resolved ? " bad" : "");
@@ -2783,21 +2797,18 @@ if (sessionWhen && sessionWhen.dataset.at) {
         text.append(copy);
         var meta = document.createElement("div");
         meta.className = "activity-meta";
+        var time = document.createElement("time");
         if (row.ts) {
-          var time = document.createElement("time");
           time.dateTime = row.ts;
           time.title = new Date(row.ts).toLocaleString();
           time.textContent = relativeWhen(row.ts) || relativeTime(row.ts);
-          meta.append(time);
         }
+        meta.append(time);
         var origin = row.origin || {};
-        var heardRoom = opts.showRoom ? (origin.roomName || "") : "";
-        if (heardRoom) {
-          var suffix = document.createElement("span");
-          suffix.className = "room-suffix";
-          suffix.textContent = heardRoom;
-          meta.append(suffix);
-        }
+        var suffix = document.createElement("span");
+        suffix.className = "room-suffix";
+        suffix.textContent = opts.showRoom ? (origin.roomName || "") : "";
+        meta.append(suffix);
         if (row.target && row.target.url && row.target.system === "slack" && (row.kind === "action" || row.kind === "result")) {
           var open = document.createElement("a");
           open.className = "entity-id";
@@ -2898,9 +2909,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (currentCrumb) currentCrumb.hidden = true;
       setViewTitle(document.getElementById("file-title").textContent || "Room");
     }
-    text("file-overview-platform", (room && room.platform) || "Platform unknown");
-    text("file-overview-when", relativeWhen(named.when) || whenLabel(named.when));
-    text("file-overview-count", leadRows.length === 1 ? "1 decision" : (leadRows.length + " decisions"));
+    var overviewCard = document.getElementById("file-overview");
+    if (overviewCard) overviewCard.hidden = true;
     text("file-id", fileRoom || "");
     var copy = document.getElementById("copy-room");
     if (copy) copy.hidden = !fileRoom;
@@ -2917,12 +2927,17 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var platformName = (fileWait && fileWait.where) || (room && room.platform) || "";
       if (platformName) pill.append(platformBadge(platformName));
     }
-    text("file-started", relativeWhen(named.when) || whenLabel(named.when));
+    var startedAt = (room && (room.startedAt || room.recordingStart)) || "";
+    text("file-started", startedAt ? (relativeWhen(startedAt) || whenLabel(startedAt) || blankMark()) : blankMark());
+    document.querySelectorAll("#file-meta .header-only").forEach(function (node) {
+      if (node.id === "file-usage-item") return;
+      node.hidden = !knownRoom;
+    });
     text("file-summary", "");
     var outcome = document.getElementById("file-outcome");
     if (outcome) {
-      outcome.hidden = !knownRoom;
-      outcome.textContent = knownRoom ? "Call ended. The room kept " + leadRows.length + " decision" + (leadRows.length === 1 ? "" : "s") + "." : "";
+      outcome.hidden = true;
+      outcome.textContent = "";
     }
     paintCallout(fileRoom);
     clear("file-overview-people");
@@ -2991,13 +3006,21 @@ if (sessionWhen && sessionWhen.dataset.at) {
     text("clash-note", clash.checked ? "This room will raise a clash here. Nothing is sent from this page." : "");
     clear("file-decisions");
     var rows = fileRoom ? decisionsFor(fileRoom) : [];
+    var clashRows = rows.filter(function (decision) { return decision.status === "clashing"; });
     if (!rows.length) {
       var none = document.createElement("p");
       none.className = "meta";
       none.textContent = "No decision yet.";
       document.getElementById("file-decisions").append(none);
     }
+    if (clashRows.length >= 2) {
+      var clashNote = document.createElement("p");
+      clashNote.className = "meta";
+      clashNote.textContent = clashRows.length + " decisions clash. Read both in Overview.";
+      document.getElementById("file-decisions").append(clashNote);
+    }
     rows.forEach(function (decision) {
+      if (clashRows.length >= 2 && decision.status === "clashing") return;
       var line = document.createElement("p");
       line.className = "decision-line";
       var who = personLabel(decision.speaker);
@@ -3019,9 +3042,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var roomActivity = activityRows(fileRoom).filter(function (row) { return row.kind !== "resolve" && row.kind !== "supersede"; });
     if (!roomActivity.length) {
       var quiet = document.createElement("p");
-      quiet.className = "meta";
+      quiet.className = "empty-title";
       quiet.textContent = "No activity for this room yet.";
-      document.getElementById("file-history").append(quiet);
+      var quietAside = document.createElement("p");
+      quietAside.className = "meta";
+      quietAside.textContent = "Requests, changes and failures show up here.";
+      document.getElementById("file-history").append(quiet, quietAside);
     } else {
       paintActivity(document.getElementById("file-history"), roomActivity, { showRoom: false, viewRoom: fileRoom });
     }
@@ -3126,11 +3152,6 @@ if (sessionWhen && sessionWhen.dataset.at) {
     callout.className = "callout-stack";
     callout.replaceChildren();
     var clashing = decisionsFor(roomId).filter(function (decision) { return decision.status === "clashing"; });
-    function clashSentence(decision) {
-      var when = relativeWhen(decision && decision.spokenAt) || whenLabel(decision && decision.spokenAt);
-      var line = (decision && decision.text) || "A sentence";
-      return when ? (line + " (" + when + ")") : line;
-    }
 
     if (clashing.length) {
       var warn = document.createElement("div");
@@ -3142,17 +3163,22 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var ordered = clashing.slice().sort(function (a, b) {
         return String(b.spokenAt || "").localeCompare(String(a.spokenAt || ""));
       });
-      var newest = ordered[0];
-      var older = ordered[1] || ordered[0];
-      var warnBody = document.createElement("p");
-      warnBody.append(document.createTextNode(clashSentence(newest) + " clashes with "));
-      var link = document.createElement("button");
-      link.type = "button";
-      link.className = "at-link";
-      link.textContent = clashSentence(older);
-      link.addEventListener("click", function () { openDecision(older); });
-      warnBody.append(link);
-      warn.append(warnBody);
+      ordered.forEach(function (decision) {
+        var line = document.createElement("p");
+        line.className = "clash-line";
+        var sentence = document.createElement("span");
+        sentence.className = "clash-text";
+        sentence.textContent = (decision && decision.text) || "A sentence";
+        line.append(sentence);
+        var when = relativeWhen(decision && decision.spokenAt) || whenLabel(decision && decision.spokenAt);
+        if (when) {
+          var stamp = document.createElement("span");
+          stamp.className = "clash-when";
+          stamp.textContent = " · " + when;
+          line.append(stamp);
+        }
+        warn.append(line);
+      });
       callout.append(warn);
     }
     var failed = activityRows(roomId).filter(function (row) { return row.kind === "failure" && row.outcome === "failed" && !row.resolved && row.retryable === true; });
@@ -3279,15 +3305,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var duration = mediaDuration();
     text("tl-end", clockText(duration));
     var when = document.getElementById("tl-when");
-    if (when) {
-      var start = roomMediaState && roomMediaState.startedAt ? new Date(roomMediaState.startedAt) : null;
-      if (start && !isNaN(start.getTime())) {
-        var zone = document.body.getAttribute("data-calendar-zone") || "UTC";
-        var label = zoneShortName(start.toISOString(), zone);
-        var stamp = relativeWhen(start.toISOString());
-        when.textContent = label && stamp ? stamp + " " + label : stamp;
-      } else when.textContent = "";
-    }
+    if (when) when.textContent = "";
     var ruler = document.getElementById("tl-ruler");
     var speakers = document.getElementById("tl-speakers");
     var events = document.getElementById("tl-events");
@@ -3400,9 +3418,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
           roomLive.startedAt = media.startedAt;
           roomLive.recordingStart = media.startedAt;
         }
-        var stamp = relativeWhen(media.startedAt);
+        var stamp = relativeWhen(media.startedAt) || whenLabel(media.startedAt) || blankMark();
         text("file-started", stamp);
-        text("file-overview-when", stamp);
         renderFacts(roomLive || room || {}, { when: media.startedAt }, fileRoom ? decisionsFor(fileRoom) : []);
       }
       renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
@@ -3417,42 +3434,18 @@ if (sessionWhen && sessionWhen.dataset.at) {
 
   function paintFactsMedia(media) {
     var box = document.getElementById("overview-facts");
-    if (!box) return;
-    box.replaceChildren();
-    var row = document.createElement("div");
-    row.className = "fact-row";
-    var platform = document.createElement("span");
-    platform.className = "meta-item";
-    var platformLabel = document.createElement("span");
-    platformLabel.className = "meta-label";
-    platformLabel.textContent = "Platform";
-    platform.append(platformLabel);
-    var room = roomOf(fileRoom);
-    if (room && room.platform) platform.append(platformBadge(room.platform));
-    var status = document.createElement("span");
-    status.className = "meta-item";
-    var statusLabelNode = document.createElement("span");
-    statusLabelNode.className = "meta-label";
-    statusLabelNode.textContent = "Status";
-    var badge = document.createElement("span");
-    var tone = roomTone(fileRoom);
-    badge.className = media && media.state === "processing" ? "badge warn" : tone.badge;
-    badge.textContent = media && media.state === "processing" ? "Processing" : tone.word;
-    status.append(statusLabelNode, badge);
-    row.append(platform, status);
-    if (media && media.duration) {
-      var usage = document.createElement("span");
-      usage.className = "meta-item";
-      var usageLabel = document.createElement("span");
-      usageLabel.className = "meta-label";
-      usageLabel.textContent = "Usage";
-      var chip = document.createElement("span");
-      chip.className = "usage-chip";
-      chip.textContent = clockText(media.duration);
-      usage.append(usageLabel, chip);
-      row.append(usage);
+    if (box) box.replaceChildren();
+    var statusBadge = document.getElementById("file-status-badge");
+    if (statusBadge && media && media.state === "processing") {
+      statusBadge.className = "badge warn";
+      statusBadge.textContent = "Processing";
     }
-    box.append(row);
+    var usageItem = document.getElementById("file-usage-item");
+    var usage = document.getElementById("file-usage");
+    if (usage && media && media.duration) {
+      usage.textContent = clockText(media.duration);
+      if (usageItem) usageItem.hidden = false;
+    } else if (usageItem) usageItem.hidden = true;
   }
 
   function outsideFor(roomId) {
@@ -3620,58 +3613,36 @@ if (sessionWhen && sessionWhen.dataset.at) {
     return "";
   }
 
-  function syncRoomLabels() {
+  function offerEmptyStatus(button, emptyId) {
+    if (!button) return;
+    var empty = document.getElementById(emptyId);
+    var open = !!(empty && !empty.hidden);
     var blocked = !!(document.getElementById("meet-block") || document.getElementById("slack-block"));
+    if (!(blocked && open)) {
+      button.hidden = true;
+      return;
+    }
+    if (emptyId === "history-empty" && historyScope === "you" && !member()) {
+      button.hidden = true;
+      return;
+    }
+    button.hidden = false;
+    button.textContent = "See Status";
+    button.classList.remove("primary");
+    button.setAttribute("data-act", "status");
+  }
+
+  function syncRoomLabels() {
     var homeLabel = document.querySelector("#new-room .room-label");
     var homeButton = document.getElementById("new-room");
     if (homeButton) homeButton.classList.add("primary");
     if (homeLabel) homeLabel.textContent = "New room";
     var plus = homeButton ? homeButton.querySelector(".ic") : null;
     if (plus) plus.hidden = false;
-    var recordNext = document.getElementById("record-next");
-    if (recordNext && blocked) {
-      recordNext.hidden = false;
-      recordNext.textContent = "See Status";
-      recordNext.classList.remove("primary");
-      recordNext.setAttribute("data-act", "status");
-    }
-    var chatNext = document.getElementById("chat-next");
-    if (chatNext && blocked) {
-      chatNext.hidden = false;
-      chatNext.textContent = "See Status";
-      chatNext.classList.remove("primary");
-      chatNext.setAttribute("data-act", "status");
-    }
-    if (chatNext && !blocked && !chatNext.hidden) {
-      chatNext.textContent = "New room";
-      chatNext.setAttribute("data-act", "room");
-    }
-    var historyNext = document.getElementById("history-next");
-    if (historyNext && blocked) {
-      var historyEmpty = document.getElementById("history-empty");
-      var needsName = historyScope === "you" && !member();
-      var historyOpen = !!(historyEmpty && !historyEmpty.hidden);
-      historyNext.hidden = !historyOpen;
-      if (historyOpen && needsName) {
-        historyNext.hidden = true;
-      } else if (historyOpen) {
-        historyNext.hidden = false;
-        historyNext.textContent = "See Status";
-        historyNext.classList.remove("primary");
-        historyNext.setAttribute("data-act", "status");
-      }
-    }
-    var peopleNext = document.getElementById("people-next");
-    if (peopleNext && blocked) {
-      var peopleEmpty = document.getElementById("people-empty");
-      var peopleOpen = !!(peopleEmpty && !peopleEmpty.hidden);
-      peopleNext.hidden = !peopleOpen;
-      if (peopleOpen) {
-        peopleNext.textContent = "See Status";
-        peopleNext.classList.remove("primary");
-        peopleNext.setAttribute("data-act", "status");
-      }
-    }
+    offerEmptyStatus(document.getElementById("record-next"), "record-empty");
+    offerEmptyStatus(document.getElementById("chat-next"), "chat-empty");
+    offerEmptyStatus(document.getElementById("history-next"), "history-empty");
+    offerEmptyStatus(document.getElementById("people-next"), "people-empty");
   }
 
   function pickDoor(meeting) {
@@ -3750,10 +3721,6 @@ if (sessionWhen && sessionWhen.dataset.at) {
         else if (loading && loading.parentNode) loading.parentNode.insertBefore(slowBox, loading);
       }
       showRetry(true, "Still loading…");
-      var heading = document.getElementById("onboard-heading");
-      var readingLine = document.getElementById("onboard-reading");
-      if (heading) heading.textContent = "Still loading…";
-      if (readingLine) readingLine.textContent = "Still loading…";
       var quiet = document.querySelector("#loading .sr");
       if (quiet) quiet.textContent = "Still loading…";
       var again = document.getElementById("read-again");
@@ -3880,6 +3847,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   document.querySelector(".rail").addEventListener("scroll", syncRail);
   window.addEventListener("resize", function () {
     fitChips();
+    reserveComposer();
     if (!window.matchMedia("(max-width: 767px)").matches) {
       try {
         if (localStorage.getItem("sederunt-rail") === "collapsed") document.body.classList.add("rail-collapsed");
@@ -3923,7 +3891,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   document.addEventListener("keydown", function (event) {
     if (event.key !== "Escape") return;
     if (document.body.classList.contains("nav-open")) {
-      document.body.classList.remove("nav-open");
+      closeNav();
       return;
     }
     if (!document.getElementById("account-menu").hidden) closeAccountMenu();
@@ -4119,13 +4087,23 @@ if (sessionWhen && sessionWhen.dataset.at) {
       text("join-status", "Sederunt could not join that meeting.");
     });
   });
+  function reserveComposer() {
+    var chat = document.getElementById("chat");
+    var form = document.getElementById("chat-form");
+    if (!chat || !form) return;
+    if (window.matchMedia("(max-width: 700px)").matches) {
+      chat.style.paddingBottom = (form.getBoundingClientRect().height + 16) + "px";
+    } else chat.style.paddingBottom = "";
+  }
+
   function placeChatAnswer(node) {
     var log = document.getElementById("chat-log");
     var form = document.getElementById("chat-form");
+    reserveComposer();
     if (!log || !node) return;
     var composer = form ? form.getBoundingClientRect().height : 72;
-    var gap = 12;
-    log.style.paddingBottom = (composer + gap) + "px";
+    var gap = 16;
+    log.style.paddingBottom = "";
     if (!form) return;
     var scroller = log;
     var parent = log.parentElement;
@@ -4254,8 +4232,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
       accountButton.setAttribute("data-name", shown);
       document.getElementById("account-name").textContent = shown;
       document.getElementById("account-avatar").textContent = initials(shown);
-      var top = document.getElementById("top-name");
-      if (top) top.textContent = shown;
+      var pageName = document.getElementById("account-page-name");
+      if (pageName) pageName.textContent = shown;
+      var pageAvatar = document.getElementById("account-page-avatar");
+      if (pageAvatar) pageAvatar.textContent = initials(shown);
       text("profile-note", "");
       closeDialog("profile-dialog");
       if (state) paint(state);
@@ -4287,7 +4267,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     try { localStorage.setItem("sederunt-rail", on ? "collapsed" : "open"); } catch (error) { /* ignore */ }
   });
   document.getElementById("nav-scrim").addEventListener("click", function () {
-    document.body.classList.remove("nav-open");
+    closeNav();
   });
   var railTip = document.getElementById("rail-tip");
   document.querySelectorAll(".rail a[data-label], #show-connectors").forEach(function (link) {
@@ -4302,14 +4282,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     link.addEventListener("mouseleave", function () { if (railTip) railTip.hidden = true; });
   });
   var railClose = document.getElementById("rail-close");
-  if (railClose) railClose.addEventListener("click", function () {
-    document.body.classList.remove("nav-open");
-    var toggle = document.getElementById("rail-toggle");
-    if (toggle) {
-      toggle.setAttribute("aria-pressed", "false");
-      toggle.setAttribute("aria-label", "Open the menu");
-    }
-  });
+  if (railClose) railClose.addEventListener("click", closeNav);
   var copyRoom = document.getElementById("copy-room");
   if (copyRoom) copyRoom.addEventListener("click", function () {
     var id = (document.getElementById("file-id") || {}).textContent || "";
@@ -4450,13 +4423,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
   var chatBox = document.getElementById("chat-text");
   function growChat() {
     if (!chatBox) return;
-    chatBox.style.height = "36px";
+    chatBox.style.height = "32px";
     var next = chatBox.scrollHeight;
     if (next > 160) {
       chatBox.style.height = "160px";
       chatBox.style.overflow = "auto";
     } else {
-      chatBox.style.height = Math.max(36, next) + "px";
+      chatBox.style.height = Math.max(32, next) + "px";
       chatBox.style.overflow = "hidden";
     }
   }
@@ -4650,6 +4623,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   showSection(startRoom ? "file" : sectionFromPath(location.pathname));
   if (!startRoom && (sectionName === "home" || sectionName === "rooms")) showHomeSkeleton(true);
   routed = true;
+  reserveComposer();
   load();
   syncRail();
 })();
