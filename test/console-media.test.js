@@ -74,6 +74,17 @@ test("a question that names a room returns only that room", () => {
   assert.equal(result.cites.every((cite) => cite.roomId === "booth"), true);
   assert.equal(result.answer.includes("Da Lat"), false);
   assert.equal(result.answer.includes("Catering"), false);
+  assert.match(result.cites[0].label, /Booth planning/);
+  assert.doesNotMatch(result.cites[0].label, /opens at/);
+});
+
+test("a room answer says when its decisions clash", () => {
+  const result = rankDecisions("What did Booth planning decide?", [
+    { roomId: "booth", text: "The booth opens at ten", status: "clashing", spokenAt: "2026-11-03T04:00:00.000Z" },
+    { roomId: "booth", text: "The booth opens at nine", status: "clashing", spokenAt: "2026-11-03T05:00:00.000Z" },
+  ], [{ id: "booth", name: "Booth planning" }]);
+  assert.match(result.answer, /These decisions clash/);
+  assert.match(result.answer, /opens at ten\./);
 });
 
 test("bot media keeps the download urls and names processing, expiry, and a missing recording", () => {

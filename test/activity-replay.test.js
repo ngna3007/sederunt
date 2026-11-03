@@ -110,11 +110,11 @@ test("viewer times drop the raw instant and markers are not feed rows", () => {
       "Sederunt moved Design crit from 2026-11-03T07:00:00.000Z to 2026-11-03T08:00:00.000Z on Google Calendar via MCP",
       "Asia/Ho_Chi_Minh",
     ),
-    "Sederunt moved Design crit 2:00 PM → 3:00 PM on Google Calendar via MCP",
+    "Sederunt moved Design crit from 2:00 PM to 3:00 PM on Google Calendar via MCP",
   );
   assert.equal(
     formatActivitySentence("from 2026-11-03T16:00:00.000Z to 2026-11-03T18:30:00.000Z", "Asia/Ho_Chi_Minh"),
-    "Nov 3, 11:00 PM → Nov 4, 1:30 AM",
+    "from Nov 3, 11:00 PM to Nov 4, 1:30 AM",
   );
   const groups = groupActivity([
     { id: "a", requestId: "r", kind: "action", ts: "2026-11-03T08:00:00.000Z" },
@@ -139,14 +139,24 @@ test("an offset instant is stored as UTC and rendered in the calendar zone", () 
     "Asia/Ho_Chi_Minh",
     "UTC",
   );
-  assert.match(shown, /2:00 PM → 4:00 PM/);
+  assert.match(shown, /from 2:00 PM to 4:00 PM/);
   assert.doesNotMatch(shown, /\+07:00/);
   assert.match(shown, /GMT\+7|ICT/);
 });
 
+test("Asia/Saigon matches Asia/Ho_Chi_Minh so a +07 viewer sees no zone label", () => {
+  const shown = formatActivitySentence(
+    "Sederunt moved Design crit from 2026-11-03T07:00:00.000Z to 2026-11-03T09:00:00.000Z on Google Calendar",
+    "Asia/Ho_Chi_Minh",
+    "Asia/Saigon",
+  );
+  assert.match(shown, /from 2:00 PM to 4:00 PM/);
+  assert.doesNotMatch(shown, /GMT\+7|ICT|UTC/);
+});
+
 test("a retried create keeps the issue id and a stale retry is refused", async () => {
   const previous = process.env.SEDERUNT_PUBLIC_ORIGIN;
-  process.env.SEDERUNT_PUBLIC_ORIGIN = "https://sederunt.example";
+  process.env.SEDERUNT_PUBLIC_ORIGIN = "https://ignored.example";
   const session = createSession();
   const { logFailure, logAction } = await import("../src/activity.js");
   logFailure(session, {
@@ -159,6 +169,7 @@ test("a retried create keeps the issue id and a stale retry is refused", async (
     tool: { name: "act", server: "sederunt-mcp" },
   });
   const created = await replayFailure(session, {
+    app: { origin: "https://sederunt.example", timeZone: "Asia/Ho_Chi_Minh", linearTeam: "ENG", linearWorkspace: "" },
     linear: {
       async createIssue(input) {
         assert.match(input.description, /From Booth planning/);
@@ -207,6 +218,139 @@ test("a retried create keeps the issue id and a stale retry is refused", async (
   assert.equal(session.activity.find((row) => row.id === "act-new").undo.available, true);
   if (previous === undefined) delete process.env.SEDERUNT_PUBLIC_ORIGIN;
   else process.env.SEDERUNT_PUBLIC_ORIGIN = previous;
+});
+
+test("a slack retry records the timestamp and a second click does not post again", async () => {
+  const session = createSession();
+  const { logFailure } = await import("../src/activity.js");
+  logFailure(session, {
+    id: "fail-slack",
+    requestId: "req-slack",
+    actor: { type: "person", name: "Mina" },
+    verb: "post",
+    target: { system: "slack", type: "message", title: "Booth notes" },
+    changes: [{ field: "body", to: "The booth opens at nine." }],
+    origin: { roomId: "booth", roomName: "C0123" },
+    tool: { name: "act", server: "sederunt-mcp" },
+  });
+  const posts = [];
+  const deps = {
+    slack: {
+      async postMessage(input) {
+        posts.push(input);
+        return { ok: true, channel: "C0123", ts: "1710000000.000100" };
+      },
+    },
+    memory: { async remember() { return { blobId: null }; } },
+  };
+  const first = await replayFailure(session, deps, "fail-slack");
+  assert.equal(first.ok, true);
+  const filed = session.activity.find((row) => row.kind === "action" && row.verb === "post");
+  assert.equal(filed.target.id, "1710000000.000100");
+  assert.equal(filed.target.url, "https://slack.com/archives/C0123/p1710000000000100");
+  assert.equal(session.activity.find((row) => row.id === "fail-slack").resolved, true);
+  const second = await replayFailure(session, deps, "fail-slack");
+  assert.equal(second.ok, false);
+  assert.equal(second.reason, "already");
+  assert.equal(posts.length, 1);
+});
+
+test("a slack refusal is recorded so the row changes", async () => {
+  const session = createSession();
+  const { logFailure } = await import("../src/activity.js");
+  logFailure(session, {
+    id: "fail-slack",
+    requestId: "req-slack",
+    actor: { type: "person", name: "Mina" },
+    verb: "post",
+    target: { system: "slack", type: "message", title: "Booth notes" },
+    changes: [{ field: "body", to: "The booth opens at nine." }],
+    origin: { roomId: "booth", roomName: "C0123" },
+    tool: { name: "act", server: "sederunt-mcp" },
+  });
+  const result = await replayFailure(session, {
+    slack: { async postMessage() { return { ok: false, error: "channel_not_found" }; } },
+    memory: { async remember() { return { blobId: null }; } },
+  }, "fail-slack");
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "failed");
+  const logged = session.activity.find((row) => row.id === result.id);
+  assert.equal(logged.kind, "failure");
+  assert.match(logged.error, /channel_not_found/);
+});
+
+test("a newer comment or status move does not stale a failed assign", async () => {
+  const session = createSession();
+  const { logFailure, logAction } = await import("../src/activity.js");
+  logFailure(session, {
+    id: "fail-assign",
+    requestId: "req-assign",
+    ts: "2026-11-03T08:00:00.000Z",
+    actor: { type: "sederunt", name: "Sederunt" },
+    verb: "assign",
+    target: { system: "linear", type: "issue", id: "ROW-127", title: "Booth power" },
+    changes: [{ field: "assignee", from: "", to: "Mina" }],
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    tool: { name: "act", server: "sederunt-mcp" },
+  });
+  logAction(session, {
+    id: "act-comment",
+    requestId: "req-comment",
+    ts: "2026-11-03T09:00:00.000Z",
+    actor: { type: "person", name: "Mina" },
+    verb: "comment",
+    target: { system: "linear", type: "issue", id: "ROW-127", title: "Booth power" },
+    changes: [{ field: "body", to: "Still open." }],
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    tool: { name: "act", server: "sederunt-mcp" },
+  });
+  logAction(session, {
+    id: "act-status",
+    requestId: "req-status",
+    ts: "2026-11-03T10:00:00.000Z",
+    actor: { type: "person", name: "Mina" },
+    verb: "move",
+    target: { system: "linear", type: "issue", id: "ROW-127", title: "Booth power" },
+    changes: [{ field: "state", from: "Todo", to: "Done" }],
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    tool: { name: "act", server: "sederunt-mcp" },
+  });
+  const calls = [];
+  const open = await replayFailure(session, {
+    linear: { async assignIssue(input) { calls.push(input); return { id: "ROW-127", identifier: "ROW-127" }; } },
+    memory: { async remember() { return { blobId: null }; } },
+  }, "fail-assign");
+  assert.equal(open.ok, true);
+  assert.equal(calls.length, 1);
+  logFailure(session, {
+    id: "fail-assign-2",
+    requestId: "req-assign-2",
+    ts: "2026-11-03T11:00:00.000Z",
+    actor: { type: "sederunt", name: "Sederunt" },
+    verb: "assign",
+    target: { system: "linear", type: "issue", id: "ROW-127", title: "Booth power" },
+    changes: [{ field: "assignee", from: "", to: "Theo" }],
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    tool: { name: "act", server: "sederunt-mcp" },
+  });
+  logAction(session, {
+    id: "act-assign-new",
+    requestId: "req-assign-new",
+    ts: "2026-11-03T12:00:00.000Z",
+    actor: { type: "person", name: "Mina" },
+    verb: "assign",
+    target: { system: "linear", type: "issue", id: "ROW-127", title: "Booth power" },
+    changes: [{ field: "assignee", from: "Mina", to: "Rowan" }],
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    undo: { available: true, until: "2099-01-01T00:00:00.000Z" },
+    tool: { name: "act", server: "sederunt-mcp" },
+  });
+  const stale = await replayFailure(session, {
+    linear: { async assignIssue() { throw new Error("should not assign"); } },
+    memory: { async remember() { return { blobId: null }; } },
+  }, "fail-assign-2");
+  assert.equal(stale.reason, "stale");
+  assert.equal(session.activity.find((row) => row.id === "act-assign-new").undo.available, true);
 });
 
 test("a restart keeps a retried failure and an undone action", async () => {

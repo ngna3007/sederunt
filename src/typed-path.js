@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { displayName, logAction, logFailure, logRequest, logUndo, renderActivity, undoRefusal } from "./activity.js";
-import { selectActivity } from "./activity-feed.js";
+import { formatActivitySentence, selectActivity } from "./activity-feed.js";
 import { readCalendarEvent, replayPlan, replaySupported, runReplay } from "./activity-replay.js";
 import { authorize } from "./domain/allow.js";
 import { clashStatuses } from "./domain/clash.js";
@@ -508,7 +508,7 @@ async function runConnector(deps, action) {
     description: issueDescription({
       origin: { roomId: action.roomId, roomName: action.roomName, at: action.offset },
       actor: { type: "person", name: action.speaker || action.memberName || "" },
-    }),
+    }, deps),
   });
 }
 
@@ -664,44 +664,55 @@ export async function replayFailure(session, deps, failureId) {
   if (!named) return { ok: false, reason: "missing" };
   if (named.kind !== "failure") return { ok: false, reason: "already" };
   if (named.resolved) return { ok: false, reason: "already" };
+  if (alreadyRetried(session, named)) return { ok: false, reason: "already" };
   if (newerSuccess(session, named)) return { ok: false, reason: "stale" };
-  const request = (session.activity || []).find((row) => row.requestId === named.requestId && row.kind === "request");
-  const observed = await readCalendarEvent(deps, named);
-  const planned = { ...named, changes: request?.changes?.length ? request.changes : named.changes };
-  const plan = replayPlan(planned, "replay", observed);
-  if (!plan.ok) return plan;
-  if (plan.method === "createIssue") {
-    const speaker = request?.actor?.type === "person"
-      ? request.actor
-      : (named.actor?.type === "person" ? named.actor : { type: "person", name: "" });
-    plan.args.description = issueDescription({ ...named, actor: speaker });
-  }
-  let created;
+  session.replayBusy ??= new Set();
+  if (session.replayBusy.has(named.id)) return { ok: false, reason: "already" };
+  session.replayBusy.add(named.id);
   try {
-    created = await runReplay(deps, plan);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "";
-    if (error?.reason === "unsupported") return { ok: false, reason: "unsupported" };
-    const event = logFailure(session, effectOf(named, { error: failureText(message), changes: named.changes }));
+    const request = (session.activity || []).find((row) => row.requestId === named.requestId && row.kind === "request");
+    const observed = await readCalendarEvent(deps, named);
+    const planned = { ...named, changes: request?.changes?.length ? request.changes : named.changes };
+    const plan = replayPlan(planned, "replay", observed, deps.app?.timeZone || "");
+    if (!plan.ok) return plan;
+    if (plan.method === "createIssue") {
+      const speaker = request?.actor?.type === "person"
+        ? request.actor
+        : (named.actor?.type === "person" ? named.actor : { type: "person", name: "" });
+      plan.args.description = issueDescription({ ...named, actor: speaker }, deps);
+    }
+    let created;
+    try {
+      created = await runReplay(deps, plan);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (error?.reason === "unsupported") return { ok: false, reason: "unsupported" };
+      const event = logFailure(session, effectOf(named, { error: failureText(message), changes: named.changes }));
+      await storeActivity(session, deps, event);
+      return { ok: false, reason: "failed", id: event.id };
+    }
+    if (!connectorSucceeded(named.target?.system, created)) {
+      const event = logFailure(session, effectOf(named, {
+        error: failureText(created?.error || "The change did not go through."),
+        changes: named.changes,
+      }));
+      await storeActivity(session, deps, event);
+      return { ok: false, reason: "failed", id: event.id };
+    }
+    const changes = plan.from ? [{ field: "start", from: plan.from, to: plan.to }] : (planned.changes || []);
+    const event = logAction(session, {
+      ...effectOf(named, { changes, target: appliedTarget(named, created, deps) }),
+      undo: replaySupported(named, "undo")
+        ? { available: true, until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() }
+        : { available: false, until: "" },
+    });
     await storeActivity(session, deps, event);
-    return { ok: false, reason: "failed", id: event.id };
+    await markResolved(session, deps, named);
+    await supersedeTarget(session, deps, named, event.id);
+    return { ok: true, id: event.id };
+  } finally {
+    session.replayBusy.delete(named.id);
   }
-  if (!connectorId(created)) return { ok: false, reason: "failed" };
-  const changes = plan.from ? [{ field: "start", from: plan.from, to: plan.to }] : (planned.changes || []);
-  const createdId = String(created?.identifier || created?.id || "").trim();
-  const target = named.verb === "create" && createdId
-    ? { ...named.target, id: createdId, url: created?.url || `https://linear.app/issue/${createdId}` }
-    : named.target;
-  const event = logAction(session, {
-    ...effectOf(named, { changes, target }),
-    undo: replaySupported(named, "undo")
-      ? { available: true, until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() }
-      : { available: false, until: "" },
-  });
-  await storeActivity(session, deps, event);
-  await markResolved(session, deps, named);
-  await supersedeTarget(session, deps, named, event.id);
-  return { ok: true, id: event.id };
 }
 
 /**
@@ -718,11 +729,11 @@ export async function undoRecorded(session, deps, id, actorName) {
   if (reason) return { ok: false, reason };
   if (!replaySupported(event, "undo")) return { ok: false, reason: "unsupported" };
   const observed = await readCalendarEvent(deps, event);
-  const plan = replayPlan(event, "undo", observed);
+  const plan = replayPlan(event, "undo", observed, deps.app?.timeZone || "");
   if (!plan.ok) return plan;
   try {
     const created = await runReplay(deps, plan);
-    if (!connectorId(created)) return { ok: false, reason: "failed" };
+    if (!connectorSucceeded(event.target?.system, created)) return { ok: false, reason: "failed" };
   } catch (error) {
     if (error?.reason === "unsupported") return { ok: false, reason: "unsupported" };
     return { ok: false, reason: "failed" };
@@ -754,17 +765,74 @@ function newerSuccess(session, failure) {
     const sameId = target.id && row.target?.id === target.id;
     const sameTitle = !target.id && target.title && row.target?.title === target.title;
     if (!sameId && !sameTitle) return false;
+    if (!sameField(failure, row)) return false;
     return (Date.parse(row.ts || "") || 0) > at;
   });
 }
 
-function issueDescription(event) {
+function sameField(failure, row) {
+  const left = String(failure?.changes?.[0]?.field || "").trim();
+  const right = String(row?.changes?.[0]?.field || "").trim();
+  if (left && right) return left === right;
+  return String(failure?.verb || "") === String(row?.verb || "");
+}
+
+function alreadyRetried(session, failure) {
+  const at = Date.parse(failure?.ts || "") || 0;
+  return (session.activity || []).some((row) => {
+    if (row.kind !== "action" && row.kind !== "result") return false;
+    if (row.outcome === "undone") return false;
+    if ((row.requestId || "") !== (failure.requestId || "")) return false;
+    if ((row.verb || "") !== (failure.verb || "")) return false;
+    return (Date.parse(row.ts || "") || 0) >= at;
+  });
+}
+
+function connectorSucceeded(system, created) {
+  if (system === "slack") return created?.ok === true;
+  return Boolean(connectorId(created));
+}
+
+function appliedTarget(named, created, deps) {
+  if (named.target?.system === "slack") {
+    const ts = String(created?.ts || "").trim();
+    const url = slackPermalink(created);
+    const next = { ...named.target };
+    if (ts) next.id = ts;
+    if (url) next.url = url;
+    return next;
+  }
+  if (named.verb === "create") {
+    const createdId = String(created?.identifier || created?.id || "").trim();
+    if (!createdId) return named.target;
+    const url = (typeof created?.url === "string" && created.url) || linearIssueUrl(deps, createdId);
+    const next = { ...named.target, id: createdId };
+    if (url) next.url = url;
+    return next;
+  }
+  return named.target;
+}
+
+function slackPermalink(created) {
+  const channel = String(created?.channel || "").trim();
+  const ts = String(created?.ts || "").trim();
+  if (!channel || !ts || !/^[A-Z0-9]+$/i.test(channel)) return "";
+  return `https://slack.com/archives/${channel}/p${ts.replace(".", "")}`;
+}
+
+function linearIssueUrl(deps, id) {
+  const workspace = String(deps?.app?.linearWorkspace || "").trim();
+  if (!workspace || !id) return "";
+  return `https://linear.app/${encodeURIComponent(workspace)}/issue/${id}`;
+}
+
+function issueDescription(event, deps) {
   const room = event?.origin?.roomName || "";
   const roomId = event?.origin?.roomId || "";
   const speaker = event?.actor?.type === "person" ? event.actor.name : "";
   const at = Number.isFinite(event?.origin?.at) ? event.origin.at : null;
   const clock = at == null ? "" : `${Math.floor(at / 60)}:${String(at % 60).padStart(2, "0")}`;
-  const origin = String(process.env.SEDERUNT_PUBLIC_ORIGIN || "").replace(/\/$/, "");
+  const origin = String(deps?.app?.origin || "").replace(/\/$/, "");
   const link = roomId && origin
     ? `${origin}/console/rooms/${encodeURIComponent(roomId)}${at == null ? "" : `#t=${at}`}`
     : "";
@@ -2001,7 +2069,7 @@ function readObjectWithin(tatum, blobId, ms) {
  * @param {ReturnType<import("./session.js").createSession>} session
  * @param {string} [memberId]
  */
-export function companyBoard(session, memberId) {
+export function companyBoard(session, memberId, options = {}) {
   const member = typeof memberId === "string" ? memberId.trim() : "";
   const visible = [];
   for (const decision of session?.decisions ?? []) {
@@ -2112,7 +2180,7 @@ export function companyBoard(session, memberId) {
       failed: (session?.activity ?? []).filter((row) => row.kind === "failure" && row.outcome === "failed" && !row.resolved).length,
       actionsToday: (session?.activity ?? []).filter((row) => row.kind === "action" && String(row.ts || "").slice(0, 10) === new Date().toISOString().slice(0, 10)).length,
     },
-    activity: publicActivity(session, rooms),
+    activity: publicActivity(session, rooms, options),
     preferences: {
       linear: resolvePreference(preferences, "linear", ""),
       calendar: resolvePreference(preferences, "calendar", ""),
@@ -2121,9 +2189,10 @@ export function companyBoard(session, memberId) {
   };
 }
 
-function publicActivity(session, rooms) {
+function publicActivity(session, rooms, options = {}) {
   const visible = new Set((rooms || []).map((room) => room.id));
   const rows = session?.activity ?? [];
+  const timeZone = options.timeZone || "";
   return rows
     .filter((row) => row && row.kind !== "resolve" && row.kind !== "supersede" && (!row.origin?.roomId || visible.has(row.origin.roomId)))
     .map((row) => ({
@@ -2146,7 +2215,9 @@ function publicActivity(session, rooms) {
       superseded: row.superseded === true,
       refersTo: row.refersTo || "",
       undoOf: row.undoOf || "",
-      sentence: renderActivity(row),
+      sentence: timeZone && row.target?.system === "calendar"
+        ? formatActivitySentence(renderActivity(row), timeZone)
+        : renderActivity(row),
     }));
 }
 
@@ -2169,8 +2240,8 @@ function publishedUndo(row, now = Date.now()) {
  * @param {{ id?: string }[]} rooms
  * @param {{ query?: string, roomId?: string, kind?: string, actor?: string }} [query]
  */
-export function searchPublishedActivity(session, rooms, query = {}) {
-  return selectActivity(publicActivity(session, rooms), query);
+export function searchPublishedActivity(session, rooms, query = {}, options = {}) {
+  return selectActivity(publicActivity(session, rooms, options), query);
 }
 
 function absorbActivity(session, activity) {

@@ -2205,3 +2205,159 @@ label.search.dock-search input { padding-left: 32px; }
   background: var(--card);
 }
 .activity-icon.bad { background: #fde8e8; }
+
+:root {
+  --table-rooms: minmax(12rem, 1fr) 9rem 8rem 12rem 4.75rem;
+  --table-rooms-narrow: minmax(6rem, 1fr) 4.75rem 9rem 3.5rem;
+  --table-people: minmax(8rem, 1.2fr) minmax(0, 2fr) 8.5rem 10rem 4.75rem;
+  --table-decisions: minmax(0, 1fr) 14rem 8.5rem 4.75rem;
+}
+#rooms .explorer,
+#rooms .explorer-head,
+#rooms a.room,
+#rooms button.room:not(.decision-row) {
+  width: 100%;
+}
+#rooms .explorer-head,
+#rooms a.room,
+#rooms button.room:not(.decision-row) {
+  grid-template-columns: var(--table-rooms);
+}
+#people-table,
+#people-list,
+.people-head,
+.people-row {
+  width: 100%;
+}
+.people-head,
+.people-row {
+  grid-template-columns: var(--table-people);
+  justify-items: start;
+  text-align: left;
+  box-sizing: border-box;
+  padding: 12px 16px;
+  gap: 12px;
+}
+.people-row .num,
+.people-head span:nth-child(3),
+.people-head span {
+  text-align: left;
+}
+.decision-head,
+#record-list .decision-row {
+  grid-template-columns: var(--table-decisions);
+  justify-items: start;
+  text-align: left;
+}
+#record-table > .decision-head {
+  border-bottom: 1px solid var(--border);
+  box-shadow: none;
+}
+#record-list .decision-row {
+  border-top: 0;
+}
+#record-list .decision-row .ex-plat {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 14rem;
+  max-width: 14rem;
+  min-width: 0;
+  overflow: hidden;
+  justify-self: start;
+}
+#record-list .decision-row .room-name {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-stale {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 400;
+  justify-self: end;
+}
+.callout-warn {
+  background: #fff7ed;
+  color: #9a3412;
+  border: 1px solid #fdba74;
+  border-radius: var(--radius);
+  padding: 12px 16px;
+}
+.callout-warn p,
+.callout-bad p { margin: 0; }
+.field-hint {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 400;
+}
+.account-layout .overview-card,
+.account-layout .settings-card { padding: 16px; }
+.account-layout .settings-card .section-label { margin: 0 0 8px; }
+.account-layout .account-kv { padding: 0; }
+.from-room { margin-left: 6px; }
+.timeline { max-height: none; }
+.tl-lane-label {
+  width: 5.75rem;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+.tl-track { padding-bottom: 16px; }
+#read-error.still-loading {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: auto;
+  margin: 0 0 12px;
+  padding: 12px 16px;
+  text-align: left;
+}
+.chip-rest,
+.more-narrow { display: none; }
+@media (max-width: 900px) {
+  #rooms .explorer-head,
+  #rooms a.room,
+  #rooms button.room:not(.decision-row) {
+    grid-template-columns: var(--table-rooms-narrow);
+  }
+}
+@media (max-width: 700px) {
+  .chip-second,
+  .more-wide { display: none !important; }
+  .more-narrow { display: inline-flex; }
+  .room-chips { flex-wrap: nowrap; }
+  .decision-head { display: none; }
+  #record-list .decision-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "sentence status" "room view";
+    align-items: start;
+  }
+  #record-list .decision-row .ex-room { grid-area: sentence; width: 100%; }
+  #record-list .decision-row .ex-plat {
+    grid-area: room;
+    width: auto;
+    max-width: 100%;
+    min-width: 0;
+  }
+  .people-head { display: none; }
+  .people-row {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas: "name count view" "rooms heard heard";
+    align-items: center;
+  }
+  .people-row .person { grid-area: name; }
+  .people-row .room-chips { grid-area: rooms; min-width: 0; }
+  .people-row .num { grid-area: count; white-space: nowrap; }
+  .people-row .heard { grid-area: heard; color: var(--muted-foreground); font-size: 12px; }
+  .people-row .row-open { grid-area: view; }
+  #record-list .decision-row .badge { grid-area: status; justify-self: end; }
+  #record-list .decision-row .row-view { grid-area: view; }
+}

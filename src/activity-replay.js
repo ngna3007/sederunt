@@ -4,6 +4,9 @@
  */
 
 import { calendarTimeZone } from "./calendar/mcp.js";
+import { toUtcIso } from "./instant.js";
+
+export { toUtcIso } from "./instant.js";
 
 const TABLE = {
   "linear:move": { replay: "updateIssue", undo: "updateIssue" },
@@ -61,21 +64,7 @@ export function methodsReferenced() {
  * @param {string} clock
  * @param {string} [timeZone]
  */
-/**
- * A stored instant, as UTC ISO. Offset forms such as `+07:00` become `Z`.
- * A clock that is not an instant is returned unchanged.
- *
- * @param {string} value
- */
-export function toUtcIso(value) {
-  const text = String(value || "").trim();
-  if (!/^\d{4}-\d{2}-\d{2}T/.test(text)) return text;
-  const parsed = Date.parse(text);
-  if (Number.isNaN(parsed)) return text;
-  return new Date(parsed).toISOString();
-}
-
-export function clockOnDate(iso, clock, timeZone = calendarTimeZone()) {
+export function clockOnDate(iso, clock, timeZone = calendarTimeZone({})) {
   const text = String(clock || "").trim();
   if (/^\d{4}-\d{2}-\d{2}T/.test(text)) return toUtcIso(text);
   const base = new Date(iso);
@@ -133,9 +122,10 @@ function zonedTimeToUtc(year, month, day, hour, minute, timeZone) {
 /**
  * @param {{ verb?: string, target?: { system?: string, id?: string, title?: string }, changes?: { field?: string, from?: string, to?: string }[] }} event
  * @param {"replay" | "undo"} direction
- * @param {{ start?: string, end?: string } | null} [observed]
+ * @param {{ start?: string, end?: string, timeZone?: string } | null} [observed]
+ * @param {string} [timeZone] app calendar zone, used when the event has none
  */
-export function replayPlan(event, direction, observed = null) {
+export function replayPlan(event, direction, observed = null, timeZone = "") {
   const system = event?.target?.system || "";
   const verb = event?.verb || "";
   const row = TABLE[`${system}:${verb}`];
@@ -170,20 +160,20 @@ export function replayPlan(event, direction, observed = null) {
     return { ok: true, system, method, args: { title, idempotencyKey } };
   }
   if (system === "calendar") {
-    const timeZone = observed?.timeZone || calendarTimeZone();
+    const zone = observed?.timeZone || timeZone || calendarTimeZone({});
     const liveStart = observed?.start || "";
     const liveEnd = observed?.end || "";
     const duration = Date.parse(liveEnd) - Date.parse(liveStart);
     if (!liveStart || !Number.isFinite(duration) || duration <= 0) return { ok: false, reason: "unsupported" };
     const wanted = direction === "undo" ? (change.from || liveStart) : (change.to || liveStart);
-    const start = clockOnDate(liveStart, wanted, timeZone);
+    const start = clockOnDate(liveStart, wanted, zone);
     if (!start) return { ok: false, reason: "unsupported" };
     const end = new Date(Date.parse(start) + duration).toISOString();
     return {
       ok: true,
       system,
       method,
-      args: { id, title: event.target?.title || "", start, end, timeZone },
+      args: { id, title: event.target?.title || "", start, end, timeZone: zone },
       from: toUtcIso(liveStart),
       to: toUtcIso(start),
     };

@@ -20,26 +20,29 @@ export function relativeTime(ts, now = Date.now()) {
 const ISO_INSTANT = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})/g;
 
 /**
- * Turn ISO instants in a sentence into clocks in `timeZone`. A pair on the
- * same date in that zone is `2:00 PM → 4:00 PM`. The date is included only
- * when the two instants fall on different dates. A zone abbreviation is
- * added when `viewerZone` is set and differs from `timeZone`.
+ * Turn ISO instants in a sentence into clocks in `timeZone`. A pair is
+ * `from 2:00 PM to 4:00 PM`. The date is included only when the two instants
+ * fall on different dates. A zone abbreviation is added when the viewer's
+ * offset at that instant differs from `timeZone`. Aliases such as
+ * `Asia/Saigon` and `Asia/Ho_Chi_Minh` share an offset and add nothing.
  *
  * @param {string} sentence
  * @param {string} [timeZone] calendar or viewer zone; omitted means the runtime zone
  * @param {string} [viewerZone]
+ * @param {string} [sampleIso] instant used when the sentence is already clocks
  */
-export function formatActivitySentence(sentence, timeZone, viewerZone) {
+export function formatActivitySentence(sentence, timeZone, viewerZone, sampleIso) {
   const text = String(sentence || "");
   const found = text.match(ISO_INSTANT);
-  if (!found || !found.length) return text;
+  const anchor = found?.[0] || (ISO_INSTANT.test(String(sampleIso || "")) ? String(sampleIso) : "");
+  if (!found || !found.length) return withZone(text, anchor || new Date().toISOString(), timeZone, viewerZone);
   const zoneNote = zoneAbbreviation(found[0], timeZone, viewerZone);
   if (found.length >= 2) {
     const [left, right] = found;
     const differ = !sameLocalDay(left, right, timeZone);
     const formattedLeft = formatClock(left, timeZone, differ);
     const formattedRight = formatClock(right, timeZone, differ);
-    const range = `${formattedLeft} → ${formattedRight}${zoneNote}`;
+    const range = `from ${formattedLeft} to ${formattedRight}${zoneNote}`;
     const fromTo = `from ${left} to ${right}`;
     if (text.includes(fromTo)) return text.replace(fromTo, range);
     return text.replace(left, formattedLeft).replace(right, `${formattedRight}${zoneNote}`);
@@ -47,11 +50,61 @@ export function formatActivitySentence(sentence, timeZone, viewerZone) {
   return text.replace(found[0], `${formatClock(found[0], timeZone, false)}${zoneNote}`);
 }
 
+/** Short zone name, the same label the feed and the timeline use. */
+export function zoneShortName(iso, timeZone) {
+  if (!timeZone) return "";
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "short" }).formatToParts(new Date(iso));
+    return parts.find((part) => part.type === "timeZoneName")?.value || "";
+  } catch {
+    return "";
+  }
+}
+
+function withZone(text, iso, timeZone, viewerZone) {
+  if (!text || !timeZone || !viewerZone) return text;
+  if (sameOffset(iso, timeZone, viewerZone)) return text;
+  if (/\b(?:GMT|UTC)[+-]\d|\bICT\b/.test(text)) return text;
+  const name = zoneShortName(iso, timeZone);
+  return name ? `${text} ${name}` : text;
+}
+
 function zoneAbbreviation(iso, timeZone, viewerZone) {
-  if (!timeZone || !viewerZone || timeZone === viewerZone) return "";
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "short" }).formatToParts(new Date(iso));
-  const name = parts.find((part) => part.type === "timeZoneName")?.value || "";
+  if (!timeZone || !viewerZone || sameOffset(iso, timeZone, viewerZone)) return "";
+  const name = zoneShortName(iso, timeZone);
   return name ? ` ${name}` : "";
+}
+
+function sameOffset(iso, left, right) {
+  if (left === right) return true;
+  const a = offsetMinutes(iso, left);
+  const b = offsetMinutes(iso, right);
+  if (a == null || b == null) return false;
+  return a === b;
+}
+
+function offsetMinutes(iso, timeZone) {
+  try {
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return null;
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }).formatToParts(date);
+    const bag = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+    let hour = Number(bag.hour);
+    if (hour === 24) hour = 0;
+    const asUtc = Date.UTC(Number(bag.year), Number(bag.month) - 1, Number(bag.day), hour, Number(bag.minute), Number(bag.second));
+    return Math.round((asUtc - date.getTime()) / 60000);
+  } catch {
+    return null;
+  }
 }
 
 function sameLocalDay(left, right, timeZone) {

@@ -335,6 +335,7 @@ test("Booth planning wins over a room that only shares planning", async () => {
     assert.equal(body.decisions, 4);
     assert.match(body.body, /Booth line/);
     assert.doesNotMatch(body.body, /Offsite line/);
+    assert.doesNotMatch(body.body, /preference /);
   } finally {
     app.close();
   }
@@ -368,6 +369,7 @@ test("chat matches a room on a word boundary and counts only that room", async (
     const boothBody = await booth.json();
     assert.equal(boothBody.decisions, 1);
     assert.match(boothBody.body, /booth kept/);
+    assert.doesNotMatch(boothBody.body, /preference /);
     assert.doesNotMatch(boothBody.body, /offsite kept/);
     assert.doesNotMatch(boothBody.body, /design-crit kept/);
     const design = await fetch(`http://127.0.0.1:${port}/api/chat`, {
@@ -378,6 +380,21 @@ test("chat matches a room on a word boundary and counts only that room", async (
     const designBody = await design.json();
     assert.equal(designBody.decisions, 1);
     assert.match(designBody.body, /design-crit kept/);
+  } finally {
+    app.close();
+  }
+});
+
+test("the activity feed module is served under both paths", async () => {
+  const app = appFor(seeded(), []);
+  const port = await listen(app);
+  try {
+    const feed = await fetch(`http://127.0.0.1:${port}/console/activity-feed.js`);
+    assert.equal(feed.status, 200);
+    assert.match(await feed.text(), /formatActivitySentence/);
+    const rooms = await fetch(`http://127.0.0.1:${port}/console/room-match.js`);
+    assert.equal(rooms.status, 200);
+    assert.match(await rooms.text(), /ROOM_WEAK/);
   } finally {
     app.close();
   }

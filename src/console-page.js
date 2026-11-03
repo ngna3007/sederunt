@@ -1,64 +1,11 @@
 import { brandLogo, brandSprite } from "./brand-logos.js";
 
-/**
- * Every decision in a room that matches the question. The chip label is the
- * sentence itself, with no room suffix.
- *
- * @param {string} question
- * @param {{ text?: string, roomId?: string, spokenAt?: string }[]} decisions
- * @param {{ id?: string, platform?: string }[]} rooms
- */
-export function rankDecisions(question, decisions, rooms) {
-  const stop = {
-    what: 1, was: 1, were: 1, decided: 1, decide: 1, decision: 1, decisions: 1,
-    about: 1, the: 1, a: 1, an: 1, of: 1, to: 1, in: 1, on: 1, for: 1, and: 1,
-    or: 1, is: 1, this: 1, that: 1, with: 1, from: 1, did: 1, does: 1, we: 1, do: 1,
-  };
-  const phraseHit = (hay, token) => {
-    const text = String(token || "").trim().toLowerCase().replace(/^#/, "");
-    if (text.length < 3) return false;
-    const escaped = text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, "i").test(String(hay || "").toLowerCase());
-  };
-  const namedRoomIds = (asked, list) => {
-    const scored = [];
-    for (const room of list || []) {
-      const full = String(room?.name || "").trim();
-      const leading = full.split(":")[0].trim();
-      let best = 0;
-      for (const phrase of [full, leading, room?.id, room?.channel]) {
-        if (phraseHit(asked, phrase)) best = Math.max(best, String(phrase).trim().length);
-      }
-      if (best && room?.id) scored.push({ id: room.id, best });
-    }
-    if (!scored.length) return [];
-    const longest = Math.max(...scored.map((item) => item.best));
-    return [...new Set(scored.filter((item) => item.best === longest).map((item) => item.id))];
-  };
-  const words = String(question || "").toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 2 && !stop[word]);
-  const rows = (decisions || []).filter((decision) => String(decision.text || "").trim());
-  if (!rows.length) return { answer: "Nothing is stored that you can read.", detail: "", cites: [] };
-  const named = namedRoomIds(question, rooms);
-  let picked = rows;
-  if (named.length) {
-    const ids = new Set(named);
-    picked = rows.filter((decision) => ids.has(decision.roomId || ""));
-    if (!picked.length) return { answer: "Nothing stored matches that question.", detail: "", cites: [] };
-  } else if (words.length) {
-    const roomsHit = {};
-    rows.forEach((decision) => {
-      const blob = String(decision.text || "").toLowerCase();
-      if (words.some((word) => phraseHit(blob, word))) roomsHit[decision.roomId || ""] = true;
-    });
-    picked = rows.filter((decision) => roomsHit[decision.roomId || ""]);
-    if (!picked.length) return { answer: "Nothing stored matches that question.", detail: "", cites: [] };
-  } else {
-    picked = rows.slice().sort((a, b) => String(b.spokenAt || "").localeCompare(String(a.spokenAt || ""))).slice(0, 3);
-  }
-  picked = picked.slice().sort((a, b) => String(b.spokenAt || "").localeCompare(String(a.spokenAt || "")));
-  const cites = picked.map((decision) => ({ roomId: decision.roomId, label: decision.text || "", text: decision.text || "" }));
-  return { answer: picked.map((decision) => decision.text).join(" "), detail: "", cites };
-}
+export { rankDecisions } from "./room-match.js";
+
+/** Header cells, one per row cell, including the empty action column. */
+export const ROOM_COLUMNS = ["Room", "Platform", "Speakers", "Status", ""];
+export const PEOPLE_COLUMNS = ["Name", "Rooms", "Decisions", "Last heard", ""];
+export const DECISION_COLUMNS = ["Decision", "Room", "Status", ""];
 
 /**
  * The operator workspace. Onboard, home, rooms, history, chat, and record
@@ -349,11 +296,7 @@ ${slack}
       </div>
       <div class="explorer">
         <div class="explorer-head">
-          <span>Room</span>
-          <span>Platform</span>
-          <span>Speakers</span>
-          <span>Status</span>
-          <span></span>
+          ${ROOM_COLUMNS.map((label) => `<span>${escapeHtml(label)}</span>`).join("")}
         </div>
         <div id="room-empty" class="empty-state" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.6h10.8v8.8H2.6z"/><path d="M2.6 6.6h10.8"/></svg></span><p class="empty-title" id="room-empty-line">No room yet.</p><p id="room-empty-aside">Bring Sederunt into a meeting or a channel.</p><button type="button" id="clear-filters" hidden>Clear filters</button></div>
         <div id="room-list"></div>
@@ -421,7 +364,7 @@ ${slack}
       <div class="empty-state" id="record-empty"><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.8h10v10.4H3z"/><path d="M5 6h6M5 8.4h6M5 10.8h3.5"/></svg></span><p class="empty-title ledger">No decision yet.</p><p>A sentence kept in a room shows up here.</p></div>
       <p class="section-next"><button id="record-next" class="primary" type="button" hidden>New room</button></p>
       <div class="record-board explorer" id="record-table">
-        <div class="explorer-head decision-head"><span>Decision</span><span>Room</span><span>Status</span><span></span></div>
+        <div class="explorer-head decision-head">${DECISION_COLUMNS.map((label) => `<span>${escapeHtml(label)}</span>`).join("")}</div>
         <div id="record-list"></div>
         <div id="record-foot" class="explorer-foot" hidden><span id="record-count"></span><span class="pager"><button id="record-prev" type="button" aria-label="Previous page">‹</button><button id="record-next-page" type="button" aria-label="Next page">›</button></span></div>
         <p id="record-detail" hidden></p>
@@ -486,7 +429,7 @@ ${slack}
         </div>
         <div class="bot-head" id="file-head">
           <p id="file-kind" class="page-kicker sr"></p>
-          <p id="file-title" class="page-title sr"></p>
+          <p id="file-title" class="page-title"></p>
           <div class="meta-strip" id="file-meta">
             <button type="button" id="file-id-chip" class="id-chip"><span id="file-id" class="mono"></span></button>
             <span class="meta-item header-only" hidden><span class="meta-label">Status</span><span id="file-status-badge" class="badge"></span></span>
@@ -737,7 +680,8 @@ ${slack}
   </div>
 </div>
 <script type="module">
-import { formatActivitySentence, groupActivity, relativeTime, selectActivity } from "/console/activity.js";
+import { formatActivitySentence, groupActivity, relativeTime, selectActivity, zoneShortName } from "/console/activity.js";
+import { rankDecisions } from "/console/room-match.js";
 var sessionWhen = document.getElementById("account-detail-expiry");
 if (sessionWhen && sessionWhen.dataset.at) {
   var sessionDate = new Date(sessionWhen.dataset.at);
@@ -773,6 +717,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   var historyScope = "group";
   var historyKind = "all";
   var lastQuestion = "";
+  var peopleColumns = ${JSON.stringify(PEOPLE_COLUMNS)};
   var slowTimer = null;
   var toastTimer = null;
   var workspaceKind = "company";
@@ -1224,8 +1169,6 @@ if (sessionWhen && sessionWhen.dataset.at) {
     return { answer: "Nothing is stored that you can read.", detail: "", cites: [] };
   }
 
-  ${rankDecisions.toString()}
-
   function rankAnswer(question) {
     return rankDecisions(question, (state && state.decisions) || [], (state && state.rooms) || []);
   }
@@ -1375,13 +1318,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (spec.title && spec.title === spec.roomId) title.classList.add("mono");
     var count = document.createElement("span");
     count.className = "ex-count";
+    var subtitle = spec.countLine || "";
     if (spec.where) {
       var inlinePlat = document.createElement("span");
       inlinePlat.className = "ex-plat-inline";
-      inlinePlat.textContent = (spec.where === "Google Meet" ? "Meet" : spec.where) + " · ";
+      inlinePlat.textContent = (spec.where === "Google Meet" ? "Meet" : spec.where) + (subtitle ? " · " : "");
       count.append(inlinePlat);
     }
-    count.append(document.createTextNode(spec.meta || spec.countLine || ""));
+    if (subtitle) count.append(document.createTextNode(subtitle));
     roomCol.append(title, count);
     var where = document.createElement("span");
     where.className = "where ex-plat";
@@ -1676,6 +1620,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     roomCell.className = "ex-plat";
     if (decisionRoom.platform) roomCell.append(platformBadge(decisionRoom.platform));
     var roomText = document.createElement("span");
+    roomText.className = "room-name";
     roomText.textContent = roomName(decisionRoom) || decisionRoom.id || "Room";
     roomText.title = roomText.textContent;
     roomCell.append(roomText);
@@ -1713,7 +1658,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     }
     var head = document.createElement("div");
     head.className = "explorer-head people-head";
-    ["Name", "Rooms", "Decisions", "Last heard", ""].forEach(function (label) {
+    peopleColumns.forEach(function (label) {
       var cell = document.createElement("span");
       cell.textContent = label;
       head.append(cell);
@@ -1730,31 +1675,38 @@ if (sessionWhen && sessionWhen.dataset.at) {
       name.append(label);
       var roomsCell = document.createElement("span");
       roomsCell.className = "room-chips";
-      var shownRooms = person.rooms.slice(0, 2);
-      if (!shownRooms.length) {
+      if (!person.rooms.length) {
         var none = document.createElement("span");
         none.className = "mini-chip";
         none.textContent = "Room";
         roomsCell.append(none);
       }
-      shownRooms.forEach(function (room) {
+      person.rooms.forEach(function (room, index) {
         var chip = document.createElement("span");
-        chip.className = "mini-chip";
+        chip.className = "mini-chip" + (index === 1 ? " chip-second" : index > 1 ? " chip-rest" : "");
         chip.textContent = clipText(room, 28);
         chip.title = room;
         roomsCell.append(chip);
       });
+      if (person.rooms.length > 1) {
+        var narrowMore = document.createElement("span");
+        narrowMore.className = "mini-chip more-narrow";
+        narrowMore.textContent = "+" + (person.rooms.length - 1);
+        narrowMore.title = person.rooms.slice(1).join(", ");
+        roomsCell.append(narrowMore);
+      }
       if (person.rooms.length > 2) {
-        var more = document.createElement("span");
-        more.className = "mini-chip";
-        more.textContent = "+" + (person.rooms.length - 2);
-        more.title = person.rooms.slice(2).join(", ");
-        roomsCell.append(more);
+        var wideMore = document.createElement("span");
+        wideMore.className = "mini-chip more-wide";
+        wideMore.textContent = "+" + (person.rooms.length - 2);
+        wideMore.title = person.rooms.slice(2).join(", ");
+        roomsCell.append(wideMore);
       }
       var decisions = document.createElement("span");
       decisions.className = "num";
-      decisions.textContent = String(person.count);
+      decisions.textContent = person.count === 1 ? "1 decision" : (person.count + " decisions");
       var heard = document.createElement("span");
+      heard.className = "heard";
       heard.textContent = relativeWhen(person.last) || whenLabel(person.last) || "";
       var view = document.createElement("span");
       view.className = "row-open";
@@ -2473,10 +2425,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var leadLine = document.getElementById("file-lead");
     if (leadLine) leadLine.hidden = true;
     var status = document.getElementById("file-lead-status");
-    var notable = lead && (lead.status === "clashing" || lead.status === "replaced" || lead.status === "unknown");
     if (status) {
-      status.textContent = notable ? humanStatus(lead.status) : "";
-      status.hidden = !status.textContent;
+      status.textContent = "";
+      status.hidden = true;
     }
     var proof = lead && typeof lead.checkpoint === "number" ? proofExplain(lead) : "";
     var ticket = lead ? ticketLine(lead) : "";
@@ -2712,10 +2663,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
         text.append(who);
         var calendarZone = document.body.getAttribute("data-calendar-zone") || "";
         var viewerZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        var sample = row.changes && row.changes[0] ? (row.changes[0].from || row.changes[0].to || "") : "";
         var sentence = formatActivitySentence(
           row.sentence || "",
           row.target && row.target.system === "calendar" ? calendarZone : viewerZone,
-          viewerZone
+          viewerZone,
+          sample
         );
         var rest = sentence.indexOf(who.textContent) === 0 ? sentence.slice(who.textContent.length) : (" " + sentence);
         text.append(document.createTextNode(" "));
@@ -2763,7 +2716,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         if (row.kind === "request" && origin.roomId && home && origin.roomId !== home) {
           var from = document.createElement("span");
           from.className = "from-room";
-          from.textContent = "from " + (roomName || origin.roomId);
+          from.textContent = " · from " + (roomName || origin.roomId);
           text.append(from);
         }
         line.append(icon, text);
@@ -2783,7 +2736,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
           line.append(done);
         } else if (row.kind === "failure" && row.stale) {
           var stale = document.createElement("span");
-          stale.className = "retried";
+          stale.className = "activity-stale";
           stale.textContent = "Superseded by a newer change";
           line.append(stale);
         } else if (row.kind === "failure" && row.retryable !== false) {
@@ -3030,15 +2983,17 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var origin = roomMediaState && roomMediaState.startedAt ? Date.parse(roomMediaState.startedAt) : (stamps.length ? Math.min.apply(null, stamps) : NaN);
       var spoken = Date.parse(decision.spokenAt || "");
       var start = !isNaN(origin) && !isNaN(spoken) ? Math.max(0, (spoken - origin) / 1000) : shown;
-      row.setAttribute("data-start", String(start));
-      row.setAttribute("data-end", String(start + 4));
+      var limit = mediaDuration();
+      var past = limit > 0 && start > limit + 0.05;
+      row.setAttribute("data-start", past ? "" : String(start));
+      row.setAttribute("data-end", past ? "" : String(start + 4));
       var head = document.createElement("span");
       head.className = "utter-head";
       var name = document.createElement("span");
       name.className = "utter-name " + toneClass(who);
       name.textContent = who;
       var time = document.createElement("time");
-      time.textContent = clockText(start);
+      time.textContent = past ? "" : clockText(start);
       head.append(name, time);
       var line = document.createElement("span");
       line.className = "utter-text";
@@ -3088,14 +3043,21 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function paintCallout(roomId) {
     var callout = document.getElementById("file-callout");
     if (!callout) return;
-    var failed = activityRows(roomId).filter(function (row) { return row.kind === "failure" && row.outcome === "failed"; });
+    var notes = [];
+    if (decisionsFor(roomId).some(function (decision) { return decision.status === "clashing"; })) {
+      notes.push({ tone: "warn", text: "This sentence clashes with another." });
+    }
+    var failed = activityRows(roomId).filter(function (row) { return row.kind === "failure" && row.outcome === "failed" && !row.resolved; });
+    if (failed.length) notes.push({ tone: "bad", text: failed[0].sentence || "A change did not go through." });
     callout.replaceChildren();
-    callout.hidden = failed.length === 0;
-    callout.classList.toggle("callout-bad", failed.length > 0);
-    if (!failed.length) return;
-    var line = document.createElement("p");
-    line.textContent = failed[0].sentence || "A change did not go through.";
-    callout.append(line);
+    callout.hidden = notes.length === 0;
+    callout.classList.toggle("callout-bad", notes.some(function (note) { return note.tone === "bad"; }));
+    callout.classList.toggle("callout-warn", notes.some(function (note) { return note.tone === "warn"; }));
+    notes.forEach(function (note) {
+      var line = document.createElement("p");
+      line.textContent = note.text;
+      callout.append(line);
+    });
   }
 
   function clockText(seconds) {
@@ -3202,14 +3164,18 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (when) {
       var start = roomMediaState && roomMediaState.startedAt ? new Date(roomMediaState.startedAt) : null;
       if (start && !isNaN(start.getTime())) {
-        var local = new Date(start.getTime() + 7 * 3600000);
-        var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-        var hh = String(local.getUTCHours());
-        var mm = String(local.getUTCMinutes());
-        var ss = String(local.getUTCSeconds());
-        if (mm.length < 2) mm = "0" + mm;
-        if (ss.length < 2) ss = "0" + ss;
-        when.textContent = months[local.getUTCMonth()] + " " + local.getUTCDate() + ", " + hh + ":" + mm + ":" + ss + " UTC+7";
+        var zone = document.body.getAttribute("data-calendar-zone") || "UTC";
+        var label = zoneShortName(start.toISOString(), zone);
+        var stamp = new Intl.DateTimeFormat("en-US", {
+          timeZone: zone,
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hourCycle: "h23"
+        }).format(start).replace(/\u202f|\u00a0/g, " ");
+        when.textContent = label ? stamp + " " + label : stamp;
       } else when.textContent = "";
     }
     var ruler = document.getElementById("tl-ruler");
@@ -3246,6 +3212,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
       decisionsFor(fileRoom).forEach(function (decision) {
         var at = Date.parse(decision.spokenAt || "");
         if (isNaN(origin) || isNaN(at)) return;
+        var offset = (at - origin) / 1000;
+        if (duration && offset > duration) return;
         var mark = document.createElement("span");
         mark.className = "tl-mark";
         mark.style.left = pct((at - origin) / 1000, duration);
@@ -3313,6 +3281,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       paintArtifacts(media);
       paintFactsMedia(media);
       paintTimeline();
+      renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
     }).catch(function () {
       roomMediaState = { state: "none" };
       paintPlayer(roomMediaState);
@@ -3635,18 +3604,37 @@ if (sessionWhen && sessionWhen.dataset.at) {
     load();
   }
 
+  function dropTrail(value) {
+    return String(value || "").split("\\n").filter(function (line) {
+      var trimmed = line.trim();
+      return trimmed.indexOf("preference ") !== 0 && trimmed.indexOf("checkpoint ") !== 0;
+    }).join("\\n").trim();
+  }
+
   function armSlow() {
     if (slowTimer) return;
     slowTimer = setTimeout(function () {
       var slowBox = document.getElementById("read-error");
-      if (slowBox) slowBox.classList.add("state-info");
-      showRetry(true, "This is taking longer than usual. Try again.");
+      var loading = document.getElementById("loading");
+      var homeBox = document.getElementById("home");
+      var onboardBox = document.getElementById("onboard");
+      if (slowBox) {
+        slowBox.classList.add("state-info", "still-loading");
+        if (homeBox && homeBox.hidden && onboardBox) onboardBox.append(slowBox);
+        else if (loading && loading.parentNode) loading.parentNode.insertBefore(slowBox, loading);
+      }
+      showRetry(true, "Still loading…");
+      var heading = document.getElementById("onboard-heading");
+      var readingLine = document.getElementById("onboard-reading");
+      if (homeBox && homeBox.hidden && heading) heading.textContent = "Still loading…";
+      if (homeBox && homeBox.hidden && readingLine) readingLine.textContent = "Still loading…";
       var again = document.getElementById("read-again");
       if (again) {
         again.disabled = false;
+        again.hidden = false;
         again.textContent = "Retry";
       }
-    }, 12000);
+    }, 10000);
   }
 
   function load() {
@@ -3929,7 +3917,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var reading = document.querySelector("#chat-log .chat-turn:last-child .chat-body > span");
       var pending = document.querySelector("#chat-log .chat-turn:last-child");
       if (pending) pending.classList.remove("chat-pending");
-      if (reading) reading.textContent = parts.answer || "The room did not answer.";
+      if (reading) reading.textContent = dropTrail(parts.answer) || "The room did not answer.";
+      if (pending && pending.scrollIntoView) pending.scrollIntoView({ block: "end", inline: "nearest" });
       if (reading && parts.detail) {
         var extra = document.createElement("span");
         extra.className = "chat-detail";

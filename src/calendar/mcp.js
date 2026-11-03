@@ -1,3 +1,5 @@
+import { toUtcIso } from "../instant.js";
+
 const CALENDAR_URL = "https://calendarmcp.googleapis.com/mcp/v1";
 
 /** Workspace calendar zone. Override with CALENDAR_TIME_ZONE. */
@@ -47,7 +49,7 @@ export function createCalendarAdapter(env = process.env, options = {}) {
       try {
         const result = await toolsCall(fetchImpl, token, "get_event", { eventId: id, timeZone: zone });
         const event = singleEvent(result);
-        if (event?.start) return { id: event.id || id, start: asUtc(event.start), end: asUtc(event.end), timeZone: event.timeZone || zone };
+        if (event?.start) return { id: event.id || id, start: toUtcIso(event.start), end: toUtcIso(event.end), timeZone: event.timeZone || zone };
       } catch { /* list_events is the fallback when get_event is absent */ }
       try {
         const listed = await toolsCall(fetchImpl, token, "list_events", {
@@ -57,7 +59,7 @@ export function createCalendarAdapter(env = process.env, options = {}) {
         });
         const event = eventsFrom(listed).find((item) => item.id === id);
         if (!event?.start) return null;
-        return { id: event.id, start: asUtc(event.start), end: asUtc(event.end), timeZone: zone };
+        return { id: event.id, start: toUtcIso(event.start), end: toUtcIso(event.end), timeZone: zone };
       } catch {
         return null;
       }
@@ -79,14 +81,6 @@ export function calendarTimeZone(env = process.env) {
 
 function zoneOf(env) {
   return calendarTimeZone(env);
-}
-
-function asUtc(value) {
-  const text = String(value || "").trim();
-  if (!/^\d{4}-\d{2}-\d{2}T/.test(text)) return text;
-  const parsed = Date.parse(text);
-  if (Number.isNaN(parsed)) return text;
-  return new Date(parsed).toISOString();
 }
 
 async function updateEvent(fetchImpl, token, params, fallbackZone) {

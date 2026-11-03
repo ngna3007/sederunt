@@ -23,7 +23,8 @@ export function renderSignInPage(state = {}) {
           <input id="sign-name" name="name" autocomplete="name" maxlength="80" value="${name}" placeholder="The name you use in the room">
         </label>
         <label>Passphrase
-          <input id="sign-pass" name="passphrase" type="password" autocomplete="current-password" required>
+          <input id="sign-pass" name="passphrase" type="password" autocomplete="current-password" required aria-describedby="pass-hint">
+          <span id="pass-hint" class="field-hint">Ask your workspace admin for the console passphrase.</span>
         </label>
         <button class="primary" type="submit" id="sign-submit">Sign in</button>
       </form>`

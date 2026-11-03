@@ -14,6 +14,7 @@ import { createMeetingAdapter, mediaFromBot, meetingDoorReady, recallBotUrl, rec
 import { createTatumReader } from "./tatum/get-object.js";
 import { bindToolMember, handleMcpRequest, memberRefusal, mcpJsonRpc } from "./mcp.js";
 import { renderConsolePage } from "./console-page.js";
+import { roomsMatching } from "./room-match.js";
 import { renderSignInPage } from "./console-sign-in.js";
 import {
   CONSOLE_SESSION_MS,
@@ -68,6 +69,14 @@ function publicMemory(saved) {
   };
 }
 
+/** Origin, calendar zone, and the Linear team, from the app env rather than a later process.env read. */
+export function appConfig(env = {}) {
+  const origin = String(env.SEDERUNT_PUBLIC_ORIGIN || "").replace(/\/$/, "");
+  const linearTeam = String(env.LINEAR_TEAM || "ROW").trim() || "ROW";
+  const linearWorkspace = String(env.LINEAR_WORKSPACE || "").trim();
+  return { origin, timeZone: calendarTimeZone(env), linearTeam, linearWorkspace };
+}
+
 /** Adapters that do not open a socket. A live Linear client is used only after a token load that the caller opts into. */
 export function defaultDeps(options = {}) {
   const env = options.env ?? process.env;
@@ -104,19 +113,39 @@ export function defaultDeps(options = {}) {
         return { identifier: id || "", id: id || "" };
       },
     },
-    calendar: options.calendar ?? createCalendarAdapter(),
+    calendar: options.calendar ?? createCalendarAdapter(env),
+    slack: options.slack ?? {
+      async postMessage({ channel, text, thread } = {}) {
+        const token = typeof env.SLACK_BOT_TOKEN === "string" ? env.SLACK_BOT_TOKEN.trim() : "";
+        if (!token || !channel || !text) {
+          const error = new Error("unsupported");
+          error.reason = "unsupported";
+          throw error;
+        }
+        const response = await fetch("https://slack.com/api/chat.postMessage", {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ channel, text, thread_ts: thread || undefined }),
+        });
+        return response.json();
+      },
+    },
     tatum: options.tatum ?? createTatumReader(),
     console: options.console ?? createConsoleAdapter(),
     meeting: options.meeting ?? createMeetingAdapter(env),
     memory: options.memory === undefined ? memoryAdapter(env, options.memwal) : options.memory,
   };
   if (options.liveLinear === true) {
-    deps.linear = liveLinear(deps.linear, options.loadToken);
+    deps.linear = liveLinear(deps.linear, options.loadToken, env);
   }
+  deps.app = appConfig(env);
   return deps;
 }
 
-function liveLinear(stub, loadToken = loadLinearToken) {
+function liveLinear(stub, loadToken = loadLinearToken, env = {}) {
   let pending;
   return {
     calls: stub.calls,
@@ -155,7 +184,8 @@ function liveLinear(stub, loadToken = loadLinearToken) {
         try {
           const token = loadToken();
           if (!token) return stub;
-          return createLinearClient(token);
+          const config = appConfig(env);
+          return createLinearClient(token, globalThis.fetch, { team: config.linearTeam, workspace: config.linearWorkspace });
         } catch {
           return stub;
         }
@@ -257,6 +287,7 @@ export function createApp(options = {}) {
     env,
     memwal: options.memwal,
   });
+  deps.app = appConfig(env);
   if (!options.deps && isDirectRun()) {
     deps.log = (event) => {
       process.stdout.write(`${JSON.stringify(event)}\n`);
@@ -454,8 +485,13 @@ export function createApp(options = {}) {
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({ id, name }));
       return;
     }
-    if (req.method === "GET" && url.pathname === "/console/activity.js") {
+    if (req.method === "GET" && (url.pathname === "/console/activity.js" || url.pathname === "/console/activity-feed.js")) {
       const source = await readFile(resolve("src/activity-feed.js"));
+      send(res, 200, "text/javascript; charset=utf-8", source);
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/console/room-match.js") {
+      const source = await readFile(resolve("src/room-match.js"));
       send(res, 200, "text/javascript; charset=utf-8", source);
       return;
     }
@@ -470,7 +506,7 @@ export function createApp(options = {}) {
         query: url.searchParams.get("q") || "",
         roomId: url.searchParams.get("room") || "",
         kind: url.searchParams.get("kind") || "",
-      });
+      }, { timeZone: calendarTimeZone(env) });
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({ ok: true, groups }));
       return;
     }
@@ -744,7 +780,7 @@ export function createApp(options = {}) {
           matched += current.decisions.filter((decision) => decision.roomId === id && !decision.deleted).length;
         }
         send(res, 200, "application/json; charset=utf-8", JSON.stringify({
-          body: parts.filter(Boolean).join("\n"),
+          body: chatAnswer(parts.filter(Boolean).join("\n")),
           decisions: matched,
           stored: false,
         }));
@@ -764,7 +800,7 @@ export function createApp(options = {}) {
         ? current.decisions.filter((decision) => decision.roomId === namedRoom && !decision.deleted).length
         : current.decisions.filter((decision) => !decision.deleted).length;
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({
-        body: result.body,
+        body: chatAnswer(result.body),
         decisions: matched,
         stored: false,
       }));
@@ -889,7 +925,7 @@ export function createApp(options = {}) {
           }
         }
         replyHttp(200, "application/json; charset=utf-8", JSON.stringify({
-          body: result.body,
+          body: question ? chatAnswer(result.body) : result.body,
           decisions: current.decisions.filter((item) => item.account !== "personal" && item.kind !== "note" && !item.deleted).length,
           posted: question === true && !repeat,
         }));
@@ -1090,43 +1126,14 @@ function displayActor(env) {
   return name || "Someone";
 }
 
-function wordHit(question, token) {
-  const text = String(token || "").trim().toLowerCase().replace(/^#/, "");
-  if (text.length < 3) return false;
-  const escaped = text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, "i").test(question);
-}
-
-const ROOM_WEAK = new Set(["planning", "review", "sync", "meeting", "room", "crit", "weekly", "daily"]);
-const ROOM_STOP = new Set(["the", "a", "an", "of", "to", "in", "on", "for", "and", "at", "about", "what", "was", "were", "decided", "decide", "did", "we", "do"]);
-
-function roomTokens(value) {
-  return String(value || "").toLowerCase().replace(/^#/, "").split(/[^a-z0-9]+/).filter((word) => word.length > 2 && !ROOM_STOP.has(word));
-}
-
-function scoreRoom(question, room) {
-  const full = typeof room?.name === "string" ? room.name.trim() : "";
-  const leading = full.split(":")[0].trim();
-  const asked = String(question || "").toLowerCase();
-  if (leading && wordHit(asked, leading)) return 100 + leading.length;
-  if (full && wordHit(asked, full)) return 100 + full.length;
-  if (wordHit(asked, room?.id) || wordHit(asked, room?.channel)) return 80 + String(room?.id || room?.channel || "").length;
-  const words = new Set(roomTokens(asked));
-  let score = 0;
-  for (const word of roomTokens(`${room?.id || ""} ${room?.channel || ""} ${leading}`)) {
-    if (words.has(word)) score += ROOM_WEAK.has(word) ? 1 : 5;
-  }
-  return score;
-}
-
-function roomsMatching(text, rooms) {
-  const ranked = (rooms || []).map((room) => ({ id: room?.id, score: scoreRoom(text, room) })).filter((room) => room.id && room.score > 0);
-  if (!ranked.length) return [];
-  ranked.sort((left, right) => right.score - left.score);
-  const best = ranked[0];
-  const second = ranked[1];
-  if (!second || best.score >= second.score + 5) return [best.id];
-  return ranked.filter((room) => room.score === best.score).map((room) => room.id);
+function chatAnswer(body) {
+  return String(body || "")
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim();
+      return trimmed && !trimmed.startsWith("preference ") && !trimmed.startsWith("checkpoint ");
+    })
+    .join("\n");
 }
 
 function activitySameOrigin(req) {
@@ -1231,7 +1238,7 @@ async function consolePayload(workspace, current, memberId, kind = "company") {
     };
   }
   const report = current.readReport;
-  const board = open === "personal" ? personalBoard(current, memberId) : companyBoard(current, memberId);
+  const board = open === "personal" ? personalBoard(current, memberId) : companyBoard(current, memberId, { timeZone: calendarTimeZone(workspace.env) });
   if (!report.ok) {
     return {
       companyLoaded: true,

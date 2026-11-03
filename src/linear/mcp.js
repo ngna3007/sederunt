@@ -3,8 +3,14 @@ const MCP_URL = "https://mcp.linear.app/mcp";
 /**
  * Linear boundary. Talks to the remote MCP the product spec names.
  * The token stays in memory for the process. It is never written to a response.
+ *
+ * @param {string} token
+ * @param {typeof fetch} [fetchImpl]
+ * @param {{ team?: string, workspace?: string }} [options]
  */
-export function createLinearClient(token, fetchImpl = globalThis.fetch) {
+export function createLinearClient(token, fetchImpl = globalThis.fetch, options = {}) {
+  const team = String(options.team || "ROW").trim() || "ROW";
+  const workspace = String(options.workspace || "").trim();
   let sessionId = "";
   let nextId = 1;
   let started = null;
@@ -80,14 +86,14 @@ export function createLinearClient(token, fetchImpl = globalThis.fetch) {
 
   return {
     async readOpenTripTickets() {
-      const trip = issuesFrom(await callTool("list_issues", { team: "ROW", query: "trip", limit: 25 }));
-      const open = issuesFrom(await callTool("list_issues", { team: "ROW", limit: 25 }));
-      return { team: "ROW", trip, open };
+      const trip = issuesFrom(await callTool("list_issues", { team, query: "trip", limit: 25 }));
+      const open = issuesFrom(await callTool("list_issues", { team, limit: 25 }));
+      return { team, trip, open };
     },
     async createIssue({ title, idempotencyKey, description }) {
       const args = {
         title,
-        team: "ROW",
+        team,
         project: "Sederunt",
         description: typeof description === "string" && description.trim() ? description.trim() : "Filed from a room.",
       };
@@ -99,7 +105,8 @@ export function createLinearClient(token, fetchImpl = globalThis.fetch) {
         const snippet = toolText(result).replace(/\s+/g, " ").slice(0, 500);
         throw new Error(`Linear create returned no issue id. ${snippet}`);
       }
-      return { id: identifier, identifier, url: findUrl(parsed) || findUrl(result) || `https://linear.app/issue/${identifier}` };
+      const url = findUrl(parsed) || findUrl(result) || issueUrl(workspace, identifier);
+      return { id: identifier, identifier, url };
     },
     async assignIssue({ id, assignee }) {
       const saved = await saveIdentified("save_issue", { id, assignee }, id);
@@ -122,7 +129,7 @@ export function createLinearClient(token, fetchImpl = globalThis.fetch) {
       return saveIdentified("save_issue", { id, assignee: null }, id);
     },
     async findIssuesByTitle(title) {
-      const found = issuesFrom(await callTool("list_issues", { team: "ROW", query: title, limit: 20 }));
+      const found = issuesFrom(await callTool("list_issues", { team, query: title, limit: 20 }));
       return found.filter((issue) => (issue.title || "") === title);
     },
     async getIssue(id) {
@@ -182,6 +189,11 @@ function issuesFrom(result) {
     title: issue.title || "",
     status: issue.status || issue.state?.name || "",
   }));
+}
+
+function issueUrl(workspace, identifier) {
+  if (!workspace || !identifier) return "";
+  return `https://linear.app/${encodeURIComponent(workspace)}/issue/${identifier}`;
 }
 
 function rowId(value) {
