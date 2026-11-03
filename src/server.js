@@ -491,7 +491,7 @@ export function createApp(options = {}) {
         query: url.searchParams.get("q") || "",
         roomId: url.searchParams.get("room") || "",
         kind: url.searchParams.get("kind") || "",
-      }, { timeZone: calendarTimeZone(env) });
+      }, { timeZone: calendarTimeZone(env), slackChannel: appConfig(env).slackChannel });
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({ ok: true, groups }));
       return;
     }
@@ -1234,7 +1234,8 @@ async function consolePayload(workspace, current, memberId, kind = "company") {
     };
   }
   const report = current.readReport;
-  const board = open === "personal" ? personalBoard(current, memberId) : companyBoard(current, memberId, { timeZone: calendarTimeZone(workspace.env) });
+  const config = appConfig(workspace.env);
+  const board = open === "personal" ? personalBoard(current, memberId) : companyBoard(current, memberId, { timeZone: config.timeZone, slackChannel: config.slackChannel });
   if (!report.ok) {
     return {
       companyLoaded: true,

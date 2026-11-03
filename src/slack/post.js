@@ -35,18 +35,18 @@ export function createSlackClient(env = {}, fetchImpl = globalThis.fetch) {
       }
       return body;
     },
+    async resolveChannel(name) {
+      return resolveChannelName(fetchImpl, token, env, name);
+    },
   };
 }
 
 async function messagePermalink(fetchImpl, token, channel, ts) {
   try {
-    const response = await fetchImpl("https://slack.com/api/chat.getPermalink", {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ channel, message_ts: ts }),
+    const params = new URLSearchParams({ channel, message_ts: ts });
+    const response = await fetchImpl(`https://slack.com/api/chat.getPermalink?${params}`, {
+      method: "GET",
+      headers: { authorization: `Bearer ${token}` },
     });
     if (!response.ok) return "";
     const body = await response.json();
@@ -54,6 +54,54 @@ async function messagePermalink(fetchImpl, token, channel, ts) {
   } catch {
     return "";
   }
+}
+
+const CHANNEL_ID = /^[CDGW][A-Z0-9]{2,}$/;
+
+async function resolveChannelName(fetchImpl, token, env, name) {
+  const raw = String(name || "").trim();
+  if (CHANNEL_ID.test(raw)) return raw;
+  const fallback = String(env.SLACK_DEFAULT_CHANNEL || "").trim();
+  const fallbackId = CHANNEL_ID.test(fallback) ? fallback : "";
+  const wanted = raw.replace(/^#/, "").toLowerCase();
+  if (!token) return fallbackId;
+  try {
+    const channels = await listChannels(fetchImpl, token);
+    const hit = wanted ? channels.find((item) => String(item?.name || "").toLowerCase() === wanted) : null;
+    if (hit && CHANNEL_ID.test(hit.id)) return hit.id;
+    const fallbackName = fallback.replace(/^#/, "").toLowerCase();
+    if (fallbackName && fallbackName !== wanted) {
+      const alt = channels.find((item) => String(item?.name || "").toLowerCase() === fallbackName);
+      if (alt && CHANNEL_ID.test(alt.id)) return alt.id;
+    }
+  } catch {
+    return fallbackId;
+  }
+  return fallbackId;
+}
+
+async function listChannels(fetchImpl, token) {
+  const found = [];
+  let cursor = "";
+  for (let page = 0; page < 8; page += 1) {
+    const params = new URLSearchParams({
+      types: "public_channel,private_channel",
+      limit: "200",
+      exclude_archived: "true",
+    });
+    if (cursor) params.set("cursor", cursor);
+    const response = await fetchImpl(`https://slack.com/api/conversations.list?${params}`, {
+      method: "GET",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) break;
+    const body = await response.json();
+    if (body?.ok !== true || !Array.isArray(body.channels)) break;
+    found.push(...body.channels);
+    cursor = String(body.response_metadata?.next_cursor || "");
+    if (!cursor) break;
+  }
+  return found;
 }
 
 function archiveUrl(channel, ts) {

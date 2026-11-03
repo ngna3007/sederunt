@@ -135,7 +135,7 @@ export function renderActivity(event, now = Date.now()) {
   if (kind === "resolve" || kind === "supersede") return "";
   const verb = VERBS.includes(event?.verb) ? event.verb : "create";
   const template = PHRASES[verb]?.[kind] || GENERIC[kind];
-  return collapse(fill(template, event, verb));
+  return collapse(withChanges(fill(template, event, verb), event));
 }
 
 /**
@@ -345,6 +345,27 @@ function fill(template, event, verb) {
   return template.replace(/\{(\w+)\}/g, (_, key) => values[key] || "");
 }
 
+function withChanges(sentence, event) {
+  const extra = (event?.changes || []).slice(1).map(changeClause).filter(Boolean);
+  if (!extra.length) return sentence;
+  const clause = ` and ${extra.join(" and ")}`;
+  const on = sentence.indexOf(" on ");
+  if (on > 0) return `${sentence.slice(0, on)}${clause}${sentence.slice(on)}`;
+  return `${sentence}${clause}`;
+}
+
+function changeClause(change) {
+  const field = String(change?.field || "");
+  const to = change?.to || "";
+  const from = change?.from || "";
+  if (field === "assignee" && to) return `assigned it to ${to}`;
+  if (field === "assignee" && from) return `unassigned ${from}`;
+  if ((field === "status" || field === "state") && from && to) return `moved it from ${from} to ${to}`;
+  if (field === "label" && to) return `added the label ${to}`;
+  if (field && to) return `set ${field} to ${to}`;
+  return "";
+}
+
 function collapse(text) {
   return text.replace(/\s+/g, " ").replace(" :", ":").trim();
 }
@@ -383,8 +404,24 @@ function undoOf(undo) {
 
 function safeUrl(url) {
   const text = clean(url);
-  if (text.startsWith("https://linear.app/") || text.startsWith("https://slack.com/")) return text.split("?")[0];
-  return "";
+  let parsed;
+  try {
+    parsed = new URL(text);
+  } catch {
+    return "";
+  }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password) return "";
+  const host = parsed.hostname.toLowerCase();
+  if (host !== "linear.app" && !slackHost(host)) return "";
+  return `${parsed.origin}${parsed.pathname}`;
+}
+
+function slackHost(host) {
+  if (host === "slack.com") return true;
+  const suffix = ".slack.com";
+  if (!host.endsWith(suffix)) return false;
+  const label = host.slice(0, -suffix.length);
+  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label);
 }
 
 function clean(value) {

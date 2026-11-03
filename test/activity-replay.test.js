@@ -3,7 +3,7 @@ import test from "node:test";
 import { activityEvent } from "../src/activity.js";
 import { replayPlan, replaySupported, runReplay, toUtcIso } from "../src/activity-replay.js";
 import { formatActivitySentence, groupActivity } from "../src/activity-feed.js";
-import { replayFailure } from "../src/typed-path.js";
+import { companyBoard, handleUtterance, replayFailure, undoRecorded } from "../src/typed-path.js";
 import { rebuildCompanyIndex } from "../src/typed-path.js";
 import { createSession } from "../src/session.js";
 
@@ -414,4 +414,179 @@ test("a create replaces the previous target url instead of keeping it", async ()
   const filed = session.activity.find((row) => row.kind === "action" && row.verb === "create");
   assert.equal(filed.target.id, "ROW-200");
   assert.equal(filed.target.url, "");
+});
+
+test("undo inverts every field or refuses when one cannot", async () => {
+  const calls = [];
+  const linear = {
+    async updateIssue(args) { calls.push(["updateIssue", args]); return { id: "ROW-1" }; },
+    async assignIssue(args) { calls.push(["assignIssue", args]); return { id: "ROW-1" }; },
+  };
+  const memory = { async remember() { return { blobId: null }; } };
+  const session = createSession();
+  const { logAction } = await import("../src/activity.js");
+  logAction(session, {
+    id: "act-multi",
+    verb: "move",
+    actor: { type: "sederunt", name: "Sederunt" },
+    target: { system: "linear", type: "issue", id: "ROW-1", title: "Demo laptop images" },
+    changes: [
+      { field: "status", from: "Backlog", to: "Todo" },
+      { field: "assignee", from: "Priya", to: "Tomas" },
+    ],
+    undo: { available: true, until: "2099-01-01T00:00:00.000Z" },
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    tool: { name: "act", server: "sederunt-mcp" },
+  });
+  const undone = await undoRecorded(session, { linear, memory }, "act-multi", "Mina");
+  assert.equal(undone.ok, true);
+  assert.deepEqual(calls, [
+    ["updateIssue", { id: "ROW-1", state: "Backlog" }],
+    ["assignIssue", { id: "ROW-1", assignee: "Priya" }],
+  ]);
+  calls.length = 0;
+  logAction(session, {
+    id: "act-bad",
+    verb: "move",
+    actor: { type: "sederunt", name: "Sederunt" },
+    target: { system: "linear", type: "issue", id: "ROW-1", title: "Demo laptop images" },
+    changes: [
+      { field: "status", from: "Backlog", to: "Todo" },
+      { field: "priority", from: "Low", to: "High" },
+    ],
+    undo: { available: true, until: "2099-01-01T00:00:00.000Z" },
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    tool: { name: "act", server: "sederunt-mcp" },
+  });
+  const refused = await undoRecorded(session, { linear, memory }, "act-bad", "Mina");
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, "unsupported");
+  assert.equal(calls.length, 0);
+});
+
+test("an assign retry keeps the same issue url", async () => {
+  const session = createSession();
+  const { logFailure } = await import("../src/activity.js");
+  const url = "https://linear.app/acme/issue/ROW-127";
+  logFailure(session, {
+    id: "fail-assign",
+    requestId: "req-assign",
+    actor: { type: "sederunt", name: "Sederunt" },
+    verb: "assign",
+    target: { system: "linear", type: "issue", id: "ROW-127", title: "Booth power", url },
+    changes: [{ field: "assignee", from: "", to: "Mina" }],
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    tool: { name: "act", server: "sederunt-mcp" },
+  });
+  await replayFailure(session, {
+    linear: { async assignIssue() { return { id: "ROW-127", identifier: "ROW-127" }; } },
+    memory: { async remember() { return { blobId: null }; } },
+  }, "fail-assign");
+  const filed = session.activity.find((row) => row.kind === "action" && row.verb === "assign");
+  assert.equal(filed.target.url, url);
+});
+
+test("a legacy retry without retryOf is already retried", async () => {
+  const session = createSession();
+  const { logFailure, logAction } = await import("../src/activity.js");
+  logFailure(session, {
+    id: "fail-legacy",
+    requestId: "req-legacy",
+    ts: "2026-11-03T08:00:00.000Z",
+    actor: { type: "sederunt", name: "Sederunt" },
+    verb: "assign",
+    target: { system: "linear", type: "issue", id: "ROW-140", title: "Labels" },
+    changes: [{ field: "assignee", to: "Mina" }],
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    tool: { name: "act", server: "sederunt-mcp" },
+  });
+  logAction(session, {
+    id: "act-legacy",
+    requestId: "req-legacy",
+    ts: "2026-11-03T09:00:00.000Z",
+    actor: { type: "sederunt", name: "Sederunt" },
+    verb: "assign",
+    target: { system: "linear", type: "issue", id: "ROW-140", title: "Labels" },
+    changes: [{ field: "assignee", to: "Mina" }],
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    tool: { name: "act", server: "sederunt-mcp" },
+  });
+  const calls = [];
+  const again = await replayFailure(session, {
+    linear: { async assignIssue() { calls.push("assign"); return { id: "ROW-140" }; } },
+    memory: { async remember() { return { blobId: null }; } },
+  }, "fail-legacy");
+  assert.equal(again.reason, "already");
+  assert.equal(calls.length, 0);
+});
+
+test("a slack failure with no channel hides retry, and a #name post stores the id", async () => {
+  const session = createSession();
+  const { logFailure } = await import("../src/activity.js");
+  logFailure(session, {
+    id: "fail-bare",
+    requestId: "req-bare",
+    actor: { type: "sederunt", name: "Sederunt" },
+    verb: "post",
+    target: { system: "slack", type: "message", title: "Booth notes" },
+    changes: [{ field: "body", to: "Hello" }],
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    tool: { name: "act", server: "sederunt-mcp" },
+  });
+  session.rooms.push({ id: "booth", name: "Booth planning", platform: "Google Meet" });
+  session.decisions.push({
+    id: "d-booth",
+    account: "company",
+    kind: "decision",
+    text: "Kept.",
+    roomId: "booth",
+    inviteMemberIds: ["mina"],
+    speakerMemberId: "mina",
+    spokenAt: "2026-11-03T08:00:00.000Z",
+  });
+  const board = companyBoard(session, "mina", {});
+  assert.equal(board.activity.find((row) => row.id === "fail-bare").retryable, false);
+  const refused = await replayFailure(session, {
+    slack: { async postMessage() { throw new Error("posted"); } },
+    memory: { async remember() { return { blobId: null }; } },
+  }, "fail-bare");
+  assert.equal(refused.reason, "unsupported");
+
+  const posting = createSession();
+  posting.actions.push({
+    id: "action-9",
+    state: "paused",
+    tool: "slack",
+    preference: "do",
+    statement: "Booth notes",
+    params: { channel: "#design", text: "Booth notes" },
+    roomId: "booth",
+    memberId: "mina",
+    edit: "post",
+    roomName: "#design",
+  });
+  const posts = [];
+  await handleUtterance({
+    text: "confirm action-9",
+    memberId: "mina",
+    session: posting,
+    door: "typed",
+  }, {
+    slack: {
+      async resolveChannel(name) {
+        assert.equal(name, "#design");
+        return "C0DESIGN";
+      },
+      async postMessage(input) {
+        posts.push(input);
+        return { ok: true, channel: "C0DESIGN", ts: "1710000000.000100", permalink: "https://acme.slack.com/archives/C0DESIGN/p1710000000000100" };
+      },
+    },
+    memory: { async remember() { return { blobId: null }; } },
+    app: {},
+  });
+  assert.equal(posts[0].channel, "C0DESIGN");
+  const filed = posting.activity.find((row) => row.kind === "action" && row.verb === "post");
+  assert.equal(filed.target.channel, "C0DESIGN");
+  assert.equal(filed.target.url, "https://acme.slack.com/archives/C0DESIGN/p1710000000000100");
 });

@@ -32,6 +32,36 @@ export function replaySupported(event, direction) {
   return Boolean(direction === "undo" ? row.undo : row.replay);
 }
 
+const CHANNEL_ID = /^[CDGW][A-Z0-9]{2,}$/;
+
+/**
+ * Whether Retry can run. Slack needs a channel id, a channel name that can
+ * be resolved, or the configured default. The page uses the same answer.
+ *
+ * @param {{ verb?: string, target?: { system?: string, channel?: string }, changes?: { field?: string, to?: string }[] }} event
+ * @param {{ slackChannel?: string }} [options]
+ */
+export function canReplay(event, options = {}) {
+  if (!replaySupported(event, "replay")) return false;
+  if ((event?.target?.system || "") !== "slack") return true;
+  const fallback = options.slackChannel || "";
+  const noted = (event?.changes || []).find((change) => change?.field === "channel")?.to || "";
+  return Boolean(
+    channelId(event?.target?.channel)
+    || channelId(noted)
+    || channelId(fallback)
+    || channelName(event?.target?.channel)
+    || channelName(noted)
+    || channelName(fallback),
+  );
+}
+
+function channelName(value) {
+  const text = String(value || "").trim().replace(/^#/, "");
+  if (!text || CHANNEL_ID.test(text)) return "";
+  return /^[a-z0-9][a-z0-9_-]{0,79}$/i.test(text) ? text : "";
+}
+
 /**
  * Method names the production adapters must export. `unassignIssue` is the
  * assign inverse when the previous assignee is empty. Calendar reads go
@@ -134,6 +164,19 @@ export function replayPlan(event, direction, observed = null, timeZone = "") {
   if (!method) return { ok: false, reason: "unsupported" };
   const change = event.changes?.[0] || {};
   const id = event.target?.id || "";
+  if (system === "linear") {
+    const many = linearSteps(event, direction);
+    if (many && !many.ok) return { ok: false, reason: "unsupported" };
+    if (many?.ok) {
+      return {
+        ok: true,
+        system,
+        method: many.steps[0].method,
+        args: many.steps[0].args,
+        steps: many.steps,
+      };
+    }
+  }
   if (system === "linear" && verb === "move") {
     const state = direction === "undo" ? change.from : change.to;
     if (!id || !state) return { ok: false, reason: "unsupported" };
@@ -193,6 +236,43 @@ export function replayPlan(event, direction, observed = null, timeZone = "") {
   return { ok: false, reason: "unsupported" };
 }
 
+function linearSteps(event, direction) {
+  const id = event.target?.id || "";
+  const changes = (event.changes || []).filter((change) => change?.field);
+  if (!id || changes.length < 2) return null;
+  const steps = [];
+  for (const change of changes) {
+    const step = linearFieldStep(change, direction, id);
+    if (!step) return { ok: false };
+    steps.push(step);
+  }
+  return { ok: true, steps };
+}
+
+function linearFieldStep(change, direction, id) {
+  const field = String(change.field || "").trim();
+  if (field === "status" || field === "state") {
+    const state = direction === "undo" ? change.from : change.to;
+    if (!state) return null;
+    return { method: "updateIssue", args: { id, state } };
+  }
+  if (field === "assignee") {
+    const name = direction === "undo" ? change.from : change.to;
+    if (!name) {
+      const other = direction === "undo" ? change.to : change.from;
+      if (!other) return null;
+      return { method: "unassignIssue", args: { id } };
+    }
+    return { method: "assignIssue", args: { id, assignee: name } };
+  }
+  if (field === "label") {
+    const label = String(change.to || change.from || "");
+    if (!label) return null;
+    return { method: direction === "undo" ? "removeLabel" : "addLabel", args: { id, label } };
+  }
+  return null;
+}
+
 /** A Slack channel id stored on the target. A room name is not a channel. */
 function slackChannel(event) {
   const direct = channelId(event?.target?.channel);
@@ -213,6 +293,17 @@ function channelId(value) {
  * @param {{ system: string, method: string, args: object }} plan
  */
 export async function runReplay(deps, plan) {
+  const steps = Array.isArray(plan.steps) && plan.steps.length
+    ? plan.steps
+    : [{ method: plan.method, args: plan.args }];
+  let last;
+  for (const step of steps) {
+    last = await runOne(deps, { system: plan.system, method: step.method, args: step.args });
+  }
+  return last;
+}
+
+async function runOne(deps, plan) {
   if (plan.system === "linear") {
     const fn = deps.linear?.[plan.method];
     if (typeof fn !== "function") {

@@ -6,8 +6,8 @@ import { rankDecisions } from "../src/room-match.js";
 
 test("a slack post checks HTTP status and prefers chat.getPermalink", async () => {
   const calls = [];
-  const fetchImpl = async (url) => {
-    calls.push(String(url));
+  const fetchImpl = async (url, init = {}) => {
+    calls.push({ url: String(url), method: init.method || "GET", type: init.headers?.["content-type"] || "" });
     if (String(url).endsWith("chat.postMessage")) {
       return { ok: true, status: 200, json: async () => ({ ok: true, channel: "C0123", ts: "1710000000.000100" }) };
     }
@@ -17,10 +17,31 @@ test("a slack post checks HTTP status and prefers chat.getPermalink", async () =
   const posted = await slack.postMessage({ channel: "C0123", text: "Booth notes" });
   assert.equal(posted.permalink, "https://sederunt.slack.com/archives/C0123/p1710000000000100");
   assert.equal(calls.length, 2);
+  assert.equal(calls[1].method, "GET");
+  assert.equal(calls[1].url.includes("chat.getPermalink"), true);
+  assert.equal(calls[1].type.includes("json"), false);
   await assert.rejects(
     () => createSlackClient({ SLACK_BOT_TOKEN: "xoxb-test" }, async () => ({ ok: false, status: 500, json: async () => ({}) })).postMessage({ channel: "C0123", text: "x" }),
     /HTTP 500/,
   );
+});
+
+test("a channel name resolves from conversations.list or the default channel", async () => {
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    calls.push({ url: String(url), method: init.method || "GET" });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, channels: [{ id: "C0DESIGN", name: "design" }], response_metadata: {} }),
+    };
+  };
+  const slack = createSlackClient({ SLACK_BOT_TOKEN: "xoxb-test", SLACK_DEFAULT_CHANNEL: "CDEFAULT" }, fetchImpl);
+  assert.equal(await slack.resolveChannel("#design"), "C0DESIGN");
+  assert.equal(calls[0].method, "GET");
+  assert.equal(calls[0].url.includes("conversations.list"), true);
+  const fallback = createSlackClient({ SLACK_DEFAULT_CHANNEL: "CDEFAULT" }, async () => { throw new Error("no"); });
+  assert.equal(await fallback.resolveChannel("#missing"), "CDEFAULT");
 });
 
 test("a permalink falls back to the archive url", async () => {

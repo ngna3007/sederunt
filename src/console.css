@@ -2378,15 +2378,9 @@ label.search.dock-search { background: var(--card); z-index: 2; }
   .tl-hints { display: none; }
 }
 @media (max-width: 700px) {
-  body.room-open #file-title { display: none; }
   .topbar, body.room-open #file-head.bot-head { padding-left: 16px; padding-right: 16px; }
   #chat-log .chat-turn { scroll-margin-bottom: 112px; }
-  .history-tools {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    justify-content: flex-start;
-  }
-  .room-settings { margin-top: 24px; }
+  .room-settings { margin-top: 16px; }
 }
 @media (max-width: 900px) {
   #rooms .explorer-head,
@@ -2394,57 +2388,157 @@ label.search.dock-search { background: var(--card); z-index: 2; }
   #rooms button.room:not(.decision-row) {
     grid-template-columns: var(--table-rooms-narrow);
   }
-  .decision-head,
-  #record-list .decision-row {
-    grid-template-columns: minmax(0, 1fr) 6.5rem 4.5rem;
-  }
-  .decision-head > span:nth-child(2) { display: none; }
-  #record-list .decision-row {
-    grid-template-areas: "sentence status view" "room room view";
-  }
-  #record-list .decision-row .ex-room { grid-area: sentence; min-width: 0; width: auto; }
-  #record-list .decision-row .ex-room strong { white-space: normal; overflow-wrap: anywhere; }
-  #record-list .decision-row .ex-plat { grid-area: room; width: auto; max-width: 100%; }
-  #record-list .decision-row .badge { grid-area: status; justify-self: start; }
-  #record-list .decision-row .row-view { grid-area: view; justify-self: start; }
   .people-head > span:nth-child(4),
   .people-row .heard { display: none; }
-  .people-head,
-  .people-row {
-    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) 6.75rem 4.5rem;
+  #people-table .people-head,
+  #people-table .people-row {
+    grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.6fr) 6.5rem 4.5rem;
   }
-  .people-row .room-chips { min-width: 0; overflow: hidden; }
-}
-@media (max-width: 700px) {
-  .chip-second,
-  .more-wide { display: none !important; }
+  .chip-second, .chip-rest, .more-wide { display: none !important; }
   .more-narrow { display: inline-flex; }
   .room-chips { flex-wrap: nowrap; }
-  .decision-head { display: none; }
-  #record-list .decision-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: "sentence status" "room view";
-    align-items: start;
+}
+@media (max-width: 700px) {
+  #rooms .row-view,
+  #rooms .explorer-head > span:nth-child(5) { display: none; }
+  #rooms .explorer-head,
+  #rooms a.room,
+  #rooms button.room:not(.decision-row) {
+    grid-template-columns: minmax(0, 1fr) max-content max-content minmax(0, 9rem);
   }
-  #record-list .decision-row .ex-room { grid-area: sentence; width: 100%; }
-  #record-list .decision-row .ex-plat {
-    grid-area: room;
+  .counts { grid-template-columns: 1fr 1fr; }
+  .status-cell { gap: 12px; }
+}
+
+#record-table.explorer,
+#people-table.explorer,
+#history-table.explorer {
+  border: 1px solid var(--border);
+  box-shadow: none;
+}
+#record-table > #record-list,
+#people-table > #people-list,
+#history-table > #history-list {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+#record-table > .decision-head,
+#people-table .people-head {
+  display: grid;
+  border-bottom: 1px solid var(--border);
+  box-shadow: none;
+}
+#record-table > .decision-head,
+#record-list .decision-row {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 14rem) 7.5rem 4.5rem;
+  grid-template-areas: none;
+}
+#record-list .decision-row {
+  padding: 12px 16px;
+  background: var(--card);
+  border-top: 0;
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+}
+#record-list .decision-row > * { min-width: 0; }
+#record-list .decision-row .ex-room,
+#record-list .decision-row .ex-plat,
+#record-list .decision-row .badge,
+#record-list .decision-row .row-view { grid-area: auto; width: auto; max-width: 100%; }
+#record-list .decision-row .badge,
+#record-list .decision-row .row-view { justify-self: start; }
+#record-list .decision-row .room-name,
+#record-list .ex-plat span.room-name {
+  display: block;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+  -webkit-line-clamp: unset;
+}
+.mini-chip { max-width: 100%; }
+.activity-row {
+  min-height: 36px;
+  align-items: center;
+  padding: 4px 0;
+}
+.activity-row p {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.activity-child { margin-left: 0; }
+.activity-icon,
+.activity-icon.bad {
+  width: 16px;
+  height: 16px;
+  background: transparent;
+  color: var(--muted-foreground);
+}
+.activity-undo,
+.activity-retry {
+  justify-self: end;
+  align-self: center;
+  margin: 0;
+  min-width: 4.5rem;
+  box-sizing: border-box;
+}
+.room-suffix { color: var(--muted-foreground); }
+.history-tools {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  justify-content: flex-start;
+}
+.history-tools .chips { flex: none; flex-wrap: nowrap; }
+.history-filters { flex: none; margin-left: 0; }
+.ask-state, .ask-name, .conn strong { font-weight: 550; }
+.account-layout .account-kv dt:last-of-type,
+.account-layout .account-kv dd:last-child { border-bottom: 0; }
+#file-id-chip { display: none; }
+#file-title { display: block; }
+.room-settings,
+#settings-heading { margin-top: 0; }
+.room-settings { padding: 16px; }
+#settings-heading { margin: 0 0 12px; }
+.table-skel { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 700px) {
+  .table-skel { grid-template-columns: 1fr 1fr; }
+  body.room-open #file-head.bot-head,
+  .room-screen .room-left,
+  #file-dialog.room-screen .detail-side.room-right,
+  .room-screen .room-left > .underline-tabs,
+  #file-transcript,
+  #file-callout,
+  label.search.dock-search {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
+#chat { padding-top: 12px; }
+#chat-form.composer { margin-top: 12px; }
+.suggests, #chat-suggests { margin-bottom: 12px; }
+#new-room.primary:not(:disabled) {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  opacity: 1;
+}
+.auth-card { width: 400px; max-width: calc(100% - 32px); }
+@media (max-width: 700px) {
+  .auth { padding: 16px; }
+  .auth-card { width: 100%; max-width: none; }
+  #chat-form.composer {
+    position: fixed;
+    left: 16px;
+    right: 16px;
     width: auto;
-    max-width: 100%;
-    min-width: 0;
+    bottom: 16px;
+    box-sizing: border-box;
   }
-  .people-head { display: none; }
-  .people-row {
-    grid-template-columns: minmax(0, 1fr) auto auto;
-    grid-template-areas: "name count view" "rooms heard heard";
-    align-items: center;
+  #chat { padding-top: 12px; }
+}
+@media (max-width: 900px) {
+  #record-table > .decision-head,
+  #record-list .decision-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 9rem) 6.5rem 4.5rem;
   }
-  .people-row .person { grid-area: name; }
-  .people-row .room-chips { grid-area: rooms; min-width: 0; }
-  .people-row .num { grid-area: count; white-space: nowrap; }
-  .people-row .heard { grid-area: heard; color: var(--muted-foreground); font-size: 12px; }
-  .people-row .row-open { grid-area: view; }
-  #record-list .decision-row .badge { grid-area: status; justify-self: end; }
-  #record-list .decision-row .row-view { grid-area: view; }
 }

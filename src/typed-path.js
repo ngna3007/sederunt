@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { displayName, logAction, logFailure, logRequest, logUndo, renderActivity, undoRefusal } from "./activity.js";
 import { formatActivitySentence, selectActivity } from "./activity-feed.js";
-import { readCalendarEvent, replayPlan, replaySupported, runReplay } from "./activity-replay.js";
+import { canReplay, readCalendarEvent, replayPlan, replaySupported, runReplay } from "./activity-replay.js";
 import { authorize } from "./domain/allow.js";
 import { clashStatuses } from "./domain/clash.js";
 import { checkInvite } from "./domain/invite.js";
@@ -431,6 +431,7 @@ async function callConnector(session, deps, action, auth) {
     actorKind: "sederunt",
     outcome: "done",
     entityId: issueId,
+    url: typeof created?.permalink === "string" ? created.permalink : (typeof created?.url === "string" ? created.url : ""),
     undoToken: action.id,
   });
   await remember(deps, {
@@ -498,6 +499,21 @@ async function runConnector(deps, action) {
     const writeTool = (tools ?? []).find((tool) => tool.write === true && tool.name);
     if (!writeTool) return { id: "" };
     return deps.calendar.call(writeTool.name, action.params);
+  }
+  if (action.tool === "slack") {
+    const channel = await slackChannelFor(deps, action.params?.channel || "");
+    if (!channel || typeof deps.slack?.postMessage !== "function") {
+      const error = new Error("unsupported");
+      error.reason = "unsupported";
+      throw error;
+    }
+    action.params = { ...(action.params || {}), channel };
+    const posted = await deps.slack.postMessage({
+      channel,
+      text: action.params.text || action.params.body || action.statement || "",
+    });
+    const ts = String(posted?.ts || "").trim();
+    return { ...posted, id: ts, channel: posted?.channel || channel };
   }
   if (action.edit === "assign") {
     return deps.linear.assignIssue({ id: action.params.id, assignee: action.params.assignee });
@@ -571,6 +587,10 @@ function activitySystem(action) {
 }
 
 async function noteActivity(session, deps, action, fields) {
+  if (action.tool === "slack") {
+    const channel = await slackChannelFor(deps, action.params?.channel || "");
+    if (channel) action.params = { ...(action.params || {}), channel };
+  }
   const kind = fields.role === "failure" ? "failure" : (fields.role === "request" ? "request" : "action");
   const input = {
     id: nextId(session, "activity"),
@@ -586,6 +606,7 @@ async function noteActivity(session, deps, action, fields) {
       type: action.tool === "calendar" ? "event" : "issue",
       id: fields.entityId || action.params?.id || "",
       title: createTitle(action),
+      url: fields.url || "",
       channel: action.tool === "slack" ? slackChannelId(action.params?.channel) : "",
     },
     changes: activityChanges(action),
@@ -676,8 +697,12 @@ export async function replayFailure(session, deps, failureId) {
     const request = (session.activity || []).find((row) => row.requestId === named.requestId && row.kind === "request");
     const observed = await readCalendarEvent(deps, named);
     const planned = { ...named, changes: request?.changes?.length ? request.changes : named.changes };
-    if (planned.target?.system === "slack" && !slackChannelId(planned.target?.channel) && !slackChannelId(channelChange(planned))) {
-      const channel = slackChannelId(request?.target?.channel) || slackChannelId(channelChange(request)) || slackChannelId(deps.app?.slackChannel);
+    if (planned.target?.system === "slack") {
+      const channel = await slackChannelFor(
+        deps,
+        planned.target?.channel || channelChange(planned) || request?.target?.channel || channelChange(request) || deps.app?.slackChannel || "",
+      );
+      if (!channel) return { ok: false, reason: "unsupported" };
       planned.target = { ...planned.target, channel };
     }
     const plan = replayPlan(planned, "replay", observed, deps.app?.timeZone || "");
@@ -800,10 +825,17 @@ function newerFailure(session, failure) {
 }
 
 function alreadyRetried(session, failure) {
+  const at = Date.parse(failure?.ts || "") || 0;
   return (session.activity || []).some((row) => {
     if (!row || row.id === failure.id) return false;
-    if (row.retryOf === failure.id && (row.kind === "action" || row.kind === "result") && row.outcome !== "undone") return true;
-    return row.kind === "resolve" && row.refersTo === failure.id;
+    if (row.kind === "resolve" && row.refersTo === failure.id) return true;
+    if (row.kind !== "action" && row.kind !== "result") return false;
+    if (row.outcome === "undone") return false;
+    if (row.retryOf === failure.id) return true;
+    if (row.retryOf) return false;
+    if ((row.requestId || "") !== (failure.requestId || "")) return false;
+    if ((row.verb || "") !== (failure.verb || "")) return false;
+    return (Date.parse(row.ts || "") || 0) >= at;
   });
 }
 
@@ -839,15 +871,33 @@ function appliedTarget(named, created, deps) {
       channel: "",
     };
   }
-  const id = connectorId(created);
+  const id = connectorId(created) || previous.id || "";
+  const createdId = connectorId(created);
+  const sameIssue = !createdId || createdId === previous.id;
+  const connectorUrl = typeof created?.url === "string" && created.url ? created.url : "";
+  const url = connectorUrl || (sameIssue ? (previous.url || "") : "") || linearIssueUrl(deps, id);
   return {
     system: previous.system || "",
     type: previous.type || "",
-    id: id || previous.id || "",
+    id,
     title,
-    url: typeof created?.url === "string" ? created.url : "",
+    url,
     channel: "",
   };
+}
+
+async function slackChannelFor(deps, raw) {
+  const direct = slackChannelId(raw);
+  if (direct) return direct;
+  if (typeof deps.slack?.resolveChannel === "function") {
+    try {
+      const resolved = slackChannelId(await deps.slack.resolveChannel(raw));
+      if (resolved) return resolved;
+    } catch {
+      // The configured default is the remaining channel.
+    }
+  }
+  return slackChannelId(deps.app?.slackChannel);
 }
 
 function slackChannelId(value) {
@@ -2178,6 +2228,7 @@ export function companyBoard(session, memberId, options = {}) {
     if (opened.platform) room.platform = opened.platform;
     if (typeof opened.name === "string" && opened.name) room.name = opened.name;
     if (typeof opened.channel === "string" && opened.channel) room.channel = opened.channel;
+    if (typeof opened.startedAt === "string" && opened.startedAt) room.startedAt = opened.startedAt;
   }
   const named = session?.roomNames && typeof session.roomNames === "object" ? session.roomNames : {};
   for (const room of rooms) {
@@ -2259,7 +2310,7 @@ function publicActivity(session, rooms, options = {}) {
       outcome: row.outcome,
       error: row.error,
       undo: publishedUndo(row),
-      retryable: row.kind === "failure" && !row.resolved && !newerSuccess(session, row) && !newerFailure(session, row) && replaySupported(row, "replay"),
+      retryable: row.kind === "failure" && !row.resolved && !newerSuccess(session, row) && !newerFailure(session, row) && canReplay(row, { slackChannel: options.slackChannel || "" }),
       stale: row.kind === "failure" && !row.resolved && newerSuccess(session, row),
       resolved: row.resolved === true,
       superseded: row.superseded === true,

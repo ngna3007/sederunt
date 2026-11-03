@@ -203,6 +203,7 @@ ${slack}
       <span class="sk sk-tile"></span>
       <span class="sk sk-tile"></span>
       <span class="sk sk-tile"></span>
+      <span class="sk sk-tile"></span>
       <span class="sr">Reading the account.</span>
       <span class="sk sk-row"></span>
       <span class="sk sk-row"></span>
@@ -407,9 +408,6 @@ ${slack}
     <section id="people" hidden>
       <div class="page-head"><div><p class="page-title">People</p><p class="page-lede">Names heard in a room.</p></div></div>
       <div class="toolbar" id="people-toolbar">
-        <div class="chips" role="group" aria-label="Filter people">
-          <button type="button" class="chip-filter" data-people-filter="all" aria-pressed="true">All</button>
-        </div>
         <label class="search">${searchIcon}<span class="sr">Search people</span><input id="people-search" type="search" placeholder="Search" autocomplete="off"></label>
       </div>
       <div id="people-empty" class="empty-state" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="5.2" r="2.2"/><path d="M3.4 12.6c.7-2 2.4-3 4.6-3s3.9 1 4.6 3"/></svg></span><p class="empty-title">No one is listed yet.</p><p>People from a meeting or a channel show up here.</p></div>
@@ -1473,6 +1471,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       specs.push(item);
     });
     rooms.forEach(function (room) {
+      askRecording(room);
       var rows = decisionsFor(room.id);
       var ident = roomIdentity(room, rows);
       var spec = {
@@ -1546,6 +1545,20 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (next) next.disabled = roomPage >= pages - 1;
   }
 
+  function askRecording(room) {
+    if (!room || !room.id || room.recordingAsked || /slack/i.test(room.platform || "")) return;
+    room.recordingAsked = true;
+    fetch("/console/rooms/" + encodeURIComponent(room.id) + "/media").then(function (response) {
+      if (!response.ok) return null;
+      return response.json();
+    }).then(function (media) {
+      if (!media || !media.startedAt || media.startedAt === room.recordingStart) return;
+      room.startedAt = media.startedAt;
+      room.recordingStart = media.startedAt;
+      paintRooms();
+    }).catch(function () { /* The list keeps the room's own start. */ });
+  }
+
   function clipText(text, max) {
     var value = String(text || "").trim();
     if (value.length <= max) return value;
@@ -1556,17 +1569,21 @@ if (sessionWhen && sessionWhen.dataset.at) {
 
   function roomName(room) {
     if (!room) return "";
-    if (room.name) return String(room.name);
     if (room.channel) {
       var channel = String(room.channel);
       return channel.charAt(0) === "#" ? channel : ("#" + channel);
     }
+    if (room.name && /slack/i.test(room.platform || "")) {
+      var slackName = String(room.name);
+      return slackName.charAt(0) === "#" ? slackName : ("#" + slackName);
+    }
+    if (room.name) return String(room.name);
     return "";
   }
 
   function roomIdentity(room, rows) {
-    var last = rows && rows.length ? rows[rows.length - 1] : null;
-    var when = (room && room.startedAt) || (last && last.spokenAt) || "";
+    var first = rows && rows.length ? rows[0] : null;
+    var when = (room && (room.recordingStart || room.startedAt)) || (first && first.spokenAt) || "";
     var platform = (room && room.platform) || "";
     var title = roomName(room) || (room && room.id) || "Room";
     var stamp = relativeWhen(when) || whenLabel(when);
@@ -1711,8 +1728,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
       person.rooms.forEach(function (room, index) {
         var chip = document.createElement("span");
         chip.className = "mini-chip" + (index === 1 ? " chip-second" : index > 1 ? " chip-rest" : "");
-        chip.textContent = clipText(room, 28);
+        chip.textContent = room;
         chip.title = room;
+        chip.setAttribute("data-full", room);
         roomsCell.append(chip);
       });
       if (person.rooms.length > 1) {
@@ -1746,6 +1764,33 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
     if (foot) foot.hidden = false;
     if (count) count.textContent = "1\u2013" + rows.length + " of " + rows.length;
+    fitChips();
+  }
+
+  function fitChips() {
+    var chips = document.querySelectorAll(".room-chips .mini-chip");
+    Array.prototype.forEach.call(chips, function (chip) {
+      if (chip.className.indexOf("more-") !== -1) return;
+      var full = chip.getAttribute("data-full") || chip.textContent;
+      chip.setAttribute("data-full", full);
+      chip.textContent = full;
+      if (!chip.clientWidth || chip.scrollWidth <= chip.clientWidth) return;
+      var words = full.split(" ");
+      var kept = "";
+      var i;
+      for (i = 0; i < words.length; i += 1) {
+        var next = kept ? (kept + " " + words[i]) : words[i];
+        chip.textContent = next + "…";
+        if (chip.scrollWidth > chip.clientWidth) {
+          chip.textContent = kept ? (kept + "…") : (words[0].charAt(0) + "…");
+          while (chip.textContent.length > 2 && chip.scrollWidth > chip.clientWidth) {
+            chip.textContent = chip.textContent.slice(0, -2) + "…";
+          }
+          return;
+        }
+        kept = next;
+      }
+    });
   }
 
   function addLine(id, title, body, onPick) {
@@ -1794,7 +1839,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var counts = (state && state.counts) || {};
     addCount(box, "Decisions kept", counts.kept || 0, "Sentences kept in this workspace.", null, false);
     addCount(box, "Actions today", counts.actionsToday || 0, "Changes that ran today.", null, false);
-    if (counts.failed) addCount(box, "Failed", counts.failed, "A change did not go through.", null, "danger");
+    if (counts.failed) addCount(box, "Failed actions", counts.failed, "A change did not go through.", null, "danger");
     if (counts.sent) addCount(box, "Sent", counts.sent, "The tool accepted the change.", null, false);
   }
 
@@ -1826,7 +1871,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       ((state && state.rooms) || []).forEach(function (room) {
         var option = document.createElement("option");
         option.value = room.id;
-        option.textContent = room.name || room.channel || room.id;
+        option.textContent = roomName(room) || room.id;
         roomPick.append(option);
       });
       if (chosen) roomPick.value = chosen;
@@ -2077,6 +2122,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
     syncNotices();
     paintPeople(next);
+    fitChips();
     var peopleCount = document.querySelectorAll("#people-list .people-row").length;
     document.getElementById("people-empty").hidden = peopleCount > 0;
     var peopleTable = document.getElementById("people-table");
@@ -2305,10 +2351,16 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (crumbSep) crumbSep.hidden = onHome;
     if (roomsCrumb) roomsCrumb.hidden = !onFile;
     if (sep2) sep2.hidden = !onFile;
+    var currentCrumb = document.getElementById("crumb-current");
     if (onFile) {
-      text("crumb-current", (document.getElementById("file-title") || {}).textContent || "Room");
+      if (currentCrumb) {
+        currentCrumb.textContent = "";
+        currentCrumb.hidden = true;
+      }
+      if (sep2) sep2.hidden = true;
       if (file) file.hidden = false;
     } else {
+      if (currentCrumb) currentCrumb.hidden = false;
       text("crumb-current", sectionLabel(name));
     }
     panels.forEach(function (id) {
@@ -2339,7 +2391,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (homeHead) homeHead.hidden = name !== "home";
     var homeTools = document.querySelector(".home-tools");
     var homeStats = document.getElementById("home-stats");
-    if (homeTools) homeTools.hidden = name !== "home" && name !== "rooms";
+    if (homeTools) homeTools.hidden = name !== "home";
     if (homeStats) homeStats.hidden = name !== "home";
     var label = onFile ? ((document.getElementById("file-title") || {}).textContent || "Room") : sectionLabel(name);
     setViewTitle(label);
@@ -2593,22 +2645,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
 
-  function activityGlyph(kind, verb) {
-    var name = kind === "failure" ? "fail" : (kind === "undo" ? "undo" : (kind === "request" ? "request" : (verb || "create")));
-    var paths = {
-      assign: '<path d="M8 3.2v3.2M6.4 4.8h3.2"/><circle cx="8" cy="11" r="2.1"/>',
-      move: '<path d="M2.8 8h9.2M9.2 5.2 12.2 8 9.2 10.8"/>',
-      reschedule: '<path d="M2.8 8h9.2M9.2 5.2 12.2 8 9.2 10.8"/>',
-      label: '<path d="M2.8 8.4 8 3.2h3.4v3.4L6.2 12z"/><circle cx="9.5" cy="5.1" r=".6" fill="currentColor"/>',
-      post: '<path d="M3 4.2h10v5.6H6.4L3 12z"/>',
-      create: '<path d="M8 3.4v9.2M3.4 8h9.2"/>',
-      fail: '<circle cx="8" cy="8" r="4.6"/><path d="M8 5.2v3.2M8 10.4v.4"/>',
-      undo: '<path d="M6.2 4.8H3.2V7.6"/><path d="M3.6 5.4a4.8 4.8 0 1 1-.8 3.4"/>',
-      request: '<circle cx="8" cy="8" r="2.2"/>',
-      join: '<circle cx="6" cy="6.2" r="1.5"/><circle cx="10.6" cy="6.2" r="1.5"/>'
-    };
-    var body = paths[name] || paths.create;
-    return '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + body + '</svg>';
+  function activityGlyph() {
+    return '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="3.2"/></svg>';
   }
 
   function paintRich(parent, text, row) {
@@ -2741,13 +2779,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
           text.append(time);
         }
         var origin = row.origin || {};
-        var roomName = origin.roomName || "";
-        var home = group.rows.map(function (item) { return (item.origin || {}).roomId; }).filter(Boolean).pop();
-        if (row.kind === "request" && origin.roomId && home && origin.roomId !== home) {
-          var from = document.createElement("span");
-          from.className = "from-room";
-          from.textContent = " · from " + (roomName || origin.roomId);
-          text.append(from);
+        var heardRoom = origin.roomName || "";
+        if (opts.showRoom && heardRoom) {
+          var suffix = document.createElement("span");
+          suffix.className = "room-suffix";
+          suffix.textContent = " · " + heardRoom;
+          text.append(suffix);
         }
         if (row.target && row.target.url && row.target.system === "slack" && (row.kind === "action" || row.kind === "result")) {
           var open = document.createElement("a");
@@ -2778,7 +2815,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
           stale.className = "activity-stale";
           stale.textContent = "Superseded by a newer change";
           line.append(stale);
-        } else if (row.kind === "failure" && row.retryable !== false) {
+        } else if (row.kind === "failure" && row.retryable === true) {
           var retry = document.createElement("button");
           retry.type = "button";
           retry.className = "activity-retry";
@@ -2788,19 +2825,6 @@ if (sessionWhen && sessionWhen.dataset.at) {
         }
         wrap.append(line);
       });
-      if (opts.showRoom) {
-        var chipName = "";
-        group.rows.forEach(function (row) {
-          var name = (row.origin || {}).roomName || "";
-          if (name) chipName = name;
-        });
-        if (chipName) {
-          var chip = document.createElement("span");
-          chip.className = "mini-chip group-chip";
-          chip.textContent = chipName;
-          wrap.append(chip);
-        }
-      }
       feed.append(wrap);
     });
     box.append(feed);
@@ -2857,7 +2881,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
     text("file-title", fileWait ? (fileWait.title || "Room") : (knownRoom ? named.title : "Room not found"));
     renderLead();
     if (sectionName === "file") {
-      text("crumb-current", document.getElementById("file-title").textContent || "Room");
+      var currentCrumb = document.getElementById("crumb-current");
+      if (currentCrumb) currentCrumb.hidden = true;
       setViewTitle(document.getElementById("file-title").textContent || "Room");
     }
     text("file-overview-platform", (room && room.platform) || "Platform unknown");
@@ -2991,14 +3016,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
     box.replaceChildren();
     var facts = [
       ["Started", relativeWhen(named.when) || whenLabel(named.when) || "Unknown"],
-      ["Room", fileRoom || ""],
+      ["Room", roomName(room) || fileRoom || ""],
       ["Decisions", String(rows.length)]
     ];
     facts.forEach(function (pair) {
       var term = document.createElement("dt");
       term.textContent = pair[0];
       var value = document.createElement("dd");
-      if (pair[0] === "Room") value.className = "mono";
       value.textContent = pair[1];
       box.append(term, value);
     });
@@ -3085,21 +3109,31 @@ if (sessionWhen && sessionWhen.dataset.at) {
     callout.className = "callout-stack";
     callout.replaceChildren();
     var clashing = decisionsFor(roomId).filter(function (decision) { return decision.status === "clashing"; });
+    function clashSentence(decision) {
+      var when = relativeWhen(decision && decision.spokenAt) || whenLabel(decision && decision.spokenAt);
+      var line = (decision && decision.text) || "A sentence";
+      return when ? (line + " (" + when + ")") : line;
+    }
+
     if (clashing.length) {
       var warn = document.createElement("div");
       warn.className = "callout callout-warn";
-      var lead = clashing[clashing.length - 1];
-      var other = clashing.filter(function (decision) { return decision.id !== lead.id; })[0] || lead;
-      warn.append(document.createTextNode("Clashes with "));
+      var ordered = clashing.slice().sort(function (a, b) {
+        return String(b.spokenAt || "").localeCompare(String(a.spokenAt || ""));
+      });
+      var newest = ordered[0];
+      var older = ordered[1] || ordered[0];
+      warn.append(clashSentence(newest));
+      warn.append(document.createTextNode(" clashes with "));
       var link = document.createElement("button");
       link.type = "button";
       link.className = "at-link";
-      link.textContent = other.text || "another sentence";
-      link.addEventListener("click", function () { openDecision(other); });
+      link.textContent = clashSentence(older);
+      link.addEventListener("click", function () { openDecision(older); });
       warn.append(link);
       callout.append(warn);
     }
-    var failed = activityRows(roomId).filter(function (row) { return row.kind === "failure" && row.outcome === "failed" && !row.resolved && row.retryable !== false; });
+    var failed = activityRows(roomId).filter(function (row) { return row.kind === "failure" && row.outcome === "failed" && !row.resolved && row.retryable === true; });
     var shown = failed[failed.length - 1];
     if (shown) {
       var bad = document.createElement("div");
@@ -3223,16 +3257,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (start && !isNaN(start.getTime())) {
         var zone = document.body.getAttribute("data-calendar-zone") || "UTC";
         var label = zoneShortName(start.toISOString(), zone);
-        var stamp = new Intl.DateTimeFormat("en-US", {
-          timeZone: zone,
-          month: "short",
-          day: "numeric",
-          hour: "numeric",
-          minute: "2-digit",
-          second: "2-digit",
-          hour12: true
-        }).format(start).replace(/\u202f|\u00a0/g, " ");
-        when.textContent = label ? stamp + " " + label : stamp;
+        var stamp = relativeWhen(start.toISOString());
+        when.textContent = label && stamp ? stamp + " " + label : stamp;
       } else when.textContent = "";
     }
     var ruler = document.getElementById("tl-ruler");
@@ -3329,18 +3355,22 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (media.title && room && !room.name) {
         room.name = media.title;
         text("file-title", media.title);
-        if (sectionName === "file") {
-          text("crumb-current", media.title);
-          setViewTitle(media.title);
-        }
+        if (sectionName === "file") setViewTitle(media.title);
       }
       paintPlayer(media);
       paintArtifacts(media);
       paintFactsMedia(media);
       paintTimeline();
       if (media.startedAt) {
-        text("file-started", relativeWhen(media.startedAt));
-        text("file-overview-when", relativeWhen(media.startedAt));
+        var roomLive = roomOf(fileRoom);
+        if (roomLive) {
+          roomLive.startedAt = media.startedAt;
+          roomLive.recordingStart = media.startedAt;
+        }
+        var stamp = relativeWhen(media.startedAt);
+        text("file-started", stamp);
+        text("file-overview-when", stamp);
+        renderFacts(roomLive || room || {}, { when: media.startedAt }, fileRoom ? decisionsFor(fileRoom) : []);
       }
       renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
     }).catch(function () {
@@ -3814,6 +3844,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   document.getElementById("rail-next").addEventListener("click", function () { stepRail(1); });
   document.querySelector(".rail").addEventListener("scroll", syncRail);
   window.addEventListener("resize", function () {
+    fitChips();
     if (!window.matchMedia("(max-width: 767px)").matches) {
       try {
         if (localStorage.getItem("sederunt-rail") === "collapsed") document.body.classList.add("rail-collapsed");

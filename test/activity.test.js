@@ -90,6 +90,42 @@ test("one renderer produces the activity sentences", () => {
   assert.equal(renderActivity(posted, NOW), "Sederunt posted a summary in #sederunt-demo via Slack");
 });
 
+test("a workspace slack permalink is kept and a lookalike host is dropped", () => {
+  const kept = activityEvent({
+    verb: "post",
+    actor: { name: "Sederunt", type: "sederunt" },
+    target: { system: "slack", url: "https://acme.slack.com/archives/C1/p1?thread=1" },
+  });
+  assert.equal(kept.target.url, "https://acme.slack.com/archives/C1/p1");
+  const dropped = activityEvent({
+    verb: "post",
+    actor: { name: "Sederunt", type: "sederunt" },
+    target: { system: "slack", url: "https://slack.com.evil.com/archives/C1" },
+  });
+  assert.equal(dropped.target.url, "");
+  const nested = activityEvent({
+    verb: "post",
+    actor: { name: "Sederunt", type: "sederunt" },
+    target: { system: "slack", url: "https://a.b.slack.com/archives/C1" },
+  });
+  assert.equal(nested.target.url, "");
+});
+
+test("a sentence names every change", () => {
+  const sentence = renderActivity({
+    kind: "action",
+    verb: "move",
+    actor: { type: "sederunt", name: "Sederunt", via: "MCP" },
+    target: { system: "linear", title: "Demo laptop images" },
+    changes: [
+      { field: "status", from: "Todo", to: "In Progress" },
+      { field: "assignee", to: "Tomas" },
+    ],
+  }, NOW);
+  assert.match(sentence, /moved Demo laptop images from Todo to In Progress/);
+  assert.match(sentence, /and assigned it to Tomas/);
+});
+
 test("a calendar reschedule and an MCP action use the same renderer", () => {
   const rescheduled = {
     kind: "action",

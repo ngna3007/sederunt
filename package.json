@@ -6,6 +6,9 @@
     "start": "node src/server.js",
     "test": "node --test"
   },
+  "devDependencies": {
+    "playwright": "1.64.1"
+  },
   "dependencies": {
     "@iconify-json/logos": "^1.2.18",
     "@mysten-incubation/memwal": "^0.1.8",
