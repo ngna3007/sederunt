@@ -4323,3 +4323,274 @@ body.is-reading #rooms .explorer { display: none !important; }
     max-width: 100% !important;
   }
 }
+
+/* Fix pass 05: compact history, equal decision rows, people count, meeting words. */
+:root {
+  --cols-history: 24px minmax(0, 1fr) max-content minmax(6.5rem, 10rem) max-content;
+}
+#people-table .people-row > .num,
+#people-table .people-head > [data-col="count"] {
+  text-align: left !important;
+  justify-self: stretch !important;
+}
+
+@media (max-width: 390px) {
+  #people-table .people-row {
+    display: flex !important;
+    flex-flow: row wrap !important;
+    align-items: center !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    padding: 10px 16px !important;
+    gap: 2px 0 !important;
+  }
+  #people-table .people-row .person { flex: 1 1 auto; order: 1; min-width: 0; }
+  #people-table .people-row > .row-open { order: 2; margin-left: 8px; }
+  #people-table .people-row::before {
+    content: "";
+    order: 3;
+    flex-basis: 100%;
+    width: 0;
+    height: 0;
+  }
+  #people-table .people-row > .num {
+    order: 4;
+    display: inline !important;
+    flex: 0 0 auto;
+    width: auto !important;
+    text-align: left !important;
+  }
+  #people-table .people-row > .num::after {
+    content: " · ";
+    color: var(--muted-foreground);
+    font-weight: 400;
+  }
+  #people-table .people-row > .heard:empty { display: none !important; }
+  #people-table .people-row > .num:has(+ .heard:empty)::after { content: none; }
+  #people-table .people-row > .heard {
+    order: 5;
+    display: inline !important;
+    flex: 0 1 auto;
+    width: auto !important;
+    min-width: 0;
+    color: var(--muted-foreground);
+    font-weight: 400;
+    text-align: left !important;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #people-table .people-row > .room-chips { order: 6; flex: 1 1 100%; }
+}
+
+@media (min-width: 641px) {
+  #record-list .decision-row {
+    height: 80px !important;
+    min-height: 80px !important;
+    max-height: 80px !important;
+    align-items: center !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    box-sizing: border-box !important;
+  }
+  #record-list .decision-row > .ex-room,
+  #record-list .decision-row > .ex-plat,
+  #record-list .decision-row > .badge,
+  #record-list .decision-row > .row-view {
+    align-self: center !important;
+  }
+  #record-list .decision-row .row-view {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+  }
+  #record-list .decision-row .ex-plat {
+    min-width: 0 !important;
+    overflow: hidden !important;
+    align-items: center !important;
+  }
+  #record-list .decision-row .room-name {
+    display: block !important;
+    flex: 1 1 auto;
+    min-width: 0 !important;
+    max-height: none !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    -webkit-line-clamp: unset !important;
+    line-clamp: unset !important;
+    -webkit-box-orient: unset !important;
+    line-height: 20px !important;
+  }
+}
+
+#history-table {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+#history-list .activity-group,
+#history-list .activity-feed {
+  margin: 0 !important;
+  padding: 0 !important;
+  gap: 0 !important;
+  row-gap: 0 !important;
+}
+#history-list .activity-group::before,
+#history-list .activity-feed::before { display: none !important; }
+#history-list .activity-copy > strong,
+#history-list .activity-copy .entity-id,
+#history-list .activity-copy .label-pill,
+#history-list .activity-copy .at-link {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+@media (min-width: 1024px) {
+  #history-table {
+    display: grid !important;
+    grid-template-columns: var(--cols-history) !important;
+    column-gap: var(--list-gap) !important;
+    padding: 0 16px !important;
+  }
+  #history-list,
+  #history-list .history-head,
+  #history-list .activity-feed,
+  #history-list .activity-group,
+  #history-list .activity-row {
+    display: grid !important;
+    grid-template-columns: subgrid !important;
+    grid-column: 1 / -1 !important;
+    column-gap: var(--list-gap) !important;
+    row-gap: 0 !important;
+    align-items: center !important;
+    width: auto !important;
+    min-width: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  #history-list .history-head { height: 40px !important; min-height: 40px !important; max-height: 40px !important; }
+  #history-list .activity-row {
+    height: 46px !important;
+    min-height: 46px !important;
+    max-height: 46px !important;
+    overflow: hidden !important;
+  }
+  #history-list .activity-row.is-confirming {
+    display: block !important;
+    height: auto !important;
+    min-height: 46px !important;
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 8px 0 !important;
+  }
+  #history-list .activity-meta { display: contents !important; }
+  #history-list time,
+  #history-list .room-suffix { margin: 0 !important; }
+  #history-list time {
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    text-align: left !important;
+  }
+  #history-list .room-suffix,
+  #history-list .room-suffix:empty { display: block !important; max-width: 10rem; }
+  #history-list .activity-row > p,
+  #history-list .activity-copy {
+    display: flex !important;
+    align-items: center;
+    gap: 0.35em;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap !important;
+    text-overflow: clip !important;
+    -webkit-line-clamp: unset !important;
+    line-clamp: unset !important;
+  }
+  #history-list .activity-copy { flex: 1 1 auto; }
+  #history-list .activity-prose {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 0 1 auto;
+  }
+  #history-list .activity-action {
+    justify-self: end;
+    overflow: visible;
+  }
+  #history-list [data-col="when"],
+  #history-list [data-col="room"] {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 1023px) {
+  #history-table { display: block !important; padding: 0 !important; }
+  #history-list,
+  #history-list .activity-feed,
+  #history-list .activity-group { display: block !important; padding: 0 !important; }
+  #history-list .history-head { display: none !important; }
+  #history-list .activity-row {
+    display: grid !important;
+    grid-template-columns: 24px minmax(0, 1fr) max-content !important;
+    grid-template-areas: "mark event action" "mark meta action" !important;
+    column-gap: var(--list-gap) !important;
+    row-gap: 2px !important;
+    align-items: center !important;
+    height: auto !important;
+    min-height: 56px !important;
+    max-height: none !important;
+    margin: 0 !important;
+    padding: 8px 16px !important;
+    overflow: visible !important;
+    box-sizing: border-box;
+  }
+  #history-list .activity-row.is-confirming {
+    display: block !important;
+    height: auto !important;
+    grid-template-areas: none !important;
+  }
+  #history-list .activity-icon { grid-area: mark; align-self: center; }
+  #history-list .activity-row > p { grid-area: event; min-width: 0; margin: 0; }
+  #history-list .activity-meta {
+    display: flex !important;
+    grid-area: meta;
+    align-items: baseline;
+    gap: 0;
+    min-width: 0;
+    width: auto !important;
+    flex-wrap: wrap;
+  }
+  #history-list .activity-action {
+    grid-area: action;
+    justify-self: end;
+    align-self: center;
+  }
+  #history-list .room-suffix:empty { display: none !important; }
+  #history-list .room-suffix:not(:empty)::before { content: "· "; }
+  #history-list .activity-row > p,
+  #history-list .activity-copy {
+    display: block !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    -webkit-line-clamp: unset !important;
+    line-clamp: unset !important;
+    min-width: 0;
+  }
+  #history-list .activity-prose,
+  #history-list .activity-copy .entity-id,
+  #history-list .activity-copy .label-pill {
+    display: inline;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
+  #history-list .activity-copy .entity-id,
+  #history-list .activity-copy .label-pill { white-space: nowrap; }
+}

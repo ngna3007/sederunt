@@ -1779,11 +1779,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var decisions = document.createElement("span");
       decisions.className = "num";
       decisions.dataset.col = "count";
-      decisions.textContent = person.count === 1 ? "1 decision" : (person.count + " decisions");
+      var countText = person.count === 1 ? "1 decision" : (person.count + " decisions");
+      decisions.textContent = countText;
       var heard = document.createElement("span");
       heard.className = "heard";
       heard.dataset.col = "heard";
-      heard.textContent = relativeWhen(person.last) || whenLabel(person.last) || "";
+      var heardText = relativeWhen(person.last) || whenLabel(person.last) || "";
+      heard.textContent = heardText;
       var view = document.createElement("span");
       view.className = "row-open";
       view.dataset.col = "action";
@@ -2666,9 +2668,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
 
   function meetingWord(room) {
     if (!room) return { word: "No recording", badge: "badge" };
-    if (room.channel || /slack/i.test(String(room.platform || ""))) return { word: "No recording", badge: "badge" };
     if (room.live === true) return { word: "Live", badge: "badge live" };
-    if (room.startedAt || room.recordingStart) return { word: "Done", badge: "badge ok" };
+    if (room.channel || /slack/i.test(String(room.platform || ""))) return { word: "Channel", badge: "badge" };
+    var heard = room.id ? decisionsFor(room.id).length > 0 : false;
+    if (heard || room.startedAt || room.recordingStart) return { word: "Ended", badge: "badge" };
     return { word: "No recording", badge: "badge" };
   }
 
@@ -2701,6 +2704,15 @@ if (sessionWhen && sessionWhen.dataset.at) {
     return '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="3.2"/></svg>';
   }
 
+  function proseSpan(value) {
+    var trimmed = String(value || "").replace(/\s+/g, " ").trim();
+    if (!trimmed) return null;
+    var span = document.createElement("span");
+    span.className = "activity-prose";
+    span.textContent = trimmed;
+    return span;
+  }
+
   function paintRich(parent, text, row) {
     var title = (row.target && row.target.title) || "";
     var id = (row.target && row.target.id) || "";
@@ -2711,16 +2723,20 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var cursor = 0;
     marks.forEach(function (mark) {
       if (mark.at < cursor) return;
-      if (mark.at > cursor) parent.append(document.createTextNode(text.slice(cursor, mark.at)));
+      if (mark.at > cursor) {
+        var lead = proseSpan(text.slice(cursor, mark.at));
+        if (lead) parent.append(lead);
+      }
       if (mark.kind === "title") {
-        parent.append(document.createTextNode(title));
+        var named = proseSpan(title);
+        if (named) parent.append(named);
       } else if (row.target && row.target.url) {
         var link = document.createElement("a");
         link.className = "entity-id";
         link.href = row.target.url;
         link.textContent = id;
         parent.append(link);
-      } else {
+      } else if (id) {
         var plain = document.createElement("span");
         plain.className = "entity-id";
         plain.textContent = id;
@@ -2728,7 +2744,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
       }
       cursor = mark.at + mark.len;
     });
-    if (cursor < text.length) parent.append(document.createTextNode(text.slice(cursor)));
+    if (cursor < text.length) {
+      var tail = proseSpan(text.slice(cursor));
+      if (tail) parent.append(tail);
+    }
   }
 
   function postActivity(op, id, button) {
@@ -2887,7 +2906,6 @@ if (sessionWhen && sessionWhen.dataset.at) {
           sample
         );
         var rest = sentence.indexOf(who.textContent) === 0 ? sentence.slice(who.textContent.length) : (" " + sentence);
-        copy.append(document.createTextNode(" "));
         paintRich(copy, rest.trim(), row);
         var outcomeKind = group.rows.some(function (item) { return item.kind === "result"; }) ? "result" : "action";
         if (row.verb === "label" && row.kind === outcomeKind && row.changes && row.changes[0] && row.changes[0].to) {
@@ -2898,12 +2916,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
             var before = source.slice(0, labelAt).trim();
             var after = source.slice(labelAt + labelWord.length).trim();
             copy.replaceChildren(who);
-            paintRich(copy, before ? " " + before + " " : " ", row);
+            paintRich(copy, before, row);
             var pill = document.createElement("span");
             pill.className = "label-pill";
             pill.textContent = labelWord;
             copy.append(pill);
-            if (after) paintRich(copy, " " + after, row);
+            if (after) paintRich(copy, after, row);
           }
         }
         if (opts.viewRoom && row.origin && Number.isFinite(row.origin.at)) {
@@ -2983,10 +3001,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
           text.dataset.col = "event";
           time.dataset.col = "when";
           suffix.dataset.col = "room";
-          meta.append(action);
-        } else if (action.childNodes.length) meta.append(action);
-        line.append(icon, text);
-        if (meta.childNodes.length) line.append(meta);
+          action.dataset.col = "action";
+          line.append(icon, text, meta, action);
+        } else {
+          if (action.childNodes.length) meta.append(action);
+          line.append(icon, text);
+          if (meta.childNodes.length) line.append(meta);
+        }
         wrap.append(line);
       });
       feed.append(wrap);
@@ -3578,10 +3599,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var mediaWord = media.state === "processing"
         ? { word: "Live", badge: "badge live" }
         : (media.state === "ready" || media.state === "novideo" || media.state === "expired")
-          ? { word: "Done", badge: "badge ok" }
-          : (media.state === "channel" || media.state === "none")
-            ? { word: "No recording", badge: "badge" }
-            : null;
+          ? { word: "Ended", badge: "badge" }
+          : media.state === "channel"
+            ? { word: "Channel", badge: "badge" }
+            : meetingWord(roomOf(fileRoom));
       if (mediaWord) {
         statusBadge.className = mediaWord.badge;
         statusBadge.textContent = mediaWord.word;

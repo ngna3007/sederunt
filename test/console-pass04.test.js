@@ -206,6 +206,7 @@ function seeded() {
     { id: "launch", name: "Launch review", platform: "Zoom", startedAt: "2026-11-03T08:00:00.000Z" },
     { id: "slack", name: "ops", platform: "Slack", channel: "ops" },
     { id: "infra", name: "Infra sync", platform: "Google Meet" },
+    { id: "quiet", name: "Quiet room", platform: "Google Meet" },
   );
   const rows = [
     ["d-nine", "booth", "The booth opens at nine and badge pickup stays at the north entrance.", "rowan", "2026-11-03T11:20:00.000Z", ["d-ten"]],
@@ -430,8 +431,9 @@ test("home and rooms columns line up, and the pass 04 fixes hold in the browser"
   });
   assert.ok(rooms.rows.length >= 2);
   assert.ok(rooms.rows.every((row) => row.status !== "Failed"), JSON.stringify(rooms.rows));
-  assert.ok(rooms.rows.some((row) => row.status === "Done"));
+  assert.ok(rooms.rows.some((row) => row.status === "Ended"));
   assert.ok(rooms.rows.some((row) => row.status === "No recording"));
+  assert.ok(rooms.rows.some((row) => row.status === "Channel"));
   assert.ok(rooms.rows.some((row) => row.chip === "1 failed action"));
   assert.ok(rooms.rows.some((row) => row.when === ""));
   assert.equal(rooms.numeral, "rgb(180, 35, 24)");
