@@ -14,6 +14,17 @@ import { createMeetingAdapter, meetingDoorReady, recallTranscriptDelivery, verif
 import { createTatumReader } from "./tatum/get-object.js";
 import { bindToolMember, handleMcpRequest, memberRefusal, mcpJsonRpc } from "./mcp.js";
 import { renderConsolePage } from "./console-page.js";
+import { renderSignInPage } from "./console-sign-in.js";
+import {
+  CONSOLE_SESSION_MS,
+  clearedSessionCookie,
+  consoleSecret,
+  guardConsole,
+  passphraseMatches,
+  safeConsoleNext,
+  sealSession,
+  sessionCookie,
+} from "./console-auth.js";
 import { renderLanding } from "./landing.js";
 import { loadCompanyEnv, loadLocalEnv } from "./local-env.js";
 import { looksLikeOpenQuestion } from "./parse.js";
@@ -273,7 +284,90 @@ export function createApp(options = {}) {
       send(res, 200, "text/html; charset=utf-8", renderLanding());
       return;
     }
-    if (req.method === "GET" && url.pathname === "/console") {
+    if (req.method === "GET" && url.pathname === "/console.css") {
+      send(res, 200, "text/css; charset=utf-8", await readFile(new URL("./console.css", import.meta.url), "utf8"));
+      return;
+    }
+    if (req.method === "GET" && (url.pathname === "/fonts/Geist-Variable.woff2" || url.pathname === "/fonts/GeistMono-Variable.woff2")) {
+      const file = url.pathname.endsWith("GeistMono-Variable.woff2")
+        ? "geist-mono/GeistMono-Variable.woff2"
+        : "geist-sans/Geist-Variable.woff2";
+      const bytes = await readFile(resolve("node_modules/geist/dist/fonts", file));
+      res.writeHead(200, { "content-type": "font/woff2", "cache-control": "public, max-age=86400" });
+      res.end(bytes);
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/console/sign-in") {
+      const gate = guardConsole(req, env);
+      if (gate.session) {
+        redirect(res, safeConsoleNext(url.searchParams.get("next") || "/console"));
+        return;
+      }
+      const reason = url.searchParams.get("reason") || "";
+      send(res, 200, "text/html; charset=utf-8", renderSignInPage({
+        configured: Boolean(consoleSecret(env)),
+        memberSet: Boolean(String(env.SEDERUNT_MEMBER || "").trim()),
+        reason: reason === "expired" || reason === "invalid" || reason === "mismatch" || reason === "missing-pass" ? reason : "",
+        name: url.searchParams.get("name") || "",
+        next: safeConsoleNext(url.searchParams.get("next") || "/console"),
+      }));
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/console/sign-in") {
+      const body = await readPosted(req);
+      const next = safeConsoleNext(typeof body.next === "string" ? body.next : "/console");
+      const secret = consoleSecret(env);
+      const name = typeof body.name === "string" ? body.name.trim().slice(0, 80) : "";
+      if (!secret) {
+        send(res, 200, "text/html; charset=utf-8", renderSignInPage({
+          configured: false,
+          memberSet: Boolean(String(env.SEDERUNT_MEMBER || "").trim()),
+          name,
+          next,
+        }));
+        return;
+      }
+      const given = typeof body.passphrase === "string" ? body.passphrase : "";
+      if (!given) {
+        send(res, 400, "text/html; charset=utf-8", renderSignInPage({
+          configured: true,
+          memberSet: Boolean(String(env.SEDERUNT_MEMBER || "").trim()),
+          reason: "missing-pass",
+          name,
+          next,
+        }));
+        return;
+      }
+      if (!passphraseMatches(given, secret)) {
+        send(res, 401, "text/html; charset=utf-8", renderSignInPage({
+          configured: true,
+          memberSet: Boolean(String(env.SEDERUNT_MEMBER || "").trim()),
+          reason: "mismatch",
+          name,
+          next,
+        }));
+        return;
+      }
+      const token = sealSession({
+        memberId: String(env.SEDERUNT_MEMBER || "").trim(),
+        name,
+        exp: Date.now() + CONSOLE_SESSION_MS,
+      }, secret);
+      redirect(res, next, { "set-cookie": sessionCookie(token, req, Math.floor(CONSOLE_SESSION_MS / 1000)) });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/console/sign-out") {
+      redirect(res, "/console/sign-in", { "set-cookie": clearedSessionCookie(req) });
+      return;
+    }
+    if (req.method === "GET" && (url.pathname === "/console" || url.pathname.startsWith("/console/"))) {
+      const gate = guardConsole(req, env);
+      if (gate.required && !gate.session) {
+        const next = encodeURIComponent(safeConsoleNext(url.pathname + (url.search || "")));
+        const reason = gate.reason === "expired" || gate.reason === "invalid" ? `&reason=${gate.reason}` : "";
+        redirect(res, `/console/sign-in?next=${next}${reason}`);
+        return;
+      }
       const doors = doorReport(env, false);
       send(res, 200, "text/html; charset=utf-8", renderConsolePage({
         meeting: doors.meeting,
@@ -285,6 +379,8 @@ export function createApp(options = {}) {
               ? "Set RECALL_WEBHOOK_SECRET to the Recall workspace verification secret, then restart."
               : "Check that SEDERUNT_PUBLIC_ORIGIN is a public https address, then restart.",
         slackReady: Boolean(env.SLACK_SIGNING_SECRET && env.SLACK_BOT_TOKEN),
+        signedIn: Boolean(gate.session),
+        memberName: gate.session?.name || "",
       }));
       return;
     }
@@ -312,25 +408,37 @@ export function createApp(options = {}) {
       return;
     }
     if (req.method === "GET" && url.pathname === "/api/console") {
+      const gate = guardConsole(req, env);
+      if (gate.required && !gate.session) {
+        send(res, 401, "application/json; charset=utf-8", JSON.stringify({ error: "Sign in again.", reason: gate.reason || "missing" }));
+        return;
+      }
       const companyId = url.searchParams.get("company") || "";
       const current = await prepareWorkspace(workspace, companyId, false, 2000);
       const requested = (url.searchParams.get("member") || "").trim();
       const configured = typeof env.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
+      const memberId = gate.session ? (gate.session.memberId || configured) : (requested || configured);
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(await consolePayload(
         workspace,
         current,
-        requested || configured,
+        memberId,
         url.searchParams.get("workspace") || "",
       )));
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/console/read") {
+      const gate = guardConsole(req, env);
+      if (gate.required && !gate.session) {
+        send(res, 401, "application/json; charset=utf-8", JSON.stringify({ error: "Sign in again.", reason: gate.reason || "missing" }));
+        return;
+      }
       const companyId = url.searchParams.get("company") || "";
       const current = await prepareWorkspace(workspace, companyId, true);
+      const configured = typeof env.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(await consolePayload(
         workspace,
         current,
-        "",
+        gate.session ? (gate.session.memberId || configured) : configured,
         url.searchParams.get("workspace") || "",
       )));
       return;
@@ -492,7 +600,6 @@ export function createApp(options = {}) {
         return;
       }
       const companyId = typeof parsed.company === "string" ? parsed.company : "";
-      const current = await prepareWorkspace(workspace, companyId);
       const event = parsed.event && typeof parsed.event === "object" ? parsed.event : parsed;
       const subtype = typeof event.subtype === "string" ? event.subtype : "";
       const noise = subtype && subtype !== "file_share" && subtype !== "message_deleted" && subtype !== "huddle";
@@ -510,7 +617,8 @@ export function createApp(options = {}) {
         send(res, status, contentType, body);
       };
       const liveAck = parsed.type === "event_callback" && Boolean(env.SLACK_BOT_TOKEN) && !deps.slack;
-      if (liveAck) replyHttp(200, "application/json; charset=utf-8", JSON.stringify({ slack: "accepted" }));
+      const slackWork = (async () => {
+      const current = await prepareWorkspace(workspace, companyId);
       try {
         const delivery = slackDelivery(event);
         const question = delivery.intent !== "delete" && slackQuestion(delivery.text);
@@ -596,6 +704,17 @@ export function createApp(options = {}) {
       } catch {
         replyHttp(500, "text/plain; charset=utf-8", "slack event failed");
       }
+      })();
+      if (liveAck) {
+        try {
+          const { waitUntil } = await import("@vercel/functions");
+          if (typeof waitUntil === "function") waitUntil(slackWork);
+        } catch {
+          // Local Node has no request context. Awaiting slackWork still finishes the reply.
+        }
+        replyHttp(200, "application/json; charset=utf-8", JSON.stringify({ slack: "accepted" }));
+      }
+      await slackWork;
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/download") {
@@ -945,11 +1064,16 @@ function headerValue(value) {
   return typeof value === "string" ? value : "";
 }
 
-function send(res, status, type, body) {
-  const headers = { "content-type": type };
+function send(res, status, type, body, extra = {}) {
+  const headers = { "content-type": type, ...extra };
   if (type.startsWith("text/html") || type.startsWith("application/json")) headers["cache-control"] = "no-store";
   res.writeHead(status, headers);
   res.end(body);
+}
+
+function redirect(res, location, extra = {}) {
+  res.writeHead(302, { location, "cache-control": "no-store", ...extra });
+  res.end();
 }
 
 const mediaRoot = resolve("public/media");
@@ -1028,6 +1152,16 @@ async function readJson(req) {
   const raw = await readBody(req);
   if (!raw.trim()) return {};
   return JSON.parse(raw);
+}
+
+async function readPosted(req) {
+  const raw = await readBody(req);
+  const type = String(req.headers["content-type"] || "");
+  if (type.includes("application/json")) {
+    if (!raw.trim()) return {};
+    return JSON.parse(raw);
+  }
+  return Object.fromEntries(new URLSearchParams(raw).entries());
 }
 
 async function readRequest(req) {

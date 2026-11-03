@@ -2,7 +2,7 @@
 
 **Status:** draft
 **Owner:** @ngna3007
-**Last updated:** 2026-10-23
+**Last updated:** 2026-11-03
 **Scope:** Feature-level. The signed-in workspace the operator opens. This is not Walrus Console.
 
 ## Mission
@@ -11,28 +11,30 @@ Give the operator one workspace at a time, and make the next action obvious. Hom
 
 ## Direction
 
-Reading this as: an operator workspace for the person who sets the accounts up, in the cmdoss component system with the Sederunt palette, dial ENERGY 1 / RHYTHM 2 / MOTION 1.
+Reading this as: an operator workspace. The shell stays put and the page inside it changes. Motion is hover and focus only.
 
-The operator asked for that component system and for these colors. The dials follow from the job. The screen is a tool, so it does not shout (ENERGY 1). The shell stays put and the page inside it changes (RHYTHM 2). Motion is hover and focus only (MOTION 1).
+The visual system is the light console in `src/console.css`. Geist is the UI face and Geist Mono is the label face. Both come from the `geist` package (SIL Open Font License).
 
-| Token | Value | Why |
+| Token | Value | Use |
 |---|---|---|
-| Canvas | `#f4f3ef` | The Sederunt ground. Light, because a dark rail was refused |
-| Paper | `#fffcf8` | Cards and the sidebar sit on the canvas as paper, not as glass |
-| Ink | `#172b76` | Body text. Passes 4.5:1 on paper |
-| Strong | `#081428` | Titles and the wordmark |
-| Quiet | `#5c6790` | Secondary sentences. Passes 4.5:1 on paper and on the canvas |
-| Label | `#4c5678` | Small labels. The previous dim blue failed 4.5:1 |
-| Accent | `#2458f6` | One accent: the current section, the primary button, and focus |
-| Waiting | `#7c4704` on the tint, `#a16207` on paper | The waiting count, paired with the words "Waiting on you". The darker brown is the number and the status word on the tint, because `#a16207` misses 4.5:1 there |
-| Kept | `#1c7c54` | A stored or delivered state, paired with the state word |
-| Failed | `#c24141` | A failed state, paired with the state word |
+| Background | `#f7f8fb` | Page ground |
+| Card | `#ffffff` | Cards, menus, dialogs |
+| Foreground | `#171a24` | Body text |
+| Muted text | `#5e636f` | Secondary sentences and table heads. Passes 4.5:1 on the background |
+| Border | `#dce0e6` | 1px rules |
+| Input | `#d2d6de` | Field borders |
+| Primary | `#524ce3` | The one accent: current section, primary button, focus |
+| Primary text | `#f9fafd` | Text on the accent. Passes 4.5:1 |
+| Sidebar | `#f1f3f9` | Rail, 240px |
+| Success text | `#146c34` | A kept or sent state. Darker than the fill so small text passes 4.5:1 |
+| Warning text | `#8a5a00` | Waiting. Darker than the fill so small text passes 4.5:1 |
+| Failed | `#d42f34` | A failed state |
 
-Type is Inter Tight for the UI and JetBrains Mono for proofs and file names, because that is the type of the component system the operator asked to keep. Radius is 8px on buttons and inputs, 12px on cards and dialogs. Buttons are 32px tall on a wide screen and at least 44px tall when the width collapses. The close control is 44px in both.
+Radius is 6px on buttons and inputs, 10px on cards and dialogs, and full pills on chips and badges. The sidebar is 240px. The top bar is 52px. Labels are 11.5px mono, uppercase, tracking 0.07em.
 
-Section labels stay short and uppercase with 0.04em tracking. That is the component system's label voice, kept on purpose. It is not a poster heading.
+Section labels stay short and uppercase. That is the label voice. It is not a poster heading.
 
-The company tile is a blue gradient. Both ends keep white initials above 4.5:1. The personal tile is solid `#081428`, because a lighter second stop failed that test. The two tiles stay different so the menu can tell the workspaces apart. The operator mark in the top bar is a solid disc. Cards do not float. The menu and the dialog are the only elevated surfaces. The waiting cell is the one tinted surface, because that count is the action. No blur on the bar, the sidebar, and the dialog at once. No glow, no radial orbs, no chart.
+The company tile is the indigo primary. The personal tile is solid `#171a24`. The two tiles stay different so the menu can tell the workspaces apart. Cards do not float. The menu and the dialog are the only elevated surfaces. The waiting cell is the one tinted surface, because that count is the action. The top bar may blur. No glow, no radial orbs.
 
 ## Design Principles
 
