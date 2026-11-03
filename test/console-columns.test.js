@@ -96,10 +96,10 @@ test("table headers and cells share an x at 1920, 1024, 768, and 640", async (t)
     const eq = cookie.indexOf("=");
     await context.addCookies([{ name: cookie.slice(0, eq), value: cookie.slice(eq + 1), url: `http://127.0.0.1:${port}` }]);
     const page = await context.newPage();
-    for (const width of [1920, 1097, 768, 640]) {
+    for (const width of [1920, 1280, 1180, 1101, 1097, 1024, 768, 640, 390]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto(`http://127.0.0.1:${port}/console/decisions`, { waitUntil: "networkidle" });
-      await page.waitForSelector("#record-list .decision-row");
+      await page.waitForSelector("#record-list .decision-row", { timeout: 45000 });
       const aligned = await page.evaluate(() => {
         const visible = (node) => node && getComputedStyle(node).display !== "none" && node.getClientRects().length > 0;
         const at = (selector) => {
@@ -132,14 +132,14 @@ test("table headers and cells share an x at 1920, 1024, 768, and 640", async (t)
         assert.ok(Math.abs(pair.head.x - pair.cell.x) <= 2, `${width} ${key} header ${pair.head.x} cell ${pair.cell.x}`);
       }
       assert.ok(aligned.rowPad >= 8, `${width} decision row padding ${aligned.rowPad}`);
-      if (width <= 1100) {
-        assert.ok(aligned.sentence.cell && aligned.sentence.cell.width >= 300, `decision text column is ${aligned.sentence.cell?.width}px`);
+      if (aligned.sentence.cell && width >= 640) {
+        assert.ok(aligned.sentence.cell.width >= 300, `${width} decision text column is ${aligned.sentence.cell.width}px`);
       }
       if (aligned.headBottom && aligned.rowTop) {
         assert.ok(aligned.rowTop - aligned.headBottom <= 2, `${width} header gap ${aligned.rowTop - aligned.headBottom}`);
       }
       await page.goto(`http://127.0.0.1:${port}/console/people`, { waitUntil: "networkidle" });
-      await page.waitForSelector(".people-row");
+      await page.waitForSelector(".people-row", { timeout: 45000 });
       const people = await page.evaluate(() => {
         const visible = (node) => node && getComputedStyle(node).display !== "none" && node.getClientRects().length > 0;
         const at = (selector) => {
@@ -155,6 +155,15 @@ test("table headers and cells share an x at 1920, 1024, 768, and 640", async (t)
           count: { head: at('.people-head [data-col="count"]'), cell: at('.people-row [data-col="count"]') },
           overflow: chips.filter((chip) => chip.scrollWidth > chip.clientWidth + 1).map((chip) => chip.textContent),
           named: chips.filter((chip) => chip.className.indexOf("more-") === -1).length,
+          clipped: (() => {
+            const cell = document.querySelector('.people-row [data-col="rooms"]');
+            if (!cell) return chips.map((chip) => chip.textContent);
+            const box = cell.getBoundingClientRect();
+            return chips.filter((chip) => {
+              const rect = chip.getBoundingClientRect();
+              return rect.left < box.left - 1 || rect.right > box.right + 1 || rect.top < box.top - 1 || rect.bottom > box.bottom + 1;
+            }).map((chip) => chip.textContent);
+          })(),
         };
       });
       for (const key of ["name", "rooms", "count"]) {
@@ -173,6 +182,49 @@ test("table headers and cells share an x at 1920, 1024, 768, and 640", async (t)
         assert.ok(people.rooms.cell.y >= people.name.cell.y, `${width} rooms sit under the name`);
       }
       assert.deepEqual(people.overflow, [], `${width} chip overflow ${people.overflow.join(",")}`);
+      assert.deepEqual(people.clipped, [], `${width} chip clipped ${people.clipped.join(",")}`);
       if (width <= 1200) assert.equal(people.named, 1, `${width} shows ${people.named} room chips`);
+
+      await page.goto(`http://127.0.0.1:${port}/console/rooms`, { waitUntil: "networkidle" });
+      await page.waitForSelector("#room-list a.room", { timeout: 45000 });
+      const rooms = await page.evaluate(() => {
+        const row = document.querySelector("#room-list a.room");
+        const svg = row && row.querySelector('.row-view svg');
+        const when = document.querySelector("#room-list .when");
+        const rowBox = row ? row.getBoundingClientRect() : null;
+        const svgBox = svg ? svg.getBoundingClientRect() : null;
+        const whenBox = when ? when.getBoundingClientRect() : null;
+        const card = document.querySelector("#rooms .explorer");
+        const cardBox = card ? card.getBoundingClientRect() : null;
+        return {
+          chevron: svg && getComputedStyle(svg).display !== "none" && svg.getClientRects().length
+            ? {
+              right: Math.round(svgBox.right),
+              left: Math.round(svgBox.left),
+              rowRight: Math.round(rowBox.right),
+              rowLeft: Math.round(rowBox.left),
+              cardRight: cardBox ? Math.round(cardBox.right) : Math.round(rowBox.right),
+            }
+            : null,
+          when: when ? {
+            text: when.textContent,
+            ellipsis: getComputedStyle(when).textOverflow === "ellipsis",
+            cut: when.scrollWidth > when.clientWidth + 1,
+            right: Math.round(whenBox.right),
+            cardRight: cardBox ? Math.round(cardBox.right) : 0,
+          } : null,
+        };
+      });
+      if (width >= 1101) {
+        assert.ok(rooms.chevron, `${width} view chevron is visible`);
+        assert.ok(rooms.chevron.right <= rooms.chevron.rowRight + 1, `${width} chevron ${rooms.chevron.right} past row ${rooms.chevron.rowRight}`);
+        assert.ok(rooms.chevron.right <= rooms.chevron.cardRight + 1, `${width} chevron ${rooms.chevron.right} past card ${rooms.chevron.cardRight}`);
+        assert.ok(rooms.chevron.left >= rooms.chevron.rowLeft - 1, `${width} chevron starts before the row`);
+      }
+      if (width <= 640 && rooms.when && rooms.when.text) {
+        assert.equal(rooms.when.ellipsis, false, `${width} time uses ellipsis`);
+        assert.equal(rooms.when.cut, false, `${width} time is cut (${rooms.when.text})`);
+        assert.ok(rooms.when.right <= rooms.when.cardRight + 1, `${width} time ${rooms.when.right} past card ${rooms.when.cardRight}`);
+      }
     }
 });
