@@ -396,11 +396,8 @@ export function createApp(options = {}) {
       }
       const id = decodeURIComponent(url.pathname.slice("/console/rooms/".length, -"/media".length));
       const body = await roomMedia(workspace, id);
-      const raw = JSON.stringify(body);
-      if (typeof env.RECALL_API_KEY === "string" && env.RECALL_API_KEY && raw.includes(env.RECALL_API_KEY)) {
-        send(res, 502, "application/json; charset=utf-8", JSON.stringify({ state: "none" }));
-        return;
-      }
+      const secret = typeof env.RECALL_API_KEY === "string" ? env.RECALL_API_KEY : "";
+      const raw = secret.length >= 12 ? JSON.stringify(body).split(secret).join("") : JSON.stringify(body);
       send(res, 200, "application/json; charset=utf-8", raw);
       return;
     }
@@ -1115,7 +1112,7 @@ async function roomMedia(workspace, id) {
   };
   let current = workspace.session || { rooms: [] };
   try {
-    current = await prepareWorkspace(workspace, "");
+    current = await prepareWorkspace(workspace, "", false, 2000);
   } catch {
     current = workspace.session || { rooms: [] };
   }
@@ -1123,8 +1120,20 @@ async function roomMedia(workspace, id) {
   const platform = typeof room?.platform === "string" ? room.platform : "";
   if (/slack/i.test(platform)) return { ...empty, state: "channel", title: room?.name || room?.channel || "" };
   workspace.mediaCache ??= new Map();
+  workspace.mediaFlight ??= new Map();
   const hit = workspace.mediaCache.get(id);
   if (hit && hit.until > Date.now()) return hit.body;
+  if (workspace.mediaFlight.has(id)) return workspace.mediaFlight.get(id);
+  const flight = loadRoomMedia(workspace, id, current, empty);
+  workspace.mediaFlight.set(id, flight);
+  try {
+    return await flight;
+  } finally {
+    workspace.mediaFlight.delete(id);
+  }
+}
+
+async function loadRoomMedia(workspace, id, current, empty) {
   let bot = null;
   const reader = workspace.recall?.readBot || workspace.deps?.recall?.readBot;
   const key = typeof workspace.env.RECALL_API_KEY === "string" ? workspace.env.RECALL_API_KEY : "";
@@ -1135,7 +1144,7 @@ async function roomMedia(workspace, id) {
         headers: { authorization: `Token ${key}`, accept: "application/json" },
       });
       const text = await response.text();
-      if (text.includes(key)) return empty;
+      if (key && text.split(key).length > 1 && text.includes("\"authorization\"")) return empty;
       if (/media has already expired/i.test(text)) return { ...empty, state: "expired" };
       if (response.ok) bot = JSON.parse(text);
     }
@@ -1143,6 +1152,7 @@ async function roomMedia(workspace, id) {
     bot = null;
   }
   const body = mediaFromBot(bot);
+  const room = (current.rooms || []).find((item) => item.id === id);
   if (body.title) {
     current.roomNames ??= {};
     if (!current.roomNames[id]) current.roomNames[id] = body.title;

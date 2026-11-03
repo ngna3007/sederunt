@@ -1796,3 +1796,69 @@ body.room-open #file-dialog .room-screen-panel {
   .timeline .tl-track { display: none; }
   body.room-open #home, body.room-open .main, body.room-open #file-dialog.room-screen { height: auto; overflow: visible; }
 }
+
+html, body, .stage, .room-right, .left-scroll, #palette-list, .rail, #chat-log, #home {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+*::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px; }
+.rail { overflow-x: hidden; }
+.rail-tip {
+  position: fixed; z-index: 80; transform: translateY(-50%);
+  padding: 6px 8px; border-radius: var(--radius); background: var(--foreground); color: #fff;
+  font-size: 12px; pointer-events: none;
+}
+body.room-open #file-dialog .room-screen-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+.room-body {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.room-split { min-height: 0; height: 100%; align-items: stretch; }
+.room-left { width: 420px; flex: none; height: 100%; overflow: hidden; }
+.player-frame, .player, .left-scroll, .dock-search { min-height: 0; }
+.player-frame { flex: 0 1 auto; overflow: hidden; }
+.room-resizer { align-self: stretch; width: 8px; min-height: 100%; position: relative; }
+.room-resizer::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent;
+}
+.room-resizer:hover::after, .room-resizer:focus-visible::after { background: var(--primary); }
+.player-frame { padding: 0; }
+.player { border-radius: 0; }
+.room-left > .underline-tabs { margin: 12px 12px 0; }
+.meta-strip { flex-wrap: nowrap; overflow-x: auto; }
+.room-actions { margin-left: auto; position: relative; }
+.room-menu { right: 0; left: auto; top: calc(100% + 4px); min-width: 10rem; }
+.left-scroll .pane-label, .left-scroll #file-heard, .left-scroll #file-present { display: none; }
+body.room-missing .room-body, body.room-missing #file-head { display: none !important; }
+body.room-missing #room-missing { margin: 64px auto; max-width: 28rem; }
+.account-layout { display: flex; flex-direction: column; gap: 16px; }
+.account-kv { padding: 4px 16px 16px; }
+.account-kv dt, .account-kv dd { padding: 8px 0; }
+.tl-plot { position: relative; flex: 1; height: 18px; }
+.tl-row { display: flex; align-items: center; gap: 8px; min-height: 22px; }
+.tl-tick.end { transform: translateX(-100%); }
+.tl-head { height: 100%; bottom: auto; }
+#tl-ruler { height: 16px; }
+.decision-row .ex-plat, .people-row span:nth-child(2) { min-width: 8rem; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.decision-row .badge { width: fit-content; }
+.sk-row { height: 48px; width: 100%; }
+.palette-panel input, .palette-panel input:focus, .palette-panel input:focus-visible {
+  border: 0; border-bottom: 1px solid var(--border); box-shadow: none;
+}
+.auth-card input::placeholder { color: var(--muted-foreground); opacity: 1; }
+.auth-card input, .auth-card input:focus-visible { border-color: var(--input); }
+.page-head { margin-top: 0; }
+@media (max-width: 767px) {
+  .main, #onboard { padding-top: 16px; }
+  #chat-form.composer { position: fixed; left: 8px; right: 8px; bottom: 8px; z-index: 12; }
+  #chat { padding-bottom: 96px; }
+}

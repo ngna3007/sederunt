@@ -1,11 +1,5 @@
 import { brandLogo, brandSprite } from "./brand-logos.js";
 
-const RANK_STOP = {
-  what: 1, was: 1, were: 1, decided: 1, decide: 1, decision: 1, decisions: 1,
-  about: 1, the: 1, a: 1, an: 1, of: 1, to: 1, in: 1, on: 1, for: 1, and: 1,
-  or: 1, is: 1, this: 1, that: 1, with: 1, from: 1, did: 1, does: 1, we: 1, do: 1,
-};
-
 /**
  * Every decision in a room that matches the question. The chip label is the
  * sentence itself, with no room suffix.
@@ -15,7 +9,12 @@ const RANK_STOP = {
  * @param {{ id?: string, platform?: string }[]} rooms
  */
 export function rankDecisions(question, decisions, rooms) {
-  const words = String(question || "").toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 2 && !RANK_STOP[word]);
+  const stop = {
+    what: 1, was: 1, were: 1, decided: 1, decide: 1, decision: 1, decisions: 1,
+    about: 1, the: 1, a: 1, an: 1, of: 1, to: 1, in: 1, on: 1, for: 1, and: 1,
+    or: 1, is: 1, this: 1, that: 1, with: 1, from: 1, did: 1, does: 1, we: 1, do: 1,
+  };
+  const words = String(question || "").toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 2 && !stop[word]);
   const rows = (decisions || []).filter((decision) => String(decision.text || "").trim());
   const roomText = (roomId) => {
     const room = (rooms || []).find((item) => item.id === roomId);
@@ -106,6 +105,7 @@ export function renderConsolePage(state = {}) {
 <body>
 ${brandSprite()}
 <div class="nav-scrim" id="nav-scrim"></div>
+<div id="rail-tip" class="rail-tip" hidden></div>
 <div class="shell">
   <div class="rail-wrap">
     <div class="rail-head">
@@ -382,7 +382,7 @@ ${slack}
         <p id="chat-next-row" class="section-next"><button id="chat-next" class="primary" type="button" hidden>New room</button></p>
         <form id="chat-form" class="composer">
           <label><span class="sr">Ask the workspace</span><textarea id="chat-text" name="chat" rows="1" placeholder="Ask about a room's decision"></textarea></label>
-          <button class="primary" type="submit" aria-label="Send">Ask</button>
+          <button class="primary" type="submit" aria-label="Ask">Ask</button>
         </form>
         <p class="composer-hint">Enter sends. Shift+Enter adds a line.</p>
       </div>
@@ -457,21 +457,8 @@ ${slack}
           <a class="primary" href="/console/rooms" id="room-missing-link">Back to Rooms</a>
         </div>
         <div class="bot-head" id="file-head">
-          <div class="bot-title-row">
-            <div class="file-name">
-              <p id="file-kind" class="page-kicker"></p>
-              <p id="file-title" class="page-title"></p>
-            </div>
-            <div class="room-actions">
-              <button type="button" id="room-menu-btn" class="close" aria-haspopup="menu" aria-expanded="false" aria-controls="room-menu" aria-label="Room actions">${kebabIcon}</button>
-              <div id="room-menu" class="menu room-menu" role="menu" hidden>
-                <button type="button" id="copy-room" role="menuitem">Copy id</button>
-                <button type="button" id="copy-link" role="menuitem">Copy link</button>
-                <button type="button" id="open-meeting" role="menuitem">Open meeting</button>
-              </div>
-              <button type="button" class="close" data-close="file-dialog" aria-label="Close">${closeIcon}</button>
-            </div>
-          </div>
+          <p id="file-kind" class="page-kicker sr"></p>
+          <p id="file-title" class="page-title sr"></p>
           <div class="meta-strip" id="file-meta">
             <button type="button" id="file-id-chip" class="id-chip"><span id="file-id" class="mono"></span></button>
             <span class="meta-item"><span class="meta-label">Status</span><span id="file-status-badge" class="badge"></span></span>
@@ -479,6 +466,14 @@ ${slack}
             <span class="meta-item"><span class="meta-label">Platform</span><span id="file-platform-pill"></span></span>
             <span class="meta-rule" aria-hidden="true"></span>
             <span class="meta-item"><span class="meta-label">Started</span><span id="file-started" class="meta"></span></span>
+            <div class="room-actions">
+              <button type="button" id="room-menu-btn" class="close" aria-haspopup="menu" aria-expanded="false" aria-controls="room-menu" aria-label="Room actions">${kebabIcon}</button>
+              <div id="room-menu" class="menu room-menu" role="menu" hidden>
+                <button type="button" id="copy-room" role="menuitem">Copy id</button>
+                <button type="button" id="copy-link" role="menuitem">Copy link</button>
+                <button type="button" id="open-meeting" role="menuitem">Open meeting</button>
+              </div>
+            </div>
             <p id="file-lead" class="page-lede" hidden></p>
             <p id="file-lead-status" class="meta"></p>
             <p id="file-proof" class="meta" hidden></p>
@@ -489,7 +484,7 @@ ${slack}
           <div class="detail-main room-left" id="room-left">
             <div class="player-frame">
               <div class="player" id="player">
-                <video id="player-video" playsinline preload="metadata"></video>
+                <video id="player-video" controls playsinline preload="metadata"></video>
                 <div id="player-fallback" class="player-fallback">
                   <p id="player-name"></p>
                   <p id="player-note"></p>
@@ -543,6 +538,7 @@ ${slack}
               <div id="file-callout" class="callout" hidden></div>
               <div class="outcome-card" id="file-outcome" hidden></div>
               <div class="overview-facts" id="overview-facts"></div>
+              <section id="participants" class="participants"></section>
               <section class="artifacts" id="artifacts">
                 <h2>Meeting artifacts</h2>
                 <div id="artifact-list"></div>
@@ -598,18 +594,17 @@ ${slack}
         </div>
         <section id="timeline" class="timeline" aria-label="Timeline">
           <div class="timeline-bar">
-            <button type="button" id="tl-play" class="tl-play" aria-label="Play">▶</button>
+            <button type="button" id="tl-play" class="tl-play" aria-label="Play"><span aria-hidden="true">▶</span></button>
             <button type="button" id="tl-restart" class="tl-restart" aria-label="Restart">↺</button>
-            <span id="tl-clock" class="tl-clock"><span id="tl-now">00:00</span><span class="tl-sep">/</span><span id="tl-end">00:00</span></span>
+            <span id="tl-clock" class="tl-clock"><span id="tl-now">0:00</span><span class="tl-sep">/</span><span id="tl-end">0:00</span></span>
             <span id="tl-when" class="tl-when"></span>
-            <span class="tl-hints"><kbd>Space</kbd><kbd>J</kbd><kbd>K</kbd></span>
-            <button type="button" id="tl-hide" class="tl-hide" aria-pressed="false">Hide timeline</button>
+            <span class="tl-hints"><span class="hint"><kbd>Space</kbd> play</span><span class="hint"><kbd>J</kbd><kbd>K</kbd> ±10s</span></span>
+            <button type="button" id="tl-hide" class="tl-hide" aria-pressed="false">Hide timeline <span aria-hidden="true">▾</span></button>
           </div>
           <div id="tl-track" class="tl-track">
-            <div id="tl-ruler" class="tl-ruler"></div>
-            <div class="tl-lane"><span class="tl-lane-label">Speakers</span><div id="tl-speakers" class="tl-lane-body"></div></div>
-            <div class="tl-lane"><span class="tl-lane-label">Events</span><div id="tl-events" class="tl-lane-body"></div></div>
-            <div class="tl-lane"><span class="tl-lane-label">Kept</span><div id="tl-marks" class="tl-lane-body"></div></div>
+            <div class="tl-row"><span class="tl-lane-label"></span><div id="tl-ruler" class="tl-plot"></div></div>
+            <div class="tl-row"><span class="tl-lane-label">Speakers</span><div id="tl-speakers" class="tl-plot"></div></div>
+            <div class="tl-row"><span class="tl-lane-label">Events</span><div id="tl-events" class="tl-plot"></div></div>
             <div id="tl-head" class="tl-head" hidden></div>
           </div>
         </section>
@@ -1541,7 +1536,7 @@ ${slack}
     if (count) {
       var from = shown ? start + 1 : 0;
       var to = Math.min(shown, start + roomPageSize);
-      count.textContent = shown ? (from + "-" + to + " of " + shown + " results") : "";
+      count.textContent = shown ? (from + "\u2013" + to + " of " + shown) : "";
     }
     if (prev) prev.disabled = roomPage <= 0;
     if (next) next.disabled = roomPage >= pages - 1;
@@ -1706,7 +1701,7 @@ ${slack}
       list.append(row);
     });
     if (foot) foot.hidden = false;
-    if (count) count.textContent = "1-" + rows.length + " of " + rows.length + " results";
+    if (count) count.textContent = "1\u2013" + rows.length + " of " + rows.length;
   }
 
   function addLine(id, title, body, onPick) {
@@ -1862,7 +1857,7 @@ ${slack}
     var historyFoot = document.getElementById("history-foot");
     var historyCount = document.getElementById("history-count");
     if (historyFoot) historyFoot.hidden = rows.length === 0;
-    if (historyCount && rows.length) historyCount.textContent = "1-" + rows.length + " of " + rows.length + " results";
+    if (historyCount && rows.length) historyCount.textContent = "1\u2013" + rows.length + " of " + rows.length;
   }
 
   function addTableRow(listId, cells, onPick) {
@@ -2017,7 +2012,7 @@ ${slack}
     var recordCount = document.getElementById("record-count");
     var keptCount = (next.decisions || []).length;
     if (recordFoot) recordFoot.hidden = noKept;
-    if (recordCount && keptCount) recordCount.textContent = "1-" + keptCount + " of " + keptCount + " results";
+    if (recordCount && keptCount) recordCount.textContent = "1\u2013" + keptCount + " of " + keptCount;
     var chatNext = document.getElementById("chat-next");
     if (chatNext) chatNext.hidden = true;
     var chatForm = document.getElementById("chat-form");
@@ -2556,6 +2551,9 @@ ${slack}
     if (missing) missing.hidden = knownRoom;
     if (fileHead) fileHead.hidden = !knownRoom;
     if (split) split.hidden = !knownRoom;
+    var timelineBox = document.getElementById("timeline");
+    if (!knownRoom && timelineBox) timelineBox.hidden = true;
+    document.body.classList.toggle("room-missing", !knownRoom);
     text("file-title", fileWait ? (fileWait.title || "Room") : (knownRoom ? named.title : "Room not found"));
     renderLead();
     if (sectionName === "file") {
@@ -2621,6 +2619,22 @@ ${slack}
         document.getElementById("file-heard").append(item);
       });
       if (present) present.hidden = true;
+    }
+    var participants = document.getElementById("participants");
+    if (participants) {
+      participants.replaceChildren();
+      var heading = document.createElement("h3");
+      heading.textContent = "Participants · " + people.length;
+      participants.append(heading);
+      people.forEach(function (person) {
+        var chip = document.createElement("span");
+        chip.className = "person";
+        chip.append(face(personLabel(person) || person));
+        var label = document.createElement("span");
+        label.textContent = personLabel(person) || person;
+        chip.append(label);
+        participants.append(chip);
+      });
     }
     var ask = document.getElementById("ask-first");
     ask.disabled = !fileRoom;
@@ -2698,30 +2712,37 @@ ${slack}
       var sentence = decision.text || "";
       if (query && (who + " " + sentence).toLowerCase().indexOf(query) === -1) return;
       shown += 1;
-      var row = document.createElement("div");
+      var row = document.createElement("button");
+      row.type = "button";
       row.className = "utter";
-      var origin = roomMediaState && roomMediaState.startedAt ? Date.parse(roomMediaState.startedAt) : NaN;
+      var stamps = (rows || []).map(function (item) { return Date.parse(item.spokenAt || ""); }).filter(function (value) { return !isNaN(value); });
+      var origin = roomMediaState && roomMediaState.startedAt ? Date.parse(roomMediaState.startedAt) : (stamps.length ? Math.min.apply(null, stamps) : NaN);
       var spoken = Date.parse(decision.spokenAt || "");
-      if (!isNaN(origin) && !isNaN(spoken)) {
-        var start = Math.max(0, (spoken - origin) / 1000);
-        row.setAttribute("data-start", String(start));
-        row.setAttribute("data-end", String(start + 4));
-      }
-      var head = document.createElement("div");
+      var start = !isNaN(origin) && !isNaN(spoken) ? Math.max(0, (spoken - origin) / 1000) : shown;
+      row.setAttribute("data-start", String(start));
+      row.setAttribute("data-end", String(start + 4));
+      var head = document.createElement("span");
       head.className = "utter-head";
       var name = document.createElement("span");
       name.className = "utter-name " + toneClass(who);
       name.textContent = who;
       var time = document.createElement("time");
-      time.textContent = relativeWhen(decision.spokenAt) || whenLabel(decision.spokenAt);
+      time.textContent = clockText(start);
       head.append(name, time);
-      var line = document.createElement("p");
-      line.textContent = sentence;
+      var line = document.createElement("span");
+      line.className = "utter-text";
+      if (query) {
+        var lower = sentence.toLowerCase();
+        var at = lower.indexOf(query);
+        if (at >= 0) {
+          line.append(document.createTextNode(sentence.slice(0, at)));
+          var mark = document.createElement("mark");
+          mark.textContent = sentence.slice(at, at + query.length);
+          line.append(mark, document.createTextNode(sentence.slice(at + query.length)));
+        } else line.textContent = sentence;
+      } else line.textContent = sentence;
       row.append(head, line);
-      row.addEventListener("click", function () {
-        var at = Number(row.getAttribute("data-start"));
-        if (!isNaN(at)) seekTo(at);
-      });
+      row.addEventListener("click", function () { seekTo(start); });
       box.append(row);
     });
     if (!shown) {
@@ -2814,7 +2835,8 @@ ${slack}
     var note = document.getElementById("player-note");
     var name = document.getElementById("player-name");
     var people = fileRoom ? peopleFor(fileRoom) : [];
-    if (name) name.textContent = people.length ? (personLabel(people[0]) || people[0]) : (media && media.title) || "";
+    var named = media && (media.state === "ready" || media.state === "novideo");
+    if (name) name.textContent = named && people.length ? (personLabel(people[0]) || people[0]) : "";
     var copy = "No recording.";
     if (media && media.state === "processing") copy = "Recording is still processing.";
     else if (media && media.state === "expired") copy = "Media has already expired.";
@@ -2865,6 +2887,7 @@ ${slack}
       } else {
         view.setAttribute("aria-disabled", "true");
         save.setAttribute("aria-disabled", "true");
+        item.title = "No " + row[0].toLowerCase() + " for this room.";
       }
       actions.append(view, save);
       item.append(label, actions);
@@ -2872,26 +2895,42 @@ ${slack}
     });
   }
 
+  function pct(seconds, duration) {
+    if (!duration) return "0%";
+    return Math.max(0, Math.min(100, seconds / duration * 100)) + "%";
+  }
+
   function paintTimeline() {
+    var timeline = document.getElementById("timeline");
+    var useful = roomMediaState && (roomMediaState.state === "ready" || roomMediaState.state === "novideo" || (roomMediaState.segments || []).length);
+    if (timeline) timeline.hidden = !useful;
+    if (!useful) return;
     var duration = mediaDuration();
     text("tl-end", clockText(duration));
     var when = document.getElementById("tl-when");
     if (when) {
       var start = roomMediaState && roomMediaState.startedAt ? new Date(roomMediaState.startedAt) : null;
-      when.textContent = start && !isNaN(start.getTime()) ? start.toLocaleString("en-GB", { timeZone: "Asia/Bangkok", hour12: false }) : "";
+      if (start && !isNaN(start.getTime())) {
+        var local = new Date(start.getTime() + 7 * 3600000);
+        var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        var hh = String(local.getUTCHours());
+        var mm = String(local.getUTCMinutes());
+        var ss = String(local.getUTCSeconds());
+        if (mm.length < 2) mm = "0" + mm;
+        if (ss.length < 2) ss = "0" + ss;
+        when.textContent = months[local.getUTCMonth()] + " " + local.getUTCDate() + ", " + hh + ":" + mm + ":" + ss + " UTC+7";
+      } else when.textContent = "";
     }
     var ruler = document.getElementById("tl-ruler");
     var speakers = document.getElementById("tl-speakers");
     var events = document.getElementById("tl-events");
-    var marks = document.getElementById("tl-marks");
     if (ruler) ruler.replaceChildren();
     if (speakers) speakers.replaceChildren();
     if (events) events.replaceChildren();
-    if (marks) marks.replaceChildren();
     var steps = 6;
     for (var i = 0; i <= steps; i += 1) {
       var tick = document.createElement("span");
-      tick.className = "tl-tick";
+      tick.className = "tl-tick" + (i === steps ? " end" : "");
       tick.style.left = (i / steps * 100) + "%";
       tick.textContent = clockText(duration * i / steps);
       if (ruler) ruler.append(tick);
@@ -2899,15 +2938,15 @@ ${slack}
     ((roomMediaState && roomMediaState.segments) || []).forEach(function (segment) {
       var block = document.createElement("span");
       block.className = "tl-seg " + toneClass(segment.speaker || "");
-      block.style.left = (segment.start / duration * 100) + "%";
-      block.style.width = Math.max(0.6, (segment.end - segment.start) / duration * 100) + "%";
+      block.style.left = pct(segment.start, duration);
+      block.style.width = Math.max(0.6, ((segment.end - segment.start) / duration) * 100) + "%";
       block.title = segment.speaker || "";
       if (speakers) speakers.append(block);
     });
     ((roomMediaState && roomMediaState.events) || []).forEach(function (event) {
       var dot = document.createElement("span");
       dot.className = "tl-dot";
-      dot.style.left = (event.at / duration * 100) + "%";
+      dot.style.left = pct(event.at, duration);
       dot.title = (event.kind || "event") + " " + (event.name || "");
       if (events) events.append(dot);
     });
@@ -2918,11 +2957,12 @@ ${slack}
         if (isNaN(origin) || isNaN(at)) return;
         var mark = document.createElement("span");
         mark.className = "tl-mark";
-        mark.style.left = Math.max(0, Math.min(100, (at - origin) / 1000 / duration * 100)) + "%";
+        mark.style.left = pct((at - origin) / 1000, duration);
         mark.title = decision.text || "";
-        if (marks) marks.append(mark);
+        if (events) events.append(mark);
       });
     }
+    placePlayhead(0, duration);
   }
 
   function seekTo(seconds) {
@@ -2939,9 +2979,11 @@ ${slack}
 
   function placePlayhead(seconds, duration) {
     var head = document.getElementById("tl-head");
-    if (!head || !duration) return;
+    var plot = document.getElementById("tl-ruler");
+    if (!head || !plot || !duration) return;
+    if (head.parentNode !== plot) plot.append(head);
     head.hidden = false;
-    head.style.left = "calc(4.5rem + (100% - 4.5rem) * " + (seconds / duration) + ")";
+    head.style.left = pct(seconds, duration);
   }
 
   function markTranscript(seconds) {
@@ -3007,19 +3049,23 @@ ${slack}
     statusLabelNode.className = "meta-label";
     statusLabelNode.textContent = "Status";
     var badge = document.createElement("span");
-    badge.className = media && media.state === "processing" ? "badge warn" : "badge ok";
-    badge.textContent = media && media.state === "processing" ? "Processing" : "Done";
+    var waitingOn = fileRoom && waitingFor(fileRoom).length > 0;
+    badge.className = waitingOn ? "badge warn" : (media && media.state === "processing" ? "badge warn" : "badge ok");
+    badge.textContent = waitingOn ? "Waiting" : (media && media.state === "processing" ? "Processing" : "Done");
     status.append(statusLabelNode, badge);
-    var usage = document.createElement("span");
-    usage.className = "meta-item";
-    var usageLabel = document.createElement("span");
-    usageLabel.className = "meta-label";
-    usageLabel.textContent = "Usage";
-    var chip = document.createElement("span");
-    chip.className = "usage-chip";
-    chip.textContent = media && media.duration ? clockText(media.duration) : "";
-    usage.append(usageLabel, chip);
-    row.append(platform, status, usage);
+    row.append(platform, status);
+    if (media && media.duration) {
+      var usage = document.createElement("span");
+      usage.className = "meta-item";
+      var usageLabel = document.createElement("span");
+      usageLabel.className = "meta-label";
+      usageLabel.textContent = "Usage";
+      var chip = document.createElement("span");
+      chip.className = "usage-chip";
+      chip.textContent = clockText(media.duration);
+      usage.append(usageLabel, chip);
+      row.append(usage);
+    }
     box.append(row);
   }
 
@@ -3426,6 +3472,11 @@ ${slack}
   document.getElementById("rail-next").addEventListener("click", function () { stepRail(1); });
   document.querySelector(".rail").addEventListener("scroll", syncRail);
   window.addEventListener("resize", function () {
+    if (!window.matchMedia("(max-width: 767px)").matches) {
+      try {
+        if (localStorage.getItem("sederunt-rail") === "collapsed") document.body.classList.add("rail-collapsed");
+      } catch (error) { /* ignore */ }
+    }
     placeAskHelp();
     placeNameRow();
     var rail = document.querySelector(".rail");
@@ -3597,7 +3648,12 @@ ${slack}
       log.scrollTop = log.scrollHeight;
       return load();
     }).catch(function () {
-      addChatTurn("Sederunt", "The room did not answer. Send the sentence again.");
+      var pending = document.querySelector("#chat-log .chat-turn.chat-pending");
+      var reading = pending ? pending.querySelector(".chat-body > span") : null;
+      if (reading) {
+        reading.textContent = "The room did not answer. Send the sentence again.";
+        pending.classList.remove("chat-pending");
+      } else addChatTurn("Sederunt", "The room did not answer. Send the sentence again.");
     });
   });
   document.getElementById("meet-form").addEventListener("submit", function (event) {
@@ -3767,6 +3823,18 @@ ${slack}
   document.getElementById("nav-scrim").addEventListener("click", function () {
     document.body.classList.remove("nav-open");
   });
+  var railTip = document.getElementById("rail-tip");
+  document.querySelectorAll(".rail a[data-label], #show-connectors").forEach(function (link) {
+    link.addEventListener("mouseenter", function () {
+      if (!railTip || !document.body.classList.contains("rail-collapsed")) return;
+      var box = link.getBoundingClientRect();
+      railTip.textContent = link.getAttribute("data-label") || "";
+      railTip.hidden = false;
+      railTip.style.top = (box.top + box.height / 2) + "px";
+      railTip.style.left = (box.right + 8) + "px";
+    });
+    link.addEventListener("mouseleave", function () { if (railTip) railTip.hidden = true; });
+  });
   var railClose = document.getElementById("rail-close");
   if (railClose) railClose.addEventListener("click", function () {
     document.body.classList.remove("nav-open");
@@ -3818,23 +3886,32 @@ ${slack}
   });
   var resizer = document.getElementById("room-resizer");
   if (resizer) {
-    resizer.addEventListener("mousedown", function (event) {
+    try {
+      var savedWidth = localStorage.getItem("sederunt-room-width");
+      var leftPane = document.getElementById("room-left");
+      if (savedWidth && leftPane) leftPane.style.width = savedWidth + "px";
+    } catch (error) { /* ignore */ }
+    resizer.addEventListener("pointerdown", function (event) {
       event.preventDefault();
       var split = document.getElementById("room-split");
       var left = document.getElementById("room-left");
       if (!split || !left) return;
+      if (resizer.setPointerCapture) resizer.setPointerCapture(event.pointerId);
       function move(next) {
         var bounds = split.getBoundingClientRect();
         var width = Math.min(bounds.width * 0.5, Math.max(360, next.clientX - bounds.left));
         left.style.width = width + "px";
         left.style.flex = "none";
       }
-      function up() {
-        window.removeEventListener("mousemove", move);
-        window.removeEventListener("mouseup", up);
+      function up(next) {
+        resizer.removeEventListener("pointermove", move);
+        resizer.removeEventListener("pointerup", up);
+        var width = Math.round(left.getBoundingClientRect().width);
+        try { localStorage.setItem("sederunt-room-width", String(width)); } catch (error) { /* ignore */ }
       }
-      window.addEventListener("mousemove", move);
-      window.addEventListener("mouseup", up);
+      resizer.addEventListener("pointermove", move);
+      resizer.addEventListener("pointerup", up);
+      move(event);
     });
     resizer.addEventListener("keydown", function (event) {
       var left = document.getElementById("room-left");
