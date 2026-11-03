@@ -16,15 +16,18 @@ export function renderSignInPage(state = {}) {
   const name = escapeText(state.name || "");
   const next = escapeText(state.next || "/console");
   const alert = signInAlert(configured, state.memberSet !== false, reason);
+  const passMessage = passphraseError(reason);
+  const passInvalid = passMessage !== "";
   const form = configured
     ? `<form method="post" action="/console/sign-in" id="sign-in-form">
         <input type="hidden" name="next" value="${next}">
+        <label>Passphrase (required)
+          <input id="sign-pass" name="passphrase" type="password" autocomplete="current-password" required placeholder="Workspace passphrase"${passInvalid ? ' aria-invalid="true"' : ""} aria-describedby="${passInvalid ? "pass-error pass-hint" : "pass-hint"}">
+          <span id="pass-hint" class="field-hint">Ask your workspace admin for the console passphrase.</span>
+          ${passInvalid ? `<span id="pass-error" class="field-error" role="alert">${escapeText(passMessage)}</span>` : ""}
+        </label>
         <label>Name (optional)
           <input id="sign-name" name="name" autocomplete="name" maxlength="80" value="${name}" placeholder="The name you use in the room">
-        </label>
-        <label>Passphrase
-          <input id="sign-pass" name="passphrase" type="password" autocomplete="current-password" required placeholder="Workspace passphrase" aria-describedby="pass-hint">
-          <span id="pass-hint" class="field-hint">Ask your workspace admin for the console passphrase.</span>
         </label>
         <button class="primary" type="submit" id="sign-submit">Sign in</button>
       </form>`
@@ -49,6 +52,8 @@ export function renderSignInPage(state = {}) {
 </main>
 <script>
 (function () {
+  var pass = document.getElementById("sign-pass");
+  if (pass && pass.getAttribute("aria-invalid") === "true") pass.focus();
   var form = document.getElementById("sign-in-form");
   if (!form) return;
   form.addEventListener("submit", function () {
@@ -73,12 +78,16 @@ function signInAlert(configured, memberSet, reason) {
   return reasonAlert(reason);
 }
 
+function passphraseError(reason) {
+  if (reason === "mismatch") return "That passphrase does not match.";
+  if (reason === "missing-pass") return "Enter the passphrase.";
+  if (reason === "expired") return "This sign-in has expired. Enter the passphrase again.";
+  if (reason === "invalid") return "This sign-in is not valid. Enter the passphrase again.";
+  return "";
+}
+
 function reasonAlert(reason) {
-  if (reason === "mismatch") return `<p class="alert" role="alert">That passphrase does not match.</p>`;
-  if (reason === "missing-pass") return `<p class="alert" role="alert">Enter the passphrase.</p>`;
-  if (reason === "expired") return `<p class="alert warn" role="alert">This sign-in has expired. Enter the passphrase again.</p>`;
-  if (reason === "invalid") return `<p class="alert" role="alert">This sign-in is not valid. Enter the passphrase again.</p>`;
-  if (reason === "missing") return "";
+  if (passphraseError(reason)) return "";
   return "";
 }
 

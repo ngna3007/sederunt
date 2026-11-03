@@ -71,7 +71,7 @@ function historySession() {
     requestId: "act-post",
     actor: { type: "sederunt", name: "Sederunt" },
     verb: "post",
-    target: { system: "slack", type: "message", title: "Booth recap", channel: "ops", url: "https://sederunt.example/booth" },
+    target: { system: "slack", type: "message", title: "Booth recap", channel: "ops", url: "https://sederunt.slack.com/archives/C012/p123" },
     changes: [{ field: "channel", to: "ops" }],
     origin: { roomId: "booth", roomName: "Booth planning" },
     tool,
@@ -508,4 +508,273 @@ serial("setup and account keep their actions in the right cards", async (t) => {
   await connected.page.waitForSelector("#slack-ask");
   assert.equal(await connected.page.locator("#slack-ask").isChecked(), false);
   assert.deepEqual(connected.errors, []);
+});
+
+test("console type scale is 12/13/14/16/28 and weights 400/500/600", () => {
+  const css = readFileSync(new URL("../src/console.css", import.meta.url), "utf8");
+  const sizes = [...css.matchAll(/font-size:\s*([^;]+)/g)].map((match) => match[1].replace(/!important/g, "").trim());
+  const allowedSizes = new Set(["0", "12px", "13px", "14px", "16px", "28px"]);
+  for (const size of sizes) assert.ok(allowedSizes.has(size), `font-size ${size}`);
+  const weights = [...css.matchAll(/font-weight:\s*([^;]+)/g)].map((match) => match[1].replace(/!important/g, "").trim());
+  for (const weight of weights) {
+    if (weight === "100 900") continue;
+    assert.ok(weight === "400" || weight === "500" || weight === "600", `font-weight ${weight}`);
+  }
+});
+
+function polishSession() {
+  const session = attentionSession();
+  for (let i = 1; i <= 18; i += 1) {
+    const n = String(i).padStart(2, "0");
+    session.rooms.push({
+      id: `palette-${n}`,
+      name: `Palette room ${n}`,
+      platform: "Google Meet",
+      startedAt: "2026-11-03T09:00:00.000Z",
+    });
+  }
+  return session;
+}
+
+serial("polish keeps the logo, rows, sign-in, and palette inside the page", async (t) => {
+  const opened = await openConsole(t, polishSession(), 4711);
+  if (!opened) return;
+  const { page, errors } = opened;
+  const bare = await page.context().browser().newContext();
+  t.after(() => bare.close());
+  const sign = await bare.newPage();
+  sign.on("pageerror", (error) => errors.push(String(error)));
+
+  for (const width of WIDTHS) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`http://127.0.0.1:${opened.port}/console`, { waitUntil: "networkidle" });
+    await page.waitForSelector("p.brand .tile-mark", { timeout: 45000 });
+    const logo = await page.evaluate(() => {
+      const tile = document.querySelector("p.brand .tile-mark.brand-mark");
+      const range = document.createRange();
+      range.selectNodeContents(tile);
+      const glyph = range.getBoundingClientRect();
+      const box = tile.getBoundingClientRect();
+      const logoBg = getComputedStyle(tile).backgroundColor;
+      const tiles = [...document.querySelectorAll("#chip-mark, #workspace-menu .tile-mark")].map((node) => {
+        const style = getComputedStyle(node);
+        return {
+          bg: style.backgroundColor,
+          border: parseFloat(style.borderTopWidth),
+        };
+      });
+      const doc = document.documentElement;
+      return {
+        dx: Math.abs((glyph.left + glyph.right) / 2 - (box.left + box.right) / 2),
+        dy: Math.abs((glyph.top + glyph.bottom) / 2 - (box.top + box.bottom) / 2),
+        glyph: glyph.width,
+        logoBg,
+        tiles,
+        overflow: doc.scrollWidth > doc.clientWidth + 1,
+      };
+    });
+    assert.ok(logo.glyph > 4, `glyph ${width}`);
+    assert.ok(logo.dx <= 2, `logo dx ${width} ${logo.dx}`);
+    assert.ok(logo.dy <= 2, `logo dy ${width} ${logo.dy}`);
+    assert.ok(logo.tiles.length >= 2, `workspace tiles ${width}`);
+    for (const tile of logo.tiles) {
+      assert.notEqual(tile.bg, logo.logoBg, `workspace tile matches the logo at ${width}`);
+      assert.ok(tile.border >= 1, `workspace tile border ${width}`);
+    }
+    assert.equal(logo.overflow, false, `home ${width} overflows`);
+
+    await page.goto(`http://127.0.0.1:${opened.port}/console/people`, { waitUntil: "networkidle" });
+    await page.waitForSelector("#people-table .people-row .num", { timeout: 45000 });
+    if (width === 390) {
+      const people = await page.evaluate(() => {
+        const row = document.querySelector("#people-table .people-row");
+        const num = row.querySelector(".num");
+        const heard = row.querySelector(".heard");
+        const name = row.querySelector(".person");
+        const numBox = num.getBoundingClientRect();
+        const heardBox = heard.getBoundingClientRect();
+        const nameBox = name.getBoundingClientRect();
+        const rowBox = row.getBoundingClientRect();
+        const chips = row.querySelector(".room-chips");
+        return {
+          height: rowBox.height,
+          count: num.textContent,
+          heard: heard.textContent,
+          sameLine: Math.abs((numBox.top + numBox.bottom) - (heardBox.top + heardBox.bottom)) <= 4,
+          underName: numBox.top >= nameBox.bottom - 2,
+          heardInside: heardBox.top >= rowBox.top - 1 && heardBox.bottom <= rowBox.bottom + 1,
+          chipsUnder: !!(chips && getComputedStyle(chips).display !== "none" && chips.getBoundingClientRect().top >= nameBox.bottom - 2),
+          clipped: row.scrollHeight > row.clientHeight + 1,
+        };
+      });
+      assert.ok(people.height >= 64 && people.height <= 72, `people row ${people.height}`);
+      assert.match(people.count, /decision/);
+      assert.ok(people.heard.length > 0);
+      assert.equal(people.sameLine, true);
+      assert.equal(people.underName, true);
+      assert.equal(people.heardInside, true);
+      assert.equal(people.chipsUnder, true);
+      assert.equal(people.clipped, false);
+    }
+
+    await page.goto(`http://127.0.0.1:${opened.port}/console/decisions`, { waitUntil: "networkidle" });
+    await page.waitForSelector("#record-list .decision-row", { timeout: 45000 });
+    const decisions = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll("#record-list .decision-row")];
+      const visible = [...document.querySelectorAll("#record-list .decision-row .badge")].filter((node) => {
+        const style = getComputedStyle(node);
+        return style.display !== "none" && style.visibility !== "hidden" && node.getClientRects().length > 0;
+      }).map((node) => node.textContent.trim());
+      const doc = document.documentElement;
+      return {
+        current: visible.filter((text) => text === "Current").length,
+        clashing: visible.filter((text) => text === "Clashing").length,
+        pills: document.querySelectorAll("#record-list .plat-badge").length,
+        names: rows.map((row) => (row.querySelector(".room-name") || {}).textContent || ""),
+        overflow: doc.scrollWidth > doc.clientWidth + 1,
+      };
+    });
+    assert.equal(decisions.current, 0, `Current badges at ${width}`);
+    assert.ok(decisions.clashing >= 1, `Clashing badge at ${width}`);
+    assert.equal(decisions.pills, 0, `platform pills at ${width}`);
+    assert.ok(decisions.names.every((name) => name.includes("Booth")), JSON.stringify(decisions.names));
+    assert.equal(decisions.overflow, false, `decisions ${width} overflows`);
+
+    await page.goto(`http://127.0.0.1:${opened.port}/console/history`, { waitUntil: "networkidle" });
+    await page.waitForSelector("#history-list .day-heading", { timeout: 45000 });
+    const history = await page.evaluate(() => {
+      const head = document.querySelector('#history-list .history-head [data-col="action"]');
+      const open = document.querySelector("#history-list .history-open");
+      const day = document.querySelector("#history-list .day-heading");
+      const doc = document.documentElement;
+      const clipped = [...document.querySelectorAll("#history-list .activity-row, #history-list .day-heading")].filter((node) => {
+        const box = node.getBoundingClientRect();
+        return box.width > 0 && (box.right > window.innerWidth + 1 || box.left < -1);
+      }).length;
+      return {
+        day: day ? day.textContent.trim() : "",
+        headShown: !!(head && getComputedStyle(head).display !== "none" && head.getClientRects().length),
+        head: head ? head.textContent.trim() : "",
+        open: open ? open.textContent.trim() : "",
+        inAction: !!(open && open.closest(".activity-action")),
+        overflow: doc.scrollWidth > doc.clientWidth + 1,
+        clipped,
+      };
+    });
+    assert.ok(history.day.length > 0, `day heading ${width}`);
+    if (width >= 1024) {
+      assert.equal(history.headShown, true, `Open header ${width}`);
+      assert.equal(history.head, "Open");
+    }
+    assert.equal(history.open, "Open");
+    assert.equal(history.inAction, true);
+    assert.equal(history.overflow, false, `history ${width} overflows`);
+    assert.equal(history.clipped, 0, `history ${width} clips`);
+
+    await page.goto(`http://127.0.0.1:${opened.port}/console/does-not-exist`, { waitUntil: "networkidle" });
+    await page.waitForSelector("#page-missing:not([hidden]) .empty-title", { timeout: 45000 });
+    const missing = await page.evaluate(() => {
+      const title = document.querySelector("#page-missing .empty-title");
+      const link = document.querySelector("#page-missing a.secondary");
+      const probe = document.createElement("span");
+      probe.style.color = "var(--foreground)";
+      document.body.append(probe);
+      const ink = getComputedStyle(probe).color;
+      probe.remove();
+      const doc = document.documentElement;
+      return {
+        title: title.textContent.trim(),
+        color: getComputedStyle(title).color,
+        ink,
+        link: link ? link.textContent.replace(/\s+/g, " ").trim() : "",
+        href: link ? link.getAttribute("href") : "",
+        shown: link && link.getClientRects().length > 0,
+        overflow: doc.scrollWidth > doc.clientWidth + 1,
+      };
+    });
+    assert.equal(missing.title, "Page not found");
+    assert.equal(missing.color, missing.ink, `missing title ${width}`);
+    assert.equal(missing.link, "Back to Home");
+    assert.equal(missing.href, "/console");
+    assert.equal(missing.shown, true);
+    assert.equal(missing.overflow, false, `missing ${width} overflows`);
+
+    await sign.setViewportSize({ width, height: 900 });
+    await sign.goto(`http://127.0.0.1:${opened.port}/console/sign-in?reason=mismatch`, { waitUntil: "networkidle" });
+    await sign.waitForFunction(() => document.activeElement && document.activeElement.id === "sign-pass");
+    const auth = await sign.evaluate(() => {
+      const pass = document.getElementById("sign-pass");
+      const name = document.getElementById("sign-name");
+      const error = document.getElementById("pass-error");
+      const probe = document.createElement("span");
+      probe.style.color = "var(--destructive)";
+      document.body.append(probe);
+      const danger = getComputedStyle(probe).color;
+      probe.remove();
+      const doc = document.documentElement;
+      return {
+        passFirst: pass.getBoundingClientRect().top < name.getBoundingClientRect().top,
+        invalid: pass.getAttribute("aria-invalid"),
+        described: pass.getAttribute("aria-describedby"),
+        error: error ? error.textContent.trim() : "",
+        tied: error ? error.id : "",
+        border: getComputedStyle(pass).borderTopColor,
+        nameBorder: getComputedStyle(name).borderTopColor,
+        danger,
+        focused: document.activeElement && document.activeElement.id,
+        overflow: doc.scrollWidth > doc.clientWidth + 1,
+      };
+    });
+    assert.equal(auth.passFirst, true, `passphrase order ${width}`);
+    assert.equal(auth.invalid, "true");
+    assert.match(auth.described, /\bpass-error\b/);
+    assert.equal(auth.error, "That passphrase does not match.");
+    assert.equal(auth.tied, "pass-error");
+    assert.equal(auth.border, auth.danger, `pass border ${width} ${auth.border}`);
+    assert.notEqual(auth.border, auth.nameBorder);
+    assert.equal(auth.focused, "sign-pass");
+    assert.equal(auth.overflow, false, `sign-in ${width} overflows`);
+
+    await page.goto(`http://127.0.0.1:${opened.port}/console`, { waitUntil: "networkidle" });
+    await page.keyboard.press("Control+k");
+    await page.waitForSelector("#palette:not([hidden]) #palette-list [data-group='Rooms']", { timeout: 45000 });
+    const palette = await page.evaluate(() => {
+      const panel = document.querySelector(".palette-panel");
+      const list = document.getElementById("palette-list");
+      const rooms = list.querySelector("[data-group='Rooms']");
+      const panelBox = panel.getBoundingClientRect();
+      const doc = document.documentElement;
+      return {
+        panelBottom: panelBox.bottom,
+        view: window.innerHeight,
+        scrollable: list.scrollHeight > list.clientHeight + 8,
+        roomsTop: rooms.getBoundingClientRect().top,
+        listBottom: list.getBoundingClientRect().bottom,
+        overflow: doc.scrollWidth > doc.clientWidth + 1,
+      };
+    });
+    assert.ok(palette.panelBottom <= palette.view + 1, `palette bottom ${width} ${palette.panelBottom}`);
+    assert.equal(palette.scrollable, true, `palette scroll ${width}`);
+    assert.ok(palette.roomsTop < palette.listBottom, `rooms group cut off at ${width}`);
+    await page.evaluate(() => {
+      const list = document.getElementById("palette-list");
+      list.scrollTop = list.scrollHeight;
+    });
+    const late = await page.evaluate(() => {
+      const list = document.getElementById("palette-list");
+      const button = [...list.querySelectorAll("button")].find((node) => node.textContent.includes("Palette room 18"));
+      if (!button) return { found: false };
+      const box = button.getBoundingClientRect();
+      const listBox = list.getBoundingClientRect();
+      return {
+        found: true,
+        inside: box.top >= listBox.top - 1 && box.bottom <= listBox.bottom + 2 && box.right <= listBox.right + 1,
+      };
+    });
+    assert.equal(late.found, true, `late room ${width}`);
+    assert.equal(late.inside, true, `late room visible ${width}`);
+    assert.equal(palette.overflow, false, `palette ${width} overflows`);
+    await page.keyboard.press("Escape");
+  }
+  assert.deepEqual(errors, []);
 });

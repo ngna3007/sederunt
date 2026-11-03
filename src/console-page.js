@@ -1700,12 +1700,21 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var roomCell = document.createElement("span");
     roomCell.className = "ex-plat";
     roomCell.dataset.col = "room";
-    if (decisionRoom.platform) roomCell.append(platformBadge(decisionRoom.platform));
-    var roomText = document.createElement("span");
-    roomText.className = "room-name";
-    roomText.textContent = roomName(decisionRoom) || decisionRoom.id || "Room";
-    roomText.title = roomText.textContent;
-    roomCell.append(roomText);
+    var roomLabelText = roomName(decisionRoom) || decisionRoom.id || "";
+    if (roomLabelText) {
+      var roomText = document.createElement("span");
+      roomText.className = "room-name";
+      roomText.textContent = roomLabelText;
+      roomText.title = roomLabelText;
+      roomCell.append(roomText);
+    } else if (decisionRoom.platform) {
+      roomCell.append(platformBadge(decisionRoom.platform));
+    } else {
+      var fallbackRoom = document.createElement("span");
+      fallbackRoom.className = "room-name";
+      fallbackRoom.textContent = "Room";
+      roomCell.append(fallbackRoom);
+    }
     var status = decision.status || "recorded";
     var clashing = status === "clashing";
     if (clashing) {
@@ -3063,7 +3072,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (opts.showRoom) {
       var head = document.createElement("div");
       head.className = "explorer-head history-head";
-      [["mark", ""], ["event", "Event"], ["when", "When"], ["room", "Room"], ["action", ""]].forEach(function (pair) {
+      [["mark", ""], ["event", "Event"], ["when", "When"], ["room", "Room"], ["action", "Open"]].forEach(function (pair) {
         var cell = document.createElement("span");
         cell.dataset.col = pair[0];
         cell.textContent = pair[1];
