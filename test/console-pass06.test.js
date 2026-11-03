@@ -778,3 +778,155 @@ serial("polish keeps the logo, rows, sign-in, and palette inside the page", asyn
   }
   assert.deepEqual(errors, []);
 });
+
+function reviewSession() {
+  const session = attentionSession();
+  session.decisions.push({
+    id: "d-mina",
+    account: "company",
+    kind: "decision",
+    text: "Mina keeps the north entrance.",
+    speakerMemberId: "mina",
+    inviteMemberIds: ["mina"],
+    roomId: "booth",
+    spokenAt: "2026-11-03T11:30:00.000Z",
+    contradicts: [],
+    fileNames: [],
+  });
+  session.rooms.push({ id: "quiet", name: "Quiet room", platform: "", startedAt: "" });
+  return session;
+}
+
+serial("pass 04 columns, avatars, and failed contrast still hold", async (t) => {
+  const opened = await openConsole(t, reviewSession(), 4712);
+  if (!opened) return;
+  const { page, errors } = opened;
+  for (const width of [1920, 768]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`http://127.0.0.1:${opened.port}/console`, { waitUntil: "networkidle" });
+    await page.waitForSelector("#room-list a.room .avatar-stack .face", { timeout: 45000 });
+    const rooms = await page.evaluate(() => {
+      const head = document.querySelector('#rooms .explorer-head [data-col="started"]');
+      const headBox = head.getBoundingClientRect();
+      const rows = [...document.querySelectorAll("#room-list > a.room")];
+      const startedX = rows.map((row) => Math.round(row.querySelector('[data-col="started"]').getBoundingClientRect().x));
+      const platformX = rows.map((row) => Math.round(row.querySelector('[data-col="platform"]').getBoundingClientRect().x));
+      const quiet = rows.find((row) => row.getAttribute("data-room") === "quiet");
+      const stack = document.querySelector('#room-list a.room[data-room="booth"] .avatar-stack');
+      const faces = [...stack.querySelectorAll(".face")].map((face, index) => {
+        const range = document.createRange();
+        range.selectNodeContents(face);
+        const glyph = range.getBoundingClientRect();
+        const next = face.nextElementSibling;
+        const nextBox = next ? next.getBoundingClientRect() : null;
+        const style = getComputedStyle(face);
+        return {
+          text: face.textContent,
+          shadow: style.boxShadow,
+          margin: style.marginLeft,
+          covered: !!(nextBox && (glyph.left + glyph.right) / 2 >= nextBox.left),
+          index,
+        };
+      });
+      const chevron = document.querySelector("#room-list a.room .row-view");
+      const doc = document.documentElement;
+      return {
+        started: head ? head.textContent.trim() : "",
+        align: head ? getComputedStyle(head).textAlign : "",
+        headX: Math.round(headBox.x),
+        startedX,
+        platformX,
+        quietStarted: quiet.querySelector('[data-col="started"]').textContent,
+        quietPlatform: quiet.querySelector('[data-col="platform"]').textContent,
+        chevron: !!(chevron && getComputedStyle(chevron).display !== "none" && chevron.getClientRects().length),
+        faces,
+        overflow: doc.scrollWidth > doc.clientWidth + 1,
+      };
+    });
+    assert.equal(rooms.started, "Started", `started header ${width}`);
+    assert.ok(rooms.align === "left" || rooms.align === "start", rooms.align);
+    assert.ok(rooms.startedX.every((x) => Math.abs(x - rooms.headX) <= 1), `${width} started x ${rooms.startedX} head ${rooms.headX}`);
+    assert.ok(rooms.platformX.every((x) => Math.abs(x - rooms.platformX[0]) <= 1), `${width} platform x ${rooms.platformX}`);
+    assert.equal(rooms.quietStarted, "");
+    assert.equal(rooms.quietPlatform, "");
+    assert.equal(rooms.quietStarted.includes("—"), false);
+    assert.equal(rooms.chevron, true, `chevron ${width}`);
+    assert.equal(rooms.faces.length, 3, JSON.stringify(rooms.faces));
+    assert.equal(rooms.faces[2].text.startsWith("+"), true, rooms.faces[2].text);
+    for (const face of rooms.faces) {
+      assert.ok(face.text.length > 0);
+      assert.equal(face.covered, false, `${width} ${face.text} covered`);
+      if (face.index > 0) assert.match(face.shadow, /2px/);
+    }
+    assert.match(rooms.faces[1].margin, /^-6px/);
+    assert.equal(rooms.overflow, false, `rooms ${width} overflow`);
+  }
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`http://127.0.0.1:${opened.port}/console`, { waitUntil: "networkidle" });
+  await page.waitForSelector("#counts .count.danger", { timeout: 45000 });
+  await page.waitForSelector(".badge.attention-failed", { timeout: 45000 });
+  const contrast = await page.evaluate(() => {
+    const channel = (color) => {
+      const match = String(color).match(/rgba?\(([0-9.]+),\s*([0-9.]+),\s*([0-9.]+)(?:,\s*([0-9.]+))?\)/);
+      if (!match) return null;
+      return { r: Number(match[1]), g: Number(match[2]), b: Number(match[3]), a: match[4] == null ? 1 : Number(match[4]) };
+    };
+    const composite = (over, under) => {
+      const alpha = over.a + under.a * (1 - over.a);
+      if (!alpha) return { r: 255, g: 255, b: 255, a: 1 };
+      return {
+        r: (over.r * over.a + under.r * under.a * (1 - over.a)) / alpha,
+        g: (over.g * over.a + under.g * under.a * (1 - over.a)) / alpha,
+        b: (over.b * over.a + under.b * under.a * (1 - over.a)) / alpha,
+        a: 1,
+      };
+    };
+    const backing = (node) => {
+      const chain = [];
+      let current = node;
+      while (current) {
+        chain.push(current);
+        current = current.parentElement;
+      }
+      let acc = { r: 255, g: 255, b: 255, a: 1 };
+      for (let i = chain.length - 1; i >= 0; i -= 1) {
+        const bg = channel(getComputedStyle(chain[i]).backgroundColor);
+        if (bg && bg.a > 0) acc = composite(bg, acc);
+      }
+      return acc;
+    };
+    const luminance = (rgb) => {
+      const lin = (part) => {
+        const s = part / 255;
+        return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * lin(rgb.r) + 0.7152 * lin(rgb.g) + 0.0722 * lin(rgb.b);
+    };
+    const ratio = (node) => {
+      const fg = channel(getComputedStyle(node).color);
+      const bg = backing(node);
+      const hi = Math.max(luminance(fg), luminance(bg));
+      const lo = Math.min(luminance(fg), luminance(bg));
+      return (hi + 0.05) / (lo + 0.05);
+    };
+    const card = document.querySelector("#counts .count.danger");
+    const probe = document.createElement("span");
+    probe.className = "badge bad";
+    probe.textContent = "Failed";
+    card.append(probe);
+    const samples = {
+      label: ratio(card.querySelector("span")),
+      number: ratio(card.querySelector("strong")),
+      note: ratio(card.querySelector(".count-note")),
+      attention: ratio(document.querySelector(".badge.attention-failed")),
+      badge: ratio(probe),
+    };
+    probe.remove();
+    return samples;
+  });
+  for (const [name, value] of Object.entries(contrast)) {
+    assert.ok(value >= 4.5, `${name} contrast ${value}`);
+  }
+  assert.deepEqual(errors, []);
+});

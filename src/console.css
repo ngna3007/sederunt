@@ -1251,7 +1251,7 @@ button.secondary {
   color: var(--muted-foreground);
   font-weight: 400;
 }
-.badge.bad { background: color-mix(in srgb, var(--destructive) 12%, white); color: var(--destructive); }
+.badge.bad { background: var(--card); color: #b42318; border: 1px solid #e7c5c2; }
 .decision-row, .people-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

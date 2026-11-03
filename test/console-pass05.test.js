@@ -263,10 +263,10 @@ test("list columns share a gap and history rows stay compact", async (t) => {
     { path: "/console/decisions", table: "#record-table", row: "#record-list .decision-row", head: "#record-table > .decision-head" },
     { path: "/console/people", table: "#people-table", row: "#people-table .people-row", head: "#people-table .people-head" },
     { path: "/console/history", table: "#history-table", row: "#history-list .activity-row", head: "#history-list .history-head", history: true },
-    { path: "/console/status", table: "#tools-card .connectors", row: "#tools-card .connectors > .conn", head: "#tools-card .status-head" },
+    { path: "/console/setup", table: "#tools-card .connectors", row: "#tools-card .connectors > .conn", head: "#tools-card .status-head" },
   ];
 
-  for (const width of [1920, 1097, 1024, 768]) {
+  for (const width of [1920, 1097, 1024, 768, 640, 390]) {
     await page.setViewportSize({ width, height: 900 });
     for (const surface of surfaces) {
       await page.goto(`http://127.0.0.1:${port}${surface.path}`, { waitUntil: "networkidle" });
@@ -305,7 +305,12 @@ test("list columns share a gap and history rows stay compact", async (t) => {
         const heights = rows.map((item) => Math.round(item.getBoundingClientRect().height));
         const doc = document.documentElement;
         const gap = root ? getComputedStyle(root).columnGap : "";
-        const stacked = history && getComputedStyle(root).display === "block";
+        const display = root ? getComputedStyle(root).display : "";
+        const stacked = display === "block";
+        const rowClip = rows.filter((item) => {
+          const box = item.getBoundingClientRect();
+          return box.width > 0 && (box.right > window.innerWidth + 1 || box.left < -1);
+        }).length;
         const clips = [...document.querySelectorAll("#history-list .entity-id, #history-list .label-pill")].filter((node) => {
           const box = node.getBoundingClientRect();
           const line = node.closest(".activity-row");
@@ -326,11 +331,13 @@ test("list columns share a gap and history rows stay compact", async (t) => {
           clips,
           actions,
           headShown,
+          rowClip,
         };
       }, surface);
       assert.equal(measured.overflow, false, `${surface.path} ${width} overflows`);
+      assert.equal(measured.rowClip, 0, `${surface.path} ${width} clips a row`);
       const uniqueHeights = [...new Set(measured.heights)];
-      if (!(surface.history && width <= 768)) {
+      if (!measured.stacked) {
         assert.deepEqual(uniqueHeights, [measured.heights[0]], `${surface.path} ${width} heights ${measured.heights.join(",")}`);
       }
       if (surface.history && width >= 1024) {
