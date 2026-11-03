@@ -308,6 +308,120 @@ function undoClause(change, target, zone, viewerZone) {
  * @param {string} [timeZone]
  * @param {string} [viewerZone]
  */
+const CONSOLE_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const CONSOLE_DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * One console date. With a time: "Today at 6:25 PM", "Yesterday at 6:25 PM",
+ * a weekday inside the last week ("Mon at 6:25 PM"), otherwise
+ * "10 Nov 2026, 6:25 PM". A date with no time stays day-only in that style
+ * ("Today", "Mon", "2 Nov 2026"). 12-hour, in `timeZone` or the runtime zone.
+ * `part: "clock"` is "6:25 PM". `part: "day"` is the history heading
+ * ("Today", "Yesterday", "2 Nov", "2 Nov 2025").
+ *
+ * @param {string|number|Date|null|undefined} value
+ * @param {{ now?: number|string|Date, timeZone?: string, time?: boolean, part?: "full"|"clock"|"day" }} [options]
+ */
+export function formatConsoleWhen(value, options = {}) {
+  if (value == null || value === "") return "";
+  const timeZone = options.timeZone || undefined;
+  const nowDate = options.now == null ? new Date() : new Date(options.now);
+  if (Number.isNaN(nowDate.getTime())) return "";
+  let nowBag;
+  try {
+    nowBag = consoleZoneBag(nowDate, timeZone);
+  } catch {
+    return "";
+  }
+  const raw = value instanceof Date || typeof value === "number" ? value : String(value).trim();
+  if (raw === "") return "";
+  const dateOnly = typeof raw === "string" ? CONSOLE_DATE_ONLY.exec(raw) : null;
+  let year;
+  let month;
+  let day;
+  let weekday = "";
+  let clock = "";
+  if (dateOnly) {
+    year = Number(dateOnly[1]);
+    month = Number(dateOnly[2]);
+    day = Number(dateOnly[3]);
+    const probe = new Date(Date.UTC(year, month - 1, day));
+    if (probe.getUTCFullYear() !== year || probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== day) return "";
+    try {
+      weekday = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "UTC" }).format(new Date(Date.UTC(year, month - 1, day, 12)));
+    } catch {
+      return "";
+    }
+  } else {
+    const date = raw instanceof Date ? raw : new Date(raw);
+    if (Number.isNaN(date.getTime())) return "";
+    let bag;
+    try {
+      bag = consoleZoneBag(date, timeZone);
+    } catch {
+      return "";
+    }
+    year = Number(bag.year);
+    month = Number(bag.month);
+    day = Number(bag.day);
+    weekday = bag.weekday || "";
+    clock = consoleClock(bag);
+  }
+  const delta = Math.round((consoleDayNumber(nowBag) - Date.UTC(year, month - 1, day)) / 86400000);
+  const part = options.part || "full";
+  if (part === "clock") return clock;
+  if (part === "day") {
+    if (delta === 0) return "Today";
+    if (delta === 1) return "Yesterday";
+    return consoleHeading(year, month, day, nowBag.year);
+  }
+  let dayWord;
+  if (delta === 0) dayWord = "Today";
+  else if (delta === 1) dayWord = "Yesterday";
+  else if (delta >= 2 && delta < 7) dayWord = weekday;
+  else dayWord = consoleAbsolute(year, month, day);
+  const wantTime = options.time !== false && !dateOnly && Boolean(clock);
+  if (!wantTime) return dayWord;
+  if (delta === 0 || delta === 1 || (delta >= 2 && delta < 7)) return `${dayWord} at ${clock}`;
+  return `${dayWord}, ${clock}`;
+}
+
+function consoleZoneBag(date, timeZone) {
+  const settings = {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  };
+  if (timeZone) settings.timeZone = timeZone;
+  const parts = new Intl.DateTimeFormat("en-US", settings).formatToParts(date);
+  const bag = {};
+  for (const part of parts) {
+    if (part.type !== "literal") bag[part.type] = String(part.value).replace(/\u202f|\u00a0/g, " ");
+  }
+  return bag;
+}
+
+function consoleDayNumber(bag) {
+  return Date.UTC(Number(bag.year), Number(bag.month) - 1, Number(bag.day));
+}
+
+function consoleClock(bag) {
+  return `${bag.hour}:${bag.minute} ${bag.dayPeriod}`.replace(/\s+/g, " ").trim();
+}
+
+function consoleAbsolute(year, month, day) {
+  return `${Number(day)} ${CONSOLE_MONTHS[Number(month) - 1]} ${year}`;
+}
+
+function consoleHeading(year, month, day, nowYear) {
+  const label = `${Number(day)} ${CONSOLE_MONTHS[Number(month) - 1]}`;
+  return String(year) === String(nowYear) ? label : `${label} ${year}`;
+}
+
 export function undoPrompt(row, timeZone, viewerZone) {
   const target = row?.target || {};
   const zone = target.system === "calendar" ? (timeZone || viewerZone || "") : (viewerZone || timeZone || "");

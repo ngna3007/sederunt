@@ -13,6 +13,7 @@ import {
   renderActivity,
   selectActivity,
 } from "../src/activity.js";
+import { formatConsoleWhen } from "../src/activity-feed.js";
 import { createSession } from "../src/session.js";
 import { companyBoard } from "../src/typed-path.js";
 
@@ -451,4 +452,33 @@ test("a request from another room stays with the action the member can see", () 
   const pair = board.activity.filter((row) => row.requestId === "pair");
   assert.equal(pair.length, 1);
   assert.equal(pair[0].origin.roomId, "design");
+});
+
+test("formatConsoleWhen is the one console date", () => {
+  const now = Date.parse("2026-11-10T15:00:00.000Z");
+  const zone = "UTC";
+  assert.equal(formatConsoleWhen("2026-11-10T18:25:00.000Z", { now, timeZone: zone }), "Today at 6:25 PM");
+  assert.equal(formatConsoleWhen("2026-11-09T18:25:00.000Z", { now, timeZone: zone }), "Yesterday at 6:25 PM");
+  const weekday = new Intl.DateTimeFormat("en-US", { timeZone: zone, weekday: "short" }).format(new Date("2026-11-04T18:25:00.000Z"));
+  assert.equal(formatConsoleWhen("2026-11-04T18:25:00.000Z", { now, timeZone: zone }), `${weekday} at 6:25 PM`);
+  assert.equal(formatConsoleWhen("2026-11-03T18:25:00.000Z", { now, timeZone: zone }), "3 Nov 2026, 6:25 PM");
+  assert.equal(formatConsoleWhen("2026-11-12T18:25:00.000Z", { now, timeZone: zone }), "12 Nov 2026, 6:25 PM");
+  assert.equal(formatConsoleWhen("2026-10-02", { now, timeZone: zone }), "2 Oct 2026");
+  assert.equal(formatConsoleWhen("2026-11-10", { now, timeZone: zone }), "Today");
+  assert.equal(formatConsoleWhen("2026-11-09", { now, timeZone: zone }), "Yesterday");
+  assert.equal(formatConsoleWhen("2026-11-08", { now, timeZone: zone }), new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "UTC" }).format(new Date(Date.UTC(2026, 10, 8, 12))));
+  assert.equal(formatConsoleWhen("2026-11-10T18:25:00.000Z", { now, timeZone: zone, part: "clock" }), "6:25 PM");
+  assert.equal(formatConsoleWhen("2026-11-10", { now, timeZone: zone, part: "clock" }), "");
+  assert.equal(formatConsoleWhen("2026-11-03T18:25:00.000Z", { now, timeZone: zone, part: "day" }), "3 Nov");
+  assert.equal(formatConsoleWhen("2025-11-03T18:25:00.000Z", { now, timeZone: zone, part: "day" }), "3 Nov 2025");
+  assert.equal(formatConsoleWhen("2026-11-10T18:25:00.000Z", { now, timeZone: zone, part: "day" }), "Today");
+  assert.equal(formatConsoleWhen("2026-11-09T06:05:00.000Z", { now, timeZone: zone, part: "clock" }), "6:05 AM");
+  assert.equal(formatConsoleWhen("2026-11-03T22:25:00.000Z", { now: Date.parse("2026-11-03T22:00:00.000Z"), timeZone: "America/New_York" }), "Today at 5:25 PM");
+  assert.equal(formatConsoleWhen("nope", { now, timeZone: zone }), "");
+  assert.equal(formatConsoleWhen("", { now, timeZone: zone }), "");
+  const localNow = Date.parse("2026-11-03T18:00:00.000Z");
+  const local = formatConsoleWhen("2026-11-03T18:25:00.000Z", { now: localNow });
+  const clock = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", hour12: true }).format(new Date("2026-11-03T18:25:00.000Z")).replace(/\u202f|\u00a0/g, " ");
+  assert.equal(local, `Today at ${clock}`);
+  assert.equal(local.includes("\u202f"), false);
 });

@@ -4692,3 +4692,10 @@ body.room-open .timeline.is-scrub .tl-track { display: none !important; }
 @media (max-width: 1023px) {
   #history-list .day-heading { margin: 0; padding: 12px 16px 4px; }
 }
+
+.decision-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.decision-actions a,
+.decision-actions button {
+  height: var(--control-h);
+  min-height: var(--control-h);
+}

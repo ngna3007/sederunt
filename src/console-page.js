@@ -183,8 +183,8 @@ ${slack}
     <div id="home" hidden>
       <div class="main">
     <div id="read-error" class="state-error empty-state" hidden>
-      <p id="read-error-copy" class="empty-title">Couldn't load your workspace. Try again.</p>
-      <button id="read-again" type="button">Retry</button>
+      <p id="read-error-copy" class="empty-title">Home could not be loaded.</p>
+      <button id="read-again" type="button">Try again</button>
     </div>
     <div class="page-head" id="home-head">
     <div>
@@ -196,7 +196,7 @@ ${slack}
     <div class="home-tools">
     <div id="home-empty" class="home-empty" hidden>
       <span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.6h10.8v8.8H2.6z"/><path d="M2.6 6.6h10.8"/></svg></span>
-      <p id="home-empty-line">No room yet.</p>
+      <p id="home-empty-line">No rooms yet.</p>
       <p id="home-empty-aside" class="empty-aside">A meeting or a channel that keeps a decision adds the room.</p>
     </div>
     <div id="home-stats">
@@ -229,7 +229,7 @@ ${slack}
       </div>
       <div class="settings-card" id="tools-card">
       <p class="section-label">Tools</p>
-      <p class="card-help">A tool that is not connected cannot be used from this page.</p>
+      <p class="card-help">Connect a tool to let Sederunt act in it.</p>
       <div class="connectors">
         <div class="explorer-head status-head">
           <span data-col="mark"></span>
@@ -318,7 +318,7 @@ ${slack}
         <div class="explorer-head">
           ${ROOM_COLUMNS.map((label, index) => `<span data-col="${["room", "platform", "speakers", "status", "started", "action"][index]}">${escapeHtml(label)}</span>`).join("")}
         </div>
-        <div id="room-empty" class="empty-state" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.6h10.8v8.8H2.6z"/><path d="M2.6 6.6h10.8"/></svg></span><p class="empty-title" id="room-empty-line">No room yet.</p><p id="room-empty-aside">Bring Sederunt into a meeting or a channel.</p><button type="button" id="clear-filters" hidden>Clear filters</button></div>
+        <div id="room-empty" class="empty-state" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.6h10.8v8.8H2.6z"/><path d="M2.6 6.6h10.8"/></svg></span><p class="empty-title" id="room-empty-line">No rooms yet.</p><p id="room-empty-aside">Bring Sederunt into a meeting or a channel.</p><button type="button" id="clear-filters" hidden>Clear filters</button></div>
         <div id="room-list"></div>
         <div id="room-foot" class="explorer-foot" hidden><span id="room-count"></span><span class="pager"><button id="room-prev" type="button" aria-label="Previous page">‹</button><button id="room-next" type="button" aria-label="Next page">›</button></span></div>
       </div>
@@ -654,9 +654,13 @@ ${slack}
     <p id="decision-heard"></p>
     <p id="decision-file" hidden></p>
     <p id="decision-ticket" hidden></p>
-    <p id="decision-proof"></p>
+    <p id="decision-proof" hidden></p>
     <p id="decision-epoch" hidden></p>
     <div id="decision-other"></div>
+    <div class="decision-actions">
+      <a id="decision-room" href="/console/rooms">Open room</a>
+      <button type="button" id="decision-copy">Copy</button>
+    </div>
     </div>
   </div>
 </div>
@@ -685,28 +689,12 @@ ${slack}
   </div>
 </div>
 <script type="module">
-import { formatActivitySentence, groupActivity, relativeTime, selectActivity, undoPrompt, zoneShortName } from "/console/activity.js";
+import { formatActivitySentence, formatConsoleWhen, groupActivity, relativeTime, selectActivity, undoPrompt, zoneShortName } from "/console/activity.js";
 import { rankDecisions } from "/console/room-match.js";
 var sessionWhen = document.getElementById("account-detail-expiry");
 if (sessionWhen && sessionWhen.dataset.at) {
-  var sessionDate = new Date(sessionWhen.dataset.at);
-  if (!isNaN(sessionDate.getTime())) {
-    var sessionHours = sessionDate.getHours();
-    var sessionMins = String(sessionDate.getMinutes());
-    if (sessionMins.length < 2) sessionMins = "0" + sessionMins;
-    var sessionClock = (sessionHours % 12 || 12) + ":" + sessionMins + (sessionHours >= 12 ? " PM" : " AM");
-    var sessionNow = new Date();
-    var sessionStart = new Date(sessionNow.getFullYear(), sessionNow.getMonth(), sessionNow.getDate()).getTime();
-    var sessionDay = new Date(sessionDate.getFullYear(), sessionDate.getMonth(), sessionDate.getDate()).getTime();
-    var sessionText = sessionDay === sessionStart
-      ? "Today at " + sessionClock
-      : sessionDay === sessionStart - 86400000
-        ? "Yesterday at " + sessionClock
-        : sessionDay === sessionStart + 86400000
-          ? "Tomorrow at " + sessionClock
-          : sessionDate.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) + " at " + sessionClock;
-    sessionWhen.textContent = sessionText;
-  }
+  var sessionText = formatConsoleWhen(sessionWhen.dataset.at);
+  if (sessionText) sessionWhen.textContent = sessionText;
 }
 (function () {
   var onboard = document.getElementById("onboard");
@@ -747,6 +735,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   var operatorLeft = false;
   var routeQuiet = false;
   var routed = false;
+  var openDecisionRow = null;
 
   function text(id, value) {
     var node = document.getElementById(id);
@@ -805,12 +794,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (decision && typeof decision.checkpoint === "number") {
       return "Kept at checkpoint " + decision.checkpoint + ".";
     }
-    return "No checkpoint was returned.";
+    return "";
   }
 
   function historyBody(decision) {
     var who = personLabel(decision.speaker) || "Someone";
-    var when = whenLabel(decision.spokenAt);
+    var when = relativeWhen(decision.spokenAt) || whenLabel(decision.spokenAt);
     var status = decision.status || "recorded";
     var line = who + " kept this";
     if (when) line += " on " + when;
@@ -859,7 +848,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (explorer && !personal) explorer.hidden = pending || (sectionName === "home" && emptyHome);
     var line = document.getElementById("home-empty-line");
     var aside = document.getElementById("home-empty-aside");
-    if (line) line.textContent = blockedHome ? "No meeting or channel is in use." : "No room yet.";
+    if (line) line.textContent = blockedHome ? "No meeting or channel is in use." : "No rooms yet.";
     if (aside) aside.textContent = blockedHome ? "Bring Sederunt into a meeting or a channel." : "A meeting or a channel that keeps a decision adds the room.";
   }
 
@@ -1186,7 +1175,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var sentence = String(decision.text || "").trim();
       if (!sentence) return;
       var who = personLabel(decision.speaker);
-      var when = whenLabel(decision.spokenAt);
+      var when = relativeWhen(decision.spokenAt) || whenLabel(decision.spokenAt);
       var tail = [who, when].filter(Boolean).join(", ");
       lines.push(tail ? sentence + " (" + tail + ")" : sentence);
     });
@@ -1200,11 +1189,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function whenLabel(iso) {
-    if (!iso) return "";
-    var date = new Date(iso);
-    if (isNaN(date.getTime())) return "";
-    var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    return date.getDate() + " " + months[date.getMonth()] + " " + date.getFullYear();
+    return formatConsoleWhen(iso, { time: false });
   }
 
   function epochLine(decision) {
@@ -1547,11 +1532,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
         ? "Rooms are unavailable."
         : filteredOut
           ? "No results."
-          : "No room yet.";
+          : "No rooms yet.";
     }
     var aside = document.getElementById("room-empty-aside");
     if (aside) aside.textContent = failed
-      ? "Home could not be loaded. Try again."
+      ? "Home could not be loaded."
       : filteredOut
         ? "Clear the filters to see every room."
         : "Bring Sederunt into a meeting or a channel.";
@@ -1636,37 +1621,16 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function relativeWhen(iso) {
-    var bag = zoneParts(iso);
-    var today = zoneParts(new Date().toISOString());
-    if (!bag || !today) return "";
-    var clock = bag.hour + ":" + bag.minute + " " + bag.dayPeriod;
-    var key = bag.year + "-" + bag.month + "-" + bag.day;
-    var nowKey = today.year + "-" + today.month + "-" + today.day;
-    if (key === nowKey) return "Today at " + clock;
-    return whenLabel(iso);
+    return formatConsoleWhen(iso);
   }
 
   function clockOnly(iso) {
-    var bag = zoneParts(iso);
-    if (!bag) return "";
-    return bag.hour + ":" + bag.minute + " " + bag.dayPeriod;
+    return formatConsoleWhen(iso, { part: "clock" });
   }
 
   function dayHeading(ms) {
     if (ms == null || isNaN(ms)) return "";
-    var bag = zoneParts(new Date(ms).toISOString());
-    var today = zoneParts(new Date().toISOString());
-    if (!bag || !today) return "";
-    var key = bag.year + "-" + bag.month + "-" + bag.day;
-    if (key === today.year + "-" + today.month + "-" + today.day) return "Today";
-    var prior = new Date();
-    prior.setDate(prior.getDate() - 1);
-    var yesterday = zoneParts(prior.toISOString());
-    if (yesterday && key === yesterday.year + "-" + yesterday.month + "-" + yesterday.day) return "Yesterday";
-    var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    var label = Number(bag.day) + " " + months[Number(bag.month) - 1];
-    if (bag.year !== today.year) label += " " + bag.year;
-    return label;
+    return formatConsoleWhen(ms, { part: "day" });
   }
 
   function groupOpened(group) {
@@ -1905,7 +1869,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var counts = (state && state.counts) || {};
     addCount(box, "Decisions kept", counts.kept || 0, "Sentences kept in this workspace.", null, false);
     addCount(box, "Actions today", counts.actionsToday || 0, "Changes that ran today.", null, false);
-    if (counts.failed) addCount(box, "Failed actions", counts.failed, "A change did not go through.", null, "danger");
+    if (counts.failed) {
+      var failedNote = counts.failed === 1 ? "1 change did not go through." : (counts.failed + " changes did not go through.");
+      addCount(box, "Failed actions", counts.failed, failedNote, null, "danger");
+    }
     if (counts.sent) addCount(box, "Sent", counts.sent, "The tool accepted the change.", null, false);
   }
 
@@ -2125,7 +2092,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     slowTimer = null;
     var errorBox = document.getElementById("read-error");
     if (errorBox && next.read === "failed") errorBox.classList.remove("state-info");
-    showRetry(next.read === "failed", "Home could not be loaded. Try again.");
+    showRetry(next.read === "failed", homeErrorCopy(next.message));
     fillHearing(next.hearing);
     var loaded = next.companyLoaded === true;
     document.getElementById("onboard-missing").hidden = loaded;
@@ -2213,7 +2180,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var emptyTitle = recordEmpty.querySelector(".empty-title");
       var emptyLine = recordEmpty.querySelector("p:last-child");
       if (next.read === "failed" && emptyTitle) emptyTitle.textContent = "Decisions are unavailable.";
-      if (next.read === "failed" && emptyLine) emptyLine.textContent = "Home could not be loaded. Try again.";
+      if (next.read === "failed" && emptyLine) emptyLine.textContent = "Home could not be loaded.";
     }
     if (recordBoard) recordBoard.hidden = noKept;
     var recordFoot = document.getElementById("record-foot");
@@ -2296,6 +2263,28 @@ if (sessionWhen && sessionWhen.dataset.at) {
     placeNewRoom();
   }
 
+  function stripEdge(value) {
+    var text = String(value || "");
+    while (text.charAt(0) === "." || text.charAt(0) === " ") text = text.slice(1);
+    while (text.length && (text.charAt(text.length - 1) === "." || text.charAt(text.length - 1) === " ")) text = text.slice(0, -1);
+    return text;
+  }
+
+  function homeErrorCopy(reason) {
+    var head = "Home could not be loaded.";
+    var extra = String(reason || "").trim();
+    while (extra.indexOf("  ") !== -1) extra = extra.split("  ").join(" ");
+    var lead = "home could not be loaded";
+    if (extra.toLowerCase().indexOf(lead) === 0) extra = extra.slice(lead.length);
+    extra = stripEdge(extra);
+    ["try again", "read the account again", "read it again"].forEach(function (tail) {
+      if (extra.toLowerCase().slice(-tail.length) === tail) extra = extra.slice(0, extra.length - tail.length);
+    });
+    extra = stripEdge(extra);
+    if (!extra) return head;
+    return head + " " + extra + ".";
+  }
+
   function showRetry(on, copy) {
     var box = document.getElementById("read-error");
     var button = document.getElementById("read-again");
@@ -2303,7 +2292,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (box) box.hidden = !on;
     if (button) button.hidden = !on;
     if (on && copy && line) line.textContent = copy;
-    if (button && on) button.disabled = false;
+    if (button && on) {
+      button.disabled = false;
+      if (copy && String(copy).indexOf("Home could not be loaded") === 0) button.textContent = "Try again";
+    }
   }
 
   function toast(message) {
@@ -2980,7 +2972,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         var time = document.createElement("time");
         if (row.ts) {
           time.dateTime = row.ts;
-          time.title = new Date(row.ts).toLocaleString();
+          time.title = relativeWhen(row.ts) || row.ts;
           time.textContent = opts.showRoom ? (clockOnly(row.ts) || relativeTime(row.ts)) : (relativeWhen(row.ts) || relativeTime(row.ts));
         }
         meta.append(time);
@@ -3086,11 +3078,31 @@ if (sessionWhen && sessionWhen.dataset.at) {
     paintActivity(box, [], { groups: selectActivity((state && state.activity) || [], { roomId: fileRoom }), viewRoom: fileRoom });
   }
 
+  function clashLine(other) {
+    var who = String(personLabel(other.speaker) || "someone").trim().toLowerCase() || "someone";
+    var clock = formatConsoleWhen(other.spokenAt, { part: "clock" });
+    var tail = clock ? (who + ", " + clock) : who;
+    return "Clashes with: " + (other.text || "A sentence") + " (" + tail + ")";
+  }
+
+  function decisionCopyText(decision) {
+    if (!decision) return "";
+    var lines = [String(decision.text || "").trim()];
+    if (decision.status === "clashing") {
+      decisionsFor(decision.roomId).forEach(function (other) {
+        if (!other || other.id === decision.id || other.status !== "clashing") return;
+        lines.push(clashLine(other));
+      });
+    }
+    return lines.filter(Boolean).join("\\n");
+  }
+
   function openDecision(decision) {
+    openDecisionRow = decision;
     text("decision-state", humanStatus(decision.status || "recorded"));
     text("decision-sentence", decision.text || "");
     var heardWho = personLabel(decision.speaker);
-    var heardWhen = whenLabel(decision.spokenAt);
+    var heardWhen = relativeWhen(decision.spokenAt) || whenLabel(decision.spokenAt);
     text("decision-heard", heardWho && heardWhen ? heardWho + " kept this on " + heardWhen + "." : heardWho ? heardWho + " kept this." : heardWhen ? "Kept on " + heardWhen + "." : "No one is recorded yet.");
     showLine("decision-file", fileLine(decision));
     showLine("decision-ticket", ticketLine(decision));
@@ -3101,9 +3113,19 @@ if (sessionWhen && sessionWhen.dataset.at) {
       decisionsFor(decision.roomId).forEach(function (other) {
         if (other.id === decision.id || other.status !== "clashing") return;
         var line = document.createElement("p");
-        line.textContent = other.text;
+        line.textContent = clashLine(other);
         document.getElementById("decision-other").append(line);
       });
+    }
+    var roomLink = document.getElementById("decision-room");
+    if (roomLink) {
+      if (decision.roomId) {
+        roomLink.hidden = false;
+        roomLink.href = "/console/rooms/" + encodeURIComponent(decision.roomId);
+      } else {
+        roomLink.hidden = true;
+        roomLink.removeAttribute("href");
+      }
     }
     openDialog("decision-dialog");
   }
@@ -4106,8 +4128,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
     }).catch(function () {
       if (token !== loadToken) return;
       document.getElementById("loading").hidden = true;
-      showRetry(true, "The account could not be read. Read the account again.");
-      text("status", "The account could not be read. Read the account again.");
+      showRetry(true, homeErrorCopy("The account could not be read."));
+      text("status", "");
     });
   }
 
@@ -4360,10 +4382,28 @@ if (sessionWhen && sessionWhen.dataset.at) {
     fetch("/api/console/read" + consoleQuery(), { method: "POST" }).then(function () {
       if (button) {
         button.disabled = false;
-        button.textContent = "Retry";
+        button.textContent = "Try again";
       }
       return load();
     });
+  });
+  var decisionRoom = document.getElementById("decision-room");
+  if (decisionRoom) decisionRoom.addEventListener("click", function (event) {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    var roomId = openDecisionRow && openDecisionRow.roomId;
+    if (!roomId) return;
+    event.preventDefault();
+    closeDialog("decision-dialog");
+    leaveOnboard();
+    openFile(roomId);
+  });
+  var decisionCopy = document.getElementById("decision-copy");
+  if (decisionCopy) decisionCopy.addEventListener("click", function () {
+    var copied = decisionCopyText(openDecisionRow);
+    var done = function () { toast("Copied."); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(copied).then(done, function () { toast("Copy did not work."); });
+    } else toast("Copy did not work.");
   });
   document.getElementById("chat-form").addEventListener("submit", function (event) {
     event.preventDefault();

@@ -43,6 +43,25 @@ test("meeting words separate live, ended, channel, and silence", () => {
   assert.match(page, /history-open/);
   const feed = readFileSync(new URL("../src/activity-feed.js", import.meta.url), "utf8");
   assert.match(feed, /b\.opened - a\.opened/);
+  assert.match(feed, /export function formatConsoleWhen/);
+  assert.match(page, /import \{[^}]*formatConsoleWhen/);
+  assert.match(page, /return formatConsoleWhen\(iso\)/);
+  assert.match(page, /formatConsoleWhen\(iso, \{ time: false \}\)/);
+  assert.match(page, /formatConsoleWhen\(ms, \{ part: "day" \}\)/);
+  assert.match(page, /Clashes with:/);
+  assert.match(page, /id="decision-room"/);
+  assert.match(page, /id="decision-copy"/);
+  assert.doesNotMatch(page, /No checkpoint was returned/);
+  assert.match(page, /Kept at checkpoint/);
+  assert.match(page, /1 change did not go through/);
+  assert.match(page, /changes did not go through/);
+  assert.doesNotMatch(page, /No room yet\./);
+  assert.match(page, /No rooms yet\./);
+  assert.match(page, /Home could not be loaded/);
+  assert.match(page, /Try again/);
+  assert.doesNotMatch(page, /Couldn't load your workspace/);
+  assert.match(page, /Connect a tool to let Sederunt act in it\./);
+  assert.doesNotMatch(page, /A tool that is not connected cannot be used from this page/);
 });
 
 function seeded() {
@@ -551,6 +570,12 @@ test("list columns share a gap and history rows stay compact", async (t) => {
   assert.ok(historyBefore.times.every((value) => !/Today|Yesterday|\d{4}/.test(value)), JSON.stringify(historyBefore.times));
   assert.equal(historyBefore.openInAction, true);
   assert.match(historyBefore.first, /ROW-200/);
+  await page.goto(`http://127.0.0.1:${port}/console`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector("#counts .count", { timeout: 45000 });
+  const failedNote = await page.evaluate(() => [...document.querySelectorAll("#counts .count")].map((node) => node.textContent).find((text) => text.includes("Failed")) || "");
+  assert.match(failedNote, /1 change did not go through/);
+  await page.goto(`http://127.0.0.1:${port}/console/history`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector("#history-list .activity-retry", { timeout: 45000 });
   await page.click("#history-list .activity-retry");
   await page.waitForSelector("#history-list .retried", { timeout: 20000 });
   const historyAfter = await page.evaluate(() => {
@@ -574,5 +599,82 @@ test("list columns share a gap and history rows stay compact", async (t) => {
   assert.equal(historyAfter.noteInCopy, true);
   assert.equal(historyAfter.noteInAction, false);
   assert.equal(historyAfter.nestedAfter, true, JSON.stringify(historyAfter));
+
+  const stamp = /^(Today at \d{1,2}:\d{2} [AP]M|Yesterday at \d{1,2}:\d{2} [AP]M|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) at \d{1,2}:\d{2} [AP]M|\d{1,2} [A-Z][a-z]{2} \d{4}, \d{1,2}:\d{2} [AP]M)$/;
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`http://127.0.0.1:${port}/console`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector("#counts .count", { timeout: 45000 });
+  const homeCopy = await page.evaluate(() => ({
+    again: document.getElementById("read-again").textContent,
+    error: document.getElementById("read-error-copy").textContent,
+  }));
+  assert.equal(homeCopy.again, "Try again");
+  assert.match(homeCopy.error, /^Home could not be loaded/);
+  assert.doesNotMatch(homeCopy.error, /Try again|Retry/);
+
+  await page.goto(`http://127.0.0.1:${port}/console/status`, { waitUntil: "domcontentloaded" });
+  const toolHelp = await page.locator("#tools-card .card-help").innerText();
+  assert.equal(toolHelp, "Connect a tool to let Sederunt act in it.");
+
+  await page.goto(`http://127.0.0.1:${port}/console/rooms`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector("#room-list [data-col='started']", { timeout: 45000 });
+  const started = await page.evaluate(() => [...document.querySelectorAll("#room-list [data-col='started']")].map((node) => node.textContent.trim()).filter(Boolean));
+  assert.ok(started.length > 0, "rooms have start times");
+  assert.ok(started.every((value) => /^(Today at \d{1,2}:\d{2} [AP]M|Yesterday at \d{1,2}:\d{2} [AP]M|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) at \d{1,2}:\d{2} [AP]M|\d{1,2} [A-Z][a-z]{2} \d{4}, \d{1,2}:\d{2} [AP]M)$/.test(value)), JSON.stringify(started));
+
+  await page.goto(`http://127.0.0.1:${port}/console/account`, { waitUntil: "domcontentloaded" });
+  const expiry = (await page.locator("#account-detail-expiry").innerText()).trim();
+  assert.match(expiry, stamp, expiry);
+
+  await page.goto(`http://127.0.0.1:${port}/console/decisions`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector("#record-list .decision-row", { timeout: 45000 });
+  const opened = await page.evaluate(() => {
+    const row = [...document.querySelectorAll("#record-list .decision-row")].find((node) => /opens at ten/.test(node.textContent));
+    const meta = row.querySelector(".meta").textContent;
+    const found = meta.match(/(Today at \d{1,2}:\d{2} [AP]M|Yesterday at \d{1,2}:\d{2} [AP]M|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) at \d{1,2}:\d{2} [AP]M|\d{1,2} [A-Z][a-z]{2} \d{4}, \d{1,2}:\d{2} [AP]M)/);
+    row.click();
+    return { when: found ? found[1] : "" };
+  });
+  assert.match(opened.when, stamp, opened.when);
+  await page.waitForSelector("#decision-dialog:not([hidden])", { timeout: 10000 });
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  for (const width of [1920, 1097, 1024, 768, 640, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const detail = await page.evaluate(() => {
+      const sentence = document.getElementById("decision-sentence");
+      const other = document.getElementById("decision-other");
+      const proof = document.getElementById("decision-proof");
+      const clip = (node) => !!(node && node.scrollWidth > node.clientWidth + 1);
+      return {
+        hidden: document.getElementById("decision-dialog").hidden,
+        overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+        sentenceClip: clip(sentence),
+        otherClip: clip(other),
+        heard: document.getElementById("decision-heard").textContent,
+        other: other.textContent,
+        proof: proof.textContent,
+        proofHidden: proof.hidden,
+        href: document.getElementById("decision-room").getAttribute("href"),
+        copy: document.getElementById("decision-copy").textContent,
+        jargon: document.body.innerText.includes("No checkpoint was returned."),
+      };
+    });
+    assert.equal(detail.hidden, false, `dialog hidden at ${width}`);
+    assert.equal(detail.overflow, false, `dialog ${width} overflows`);
+    assert.equal(detail.sentenceClip, false, `sentence clipped at ${width}`);
+    assert.equal(detail.otherClip, false, `clash clipped at ${width}`);
+    assert.match(detail.heard, new RegExp(opened.when.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(detail.other, /Clashes with: The booth opens at nine.+\(rowan, \d{1,2}:\d{2} [AP]M\)/);
+    assert.equal(detail.proofHidden, true, detail.proof);
+    assert.equal(detail.proof, "");
+    assert.equal(detail.href, "/console/rooms/booth");
+    assert.equal(detail.copy, "Copy");
+    assert.equal(detail.jargon, false);
+  }
+  await page.click("#decision-copy");
+  await page.waitForFunction(() => document.getElementById("toast") && !document.getElementById("toast").hidden, { timeout: 5000 });
+  const copied = await page.evaluate(() => navigator.clipboard.readText());
+  assert.match(copied, /opens at ten/);
+  assert.match(copied, /Clashes with:/);
   assert.deepEqual(errors, []);
 });
