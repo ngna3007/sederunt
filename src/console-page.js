@@ -198,10 +198,18 @@ ${slack}
       <span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.6h10.8v8.8H2.6z"/><path d="M2.6 6.6h10.8"/></svg></span>
       <p id="home-empty-line">No rooms yet.</p>
       <p id="home-empty-aside" class="empty-aside">A meeting or a channel that keeps a decision adds the room.</p>
+      <div class="empty-actions">
+        <button type="button" class="primary" id="home-add-meeting">Add Sederunt to a meeting</button>
+        <a class="secondary" href="/console/status" id="home-connect-tools">Connect tools</a>
+      </div>
     </div>
     <div id="home-stats">
       <div id="counts" class="counts"></div>
     </div>
+    <section id="needs-attention" class="needs-attention" hidden>
+      <h2 class="section-label">Needs attention</h2>
+      <div id="attention-list" class="attention-list"></div>
+    </section>
     <div class="rooms-bar" hidden>
       <button id="new-room" class="primary" type="button">${plusIcon}<span class="room-label">New room</span></button>
     </div>
@@ -841,7 +849,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var blockedHome = !!(document.getElementById("meet-block") && document.getElementById("slack-block"));
     if (homeEmpty) homeEmpty.hidden = !emptyHome;
     var stats = document.getElementById("home-stats");
-    if (stats) stats.hidden = sectionName !== "home" || (state && state.read === "failed");
+    if (stats) stats.hidden = sectionName !== "home" || emptyHome || (state && state.read === "failed");
     var note = document.getElementById("read-note");
     if (note) note.hidden = sectionName !== "home" || emptyHome;
     var explorer = document.querySelector(".explorer");
@@ -1876,6 +1884,74 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (counts.sent) addCount(box, "Sent", counts.sent, "The tool accepted the change.", null, false);
   }
 
+  function attentionStamp(value) {
+    var at = Date.parse(value || "");
+    return isNaN(at) ? 0 : at;
+  }
+
+  function paintAttention() {
+    var section = document.getElementById("needs-attention");
+    var list = document.getElementById("attention-list");
+    if (!section || !list) return;
+    list.replaceChildren();
+    var items = [];
+    ((state && state.decisions) || []).forEach(function (decision) {
+      if (!decision || decision.status !== "clashing") return;
+      items.push({
+        kind: "clash",
+        text: decision.text || "A decision clashes.",
+        href: decision.roomId ? ("/console/rooms/" + encodeURIComponent(decision.roomId)) : "/console/decisions",
+        roomId: decision.roomId || "",
+        at: attentionStamp(decision.spokenAt)
+      });
+    });
+    ((state && state.activity) || []).forEach(function (row) {
+      if (!row || row.kind !== "failure" || row.outcome !== "failed" || row.resolved) return;
+      items.push({
+        kind: "failed",
+        text: row.sentence || "A change did not go through.",
+        href: "/console/history#activity-" + encodeURIComponent(row.id || ""),
+        activityId: row.id || "",
+        at: attentionStamp(row.ts)
+      });
+    });
+    items.sort(function (a, b) {
+      if (a.kind !== b.kind) return a.kind === "clash" ? -1 : 1;
+      return b.at - a.at;
+    });
+    items = items.slice(0, 5);
+    var quiet = !state || state.reading === true || state.read === "failed" || sectionName !== "home";
+    section.hidden = quiet || items.length === 0;
+    items.forEach(function (item) {
+      var link = document.createElement("a");
+      link.className = "attention-row";
+      link.href = item.href;
+      var badge = document.createElement("span");
+      badge.className = item.kind === "failed" ? "badge attention-failed" : "badge warn";
+      badge.textContent = item.kind === "failed" ? "Failed" : "Clashing";
+      var label = document.createElement("span");
+      label.textContent = item.text;
+      link.append(badge, label);
+      link.addEventListener("click", function (event) {
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+        event.preventDefault();
+        if (item.kind === "clash" && item.roomId) {
+          openFile(item.roomId);
+          return;
+        }
+        if (!item.activityId) return;
+        showSection("history");
+        var target = "activity-" + item.activityId;
+        if (window.history && window.history.replaceState) {
+          history.replaceState({ section: "history" }, "", "/console/history#" + target);
+        }
+        var node = document.getElementById(target);
+        if (node && node.scrollIntoView) node.scrollIntoView({ block: "center" });
+      });
+      list.append(link);
+    });
+  }
+
   function syncHistoryKinds() {
     if (historyKind !== "all" && historyKind !== "request" && historyKind !== "action" && historyKind !== "failure") historyKind = "all";
   }
@@ -2049,14 +2125,25 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var rooms = ((state && state.rooms) || []).filter(function (room) {
       return decisionsFor(room.id).length > 0;
     });
-    rooms.slice(0, 3).forEach(function (room) {
-      var title = roomIdentity(room, decisionsFor(room.id)).title || room.id || "";
-      var shortName = String(title).split(":")[0].trim() || title;
-      var button = document.createElement("button");
-      button.type = "button";
-      button.setAttribute("data-suggest", "What did " + shortName + " decide?");
-      button.textContent = "What did " + shortName + " decide?";
-      box.append(button);
+    if (rooms.length) {
+      rooms.slice(0, 3).forEach(function (room) {
+        var title = roomIdentity(room, decisionsFor(room.id)).title || room.id || "";
+        var shortName = String(title).split(":")[0].trim() || title;
+        var button = document.createElement("button");
+        button.type = "button";
+        button.setAttribute("data-suggest", "What did " + shortName + " decide?");
+        button.textContent = "What did " + shortName + " decide?";
+        box.append(button);
+      });
+      return;
+    }
+    ["What did the last meeting decide?", "Which decisions are clashing?", "What changed since yesterday?"].forEach(function (prompt) {
+      var example = document.createElement("button");
+      example.type = "button";
+      example.className = "suggest-chip";
+      example.setAttribute("data-fill", prompt);
+      example.textContent = prompt;
+      box.append(example);
     });
   }
 
@@ -2147,6 +2234,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     syncHomeChrome();
     paintRooms();
     paintCounts();
+    paintAttention();
     paintHistory();
     clear("record-list");
     clear("people-list");
@@ -2453,7 +2541,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var homeTools = document.querySelector(".home-tools");
     var homeStats = document.getElementById("home-stats");
     if (homeTools) homeTools.hidden = name !== "home";
-    if (homeStats) homeStats.hidden = name !== "home";
+    if (homeStats && name !== "home") homeStats.hidden = true;
+    paintAttention();
     var label = onFile ? ((document.getElementById("file-title") || {}).textContent || "Room") : sectionLabel(name);
     setViewTitle(label);
     placeNotice();
@@ -4078,7 +4167,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var plus = homeButton ? homeButton.querySelector(".ic") : null;
     if (plus) plus.hidden = false;
     offerEmptyStatus(document.getElementById("record-next"), "record-empty");
-    offerEmptyStatus(document.getElementById("chat-next"), "chat-empty");
+    var chatNext = document.getElementById("chat-next");
+    if (chatNext) chatNext.hidden = true;
     offerEmptyStatus(document.getElementById("history-next"), "history-empty");
     offerEmptyStatus(document.getElementById("people-next"), "people-empty");
   }
@@ -4328,6 +4418,17 @@ if (sessionWhen && sessionWhen.dataset.at) {
       leaveOnboard();
       showSection(button.getAttribute("data-show") || "connectors");
     });
+  });
+  var homeAdd = document.getElementById("home-add-meeting");
+  if (homeAdd) homeAdd.addEventListener("click", function () {
+    document.getElementById("new-room").click();
+  });
+  var homeConnect = document.getElementById("home-connect-tools");
+  if (homeConnect) homeConnect.addEventListener("click", function (event) {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    event.preventDefault();
+    leaveOnboard();
+    showSection("connectors");
   });
   document.getElementById("new-room").addEventListener("click", function () {
     text("join-status", "");
@@ -4842,10 +4943,20 @@ if (sessionWhen && sessionWhen.dataset.at) {
   });
   var suggestBox = document.getElementById("chat-suggests");
   if (suggestBox) suggestBox.addEventListener("click", function (event) {
-    var button = event.target.closest("[data-suggest]");
+    var button = event.target.closest("[data-fill], [data-suggest]");
     if (!button) return;
     var input = document.getElementById("chat-text");
-    if (!input || input.disabled) return;
+    if (!input) return;
+    if (button.hasAttribute("data-fill")) {
+      input.disabled = false;
+      var ask = document.querySelector("#chat-form button");
+      if (ask) ask.disabled = false;
+      input.value = button.getAttribute("data-fill") || "";
+      growChat();
+      input.focus();
+      return;
+    }
+    if (input.disabled) return;
     input.value = button.getAttribute("data-suggest") || "";
     growChat();
     var form = document.getElementById("chat-form");

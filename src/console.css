@@ -4700,6 +4700,81 @@ body.room-open .timeline.is-scrub .tl-track { display: none !important; }
   min-height: var(--control-h);
 }
 
+/* Empty home, phone stats, and the needs-attention list. */
+#home-empty {
+  align-items: center;
+  text-align: center;
+  width: min(28rem, 100%);
+  margin: 0 auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--card);
+  padding: 28px 24px;
+  box-sizing: border-box;
+}
+#home-empty .empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.needs-attention { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.needs-attention .section-label { margin: 0; }
+.attention-list {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--card);
+  overflow: hidden;
+}
+.attention-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  min-height: 48px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  color: var(--foreground);
+  text-decoration: none;
+}
+.attention-row:first-child { border-top: 0; }
+.attention-row:hover { background: color-mix(in srgb, var(--muted) 50%, white); }
+.attention-row > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.badge.attention-failed {
+  background: var(--card);
+  color: #b42318;
+  border: 1px solid #e7c5c2;
+}
+.suggest-chip { max-width: 100%; }
+@media (max-width: 640px) {
+  #home-stats, .counts { min-width: 0; }
+  .counts {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .count, button.count {
+    min-width: 0;
+    min-height: 0;
+    padding: 10px 8px;
+    gap: 4px;
+  }
+  .count > span:first-child, button.count > span:first-child {
+    letter-spacing: 0;
+    white-space: normal;
+  }
+  .count strong { font-size: 16px; }
+  .count-note { display: none; }
+}
+
 /* Phone tap targets. The painted control stays; the ::after box is the hit area. */
 @media (max-width: 768px) {
   a,
