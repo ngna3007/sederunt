@@ -4699,3 +4699,42 @@ body.room-open .timeline.is-scrub .tl-track { display: none !important; }
   height: var(--control-h);
   min-height: var(--control-h);
 }
+
+/* Phone tap targets. The painted control stays; the ::after box is the hit area. */
+@media (max-width: 768px) {
+  a,
+  button,
+  summary,
+  .switch input {
+    position: relative;
+  }
+  a::after,
+  button::after,
+  summary::after,
+  .switch input::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    transform: translate(-50%, -50%);
+  }
+  input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+  select,
+  #sign-name,
+  #sign-pass {
+    height: 44px !important;
+    min-height: 44px !important;
+    box-sizing: border-box;
+  }
+  .page-toolbar > .search,
+  .toolbar > .search,
+  .history-tools > .search,
+  label.search,
+  label.dock-search,
+  label.room-filter {
+    height: auto !important;
+    min-height: 44px;
+  }
+}

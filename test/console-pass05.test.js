@@ -62,6 +62,11 @@ test("meeting words separate live, ended, channel, and silence", () => {
   assert.doesNotMatch(page, /Couldn't load your workspace/);
   assert.match(page, /Connect a tool to let Sederunt act in it\./);
   assert.doesNotMatch(page, /A tool that is not connected cannot be used from this page/);
+  const tap = css.slice(css.lastIndexOf("Phone tap targets"));
+  assert.match(tap, /max-width: 768px/);
+  assert.match(tap, /a::after/);
+  assert.match(tap, /height: max\(100%, 44px\)/);
+  assert.match(tap, /min-height: 44px !important/);
 });
 
 function seeded() {
@@ -676,5 +681,65 @@ test("list columns share a gap and history rows stay compact", async (t) => {
   const copied = await page.evaluate(() => navigator.clipboard.readText());
   assert.match(copied, /opens at ten/);
   assert.match(copied, /Clashes with:/);
+
+  async function shortTargets(target) {
+    return target.evaluate(() => {
+      const nodes = [...document.querySelectorAll("a, button, input, select, textarea, summary, [role='button']")];
+      const shorts = [];
+      for (const el of nodes) {
+        if (el.closest("[hidden]")) continue;
+        const type = (el.getAttribute("type") || "").toLowerCase();
+        if (type === "hidden") continue;
+        const style = getComputedStyle(el);
+        if (style.display === "none" || style.visibility === "hidden" || style.pointerEvents === "none") continue;
+        const host = el.getBoundingClientRect();
+        if (host.width < 1 || host.height < 1) continue;
+        if (host.right <= 1 || host.left >= window.innerWidth - 1) continue;
+        let width = host.width;
+        let height = host.height;
+        for (const pseudo of ["::before", "::after"]) {
+          const pseudoStyle = getComputedStyle(el, pseudo);
+          const content = pseudoStyle.content;
+          if (!content || content === "none" || content === "normal") continue;
+          const w = parseFloat(pseudoStyle.width);
+          const h = parseFloat(pseudoStyle.height);
+          if (w > 0) width = Math.max(width, w);
+          if (h > 0) height = Math.max(height, h);
+        }
+        if (width >= 43.5 && height >= 43.5) continue;
+        shorts.push({
+          tag: el.tagName.toLowerCase(),
+          id: el.id || "",
+          cls: String(el.className || "").slice(0, 60),
+          w: Math.round(width),
+          h: Math.round(height),
+          text: (el.innerText || el.getAttribute("aria-label") || "").trim().slice(0, 40),
+        });
+      }
+      return {
+        shorts,
+        overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+      };
+    });
+  }
+  await page.setViewportSize({ width: 390, height: 800 });
+  const phonePages = ["/console/history", "/console/status", "/console/rooms", "/console/rooms/booth"];
+  for (const path of phonePages) {
+    await page.goto(`http://127.0.0.1:${port}${path}`, { waitUntil: "domcontentloaded" });
+    if (path.endsWith("/booth")) await page.waitForSelector("#file-head", { timeout: 45000 });
+    else await page.waitForSelector("a, button", { timeout: 45000 });
+    const hit = await shortTargets(page);
+    assert.equal(hit.overflow, false, `${path} 390 overflows`);
+    assert.deepEqual(hit.shorts, [], `${path} 390 short targets ${JSON.stringify(hit.shorts)}`);
+  }
+  const bare = await browser.newContext();
+  const sign = await bare.newPage();
+  await sign.setViewportSize({ width: 390, height: 800 });
+  await sign.goto(`http://127.0.0.1:${port}/console/sign-in`, { waitUntil: "domcontentloaded" });
+  await sign.waitForSelector("#sign-submit", { timeout: 45000 });
+  const signHit = await shortTargets(sign);
+  assert.equal(signHit.overflow, false, "sign-in 390 overflows");
+  assert.deepEqual(signHit.shorts, [], `sign-in 390 short targets ${JSON.stringify(signHit.shorts)}`);
+  await bare.close();
   assert.deepEqual(errors, []);
 });
