@@ -362,9 +362,10 @@ function withChanges(sentence, event) {
   const skip = event?.verb === "post" || event?.target?.system === "slack"
     ? new Set(["body", "channel"])
     : null;
-  const extra = (event?.changes || [])
-    .slice(1)
-    .filter((change) => !skip?.has(change?.field))
+  const changes = (event?.changes || []).filter((change) => !skip?.has(change?.field));
+  const from = event?.kind === "failure" && !failureCovers(event?.verb, changes[0]) ? 0 : 1;
+  const extra = changes
+    .slice(from)
     .map((change) => changeClause(change, event?.kind))
     .filter(Boolean);
   if (!extra.length) return sentence;
@@ -378,13 +379,42 @@ function withChanges(sentence, event) {
   return `${sentence}${clause}`;
 }
 
+/** The failure template already names this change, so it is not a later clause. */
+function failureCovers(verb, change) {
+  const field = String(change?.field || "");
+  if (!field) return true;
+  if (verb === "move" || verb === "reschedule" || verb === "schedule") {
+    return field === "status" || field === "state" || field === "start";
+  }
+  if (verb === "assign" || verb === "unassign") return field === "assignee";
+  if (verb === "label" || verb === "unlabel") return field === "label";
+  if (verb === "post" || verb === "create") return true;
+  return false;
+}
+
 function failedUndoSentence(event) {
   const actor = event?.actor?.name || "Someone";
   const title = event?.target?.title || event?.target?.id || "it";
-  const bits = (event?.changes || []).map(undoBit).filter(Boolean);
+  const bits = (event?.changes || []).map(failedUndoBit).filter(Boolean);
   const detail = bits.length ? ` (${bits.join(", ")})` : "";
   const error = event?.error || "The change did not go through.";
-  return `${actor} couldn't undo the change to ${title}${detail}: ${error}`;
+  return `${actor} couldn't finish undoing ${title}${detail}: ${error}`;
+}
+
+function failedUndoBit(change) {
+  const field = String(change?.field || "");
+  const from = change?.from || "";
+  const to = change?.to || "";
+  if ((field === "status" || field === "state") && from) return `move the status back to ${from}`;
+  if (field === "assignee" && from) return `assign it back to ${from}`;
+  if (field === "assignee") return "clear the assignee";
+  if (field === "label") return `remove the label ${to || from}`;
+  if (field === "body" || field === "channel") return "";
+  if (field === "priority" && from) return `set the priority back to ${from}`;
+  if (field === "end" && from) return `set the end time back to ${from}`;
+  if (field === "start" && from) return `move the start back to ${from}`;
+  if (from) return `set ${field} back to ${from}`;
+  return "";
 }
 
 function undoSentence(event) {
@@ -413,12 +443,18 @@ function changeClause(change, kind) {
   const field = String(change?.field || "");
   const to = change?.to || "";
   const from = change?.from || "";
-  const ask = kind === "request";
-  if (field === "assignee" && to) return ask ? `assign it to ${to}` : `assigned it to ${to}`;
-  if (field === "assignee" && from) return ask ? `unassign ${from}` : `unassigned ${from}`;
-  if ((field === "status" || field === "state") && from && to) return ask ? `move it from ${from} to ${to}` : `moved it from ${from} to ${to}`;
-  if (field === "label" && to) return ask ? `add the label ${to}` : `added the label ${to}`;
-  if (field && to) return ask ? `set ${field} to ${to}` : `set ${field} to ${to}`;
+  const base = kind === "request" || kind === "failure";
+  if (field === "assignee" && to) return base ? `assign it to ${to}` : `assigned it to ${to}`;
+  if (field === "assignee" && from) return base ? `unassign ${from}` : `unassigned ${from}`;
+  if ((field === "status" || field === "state") && from && to) return base ? `move it from ${from} to ${to}` : `moved it from ${from} to ${to}`;
+  if (field === "label" && to) return base ? `add the label ${to}` : `added the label ${to}`;
+  if (field === "label" && from) return base ? `remove the label ${from}` : `removed the label ${from}`;
+  if (field === "priority" && to) return base ? `set the priority to ${to}` : `set the priority to ${to}`;
+  if (field === "end" && to) return base ? `set the end time to ${to}` : `set the end time to ${to}`;
+  if (field === "start" && from && to) return base ? `move the start from ${from} to ${to}` : `moved the start from ${from} to ${to}`;
+  if (field === "start" && to) return base ? `set the start to ${to}` : `set the start to ${to}`;
+  if (field && from && to) return base ? `set ${field} from ${from} to ${to}` : `set ${field} from ${from} to ${to}`;
+  if (field && to) return `set ${field} to ${to}`;
   return "";
 }
 

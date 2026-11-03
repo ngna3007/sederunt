@@ -826,7 +826,7 @@ test("a partial undo retries only the steps that did not apply", async () => {
   assert.equal(failure.undoOf, "act-part");
   assert.deepEqual(failure.changes.map((change) => change.field), ["assignee"]);
   const sentence = renderActivity(failure);
-  assert.match(sentence, /couldn't undo the change to Booth rollback B/);
+  assert.match(sentence, /couldn't finish undoing Booth rollback B/);
   assert.match(sentence, /: Part of the undo went through\./);
   assert.equal(/went through\..*assigned/.test(sentence), false);
   calls.length = 0;

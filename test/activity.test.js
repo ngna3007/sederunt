@@ -163,7 +163,7 @@ test("a failure names every change before the error, and a failed undo says undo
     ],
     error: "Linear timed out",
   }, NOW);
-  assert.equal(failed, "Sederunt couldn't move Booth rollback C and assigned it to Tomas: Linear timed out");
+  assert.equal(failed, "Sederunt couldn't move Booth rollback C and assign it to Tomas: Linear timed out");
   const undone = renderActivity({
     kind: "failure",
     verb: "move",
@@ -176,9 +176,62 @@ test("a failure names every change before the error, and a failed undo says undo
     ],
     error: "Part of the undo went through.",
   }, NOW);
-  assert.equal(undone.startsWith("Sederunt couldn't undo the change to Booth rollback B"), true);
-  assert.equal(undone.endsWith(": Part of the undo went through."), true);
-  assert.equal(undone.indexOf("assigned it") > undone.indexOf(":"), false);
+  assert.equal(
+    undone,
+    "Sederunt couldn't finish undoing Booth rollback B (move the status back to Backlog, assign it back to Mina): Part of the undo went through.",
+  );
+});
+
+test("a failure uses the base form for every later clause", () => {
+  const move = renderActivity({
+    kind: "failure",
+    verb: "move",
+    actor: { type: "sederunt", name: "Sederunt" },
+    target: { system: "linear", title: "Venue contract review" },
+    changes: [
+      { field: "status", from: "Todo", to: "In Progress" },
+      { field: "assignee", to: "Tomas" },
+    ],
+    error: "Linear timed out",
+  }, NOW);
+  assert.equal(move, "Sederunt couldn't move Venue contract review and assign it to Tomas: Linear timed out");
+  const update = renderActivity({
+    kind: "failure",
+    verb: "update",
+    actor: { type: "sederunt", name: "Sederunt" },
+    target: { system: "linear", title: "Launch checklist" },
+    changes: [
+      { field: "priority", from: "Low", to: "High" },
+      { field: "label", to: "launch" },
+    ],
+    error: "Linear timed out",
+  }, NOW);
+  assert.equal(
+    update,
+    "Sederunt couldn't update Launch checklist and set the priority to High and add the label launch: Linear timed out",
+  );
+  const calendar = renderActivity({
+    kind: "failure",
+    verb: "move",
+    actor: { type: "sederunt", name: "Sederunt" },
+    target: { system: "calendar", title: "Design crit" },
+    changes: [
+      { field: "start", from: "2:00 PM", to: "3:00 PM" },
+      { field: "end", from: "3:00 PM", to: "4:00 PM" },
+    ],
+    error: "Calendar timed out",
+  }, NOW);
+  assert.equal(calendar, "Sederunt couldn't move Design crit and set the end time to 4:00 PM: Calendar timed out");
+  const label = renderActivity({
+    kind: "failure",
+    verb: "label",
+    undoOf: "act-label",
+    actor: { type: "sederunt", name: "Sederunt" },
+    target: { system: "linear", title: "Launch checklist" },
+    changes: [{ field: "label", to: "launch" }],
+    error: "Linear timed out",
+  }, NOW);
+  assert.equal(label, "Sederunt couldn't finish undoing Launch checklist (remove the label launch): Linear timed out");
 });
 
 test("a slack post names the channel and leaves the message body out of the sentence", () => {
