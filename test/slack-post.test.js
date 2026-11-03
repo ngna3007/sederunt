@@ -42,6 +42,13 @@ test("a channel name resolves from conversations.list or the default channel", a
   assert.equal(calls[0].url.includes("conversations.list"), true);
   const fallback = createSlackClient({ SLACK_DEFAULT_CHANNEL: "CDEFAULT" }, async () => { throw new Error("no"); });
   assert.equal(await fallback.resolveChannel("#missing"), "CDEFAULT");
+  const missed = [];
+  const named = createSlackClient({ SLACK_BOT_TOKEN: "xoxb-test", SLACK_DEFAULT_CHANNEL: "CDEFAULT" }, async (url) => {
+    missed.push(String(url));
+    return { ok: true, status: 200, json: async () => ({ ok: true, channels: [{ id: "C0DESIGN", name: "design" }], response_metadata: {} }) };
+  });
+  assert.equal(await named.resolveChannel("#no-such-room"), "");
+  assert.equal(missed.some((url) => url.includes("conversations.list")), true);
 });
 
 test("a permalink falls back to the archive url", async () => {

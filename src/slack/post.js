@@ -67,17 +67,12 @@ async function resolveChannelName(fetchImpl, token, env, name) {
   if (!wanted || !token) return fallbackId;
   try {
     const channels = await listChannels(fetchImpl, token);
-    const hit = wanted ? channels.find((item) => String(item?.name || "").toLowerCase() === wanted) : null;
+    const hit = channels.find((item) => String(item?.name || "").toLowerCase() === wanted);
     if (hit && CHANNEL_ID.test(hit.id)) return hit.id;
-    const fallbackName = fallback.replace(/^#/, "").toLowerCase();
-    if (fallbackName && fallbackName !== wanted) {
-      const alt = channels.find((item) => String(item?.name || "").toLowerCase() === fallbackName);
-      if (alt && CHANNEL_ID.test(alt.id)) return alt.id;
-    }
   } catch {
-    return fallbackId;
+    return "";
   }
-  return fallbackId;
+  return "";
 }
 
 async function listChannels(fetchImpl, token) {

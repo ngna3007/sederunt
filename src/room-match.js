@@ -136,7 +136,7 @@ export function rankDecisions(question, decisions, rooms) {
   const cites = picked.map((decision) => {
     const room = (rooms || []).find((item) => item?.id === decision.roomId);
     const label = [roomTitle(room), citeWhen(decision.spokenAt)].filter(Boolean).join(" · ");
-    return { roomId: decision.roomId, label, text: decision.text || "" };
+    return { roomId: decision.roomId, label, text: decision.text || "", spokenAt: decision.spokenAt || "" };
   });
   return {
     answer: lines.join("\n"),

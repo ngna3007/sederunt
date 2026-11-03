@@ -151,6 +151,36 @@ test("a request uses the infinitive and an undo names the fields going back", ()
   assert.equal(undone, "Mina undid the change to Booth power strips (status back to Backlog, assignee back to Priya)");
 });
 
+test("a failure names every change before the error, and a failed undo says undo", () => {
+  const failed = renderActivity({
+    kind: "failure",
+    verb: "move",
+    actor: { type: "sederunt", name: "Sederunt", via: "MCP" },
+    target: { system: "linear", title: "Booth rollback C" },
+    changes: [
+      { field: "status", from: "Todo", to: "In Progress" },
+      { field: "assignee", to: "Tomas" },
+    ],
+    error: "Linear timed out",
+  }, NOW);
+  assert.equal(failed, "Sederunt couldn't move Booth rollback C and assigned it to Tomas: Linear timed out");
+  const undone = renderActivity({
+    kind: "failure",
+    verb: "move",
+    undoOf: "act-1",
+    actor: { type: "sederunt", name: "Sederunt" },
+    target: { system: "linear", title: "Booth rollback B" },
+    changes: [
+      { field: "status", from: "Backlog", to: "In Progress" },
+      { field: "assignee", from: "Mina", to: "Tomas" },
+    ],
+    error: "Part of the undo went through.",
+  }, NOW);
+  assert.equal(undone.startsWith("Sederunt couldn't undo the change to Booth rollback B"), true);
+  assert.equal(undone.endsWith(": Part of the undo went through."), true);
+  assert.equal(undone.indexOf("assigned it") > undone.indexOf(":"), false);
+});
+
 test("a slack post names the channel and leaves the message body out of the sentence", () => {
   const sentence = renderActivity({
     kind: "action",

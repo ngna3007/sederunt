@@ -35,20 +35,27 @@ export function replaySupported(event, direction) {
 const CHANNEL_ID = /^[CDGW][A-Z0-9]{2,}$/;
 
 /**
- * Whether Retry can run. Slack needs a channel id already in hand: on the
- * row, on a change, or as the configured default. A channel name is not
- * enough, because a name that does not resolve would show a button the
- * server then refuses. The page uses this same answer.
+ * Whether Retry can run. A Slack channel id, a channel name, or the
+ * configured default id is enough to try. A name that the lookup has already
+ * missed is marked `channelMissing` and is not retryable. The page uses this
+ * same answer.
  *
- * @param {{ verb?: string, target?: { system?: string, channel?: string }, changes?: { field?: string, to?: string }[] }} event
+ * @param {{ verb?: string, target?: { system?: string, channel?: string }, changes?: { field?: string, to?: string }[], channelMissing?: boolean }} event
  * @param {{ slackChannel?: string }} [options]
  */
 export function canReplay(event, options = {}) {
   if (!replaySupported(event, "replay")) return false;
+  if (event?.channelMissing) return false;
   if ((event?.target?.system || "") !== "slack") return true;
   const fallback = options.slackChannel || "";
   const noted = (event?.changes || []).find((change) => change?.field === "channel")?.to || "";
-  return Boolean(channelId(event?.target?.channel) || channelId(noted) || channelId(fallback));
+  return Boolean(
+    channelId(event?.target?.channel)
+    || channelId(noted)
+    || channelName(event?.target?.channel)
+    || channelName(noted)
+    || channelId(fallback),
+  );
 }
 
 /**
@@ -267,6 +274,31 @@ function linearFieldStep(change, direction, id) {
   return { method: step.method, args: step.args, undo };
 }
 
+/**
+ * Undo the fields still on the event. A partial undo keeps only the steps
+ * that have not been applied, so a retry does not repeat the forward change.
+ *
+ * @param {{ target?: { id?: string }, changes?: { field?: string, from?: string, to?: string }[] }} event
+ */
+export function fieldUndoPlan(event) {
+  const id = event?.target?.id || "";
+  const changes = (event?.changes || []).filter((change) => change?.field);
+  if (!id || !changes.length) return { ok: false, reason: "unsupported" };
+  const steps = [];
+  for (const change of changes) {
+    const step = linearFieldStep(change, "undo", id);
+    if (!step) return { ok: false, reason: "unsupported" };
+    steps.push(step);
+  }
+  return {
+    ok: true,
+    system: "linear",
+    method: steps[0].method,
+    args: steps[0].args,
+    steps,
+  };
+}
+
 function linearFieldPair(change, id) {
   const field = String(change.field || "").trim();
   if (field === "status" || field === "state") {
@@ -331,19 +363,21 @@ export async function runReplay(deps, plan) {
   } catch (error) {
     if (done.length && done.length < steps.length) {
       const stuck = [];
-      for (const step of [...done].reverse()) {
+      for (let index = done.length - 1; index >= 0; index -= 1) {
+        const step = done[index];
         if (!step.undo) {
-          stuck.push(step.method);
+          stuck.push(index);
           continue;
         }
         try {
           await runOne(deps, { system: plan.system, method: step.undo.method, args: step.undo.args });
         } catch {
-          stuck.push(step.method);
+          stuck.push(index);
         }
       }
       if (stuck.length) {
-        error.partial = stuck;
+        error.partial = stuck.map((index) => done[index].method);
+        error.appliedIndexes = [...stuck].sort((left, right) => left - right);
         error.reason = "partial";
       }
     }

@@ -3,7 +3,7 @@ import test from "node:test";
 import { activityEvent } from "../src/activity.js";
 import { canReplay, canUndo, replayPlan, replaySupported, runReplay, toUtcIso } from "../src/activity-replay.js";
 import { formatActivitySentence, groupActivity } from "../src/activity-feed.js";
-import { companyBoard, handleUtterance, replayFailure, undoRecorded } from "../src/typed-path.js";
+import { companyBoard, handleUtterance, hydrateSlackChannels, replayFailure, undoRecorded } from "../src/typed-path.js";
 import { rebuildCompanyIndex } from "../src/typed-path.js";
 import { createSession } from "../src/session.js";
 
@@ -591,7 +591,78 @@ test("a slack failure with no channel hides retry, and a #name post stores the i
   assert.equal(filed.target.url, "https://acme.slack.com/archives/C0DESIGN/p1710000000000100");
 });
 
-test("an unresolved slack channel is not retryable and does not list conversations", async () => {
+test("a slack channel name resolves before retry, and a miss is unsupported", async () => {
+  const session = createSession();
+  const { logFailure } = await import("../src/activity.js");
+  logFailure(session, {
+    id: "fail-demo",
+    requestId: "req-demo",
+    actor: { type: "sederunt", name: "Sederunt" },
+    verb: "post",
+    target: { system: "slack", type: "message", title: "Booth notes", channel: "#sederunt-demo" },
+    changes: [{ field: "body", to: "Hello" }],
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    tool: { name: "act", server: "sederunt-mcp" },
+  });
+  session.rooms.push({ id: "booth", name: "Booth planning", platform: "Google Meet" });
+  session.decisions.push({
+    id: "d-booth",
+    account: "company",
+    kind: "decision",
+    text: "Kept.",
+    roomId: "booth",
+    inviteMemberIds: ["mina"],
+    speakerMemberId: "mina",
+    spokenAt: "2026-11-03T08:00:00.000Z",
+  });
+  const listed = [];
+  const posts = [];
+  const slack = {
+    async resolveChannel(name) {
+      listed.push(name);
+      return String(name).replace(/^#/, "") === "sederunt-demo" ? "CDEMO" : "";
+    },
+    async postMessage(input) {
+      posts.push(input);
+      return { ok: true, channel: input.channel, ts: "1710000000.000100" };
+    },
+  };
+  await hydrateSlackChannels(session, { slack });
+  assert.deepEqual(listed, ["sederunt-demo"]);
+  const board = companyBoard(session, "mina", {});
+  assert.equal(board.activity.find((row) => row.id === "fail-demo").retryable, true);
+  assert.equal(session.activity.find((row) => row.id === "fail-demo").target.channel, "CDEMO");
+  const retried = await replayFailure(session, { slack, memory: { async remember() { return { blobId: null }; } } }, "fail-demo");
+  assert.equal(retried.ok, true);
+  assert.equal(posts[0].channel, "CDEMO");
+  assert.equal(listed.length, 1);
+
+  const missing = createSession();
+  logFailure(missing, {
+    id: "fail-name",
+    requestId: "req-name",
+    actor: { type: "sederunt", name: "Sederunt" },
+    verb: "post",
+    target: { system: "slack", type: "message", title: "Booth notes", channel: "#no-such-room" },
+    changes: [{ field: "body", to: "Hello" }],
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    tool: { name: "act", server: "sederunt-mcp" },
+  });
+  missing.rooms.push({ id: "booth", name: "Booth planning", platform: "Google Meet" });
+  missing.decisions.push(session.decisions[0]);
+  const looked = [];
+  await hydrateSlackChannels(missing, { slack: { async resolveChannel(name) { looked.push(name); return ""; } } });
+  assert.deepEqual(looked, ["no-such-room"]);
+  assert.equal(companyBoard(missing, "mina", {}).activity.find((row) => row.id === "fail-name").retryable, false);
+  const refused = await replayFailure(missing, {
+    slack: { async resolveChannel() { looked.push("again"); return ""; }, async postMessage() { throw new Error("posted"); } },
+    memory: { async remember() { return { blobId: null }; } },
+  }, "fail-name");
+  assert.equal(refused.reason, "unsupported");
+  assert.equal(looked.includes("again"), false);
+});
+
+test("an unresolved slack channel is not retryable after the lookup misses", async () => {
   const session = createSession();
   const { logFailure } = await import("../src/activity.js");
   logFailure(session, {
@@ -615,16 +686,15 @@ test("an unresolved slack channel is not retryable and does not list conversatio
     speakerMemberId: "mina",
     spokenAt: "2026-11-03T08:00:00.000Z",
   });
-  const board = companyBoard(session, "mina", {});
-  assert.equal(board.activity.find((row) => row.id === "fail-name").retryable, false);
-  assert.equal(canReplay(session.activity.find((row) => row.id === "fail-name"), {}), false);
+  assert.equal(canReplay(session.activity.find((row) => row.id === "fail-name"), {}), true);
   const listed = [];
   const refused = await replayFailure(session, {
     slack: { async resolveChannel() { listed.push("list"); return ""; }, async postMessage() { throw new Error("posted"); } },
     memory: { async remember() { return { blobId: null }; } },
   }, "fail-name");
   assert.equal(refused.reason, "unsupported");
-  assert.equal(listed.length, 0);
+  assert.equal(listed.length, 1);
+  assert.equal(companyBoard(session, "mina", {}).activity.find((row) => row.id === "fail-name").retryable, false);
 });
 
 test("a priority field hides undo and the server refuses it", () => {
@@ -700,4 +770,70 @@ test("a failed second step rolls back the first, or records a partial", async ()
     () => runReplay({ linear: stuck }, plan),
     (error) => error.reason === "partial" && error.partial.includes("updateIssue"),
   );
+});
+
+test("a partial undo retries only the steps that did not apply", async () => {
+  const { logAction, renderActivity } = await import("../src/activity.js");
+  const session = createSession();
+  logAction(session, {
+    id: "act-part",
+    requestId: "req-part",
+    verb: "move",
+    actor: { type: "sederunt", name: "Sederunt" },
+    target: { system: "linear", type: "issue", id: "ROW-9", title: "Booth rollback B" },
+    changes: [
+      { field: "status", from: "Backlog", to: "In Progress" },
+      { field: "assignee", from: "Mina", to: "Tomas" },
+    ],
+    undo: { available: true, until: "2099-01-01T00:00:00.000Z" },
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    tool: { name: "act", server: "sederunt-mcp" },
+  });
+  session.rooms.push({ id: "booth", name: "Booth planning", platform: "Google Meet" });
+  session.decisions.push({
+    id: "d-booth",
+    account: "company",
+    kind: "decision",
+    text: "Kept.",
+    roomId: "booth",
+    inviteMemberIds: ["mina"],
+    speakerMemberId: "mina",
+    spokenAt: "2026-11-03T08:00:00.000Z",
+  });
+  const calls = [];
+  let assignFailed = false;
+  const linear = {
+    async updateIssue(args) {
+      calls.push(["updateIssue", args.state]);
+      if (args.state === "In Progress") throw new Error("rollback failed");
+      return { id: "ROW-9" };
+    },
+    async assignIssue(args) {
+      calls.push(["assignIssue", args.assignee]);
+      if (!assignFailed) {
+        assignFailed = true;
+        throw new Error("assign failed");
+      }
+      return { id: "ROW-9" };
+    },
+  };
+  const memory = { async remember() { return { blobId: null }; } };
+  const undone = await undoRecorded(session, { linear, memory }, "act-part", "Mina");
+  assert.equal(undone.reason, "partial");
+  const original = session.activity.find((row) => row.id === "act-part");
+  assert.equal(original.undo.available, false);
+  const failure = session.activity.find((row) => row.id === undone.id);
+  assert.equal(failure.undoOf, "act-part");
+  assert.deepEqual(failure.changes.map((change) => change.field), ["assignee"]);
+  const sentence = renderActivity(failure);
+  assert.match(sentence, /couldn't undo the change to Booth rollback B/);
+  assert.match(sentence, /: Part of the undo went through\./);
+  assert.equal(/went through\..*assigned/.test(sentence), false);
+  calls.length = 0;
+  const again = await replayFailure(session, { linear, memory }, failure.id);
+  assert.equal(again.ok, true);
+  assert.deepEqual(calls, [["assignIssue", "Mina"]]);
+  assert.equal(calls.some((call) => call[1] === "In Progress"), false);
+  const board = companyBoard(session, "mina", {});
+  assert.equal(board.activity.find((row) => row.id === "act-part").undo.available, false);
 });

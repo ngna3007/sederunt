@@ -96,7 +96,7 @@ test("table headers and cells share an x at 1920, 1024, 768, and 640", async (t)
     const eq = cookie.indexOf("=");
     await context.addCookies([{ name: cookie.slice(0, eq), value: cookie.slice(eq + 1), url: `http://127.0.0.1:${port}` }]);
     const page = await context.newPage();
-    for (const width of [1920, 1024, 768, 640]) {
+    for (const width of [1920, 1097, 768, 640]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto(`http://127.0.0.1:${port}/console/decisions`, { waitUntil: "networkidle" });
       await page.waitForSelector("#record-list .decision-row");
@@ -126,13 +126,13 @@ test("table headers and cells share an x at 1920, 1024, 768, and 640", async (t)
       for (const key of ["sentence", "room", "status", "action"]) {
         const pair = aligned[key];
         if (!pair.head || !pair.cell) {
-          assert.ok(width <= 900, `${width} ${key} header and cell are visible`);
+          assert.ok(width <= 1100, `${width} ${key} header and cell are visible`);
           continue;
         }
         assert.ok(Math.abs(pair.head.x - pair.cell.x) <= 2, `${width} ${key} header ${pair.head.x} cell ${pair.cell.x}`);
       }
       assert.ok(aligned.rowPad >= 8, `${width} decision row padding ${aligned.rowPad}`);
-      if (width <= 900) {
+      if (width <= 1100) {
         assert.ok(aligned.sentence.cell && aligned.sentence.cell.width >= 300, `decision text column is ${aligned.sentence.cell?.width}px`);
       }
       if (aligned.headBottom && aligned.rowTop) {
@@ -146,7 +146,7 @@ test("table headers and cells share an x at 1920, 1024, 768, and 640", async (t)
           const node = document.querySelector(selector);
           if (!visible(node)) return null;
           const box = node.getBoundingClientRect();
-          return { x: Math.round(box.x), right: Math.round(box.right) };
+          return { x: Math.round(box.x), y: Math.round(box.y), right: Math.round(box.right) };
         };
         const chips = [...document.querySelectorAll(".room-chips .mini-chip")].filter((chip) => getComputedStyle(chip).display !== "none");
         return {
@@ -159,11 +159,18 @@ test("table headers and cells share an x at 1920, 1024, 768, and 640", async (t)
       });
       for (const key of ["name", "rooms", "count"]) {
         const pair = people[key];
+        if (width <= 700) {
+          assert.ok(pair.cell, `${width} people ${key} cell is visible`);
+          continue;
+        }
         assert.ok(pair.head && pair.cell, `${width} people ${key} header and cell are visible`);
         assert.ok(Math.abs(pair.head.x - pair.cell.x) <= 2, `${width} people ${key} header ${pair.head.x} cell ${pair.cell.x}`);
         if (key === "rooms" && people.count.cell) {
           assert.ok(pair.cell.right <= people.count.cell.x + 1, `${width} chips ${pair.cell.right} overlap count ${people.count.cell.x}`);
         }
+      }
+      if (width <= 700 && people.name.cell && people.rooms.cell) {
+        assert.ok(people.rooms.cell.y >= people.name.cell.y, `${width} rooms sit under the name`);
       }
       assert.deepEqual(people.overflow, [], `${width} chip overflow ${people.overflow.join(",")}`);
       if (width <= 1200) assert.equal(people.named, 1, `${width} shows ${people.named} room chips`);

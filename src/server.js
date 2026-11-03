@@ -33,7 +33,7 @@ import { looksLikeOpenQuestion } from "./parse.js";
 import { createSession } from "./session.js";
 import { postSlackReply, slackAnswer, slackChannelMembers, slackFileBytes, slackQuestion } from "./slack/reply.js";
 import { slackDelivery, verifySlackRequest } from "./slack/sign.js";
-import { companyBoard, downloadFile, handleUtterance, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded } from "./typed-path.js";
+import { companyBoard, downloadFile, handleUtterance, hydrateSlackChannels, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded } from "./typed-path.js";
 
 const port = Number(process.env.PORT || 8787);
 
@@ -648,6 +648,7 @@ export function createApp(options = {}) {
         return;
       }
       let botId = "";
+      let startedAt = "";
       if (deps.meeting?.join) {
         try {
           const ready = await prepareWorkspace(workspace, "");
@@ -655,6 +656,7 @@ export function createApp(options = {}) {
           const sent = await deps.meeting.join({ url: meetingUrl, name: guest });
           join = "sent";
           botId = typeof sent?.id === "string" ? sent.id : "";
+          startedAt = typeof sent?.startedAt === "string" ? sent.startedAt : (typeof sent?.started_at === "string" ? sent.started_at : "");
         } catch (error) {
           const message = error instanceof Error ? error.message : "";
           join = message === "Meeting join is not configured" ? "not-configured" : "failed";
@@ -667,7 +669,7 @@ export function createApp(options = {}) {
             const current = await prepareWorkspace(workspace, "");
             await handleUtterance({
               session: current,
-              openedRoom: { platform, id: botId },
+              openedRoom: { platform, id: botId, ...(startedAt ? { startedAt } : {}) },
             }, depsFor(workspace, ""));
           } catch {
             // The door already sent the bot. A missed record does not change that word.
@@ -1235,6 +1237,7 @@ async function consolePayload(workspace, current, memberId, kind = "company") {
   }
   const report = current.readReport;
   const config = appConfig(workspace.env);
+  if (open !== "personal") await hydrateSlackChannels(current, workspace.deps);
   const board = open === "personal" ? personalBoard(current, memberId) : companyBoard(current, memberId, { timeZone: config.timeZone, slackChannel: config.slackChannel });
   if (!report.ok) {
     return {
@@ -1256,8 +1259,7 @@ async function consolePayload(workspace, current, memberId, kind = "company") {
   }
   const empty = report.empty && board.decisions.length === 0;
   await readProofs(current, board, workspace.deps?.tatum);
-  await attachRecordingStarts(workspace, current, board.rooms);
-  return {
+  const payload = {
     companyLoaded: true,
     workspace: open,
     read: empty ? "empty" : "ok",
@@ -1275,6 +1277,8 @@ async function consolePayload(workspace, current, memberId, kind = "company") {
     counts: board.counts,
     hearing: normalizeHearing(current.hearing),
   };
+  void attachRecordingStarts(workspace, current, board.rooms);
+  return payload;
 }
 
 function bindMember(env, supplied) {
@@ -1290,12 +1294,23 @@ async function attachRecordingStarts(workspace, current, rooms) {
   if (!Array.isArray(rooms) || !rooms.length) return;
   await Promise.all(rooms.map(async (room) => {
     if (!room?.id || /slack/i.test(room.platform || "")) return;
+    if (typeof room.startedAt === "string" && room.startedAt) return;
     try {
       const media = await roomMedia(workspace, room.id);
       if (!media?.startedAt) return;
       room.startedAt = media.startedAt;
       const live = (current.rooms || []).find((item) => item.id === room.id);
       if (live) live.startedAt = media.startedAt;
+      const memory = workspace.deps?.memory;
+      if (live && typeof memory?.remember === "function") {
+        await memory.remember({
+          account: "company",
+          kind: "room",
+          text: `${live.id} meeting`,
+          idempotencyKey: `${live.id}:started`,
+          room: { id: live.id, kind: "meeting", platform: live.platform || room.platform || "", startedAt: media.startedAt },
+        });
+      }
     } catch {
       // The room keeps the start already on the board.
     }

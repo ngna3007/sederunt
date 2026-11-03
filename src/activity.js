@@ -358,6 +358,7 @@ function postedChannel(event) {
 
 function withChanges(sentence, event) {
   if (event?.kind === "undo") return undoSentence(event) || sentence;
+  if (event?.kind === "failure" && event?.undoOf) return failedUndoSentence(event);
   const skip = event?.verb === "post" || event?.target?.system === "slack"
     ? new Set(["body", "channel"])
     : null;
@@ -368,9 +369,22 @@ function withChanges(sentence, event) {
     .filter(Boolean);
   if (!extra.length) return sentence;
   const clause = ` and ${extra.join(" and ")}`;
+  if (event?.kind === "failure") {
+    const colon = sentence.lastIndexOf(": ");
+    if (colon > 0) return `${sentence.slice(0, colon)}${clause}${sentence.slice(colon)}`;
+  }
   const on = sentence.indexOf(" on ");
   if (on > 0) return `${sentence.slice(0, on)}${clause}${sentence.slice(on)}`;
   return `${sentence}${clause}`;
+}
+
+function failedUndoSentence(event) {
+  const actor = event?.actor?.name || "Someone";
+  const title = event?.target?.title || event?.target?.id || "it";
+  const bits = (event?.changes || []).map(undoBit).filter(Boolean);
+  const detail = bits.length ? ` (${bits.join(", ")})` : "";
+  const error = event?.error || "The change did not go through.";
+  return `${actor} couldn't undo the change to ${title}${detail}: ${error}`;
 }
 
 function undoSentence(event) {

@@ -104,6 +104,44 @@ test("bot media keeps the download urls and names processing, expiry, and a miss
   assert.equal(mediaFromBot({ id: "bot", recordings: [], status_changes: [{ code: "done" }] }).state, "none");
 });
 
+test("the room list does not wait for Recall", async () => {
+  const session = (await import("../src/session.js")).createSession();
+  session.rooms.push({ id: "11111111-1111-1111-1111-111111111111", kind: "meeting", platform: "Zoom", botPresent: true });
+  session.decisions.push({
+    id: "d1",
+    account: "company",
+    kind: "decision",
+    text: "Kept.",
+    roomId: "11111111-1111-1111-1111-111111111111",
+    inviteMemberIds: ["mina"],
+    speakerMemberId: "mina",
+    spokenAt: "2026-11-03T08:00:00.000Z",
+    deleted: false,
+  });
+  let started = 0;
+  const app = createApp({
+    companyLoaded: true,
+    session,
+    env: { RECALL_API_KEY: KEY },
+    deps: { memory: { async index() { return []; }, async recall() { return []; } } },
+    recall: { async readBot() { started += 1; await new Promise(() => {}); } },
+  });
+  const port = await listen(app);
+  try {
+    const startedAt = Date.now();
+    const response = await fetch(`http://127.0.0.1:${port}/api/console?member=mina`);
+    const elapsed = Date.now() - startedAt;
+    assert.equal(response.status, 200);
+    assert.ok(elapsed < 1500, `list waited ${elapsed}ms`);
+    const body = await response.json();
+    assert.equal(body.rooms[0].startedAt || "", "");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(started, 1);
+  } finally {
+    app.close();
+  }
+});
+
 test("room media requires the console session and does not return the recall key", async () => {
   const app = createApp({
     companyLoaded: true,
