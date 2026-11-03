@@ -1898,7 +1898,7 @@ body.room-missing #room-missing { margin: 64px auto; max-width: 28rem; }
 .activity-feed { display: flex; flex-direction: column; gap: 16px; }
 .activity-group { position: relative; padding-left: 20px; }
 .activity-group::before { content: ""; position: absolute; left: 7px; top: 8px; bottom: 8px; width: 1px; background: var(--border); }
-.activity-row { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 8px; padding: 6px 0; }
+.activity-row { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 8px; padding: 6px 0; align-items: start; font-size: 13px; }
 .activity-child { margin-left: 16px; }
 .activity-icon { width: 16px; height: 16px; border-radius: 99px; background: var(--muted); color: var(--foreground); font-size: 11px; display: inline-flex; align-items: center; justify-content: center; }
 .activity-icon.bad { background: #fde8e8; color: #b42318; }
@@ -1923,7 +1923,7 @@ body.room-missing #room-missing { margin: 64px auto; max-width: 28rem; }
 .participants { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
 .participants .person, .faces .face { margin: 0; position: static; }
 .activity-feed { min-width: 0; }
-.activity-row { grid-template-columns: 24px minmax(0, 1fr) auto; align-items: start; font-size: 13px; font-weight: 400; }
+.activity-row { font-weight: 400; }
 .activity-row p { font-size: 13px; font-weight: 400; min-width: 0; }
 .activity-row strong { font-weight: 550; }
 .activity-icon { width: 24px; height: 24px; background: transparent; color: var(--muted-foreground); }
@@ -2002,21 +2002,16 @@ a.entity-id:hover { text-decoration: underline; }
 .table-skel .sk-row { grid-column: 1 / -1; }
 #chat-form.composer, #chat .composer { width: 100%; max-width: none; }
 #chat-text { width: 100%; }
-.frame { overflow: auto; }
-#chat, #record, .main { overflow: visible; }
 @media (max-width: 700px) {
   .counts { grid-template-columns: 1fr; }
 }
 @media (max-width: 1180px) {
   .player, .player-frame { max-height: 45vh; }
-  .room-screen .room-right { padding: 0 12px 16px; overflow: visible; }
-  .room-left { padding: 0 12px; }
-}
-@media (max-width: 1180px) {
   body.room-open .stage { overflow: auto; }
   body.room-open #home, body.room-open .main, body.room-open #file-dialog.room-screen { height: auto; overflow: visible; }
   .room-split { flex-direction: column !important; height: auto; overflow: visible; }
   .room-left, .room-right { width: 100% !important; max-width: none !important; min-width: 0 !important; flex: none !important; height: auto; }
-  .room-right { padding: 0 12px 16px; }
+  .room-screen .room-right { padding: 0 12px 16px; overflow: visible; }
+  .room-left { padding: 0 12px; }
   .room-resizer { display: none; }
 }

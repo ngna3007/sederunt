@@ -1,4 +1,3 @@
-import { groupActivity, relativeTime, selectActivity } from "./activity.js";
 import { brandLogo, brandSprite } from "./brand-logos.js";
 
 /**
@@ -424,7 +423,7 @@ ${slack}
             <dt class="account-name-row">Name</dt><dd id="account-detail-name" class="account-name-row"></dd>
             <dt>Role</dt><dd id="account-detail-role"></dd>
             <dt>Workspace</dt><dd id="account-detail-workspace">Company</dd>
-            <dt>Session</dt><dd id="account-detail-expiry">${escapeHtml(state.accountExpiry ? new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC", timeZoneName: "short" }).format(new Date(state.accountExpiry)) : (signedIn ? "This sign-in does not list an expiry." : "Sign-in is not set up."))}</dd>
+            <dt>Session</dt><dd id="account-detail-expiry"${state.accountExpiry ? ` data-at="${escapeHtml(new Date(state.accountExpiry).toISOString())}"` : ""}>${escapeHtml(signedIn ? "This sign-in does not list an expiry." : "Sign-in is not set up.")}</dd>
           </dl>
         </div>
         <div class="settings-card">
@@ -711,7 +710,15 @@ ${slack}
     <p id="palette-empty" class="palette-empty" hidden>No matches.</p>
   </div>
 </div>
-<script>
+<script type="module">
+import { groupActivity, relativeTime, selectActivity } from "/console/activity.js";
+var sessionWhen = document.getElementById("account-detail-expiry");
+if (sessionWhen && sessionWhen.dataset.at) {
+  var sessionDate = new Date(sessionWhen.dataset.at);
+  if (!isNaN(sessionDate.getTime())) {
+    sessionWhen.textContent = sessionDate.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+}
 (function () {
   var onboard = document.getElementById("onboard");
   var home = document.getElementById("home");
@@ -1597,7 +1604,7 @@ ${slack}
   }
 
   function roomVisible(spec) {
-    if (roomFilter === "waiting") roomFilter = "all";
+    if (roomFilter === "waiting") return true;
     if (roomFilter === "kept" && !spec.kept) return false;
     if (!roomQuery) return true;
     var hay = String(spec.fullTitle || "") + " " + String(spec.title || "") + " " + String(spec.where || "");
@@ -2526,9 +2533,6 @@ ${slack}
     });
   }
 
-  ${groupActivity.toString()}
-  ${selectActivity.toString()}
-  ${relativeTime.toString()}
 
   function activityGlyph(kind, verb) {
     var name = kind === "failure" ? "fail" : (kind === "undo" ? "undo" : (kind === "request" ? "request" : (verb || "create")));
@@ -2630,11 +2634,19 @@ ${slack}
         var rest = sentence.indexOf(who.textContent) === 0 ? sentence.slice(who.textContent.length) : (" " + sentence);
         text.append(document.createTextNode(" "));
         paintRich(text, rest.trim(), row);
-        if (row.verb === "label" && row.changes && row.changes[0] && row.changes[0].to) {
-          var pill = document.createElement("span");
-          pill.className = "label-pill";
-          pill.textContent = row.changes[0].to;
-          text.append(pill);
+        if (row.verb === "label" && row.kind !== "request" && row.changes && row.changes[0] && row.changes[0].to) {
+          var labelWord = row.changes[0].to;
+          var labelAt = rest.indexOf(labelWord);
+          if (labelAt >= 0) {
+            text.replaceChildren(who, document.createTextNode(" "));
+            paintRich(text, rest.trim().slice(0, labelAt).trim(), row);
+            text.append(document.createTextNode(" "));
+            var pill = document.createElement("span");
+            pill.className = "label-pill";
+            pill.textContent = labelWord;
+            text.append(pill);
+            text.append(document.createTextNode(rest.trim().slice(labelAt + labelWord.length)));
+          }
         }
         if (opts.viewRoom && row.origin && Number.isFinite(row.origin.at)) {
           var seek = document.createElement("button");
@@ -2666,7 +2678,8 @@ ${slack}
           text.append(from);
         }
         line.append(icon, text);
-        if (row.undo && row.undo.available && row.outcome !== "undone" && !row.superseded) {
+        var undoUntil = row.undo && row.undo.until ? Date.parse(row.undo.until) : 0;
+        if (row.undo && row.undo.available && row.outcome !== "undone" && !row.superseded && undoUntil > Date.now()) {
           var undo = document.createElement("button");
           undo.type = "button";
           undo.className = "activity-undo";

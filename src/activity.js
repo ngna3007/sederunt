@@ -1,11 +1,13 @@
 import { redact } from "./domain/redact.js";
 
+export { groupActivity, relativeTime, selectActivity } from "./activity-feed.js";
+
 const VERBS = [
   "create", "update", "assign", "unassign", "move", "label", "unlabel",
   "link", "comment", "post", "schedule", "reschedule", "cancel", "join", "leave",
 ];
 
-const KINDS = new Set(["request", "action", "result", "failure", "undo"]);
+const KINDS = new Set(["request", "action", "result", "failure", "undo", "resolve", "supersede"]);
 
 const SYSTEMS = {
   linear: "Linear",
@@ -79,6 +81,8 @@ const GENERIC = {
   result: "{actor} {past} {title} via {via}",
   failure: "{actor} couldn't {word} {title}: {error}",
   undo: "{actor} undid {word} {title}",
+  resolve: "{actor} resolved {title}",
+  supersede: "{actor} superseded {title}",
 };
 
 const PAST = {
@@ -120,28 +124,7 @@ const ICON = {
 };
 
 /**
- * Relative time. Just now, then minutes, hours, days, and weeks.
- *
- * @param {string} ts
- * @param {number} [now]
- */
-export function relativeTime(ts, now = Date.now()) {
-  const at = Date.parse(ts || "");
-  if (Number.isNaN(at)) return "";
-  const sec = Math.max(0, Math.floor((now - at) / 1000));
-  const min = Math.floor(sec / 60);
-  if (min < 1) return "just now";
-  if (min < 60) return `${min}m ago`;
-  const hour = Math.floor(min / 60);
-  if (hour < 24) return `${hour}h ago`;
-  const day = Math.floor(hour / 24);
-  if (day < 14) return `${day}d ago`;
-  return `${Math.floor(day / 7)}w ago`;
-}
-
-/**
- * The one sentence for an event. Failure ends with Retry. A request names
- * the room before the relative time.
+ * The one sentence for an event.
  *
  * @param {ReturnType<typeof activityEvent>} event
  * @param {number} [now]
@@ -165,71 +148,6 @@ export function activityIcon(event) {
     icon: ICON[verb] || "create",
     system: event?.target?.system || "",
   };
-}
-
-/**
- * Group a feed by requestId. The request row is first. Later rows indent.
- *
- * @param {Array<ReturnType<typeof activityEvent>>} events
- */
-export function groupActivity(events) {
-  const groups = [];
-  const byRequest = new Map();
-  for (const event of events || []) {
-    const key = event.requestId || event.id;
-    let group = byRequest.get(key);
-    if (!group) {
-      group = { requestId: key, rows: [] };
-      byRequest.set(key, group);
-      groups.push(group);
-    }
-    group.rows.push(event);
-  }
-  for (const group of groups) {
-    const at = (row) => {
-      const parsed = Date.parse(row?.ts || "");
-      return Number.isNaN(parsed) ? 0 : parsed;
-    };
-    group.rows.sort((a, b) => at(a) - at(b) || (a.kind === "request" ? -1 : 1));
-    group.latest = group.rows.reduce((max, row) => Math.max(max, at(row)), 0);
-  }
-  groups.sort((a, b) => b.latest - a.latest);
-  return groups;
-}
-
-/**
- * Keep a whole request together. A room match keeps every row in the group.
- * Search, kind, and actor match rows.
- *
- * @param {Array<ReturnType<typeof activityEvent>>} events
- * @param {{ kind?: string, query?: string, roomId?: string, actor?: string }} [query]
- */
-export function selectActivity(events, query = {}) {
-  let groups = groupActivity(events);
-  const room = String(query.roomId || "");
-  if (room) {
-    groups = groups.filter((group) => group.rows.some((row) => {
-      const origin = row?.origin || {};
-      return origin.roomId === room || origin.roomName === room;
-    }));
-  }
-  const kind = query.kind && query.kind !== "all" ? query.kind : "";
-  const actor = String(query.actor || "").trim().toLowerCase();
-  const text = String(query.query || "").trim().toLowerCase();
-  if (!kind && !actor && !text) return groups;
-  return groups.map((group) => ({
-    ...group,
-    rows: group.rows.filter((row) => {
-      if (kind && row.kind !== kind && !(kind === "action" && row.kind === "result")) return false;
-      if (actor && String(row.actor?.name || "").toLowerCase() !== actor) return false;
-      if (text) {
-        const sentence = typeof row.sentence === "string" ? row.sentence : "";
-        const blob = `${sentence} ${row.target?.id || ""} ${row.target?.title || ""} ${row.origin?.roomName || ""}`.toLowerCase();
-        if (!blob.includes(text)) return false;
-      }
-      return true;
-    }),
-  })).filter((group) => group.rows.length);
 }
 
 /**
@@ -338,6 +256,10 @@ export function activityEvent(input, now = new Date()) {
     outcome: input.outcome === "failed" || input.outcome === "undone" ? input.outcome : "ok",
     error: clean(input.error),
     undo: undoOf(input.undo),
+    refersTo: clean(input.refersTo),
+    undoOf: clean(input.undoOf),
+    resolved: input.resolved === true,
+    superseded: input.superseded === true,
   };
   return event;
 }

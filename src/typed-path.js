@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { displayName, logAction, logFailure, logRequest, logUndo, renderActivity, undoRefusal } from "./activity.js";
+import { readCalendarEvent, replayPlan, runReplay } from "./activity-replay.js";
 import { authorize } from "./domain/allow.js";
 import { clashStatuses } from "./domain/clash.js";
 import { checkInvite } from "./domain/invite.js";
@@ -643,63 +644,34 @@ async function storeActivity(session, deps, event) {
  * @param {string} failureId
  */
 export async function replayFailure(session, deps, failureId) {
-  const failed = (session.activity || []).find((row) => row.id === failureId && row.kind === "failure" && !row.resolved);
-  if (!failed) return { ok: false, reason: "missing" };
-  const request = (session.activity || []).find((row) => row.requestId === failed.requestId && row.kind === "request");
-  const changes = request?.changes?.length ? request.changes : (failed.changes || []);
-  const stored = (session.actions || []).find((item) => item.id === failed.requestId);
-  const action = stored || actionFromEvent(failed, changes);
+  const named = (session.activity || []).find((row) => row.id === failureId);
+  if (!named) return { ok: false, reason: "missing" };
+  if (named.kind !== "failure") return { ok: false, reason: "already" };
+  if (named.resolved) return { ok: false, reason: "already" };
+  const request = (session.activity || []).find((row) => row.requestId === named.requestId && row.kind === "request");
+  const observed = await readCalendarEvent(deps, named);
+  const planned = { ...named, changes: request?.changes?.length ? request.changes : named.changes };
+  const plan = replayPlan(planned, "replay", observed);
+  if (!plan.ok) return plan;
   let created;
   try {
-    created = await runConnector(deps, action);
+    created = await runReplay(deps, plan);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
-    const event = logFailure(session, {
-      id: activityIdentity(),
-      requestId: failed.requestId || failed.id,
-      actor: { type: "sederunt", name: "Sederunt", via: failed.actor?.via || "MCP" },
-      verb: failed.verb,
-      target: failed.target,
-      changes,
-      tool: failed.tool,
-      origin: failed.origin,
-      error: failureText(message),
-    });
+    if (error?.reason === "unsupported") return { ok: false, reason: "unsupported" };
+    const event = logFailure(session, effectOf(named, { error: failureText(message), changes: named.changes }));
     await storeActivity(session, deps, event);
     return { ok: false, reason: "failed", id: event.id };
   }
-  if (!connectorId(created)) {
-    const event = logFailure(session, {
-      id: activityIdentity(),
-      requestId: failed.requestId || failed.id,
-      actor: { type: "sederunt", name: "Sederunt", via: failed.actor?.via || "MCP" },
-      verb: failed.verb,
-      target: failed.target,
-      changes,
-      tool: failed.tool,
-      origin: failed.origin,
-      error: "The change did not go through.",
-    });
-    await storeActivity(session, deps, event);
-    return { ok: false, reason: "failed", id: event.id };
-  }
-  failed.resolved = true;
-  for (const row of session.activity || []) {
-    if (row.requestId === failed.requestId && row.id !== failed.id && row.kind !== "failure") row.superseded = true;
-  }
+  if (!connectorId(created)) return { ok: false, reason: "failed" };
+  const changes = plan.from ? [{ field: "start", from: plan.from, to: plan.to }] : (planned.changes || []);
   const event = logAction(session, {
-    id: activityIdentity(),
-    requestId: failed.requestId || failed.id,
-    actor: { type: "sederunt", name: "Sederunt", via: failed.actor?.via || "MCP" },
-    verb: failed.verb,
-    target: { ...failed.target, id: failed.target?.id || connectorId(created) },
-    changes,
-    tool: failed.tool || { name: "act", server: "sederunt-mcp" },
-    origin: failed.origin,
+    ...effectOf(named, { changes }),
     undo: { available: true, until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() },
   });
-  await storeActivity(session, deps, failed);
   await storeActivity(session, deps, event);
+  await markResolved(session, deps, named);
+  await supersedeTarget(session, deps, named, event.id);
   return { ok: true, id: event.id };
 }
 
@@ -715,16 +687,16 @@ export async function undoRecorded(session, deps, id, actorName) {
   const event = (session.activity || []).find((row) => row.id === id);
   const reason = undoRefusal(event);
   if (reason) return { ok: false, reason };
-  const change = event.changes?.[0];
-  const reversed = change ? [{ field: change.field, from: change.to, to: change.from }] : [];
+  const observed = await readCalendarEvent(deps, event);
+  const plan = replayPlan(event, "undo", observed);
+  if (!plan.ok) return plan;
   try {
-    const created = await runConnector(deps, actionFromEvent(event, reversed));
+    const created = await runReplay(deps, plan);
     if (!connectorId(created)) return { ok: false, reason: "failed" };
-  } catch {
+  } catch (error) {
+    if (error?.reason === "unsupported") return { ok: false, reason: "unsupported" };
     return { ok: false, reason: "failed" };
   }
-  event.outcome = "undone";
-  if (event.undo) event.undo.available = false;
   const undo = logUndo(session, {
     id: activityIdentity(),
     requestId: event.requestId || event.id,
@@ -736,15 +708,82 @@ export async function undoRecorded(session, deps, id, actorName) {
     tool: event.tool,
     origin: event.origin,
   });
-  await storeActivity(session, deps, event);
   await storeActivity(session, deps, undo);
+  foldActivity(session);
   return { ok: true, id: undo.id };
 }
 
+function effectOf(source, extra) {
+  return {
+    id: activityIdentity(),
+    requestId: source.requestId || source.id,
+    actor: { type: "sederunt", name: "Sederunt", via: source.actor?.via || "MCP" },
+    verb: source.verb,
+    target: source.target,
+    changes: extra.changes || source.changes,
+    tool: source.tool,
+    origin: source.origin,
+    error: extra.error || "",
+  };
+}
+
+async function markResolved(session, deps, failed) {
+  const event = {
+    id: activityIdentity(),
+    requestId: failed.requestId || failed.id,
+    kind: "resolve",
+    refersTo: failed.id,
+    actor: { type: "sederunt", name: "Sederunt", via: "Console" },
+    verb: failed.verb || "update",
+    target: failed.target || { system: "", type: "", id: "", title: "", url: "" },
+    changes: [],
+    tool: failed.tool || { name: "act", server: "sederunt-mcp" },
+    origin: failed.origin || { roomId: "", roomName: "", at: null, messageUrl: "" },
+    outcome: "ok",
+    error: "",
+  };
+  session.activity.push(event);
+  await storeActivity(session, deps, event);
+  foldActivity(session);
+}
+
+async function supersedeTarget(session, deps, source, keepId) {
+  const id = source.target?.id || "";
+  const title = source.target?.title || "";
+  const system = source.target?.system || "";
+  const fresh = [];
+  for (const row of session.activity || []) {
+    if (row.id === keepId || row.id === source.id) continue;
+    if (row.kind !== "action" && row.kind !== "result") continue;
+    if (row.superseded || row.outcome === "undone") continue;
+    const same = row.target?.system === system && ((id && row.target?.id === id) || (!id && title && row.target?.title === title));
+    if (!same) continue;
+    const event = {
+      id: activityIdentity(),
+      requestId: row.requestId || row.id,
+      kind: "supersede",
+      refersTo: row.id,
+      actor: { type: "sederunt", name: "Sederunt", via: "Console" },
+      verb: row.verb || "update",
+      target: row.target,
+      changes: [],
+      tool: row.tool || { name: "act", server: "sederunt-mcp" },
+      origin: row.origin || { roomId: "", roomName: "", at: null, messageUrl: "" },
+      outcome: "ok",
+      error: "",
+    };
+    session.activity.push(event);
+    fresh.push(event);
+  }
+  foldActivity(session);
+  for (const row of fresh) await storeActivity(session, deps, row);
+}
+
 function createTitle(action) {
-  const raw = String(action.params?.title || action.statement || "").trim();
-  if (action.edit !== "create" && action.verb !== "create") return raw;
-  return raw.replace(/^file the venue ticket\s*/i, "").replace(/^create (?:a |one )?(?:test )?ticket titled\s*/i, "").replace(/^["“]|["”]$/g, "").trim() || "ticket";
+  const titled = typeof action.params?.title === "string" ? action.params.title.trim() : "";
+  const spoken = typeof action.statement === "string" ? action.statement.trim() : "";
+  if (titled && titled !== spoken) return titled;
+  return "ticket";
 }
 
 function activityChanges(action) {
@@ -1995,7 +2034,7 @@ export function companyBoard(session, memberId) {
       kept: decisions.length,
       waiting: waiting.length,
       sent,
-      failed: (session?.activity ?? []).filter((row) => row.kind === "failure" && row.outcome === "failed").length,
+      failed: (session?.activity ?? []).filter((row) => row.kind === "failure" && row.outcome === "failed" && !row.resolved).length,
       actionsToday: (session?.activity ?? []).filter((row) => row.kind === "action" && String(row.ts || "").slice(0, 10) === new Date().toISOString().slice(0, 10)).length,
     },
     activity: publicActivity(session, rooms),
@@ -2026,6 +2065,10 @@ function publicActivity(session, rooms) {
       outcome: row.outcome,
       error: row.error,
       undo: row.undo,
+      resolved: row.resolved === true,
+      superseded: row.superseded === true,
+      refersTo: row.refersTo || "",
+      undoOf: row.undoOf || "",
       sentence: renderActivity(row),
     }));
 }
@@ -2033,8 +2076,31 @@ function publicActivity(session, rooms) {
 function absorbActivity(session, activity) {
   if (!activity || typeof activity.id !== "string" || !activity.id) return;
   session.activity ??= [];
-  if (session.activity.some((row) => row.id === activity.id)) return;
-  session.activity.push(activity);
+  if (!session.activity.some((row) => row.id === activity.id)) session.activity.push(activity);
+  foldActivity(session);
+}
+
+function foldActivity(session) {
+  for (const event of session.activity || []) {
+    if (event.kind === "resolve" && event.refersTo) {
+      const prior = session.activity.find((row) => row.id === event.refersTo);
+      if (prior) prior.resolved = true;
+    }
+    if (event.kind === "supersede" && event.refersTo) {
+      const prior = session.activity.find((row) => row.id === event.refersTo);
+      if (prior) {
+        prior.superseded = true;
+        if (prior.undo) prior.undo.available = false;
+      }
+    }
+    if (event.kind === "undo" && event.undoOf) {
+      const prior = session.activity.find((row) => row.id === event.undoOf);
+      if (prior) {
+        prior.outcome = "undone";
+        if (prior.undo) prior.undo.available = false;
+      }
+    }
+  }
 }
 
 function accessRows(session, rooms) {

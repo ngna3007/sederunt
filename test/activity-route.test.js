@@ -39,7 +39,7 @@ function seeded() {
     });
   }
   const tool = { name: "act", server: "sederunt-mcp" };
-  const changes = [{ field: "start", from: "2:00 PM", to: "3:00 PM" }];
+  const changes = [{ field: "start", from: "2:00 PM", to: "4:00 PM" }];
   logRequest(session, {
     id: "req-move",
     requestId: "req-move",
@@ -84,11 +84,16 @@ function appFor(session, calls) {
       tatum: { async getObject() { return { text: "", checkpoint: null }; } },
       calendar: {
         async listTools() { return [{ name: "move_event", write: true }]; },
+        async readEvent() { calls.push(["read"]); return { start: "2026-11-03T15:00:00.000Z", end: "2026-11-03T16:00:00.000Z" }; },
         async call(name, params) { calls.push(["calendar", name, params]); return { id: "evt-1" }; },
       },
       linear: {
         async createIssue(input) { calls.push(["create", input]); return { identifier: "ROW-9", id: "ROW-9" }; },
-        async assignIssue(input) { calls.push(["assign", input]); return { id: input.id }; },
+        async assignIssue(input) { calls.push(["assign", input]); return { id: input.id || "ABC-123" }; },
+        async unassignIssue(input) { calls.push(["unassign", input]); return { id: input.id }; },
+        async updateIssue(input) { calls.push(["update", input]); return { id: input.id }; },
+        async addLabel(input) { calls.push(["add", input]); return { id: input.id }; },
+        async removeLabel(input) { calls.push(["remove", input]); return { id: input.id }; },
       },
     },
     env: {
@@ -99,6 +104,32 @@ function appFor(session, calls) {
     },
   });
 }
+
+test("activity routes refuse mutations when sign-in is not configured", async () => {
+  const app = createApp({
+    session: seeded(),
+    companyLoaded: true,
+    deps: { memory: { async remember() { return { blobId: null }; } }, tatum: { async getObject() { return { text: "", checkpoint: null }; } } },
+    env: { COMPANY_MEMWAL_KEY: "k", COMPANY_MEMWAL_ACCOUNT_ID: "a", SEDERUNT_MEMBER: "Mina" },
+  });
+  const port = await listen(app);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/activity`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: "retry", id: "fail-move" }),
+    });
+    assert.equal(response.status, 401);
+    const unknown = await fetch(`http://127.0.0.1:${port}/api/activity`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: cookie(), origin: `http://127.0.0.1:${port}` },
+      body: JSON.stringify({ op: "nope", id: "fail-move" }),
+    });
+    assert.equal(unknown.status, 401);
+  } finally {
+    app.close();
+  }
+});
 
 test("activity routes require a session and a same-origin JSON post", async () => {
   const app = appFor(seeded(), []);
@@ -122,6 +153,12 @@ test("activity routes require a session and a same-origin JSON post", async () =
       body: JSON.stringify({ op: "undo", id: "missing" }),
     });
     assert.equal(cross.status, 403);
+    const op = await fetch(`http://127.0.0.1:${port}/api/activity`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: cookie(), origin: `http://127.0.0.1:${port}` },
+      body: JSON.stringify({ op: "explode", id: "fail-move" }),
+    });
+    assert.equal(op.status, 400);
   } finally {
     app.close();
   }
@@ -167,12 +204,17 @@ test("retry calls the connector and keeps the request's from value", async () =>
       method: "POST", headers, body: JSON.stringify({ op: "retry", id: "fail-move" }),
     });
     assert.equal(response.status, 200);
-    assert.equal(calls[0][0], "calendar");
-    assert.equal(calls[0][2].day, "3:00 PM");
-    const retried = session.activity.find((row) => row.kind === "action" && row.requestId === "req-move");
-    assert.equal(retried.changes[0].from, "2:00 PM");
-    assert.equal(retried.changes[0].to, "3:00 PM");
+    const calendarCall = calls.find((call) => call[0] === "calendar");
+    assert.equal(calendarCall[1], "update_event");
+    assert.match(calendarCall[2].start, /^2026-11-03T/);
+    const retried = session.activity.find((row) => row.kind === "action" && row.requestId === "req-move" && row.id !== "act-assign");
+    assert.equal(retried.changes[0].from, "2026-11-03T15:00:00.000Z");
+    assert.equal(retried.changes[0].to, "2026-11-03T16:00:00.000Z");
     assert.equal(session.activity.find((row) => row.id === "fail-move").resolved, true);
+    const again = await fetch(`http://127.0.0.1:${port}/api/activity`, {
+      method: "POST", headers, body: JSON.stringify({ op: "retry", id: "fail-move" }),
+    });
+    assert.equal(again.status, 409);
   } finally {
     app.close();
   }

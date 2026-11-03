@@ -422,9 +422,14 @@ export function createApp(options = {}) {
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({ id, name }));
       return;
     }
+    if (req.method === "GET" && url.pathname === "/console/activity.js") {
+      const source = await readFile(resolve("src/activity-feed.js"));
+      send(res, 200, "text/javascript; charset=utf-8", source);
+      return;
+    }
     if (req.method === "POST" && url.pathname === "/api/activity") {
       const gate = guardConsole(req, env);
-      if (gate.required && !gate.session) {
+      if (!gate.session) {
         send(res, 401, "application/json; charset=utf-8", JSON.stringify({ ok: false, reason: "sign-in" }));
         return;
       }
@@ -433,9 +438,13 @@ export function createApp(options = {}) {
         return;
       }
       const body = await readJson(req);
+      if (body.op !== "undo" && body.op !== "retry") {
+        send(res, 400, "application/json; charset=utf-8", JSON.stringify({ ok: false, reason: "op" }));
+        return;
+      }
       const current = await prepareWorkspace(workspace, "", false, 2000);
       const id = typeof body.id === "string" ? body.id : "";
-      const actor = gate.session?.name?.trim() || "Someone";
+      const actor = gate.session.name?.trim() || "Someone";
       const deps = depsFor(workspace, "");
       const result = body.op === "undo"
         ? await undoRecorded(current, deps, id, actor)
@@ -456,7 +465,7 @@ export function createApp(options = {}) {
       const roomPath = /^\/console\/rooms\/([^/]+)$/.exec(url.pathname);
       let status = 200;
       if (roomPath) {
-        const current = await prepareWorkspace(workspace, "", false, 2000);
+        const current = workspace.session?.readReport ? workspace.session : await prepareWorkspace(workspace, "", false, 0);
         const readable = current.readReport?.ok === true;
         const id = decodeURIComponent(roomPath[1]);
         const known = (current.rooms || []).some((room) => room.id === id)
@@ -661,7 +670,31 @@ export function createApp(options = {}) {
         }));
         return;
       }
-      const namedRoom = roomNamedIn(text, current.rooms || []);
+      const namedRooms = roomsMatching(text, current.rooms || []);
+      if (namedRooms.length > 1) {
+        const parts = [];
+        let matched = 0;
+        for (const id of namedRooms) {
+          const part = await handleUtterance({
+            text,
+            intent: "recall",
+            door: "mcp",
+            memberId: bound.memberId,
+            workspace: scope,
+            room: { id },
+            session: current,
+          }, depsFor(workspace, companyId));
+          parts.push(part.body);
+          matched += current.decisions.filter((decision) => decision.roomId === id && !decision.deleted).length;
+        }
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify({
+          body: parts.filter(Boolean).join("\n"),
+          decisions: matched,
+          stored: false,
+        }));
+        return;
+      }
+      const namedRoom = namedRooms[0] || "";
       const result = await handleUtterance({
         text,
         intent: "recall",
@@ -1008,23 +1041,24 @@ function wordHit(question, token) {
   return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, "i").test(question);
 }
 
-function roomNamedIn(text, rooms) {
+const ROOM_STOP = new Set(["the", "a", "an", "of", "to", "in", "on", "for", "and", "at", "about", "what", "was", "were", "decided", "did", "we", "do"]);
+
+function roomWords(value) {
+  return String(value || "").toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 3 && !ROOM_STOP.has(word));
+}
+
+function roomsMatching(text, rooms) {
   const question = String(text || "").toLowerCase();
-  let best = "";
-  let bestLength = 0;
+  const words = new Set(roomWords(question));
+  const hits = [];
   for (const room of rooms || []) {
     const full = typeof room?.name === "string" ? room.name.trim() : "";
     const leading = full.split(":")[0].trim();
-    const names = [room?.id, room?.channel, full, leading].filter((value) => typeof value === "string" && value.trim());
-    for (const name of names) {
-      if (!wordHit(question, name)) continue;
-      if (name.length > bestLength) {
-        best = room.id;
-        bestLength = name.length;
-      }
-    }
+    const named = wordHit(question, room?.id) || wordHit(question, room?.channel) || wordHit(question, full) || wordHit(question, leading);
+    const shared = roomWords(`${room?.id || ""} ${room?.channel || ""} ${leading}`).some((word) => words.has(word));
+    if (named || shared) hits.push(room.id);
   }
-  return best;
+  return [...new Set(hits)];
 }
 
 function activitySameOrigin(req) {
