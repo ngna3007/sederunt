@@ -17,5 +17,5 @@ export function brandSprite() {
 export function brandLogo(name, size = 20) {
   const icon = logos[name];
   if (!icon) return "";
-  return `<span class="conn-mark" aria-hidden="true"><svg class="brand-mark" width="${size}" height="${size}"><use href="#logo-${name}"></use></svg></span>`;
+  return `<span class="conn-mark" data-col="mark" aria-hidden="true"><svg class="brand-mark" width="${size}" height="${size}"><use href="#logo-${name}"></use></svg></span>`;
 }

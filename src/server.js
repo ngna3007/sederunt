@@ -538,7 +538,8 @@ export function createApp(options = {}) {
         || url.pathname === "/console/chat"
         || url.pathname === "/console/people"
         || url.pathname === "/console/account"
-        || url.pathname === "/console/status";
+        || url.pathname === "/console/status"
+        || url.pathname === "/console/setup";
       let status = roomPath || consolePage ? 200 : 404;
       if (roomPath) {
         const current = workspace.session?.readReport ? workspace.session : await prepareWorkspace(workspace, "", false, 0);
@@ -1206,7 +1207,7 @@ async function consolePayload(workspace, current, memberId, kind = "company") {
       read: "blocked",
       message: "The company account is not loaded. Add the delegate outside this page, then restart.",
       doors,
-      preferences: { linear: "ask", calendar: "ask" },
+      preferences: { linear: "ask", calendar: "ask", slack: "ask" },
       slack,
       decisions: [],
       rooms: [],
@@ -1225,7 +1226,7 @@ async function consolePayload(workspace, current, memberId, kind = "company") {
       read: "reading",
       message: "",
       doors,
-      preferences: { linear: "ask", calendar: "ask" },
+      preferences: { linear: "ask", calendar: "ask", slack: "ask" },
       slack,
       decisions: [],
       rooms: [],
@@ -1247,7 +1248,7 @@ async function consolePayload(workspace, current, memberId, kind = "company") {
       read: "failed",
       message: "The account could not be read. Read the account again.",
       doors,
-      preferences: { linear: "ask", calendar: "ask" },
+      preferences: { linear: "ask", calendar: "ask", slack: "ask" },
       slack,
       decisions: [],
       rooms: [],

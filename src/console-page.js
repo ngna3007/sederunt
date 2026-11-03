@@ -63,7 +63,7 @@ export function renderConsolePage(state = {}) {
     : `<p class="account-note" role="note">Sign-in is not set up.</p>`;
   const signInOff = state.signInOff === true;
   const signInBanner = signInOff
-    ? `<div class="sign-in-off" role="status"><p>Sign-in is off. Anyone with this link can act as you. <a href="/console/status#console-secret" id="set-console-secret">Set a console secret</a></p></div>`
+    ? `<div class="sign-in-off" role="status"><p>Sign-in is off. Anyone with this link can act as you. <a href="/console/setup#console-secret" id="set-console-secret">Set a console secret</a></p></div>`
     : "";
   const secretCard = signInOff
     ? `<div class="settings-card" id="console-secret"><p class="section-label">Console sign-in</p><p class="card-help">Sign-in is off. Anyone with this link can act as you. Set SEDERUNT_CONSOLE_SECRET outside this page, then restart. This page never shows the secret.</p></div>`
@@ -113,7 +113,7 @@ ${brandSprite()}
       <a href="/console/decisions" data-show="record" data-label="Decisions">${recordIcon}Decisions</a>
       <a href="/console/chat" data-show="chat" data-label="Chat">${chatIcon}Chat</a>
       <p class="rail-label">Setup</p>
-      <a href="/console/status" id="show-connectors" data-label="Status">${plugIcon}Status</a>
+      <a href="/console/setup" id="show-connectors" data-label="Setup">${plugIcon}Setup</a>
       <p class="rail-label">Account</p>
       <a href="/console/account" data-show="account" data-label="Account">${userIcon}Account</a>
       <a href="/console/people" data-show="people" data-label="People">${peopleIcon}People</a>
@@ -152,7 +152,7 @@ ${brandSprite()}
       <span id="top-name" class="top-name"></span>
     </div>
     <h1 id="view-title" class="sr">Home</h1>
-    <p id="status-title" class="page-title" hidden>Status</p>
+    <p id="status-title" class="page-title" hidden>Setup</p>
     <div class="notices">
       <p id="setup-label" class="setup-label">Rooms</p>
       <button id="setup-toggle" class="setup-toggle" type="button" aria-expanded="false" hidden>Setup is unfinished</button>
@@ -175,7 +175,7 @@ ${slack}
         <p id="onboard-missing" hidden>The company account is not loaded. Add the delegate outside this page, then restart.</p>
         <p id="onboard-ready" hidden>A room appears when a meeting or a channel is in use.</p>
         <p id="onboard-next" hidden>Meeting and Channel were not turned on when Sederunt started.</p>
-        <button id="open-connectors" type="button" hidden>Go to Status</button>
+        <button id="open-connectors" type="button" hidden>Go to Setup</button>
         <button id="continue" type="button" hidden>Go to Home</button>
         <div id="onboard-doors"></div>
       </div>
@@ -200,7 +200,7 @@ ${slack}
       <p id="home-empty-aside" class="empty-aside">A meeting or a channel that keeps a decision adds the room.</p>
       <div class="empty-actions">
         <button type="button" class="primary" id="home-add-meeting">Add Sederunt to a meeting</button>
-        <a class="secondary" href="/console/status" id="home-connect-tools">Connect tools</a>
+        <a class="secondary" href="/console/setup" id="home-connect-tools">Connect tools</a>
       </div>
     </div>
     <div id="home-stats">
@@ -228,7 +228,7 @@ ${slack}
       <span class="sk sk-row"></span>
     </div>
     <div id="overview" hidden>
-      <div class="page-head"><div><p class="page-title">Status</p><p class="page-lede">Which tools Sederunt can use, and how the meeting guest listens.</p></div><div class="page-actions"></div></div>
+      <div class="page-head"><div><p class="page-title">Setup</p><p class="page-lede">Which tools Sederunt can use, and how the meeting guest listens.</p></div><div class="page-actions"></div></div>
       ${secretCard}
       <p id="connector-split"></p>
       <div class="settings-card" id="meeting-card"${state.meeting ? " hidden" : ""}>
@@ -238,6 +238,7 @@ ${slack}
       <div class="settings-card" id="tools-card">
       <p class="section-label">Tools</p>
       <p class="card-help">Connect a tool to let Sederunt act in it.</p>
+      <p id="ask-help" class="sr">On means a change runs as soon as it is asked.</p>
       <div class="connectors">
         <div class="explorer-head status-head">
           <span data-col="mark"></span>
@@ -246,44 +247,54 @@ ${slack}
         </div>
         <div class="conn" id="cal-status-row">
           ${calendarIcon}
-          <div class="set-copy">
+          <div class="set-copy" data-col="tool">
             <strong>Calendar</strong>
             <p id="cal-conn" class="conn-state off">Not connected</p>
             <p id="cal-line" class="sr">Calendar runs automatically.</p>
           </div>
-          <button type="button" class="conn-connect" id="cal-connect" data-connect="calendar">Connect</button>
+          <div class="conn-actions" data-col="action">
+            <button type="button" class="conn-connect" id="cal-connect" data-connect="calendar">Connect</button>
+            <button type="button" class="secondary conn-manage" id="cal-manage" data-connect="calendar" hidden>Manage</button>
+          </div>
+        </div>
+        <div class="tool-ask ask-quiet" id="cal-ask-row">
+          <div class="set-copy" data-col="tool"><span class="ask-name">Run automatically</span><span class="ask-tool"> for Calendar</span></div>
+          <div class="conn-ask" data-col="action"><label class="switch"><input id="cal-ask" type="checkbox" checked aria-label="Run automatically for Calendar" aria-describedby="ask-help"></label></div>
         </div>
         <div class="conn" id="lin-status-row">
           ${linearIcon}
-          <div class="set-copy">
+          <div class="set-copy" data-col="tool">
             <strong>Linear</strong>
             <p id="lin-conn" class="conn-state off">Not connected</p>
             <p id="lin-line" class="sr">Linear runs automatically.</p>
           </div>
-          <button type="button" class="conn-connect" id="lin-connect" data-connect="linear">Connect</button>
+          <div class="conn-actions" data-col="action">
+            <button type="button" class="conn-connect" id="lin-connect" data-connect="linear">Connect</button>
+            <button type="button" class="secondary conn-manage" id="lin-manage" data-connect="linear" hidden>Manage</button>
+          </div>
+        </div>
+        <div class="tool-ask ask-quiet" id="lin-ask-row">
+          <div class="set-copy" data-col="tool"><span class="ask-name">Run automatically</span><span class="ask-tool"> for Linear</span></div>
+          <div class="conn-ask" data-col="action"><label class="switch"><input id="lin-ask" type="checkbox" checked aria-label="Run automatically for Linear" aria-describedby="ask-help"></label></div>
         </div>
         <div class="conn" id="slack-status-row">
           ${channelIcon}
-          <div class="set-copy">
+          <div class="set-copy" data-col="tool">
             <strong>Slack</strong>
             <p id="slack-conn" class="conn-state off">Not connected</p>
+            <p id="slack-line" class="sr">Slack runs automatically.</p>
             <p id="slack-note" class="sr">Sederunt answers in a channel it has already joined.</p>
           </div>
-          <button type="button" class="conn-connect" id="slack-connect" data-connect="slack">Connect</button>
+          <div class="conn-actions" data-col="action">
+            <button type="button" class="conn-connect" id="slack-connect" data-connect="slack">Connect</button>
+            <button type="button" class="secondary conn-manage" id="slack-manage" data-connect="slack" hidden>Manage</button>
+          </div>
+        </div>
+        <div class="tool-ask ask-quiet" id="slack-ask-row">
+          <div class="set-copy" data-col="tool"><span class="ask-name">Run automatically</span><span class="ask-tool"> for Slack</span></div>
+          <div class="conn-ask" data-col="action"><label class="switch"><input id="slack-ask" type="checkbox" checked aria-label="Run automatically for Slack" aria-describedby="ask-help"></label></div>
         </div>
       </div>
-      </div>
-      <div class="settings-card" id="ask-block">
-        <p class="section-label">Before sending a change</p>
-        <p id="ask-help" class="card-help">On means a change runs as soon as it is asked.</p>
-        <div class="conn ask-quiet" id="cal-ask-row">
-          <div class="set-copy"><span class="ask-name">Run automatically</span><span class="ask-tool"> for Calendar</span></div>
-          <div class="conn-ask"><label class="switch"><input id="cal-ask" type="checkbox" checked aria-label="Run automatically for Calendar" aria-describedby="ask-help"></label></div>
-        </div>
-        <div class="conn ask-quiet" id="lin-ask-row">
-          <div class="set-copy"><span class="ask-name">Run automatically</span><span class="ask-tool"> for Linear</span></div>
-          <div class="conn-ask"><label class="switch"><input id="lin-ask" type="checkbox" checked aria-label="Run automatically for Linear" aria-describedby="ask-help"></label></div>
-        </div>
       </div>
       <div class="settings-card" id="hearing-block">
         <p class="section-label">Meeting guest</p>
@@ -401,10 +412,11 @@ ${slack}
       <div class="account-layout">
         <div class="overview-card account-hero" id="account-card">
           <span id="account-page-avatar" class="account-avatar lg" aria-hidden="true">${escapeHtml(accountInitials(accountName))}</span>
-          <div>
+          <div class="account-identity">
             <p id="account-page-name" class="empty-title"></p>
             <p id="account-page-role" class="meta"></p>
           </div>
+          ${signedIn ? `<button type="button" class="secondary" id="account-edit">Edit profile</button>` : ""}
         </div>
         <div class="settings-card">
           <p class="section-label">Details</p>
@@ -418,7 +430,7 @@ ${slack}
           <p class="section-label">Sessions</p>
           <p class="card-help">This browser keeps one sign-in for the workspace.</p>
           <div class="wait-actions">
-            ${signedIn ? `<button type="button" class="primary" id="account-edit">Edit profile</button><button type="button" class="danger" id="account-signout">Sign out</button>` : `<p class="meta">Sign-in is not set up.</p>`}
+            ${signedIn ? `<button type="button" class="danger" id="account-signout">Sign out</button>` : `<p class="meta">Sign-in is not set up.</p>`}
           </div>
         </div>
       </div>
@@ -621,13 +633,13 @@ ${slack}
       <label id="meet-link-label"${state.meeting ? "" : " hidden"}>Meeting link <input id="meet-link" name="meet" placeholder="Paste a Zoom, Google Meet, Teams, or Webex link"></label>
       <p id="join-ready" class="${joinReadyClass.trim()}">${joinReadyCopy}</p>
       <button id="join-submit" class="primary" type="submit"${joinDisabled}>Join with this link</button>
-      <button id="meet-connectors" class="primary" type="button"${state.meeting ? " hidden" : ""}>Open Status</button>
+      <button id="meet-connectors" class="primary" type="button"${state.meeting ? " hidden" : ""}>Open Setup</button>
       <p id="join-hint" class="sr">Sederunt joins that meeting when Meet is ready. If Meet is not ready, the status line says so.</p>
     </form>
     <div id="channel-door" hidden>
       <p id="channel-setup"></p>
       <p>No channel is in use.<br>Slack is the channel tool. Status shows whether it is connected.</p>
-      <button id="channel-connectors" type="button">Open Status</button>
+      <button id="channel-connectors" type="button">Open Setup</button>
     </div>
     <p id="join-status"></p>
     </div>
@@ -830,7 +842,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var connectId = id === "cal-conn" ? "cal-connect" : id === "lin-conn" ? "lin-connect" : id === "slack-conn" ? "slack-connect" : "";
     var connect = connectId ? document.getElementById(connectId) : null;
     if (connect) connect.hidden = failed || !!connected;
-    var askId = id === "cal-conn" ? "cal-ask-row" : id === "lin-conn" ? "lin-ask-row" : "";
+    var manageId = id === "cal-conn" ? "cal-manage" : id === "lin-conn" ? "lin-manage" : id === "slack-conn" ? "slack-manage" : "";
+    var manage = manageId ? document.getElementById(manageId) : null;
+    if (manage) manage.hidden = failed || !connected;
+    var askId = id === "cal-conn" ? "cal-ask-row" : id === "lin-conn" ? "lin-ask-row" : id === "slack-conn" ? "slack-ask-row" : "";
     var askRow = askId ? document.getElementById(askId) : null;
     if (askRow) askRow.classList.toggle("ask-quiet", !connected);
   }
@@ -2052,7 +2067,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (historyScope === "you" && !member()) historyWords = "Sign-in is not set up, so this list has no account.";
       else if (historyScope === "you") historyWords = "You lists changes waiting on you. Nothing is waiting.";
       else if (historyKind === "other") historyWords = "Nothing else is in this list.";
-      else if (document.getElementById("meet-block") && document.getElementById("slack-block")) historyWords = "No shared history yet. See Status for whether a room is in use.";
+      else if (document.getElementById("meet-block") && document.getElementById("slack-block")) historyWords = "No shared history yet. See Setup for whether a room is in use.";
       if (historyLine) historyLine.textContent = historyWords;
     }
     var historyNext = document.getElementById("history-next");
@@ -2064,7 +2079,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (needsName && rows.length === 0) {
         historyNext.hidden = true;
       } else if (doorsBlocked && rows.length === 0) {
-        historyNext.textContent = "See Status";
+        historyNext.textContent = "See Setup";
         historyNext.classList.remove("primary");
         historyNext.setAttribute("data-act", "status");
       } else if (needsName) {
@@ -2202,6 +2217,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var prefs = next.preferences || {};
     var calendarMode = prefs.calendar === "do" ? "Do" : "Ask";
     var linearMode = prefs.linear === "do" ? "Do" : "Ask";
+    var slackMode = prefs.slack === "do" ? "Do" : "Ask";
     paintConn("cal-conn", !!doors.calendar);
     paintConn("lin-conn", !!doors.linear);
     paintConn("slack-conn", next.slack === "ready");
@@ -2211,17 +2227,23 @@ if (sessionWhen && sessionWhen.dataset.at) {
       : "";
     text("cal-line", calendarMode === "Ask" ? "Calendar waits before a change." : "Calendar runs automatically.");
     text("lin-line", linearMode === "Ask" ? "Linear waits before a change." : "Linear runs automatically.");
+    text("slack-line", slackMode === "Ask" ? "Slack waits before a change." : "Slack runs automatically.");
     text("prefs", "");
     var calAsk = document.getElementById("cal-ask");
     var linAsk = document.getElementById("lin-ask");
+    var slackAsk = document.getElementById("slack-ask");
     if (calAsk) calAsk.checked = calendarMode !== "Ask";
     if (linAsk) linAsk.checked = linearMode !== "Ask";
+    if (slackAsk) slackAsk.checked = slackMode !== "Ask";
     syncAskState(calAsk);
     syncAskState(linAsk);
+    syncAskState(slackAsk);
     var calRow = document.getElementById("cal-ask-row");
     var linRow = document.getElementById("lin-ask-row");
+    var slackRow = document.getElementById("slack-ask-row");
     if (calRow) calRow.hidden = false;
     if (linRow) linRow.hidden = false;
+    if (slackRow) slackRow.hidden = false;
     var kicker = document.querySelector(".ask-kicker");
     var askHelp = document.getElementById("ask-help");
     var askBlock = document.getElementById("ask-block");
@@ -2253,7 +2275,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (peopleNext) {
       peopleNext.hidden = peopleCount > 0 || !(document.getElementById("meet-block") && document.getElementById("slack-block"));
       if (!peopleNext.hidden) {
-        peopleNext.textContent = "See Status";
+        peopleNext.textContent = "See Setup";
         peopleNext.classList.remove("primary");
         peopleNext.setAttribute("data-act", "status");
       }
@@ -2329,7 +2351,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (name === "record") return "Decisions";
     if (name === "people") return "People";
     if (name === "account") return "Account";
-    if (name === "connectors") return "Status";
+    if (name === "connectors") return "Setup";
     if (name === "missing") return "Not found";
     return "Home";
   }
@@ -2451,7 +2473,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (name === "chat") return "/console/chat";
     if (name === "people") return "/console/people";
     if (name === "account") return "/console/account";
-    if (name === "connectors") return "/console/status";
+    if (name === "connectors") return "/console/setup";
     if (name === "missing") return location.pathname;
     return "/console";
   }
@@ -2470,7 +2492,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (path === "/console/chat") return "chat";
     if (path === "/console/people") return "people";
     if (path === "/console/account") return "account";
-    if (path === "/console/status") return "connectors";
+    if (path === "/console/status" || path === "/console/setup") return "connectors";
     if (path === "/console" || path === "/console/") return "home";
     return "missing";
   }
@@ -4025,8 +4047,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function saveToolAsk(tool, on) {
-    var box = document.getElementById(tool === "calendar" ? "cal-ask" : "lin-ask");
-    var line = tool === "calendar" ? "cal-line" : "lin-line";
+    var boxId = tool === "calendar" ? "cal-ask" : tool === "linear" ? "lin-ask" : "slack-ask";
+    var line = tool === "calendar" ? "cal-line" : tool === "linear" ? "lin-line" : "slack-line";
+    var box = document.getElementById(boxId);
     var value = on ? "do" : "ask";
     text(line, "Saving Run automatically.");
     fetch("/api/typed", {
@@ -4154,7 +4177,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       return;
     }
     button.hidden = false;
-    button.textContent = "See Status";
+    button.textContent = "See Setup";
     button.classList.remove("primary");
     button.setAttribute("data-act", "status");
   }
@@ -4529,6 +4552,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
   document.getElementById("lin-ask").addEventListener("change", function () {
     syncAskState(document.getElementById("lin-ask"));
     saveToolAsk("linear", document.getElementById("lin-ask").checked);
+  });
+  document.getElementById("slack-ask").addEventListener("change", function () {
+    syncAskState(document.getElementById("slack-ask"));
+    saveToolAsk("slack", document.getElementById("slack-ask").checked);
   });
   document.getElementById("read-again").addEventListener("click", function () {
     readingTries = 0;
@@ -5202,7 +5229,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       list.append(button);
       count += 1;
     }
-    [["home", "Home"], ["rooms", "Rooms"], ["history", "History"], ["record", "Decisions"], ["chat", "Chat"], ["connectors", "Status"], ["account", "Account"], ["people", "People"]].forEach(function (page) {
+    [["home", "Home"], ["rooms", "Rooms"], ["history", "History"], ["record", "Decisions"], ["chat", "Chat"], ["connectors", "Setup"], ["account", "Account"], ["people", "People"]].forEach(function (page) {
       add("Navigate", page[1], function () {
         leaveOnboard();
         showSection(page[0]);

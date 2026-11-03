@@ -108,10 +108,11 @@ async function browserPath(chromium) {
   }
 }
 
-function appFor(session) {
+function appFor(session, extra = {}) {
   return createApp({
     session,
     companyLoaded: true,
+    linearReady: extra.linearReady === true,
     deps: {
       memory: { async remember() { return { blobId: null }; } },
       tatum: { async getObject() { return { text: "" }; } },
@@ -121,11 +122,12 @@ function appFor(session) {
       SEDERUNT_MEMBER: "mina",
       COMPANY_MEMWAL_KEY: "k",
       COMPANY_MEMWAL_ACCOUNT_ID: "a",
+      ...(extra.env || {}),
     },
   });
 }
 
-async function openConsole(t, session, port) {
+async function openConsole(t, session, port, extra) {
   let chromium;
   try {
     ({ chromium } = await import("playwright"));
@@ -138,7 +140,7 @@ async function openConsole(t, session, port) {
     t.skip("no browser binary found");
     return null;
   }
-  const app = appFor(session);
+  const app = appFor(session, extra);
   const browser = await chromium.launch({ executablePath, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
   t.after(() => {
     browser.close();
@@ -266,7 +268,7 @@ serial("empty home and chat offer a next step", async (t) => {
     assert.equal(home.empty, true, `empty card ${width}`);
     assert.equal(home.add, "Add Sederunt to a meeting");
     assert.equal(home.connect, "Connect tools");
-    assert.equal(home.connectHref, "/console/status");
+    assert.equal(home.connectHref, "/console/setup");
     assert.equal(home.statsHidden, true, `stats ${width}`);
     assert.equal(home.attentionHidden, true);
     assert.equal(home.zeroShown, false);
@@ -374,4 +376,136 @@ serial("home stats share a row and needs attention links the work", async (t) =>
     assert.equal(overflow, false, `populated home ${width} overflows`);
   }
   assert.deepEqual(errors, []);
+});
+
+serial("setup and account keep their actions in the right cards", async (t) => {
+  const opened = await openConsole(t, createSession(), 4709);
+  if (!opened) return;
+  const { page, errors } = opened;
+  for (const width of WIDTHS) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`http://127.0.0.1:${opened.port}/console/setup`, { waitUntil: "networkidle" });
+    await page.waitForSelector("#overview:not([hidden]) .tool-ask", { timeout: 45000 });
+    const setup = await page.evaluate(() => {
+      const title = document.querySelector("#overview .page-title");
+      const nav = document.getElementById("show-connectors");
+      const asks = [...document.querySelectorAll("#tools-card .tool-ask")].filter((node) => node.getClientRects().length);
+      const connects = [...document.querySelectorAll("#tools-card .conn-connect")].filter((node) => node.getClientRects().length);
+      const manages = [...document.querySelectorAll("#tools-card .conn-manage")].filter((node) => node.getClientRects().length);
+      const rows = [...document.querySelectorAll("#tools-card .connectors > .conn")].filter((node) => node.getClientRects().length);
+      const toolX = rows.map((row) => Math.round(row.querySelector('[data-col="tool"]').getBoundingClientRect().x));
+      const actionX = rows.map((row) => Math.round(row.querySelector('[data-col="action"]').getBoundingClientRect().x));
+      const headTool = Math.round(document.querySelector('#tools-card .status-head [data-col="tool"]').getBoundingClientRect().x);
+      const switchX = asks.map((row) => Math.round(row.querySelector(".conn-ask").getBoundingClientRect().x));
+      const doc = document.documentElement;
+      const clipped = [...document.querySelectorAll("#tools-card .conn, #tools-card .tool-ask")].filter((node) => {
+        const box = node.getBoundingClientRect();
+        return box.right > window.innerWidth + 1 || box.left < -1;
+      }).length;
+      return {
+        title: title ? title.textContent.trim() : "",
+        nav: nav ? nav.textContent.trim() : "",
+        crumb: document.getElementById("crumb-current").textContent.trim(),
+        asks: asks.map((node) => node.textContent.replace(/\s+/g, " ").trim()),
+        connects: connects.map((node) => node.textContent.trim()),
+        manages: manages.length,
+        toolX,
+        actionX,
+        headTool,
+        switchX,
+        overflow: doc.scrollWidth > doc.clientWidth + 1,
+        clipped,
+      };
+    });
+    assert.equal(setup.title, "Setup", `title ${width}`);
+    assert.equal(setup.nav, "Setup", `nav ${width}`);
+    assert.equal(setup.crumb, "Setup");
+    assert.deepEqual(setup.asks, ["Run automatically for Calendar", "Run automatically for Linear", "Run automatically for Slack"]);
+    assert.deepEqual(setup.connects, ["Connect", "Connect", "Connect"]);
+    assert.equal(setup.manages, 0, "Manage shows before a tool is connected");
+    assert.equal(setup.headTool, setup.toolX[0]);
+    assert.ok(setup.toolX.every((x) => Math.abs(x - setup.toolX[0]) <= 1), `tool x ${setup.toolX}`);
+    assert.ok(setup.actionX.every((x) => Math.abs(x - setup.actionX[0]) <= 1), `action x ${setup.actionX}`);
+    assert.ok(setup.switchX.every((x) => Math.abs(x - setup.switchX[0]) <= 1), `switch x ${setup.switchX}`);
+    assert.equal(setup.overflow, false, `setup ${width} overflows`);
+    assert.equal(setup.clipped, 0, `setup ${width} clips`);
+    await page.goto(`http://127.0.0.1:${opened.port}/console/account`, { waitUntil: "networkidle" });
+    await page.waitForSelector("#account-card #account-edit", { timeout: 45000 });
+    const account = await page.evaluate(() => {
+      const card = document.getElementById("account-card");
+      const edit = document.getElementById("account-edit");
+      const sessions = [...document.querySelectorAll("#account-page .settings-card")].find((node) => node.querySelector(".section-label") && node.querySelector(".section-label").textContent.trim() === "Sessions");
+      const avatar = document.getElementById("account-page-avatar").getBoundingClientRect();
+      const name = document.getElementById("account-page-name").getBoundingClientRect();
+      const button = edit.getBoundingClientRect();
+      const doc = document.documentElement;
+      return {
+        name: document.getElementById("account-page-name").textContent.trim(),
+        role: document.getElementById("account-page-role").textContent.trim(),
+        editInCard: card.contains(edit),
+        secondary: edit.classList.contains("secondary"),
+        signOut: sessions ? sessions.querySelector("#account-signout") !== null : false,
+        editInSessions: sessions ? sessions.querySelector("#account-edit") !== null : true,
+        dir: getComputedStyle(card).flexDirection,
+        horizontal: button.left >= name.right - 1 && avatar.left < name.left,
+        overflow: doc.scrollWidth > doc.clientWidth + 1,
+      };
+    });
+    assert.equal(account.name, "Mina");
+    assert.equal(account.role, "Owner");
+    assert.equal(account.editInCard, true);
+    assert.equal(account.secondary, true);
+    assert.equal(account.signOut, true);
+    assert.equal(account.editInSessions, false);
+    if (width >= 768) assert.equal(account.dir, "row");
+    if (width >= 768) assert.equal(account.horizontal, true, `account layout ${width}`);
+    assert.equal(account.overflow, false, `account ${width} overflows`);
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`http://127.0.0.1:${opened.port}/console/status`, { waitUntil: "networkidle" });
+  await page.waitForSelector("#overview:not([hidden]) .page-title", { timeout: 45000 });
+  const alias = await page.evaluate(() => ({
+    path: location.pathname,
+    title: document.querySelector("#overview .page-title").textContent.trim(),
+  }));
+  assert.equal(alias.path, "/console/status");
+  assert.equal(alias.title, "Setup");
+  await page.goto(`http://127.0.0.1:${opened.port}/console/account`, { waitUntil: "networkidle" });
+  await page.click("#account-edit");
+  await page.waitForSelector("#profile-dialog:not([hidden])", { timeout: 45000 });
+  assert.deepEqual(errors, []);
+
+  const connected = await openConsole(t, createSession(), 4710, {
+    linearReady: true,
+    env: {
+      CALENDAR_MCP_TOKEN: "calendar-token",
+      SLACK_SIGNING_SECRET: "slack-secret",
+      SLACK_BOT_TOKEN: "slack-token",
+    },
+  });
+  if (!connected) return;
+  await connected.page.setViewportSize({ width: 1280, height: 900 });
+  await connected.page.goto(`http://127.0.0.1:${connected.port}/console/setup`, { waitUntil: "networkidle" });
+  await connected.page.waitForSelector("#slack-manage:not([hidden])", { timeout: 45000 });
+  const linked = await connected.page.evaluate(() => {
+    const manages = [...document.querySelectorAll("#tools-card .conn-manage")].filter((node) => node.getClientRects().length);
+    const connects = [...document.querySelectorAll("#tools-card .conn-connect")].filter((node) => node.getClientRects().length);
+    return {
+      manages: manages.map((node) => node.getAttribute("data-connect")),
+      connects: connects.length,
+      states: [...document.querySelectorAll("#tools-card .conn-state")].map((node) => node.textContent.trim()),
+    };
+  });
+  assert.deepEqual(linked.manages, ["calendar", "linear", "slack"]);
+  assert.equal(linked.connects, 0);
+  assert.deepEqual(linked.states, ["Connected", "Connected", "Connected"]);
+  const saved = connected.page.waitForResponse((response) => response.url().includes("/api/typed") && response.request().method() === "POST");
+  await connected.page.locator("#slack-ask").click();
+  const response = await saved;
+  assert.equal(response.ok(), true);
+  await connected.page.waitForFunction(() => document.getElementById("slack-ask").checked === false);
+  await connected.page.reload({ waitUntil: "networkidle" });
+  await connected.page.waitForSelector("#slack-ask");
+  assert.equal(await connected.page.locator("#slack-ask").isChecked(), false);
+  assert.deepEqual(connected.errors, []);
 });

@@ -2394,6 +2394,7 @@ export function companyBoard(session, memberId, options = {}) {
     preferences: {
       linear: resolvePreference(preferences, "linear", ""),
       calendar: resolvePreference(preferences, "calendar", ""),
+      slack: resolvePreference(preferences, "slack", ""),
     },
     access: accessRows(session, rooms),
   };
@@ -2545,6 +2546,7 @@ export function personalBoard(session, memberId) {
     preferences: {
       linear: resolvePreference(preferences, "linear", ""),
       calendar: resolvePreference(preferences, "calendar", ""),
+      slack: resolvePreference(preferences, "slack", ""),
     },
     access: [],
   };
