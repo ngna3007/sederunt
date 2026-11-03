@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { replayPlan, runReplay } from "../src/activity-replay.js";
+import { replayPlan, replaySupported, runReplay } from "../src/activity-replay.js";
+import { formatActivitySentence, groupActivity } from "../src/activity-feed.js";
 import { rebuildCompanyIndex } from "../src/typed-path.js";
 import { createSession } from "../src/session.js";
 
@@ -53,6 +54,72 @@ test("each replay row calls its own method and an unknown pair never creates an 
   const unknown = replayPlan(event("linear", "comment", []), "undo", observed);
   assert.equal(unknown.reason, "unsupported");
   assert.equal(calls.some((call) => call[0] === "createIssue"), false);
+});
+
+test("a clock uses Asia/Ho_Chi_Minh and keeps the event's duration", () => {
+  const replay = replayPlan({
+    verb: "reschedule",
+    target: { system: "calendar", id: "evt-1", title: "Launch review" },
+    changes: [{ field: "start", from: "2:00 PM", to: "4 PM" }],
+  }, "replay", {
+    start: "2026-11-03T07:00:00.000Z",
+    end: "2026-11-03T07:45:00.000Z",
+    timeZone: "Asia/Ho_Chi_Minh",
+  });
+  assert.equal(replay.ok, true);
+  assert.equal(replay.args.start, "2026-11-03T09:00:00.000Z");
+  assert.equal(replay.args.end, "2026-11-03T09:45:00.000Z");
+  assert.equal(replay.args.timeZone, "Asia/Ho_Chi_Minh");
+  const undo = replayPlan({
+    verb: "move",
+    target: { system: "calendar", id: "evt-1", title: "Design crit" },
+    changes: [{ field: "start", from: "2:00 PM", to: "4 PM" }],
+  }, "undo", {
+    start: "2026-11-03T09:00:00.000Z",
+    end: "2026-11-03T10:00:00.000Z",
+    timeZone: "Asia/Ho_Chi_Minh",
+  });
+  assert.equal(undo.args.start, "2026-11-03T07:00:00.000Z");
+  assert.equal(undo.args.end, "2026-11-03T08:00:00.000Z");
+});
+
+test("a linear create replays with its idempotency key and a slack post has no undo", () => {
+  const plan = replayPlan({
+    id: "fail-1",
+    requestId: "req-1",
+    verb: "create",
+    target: { system: "linear", title: "Order booth banner" },
+  }, "replay");
+  assert.equal(plan.method, "createIssue");
+  assert.equal(plan.args.idempotencyKey, "req-1");
+  assert.equal(plan.args.title, "Order booth banner");
+  assert.equal(replayPlan({
+    requestId: "req-1",
+    verb: "create",
+    target: { system: "linear", title: "Order booth banner" },
+  }, "undo").reason, "unsupported");
+  assert.equal(replaySupported({ verb: "post", target: { system: "slack" } }, "undo"), false);
+  assert.equal(replaySupported({ verb: "create", target: { system: "linear" } }, "replay"), true);
+});
+
+test("viewer times drop the raw instant and markers are not feed rows", () => {
+  assert.equal(
+    formatActivitySentence(
+      "Sederunt moved Design crit from 2026-11-03T07:00:00.000Z to 2026-11-03T08:00:00.000Z on Google Calendar via MCP",
+      "Asia/Ho_Chi_Minh",
+    ),
+    "Sederunt moved Design crit 2:00 PM → 3:00 PM on Google Calendar via MCP",
+  );
+  assert.equal(
+    formatActivitySentence("from 2026-11-03T16:00:00.000Z to 2026-11-03T18:30:00.000Z", "Asia/Ho_Chi_Minh"),
+    "Nov 3, 11:00 PM → Nov 4, 1:30 AM",
+  );
+  const groups = groupActivity([
+    { id: "a", requestId: "r", kind: "action", ts: "2026-11-03T08:00:00.000Z" },
+    { id: "s", requestId: "r", kind: "resolve", ts: "2026-11-03T09:00:00.000Z" },
+    { id: "u", requestId: "r", kind: "supersede" },
+  ]);
+  assert.deepEqual(groups[0].rows.map((row) => row.id), ["a"]);
 });
 
 test("a restart keeps a retried failure and an undone action", async () => {

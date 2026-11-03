@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { displayName, logAction, logFailure, logRequest, logUndo, renderActivity, undoRefusal } from "./activity.js";
-import { readCalendarEvent, replayPlan, runReplay } from "./activity-replay.js";
+import { selectActivity } from "./activity-feed.js";
+import { readCalendarEvent, replayPlan, replaySupported, runReplay } from "./activity-replay.js";
 import { authorize } from "./domain/allow.js";
 import { clashStatuses } from "./domain/clash.js";
 import { checkInvite } from "./domain/invite.js";
@@ -556,6 +557,12 @@ function verbFor(action) {
   return "create";
 }
 
+function activitySystem(action) {
+  if (action.tool === "calendar") return "calendar";
+  if (action.tool === "slack") return "slack";
+  return "linear";
+}
+
 async function noteActivity(session, deps, action, fields) {
   const kind = fields.role === "failure" ? "failure" : (fields.role === "request" ? "request" : "action");
   const input = {
@@ -582,7 +589,9 @@ async function noteActivity(session, deps, action, fields) {
     },
     outcome: kind === "failure" ? "failed" : "ok",
     error: kind === "failure" ? failureText(fields.error) : "",
-    undo: kind === "action" ? { available: true, until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() } : undefined,
+    undo: kind === "action" && replaySupported({ verb: verbFor(action), target: { system: activitySystem(action) } }, "undo")
+      ? { available: true, until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() }
+      : undefined,
   };
   let event;
   try {
@@ -667,7 +676,9 @@ export async function replayFailure(session, deps, failureId) {
   const changes = plan.from ? [{ field: "start", from: plan.from, to: plan.to }] : (planned.changes || []);
   const event = logAction(session, {
     ...effectOf(named, { changes }),
-    undo: { available: true, until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() },
+    undo: replaySupported(named, "undo")
+      ? { available: true, until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() }
+      : { available: false, until: "" },
   });
   await storeActivity(session, deps, event);
   await markResolved(session, deps, named);
@@ -687,6 +698,7 @@ export async function undoRecorded(session, deps, id, actorName) {
   const event = (session.activity || []).find((row) => row.id === id);
   const reason = undoRefusal(event);
   if (reason) return { ok: false, reason };
+  if (!replaySupported(event, "undo")) return { ok: false, reason: "unsupported" };
   const observed = await readCalendarEvent(deps, event);
   const plan = replayPlan(event, "undo", observed);
   if (!plan.ok) return plan;
@@ -741,6 +753,7 @@ async function markResolved(session, deps, failed) {
     origin: failed.origin || { roomId: "", roomName: "", at: null, messageUrl: "" },
     outcome: "ok",
     error: "",
+    ts: new Date().toISOString(),
   };
   session.activity.push(event);
   await storeActivity(session, deps, event);
@@ -771,6 +784,7 @@ async function supersedeTarget(session, deps, source, keepId) {
       origin: row.origin || { roomId: "", roomName: "", at: null, messageUrl: "" },
       outcome: "ok",
       error: "",
+      ts: new Date().toISOString(),
     };
     session.activity.push(event);
     fresh.push(event);
@@ -781,9 +795,11 @@ async function supersedeTarget(session, deps, source, keepId) {
 
 function createTitle(action) {
   const titled = typeof action.params?.title === "string" ? action.params.title.trim() : "";
+  if (titled) return titled.slice(0, 80);
+  const name = typeof action.params?.name === "string" ? action.params.name.trim() : "";
+  if (name) return name.slice(0, 80);
   const spoken = typeof action.statement === "string" ? action.statement.trim() : "";
-  if (titled && titled !== spoken) return titled;
-  return "ticket";
+  return spoken.slice(0, 80);
 }
 
 function activityChanges(action) {
@@ -2050,7 +2066,7 @@ function publicActivity(session, rooms) {
   const visible = new Set((rooms || []).map((room) => room.id));
   const rows = session?.activity ?? [];
   return rows
-    .filter((row) => row && (!row.origin?.roomId || visible.has(row.origin.roomId)))
+    .filter((row) => row && row.kind !== "resolve" && row.kind !== "supersede" && (!row.origin?.roomId || visible.has(row.origin.roomId)))
     .map((row) => ({
       id: row.id,
       requestId: row.requestId,
@@ -2064,13 +2080,37 @@ function publicActivity(session, rooms) {
       origin: row.origin,
       outcome: row.outcome,
       error: row.error,
-      undo: row.undo,
+      undo: publishedUndo(row),
+      retryable: row.kind === "failure" && !row.resolved && replaySupported(row, "replay"),
       resolved: row.resolved === true,
       superseded: row.superseded === true,
       refersTo: row.refersTo || "",
       undoOf: row.undoOf || "",
       sentence: renderActivity(row),
     }));
+}
+
+function publishedUndo(row, now = Date.now()) {
+  const until = Date.parse(row.undo?.until || "");
+  const open = row.undo?.available === true
+    && row.outcome !== "undone"
+    && row.superseded !== true
+    && replaySupported(row, "undo")
+    && !Number.isNaN(until)
+    && until > now;
+  if (!row.undo && !open) return undefined;
+  return { available: open, until: row.undo?.until || "" };
+}
+
+/**
+ * The workspace feed, filtered with the same search the page uses.
+ *
+ * @param {ReturnType<import("./session.js").createSession>} session
+ * @param {{ id?: string }[]} rooms
+ * @param {{ query?: string, roomId?: string, kind?: string, actor?: string }} [query]
+ */
+export function searchPublishedActivity(session, rooms, query = {}) {
+  return selectActivity(publicActivity(session, rooms), query);
 }
 
 function absorbActivity(session, activity) {

@@ -716,7 +716,7 @@ ${slack}
   </div>
 </div>
 <script type="module">
-import { groupActivity, relativeTime, selectActivity } from "/console/activity.js";
+import { formatActivitySentence, groupActivity, relativeTime, selectActivity } from "/console/activity.js";
 var sessionWhen = document.getElementById("account-detail-expiry");
 if (sessionWhen && sessionWhen.dataset.at) {
   var sessionDate = new Date(sessionWhen.dataset.at);
@@ -1234,7 +1234,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var date = new Date(iso);
     if (isNaN(date.getTime())) return "";
     var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    return date.getUTCDate() + " " + months[date.getUTCMonth()] + " " + date.getUTCFullYear();
+    return date.getDate() + " " + months[date.getMonth()] + " " + date.getFullYear();
   }
 
   function epochLine(decision) {
@@ -2671,7 +2671,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         var who = document.createElement("strong");
         who.textContent = (row.actor && row.actor.name) || "Someone";
         text.append(who);
-        var sentence = row.sentence || "";
+        var sentence = formatActivitySentence(row.sentence || "");
         var rest = sentence.indexOf(who.textContent) === 0 ? sentence.slice(who.textContent.length) : (" " + sentence);
         text.append(document.createTextNode(" "));
         paintRich(text, rest.trim(), row);
@@ -2736,7 +2736,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
           done.className = "retried";
           done.textContent = "Retried";
           line.append(done);
-        } else if (row.kind === "failure") {
+        } else if (row.kind === "failure" && row.retryable !== false) {
           var retry = document.createElement("button");
           retry.type = "button";
           retry.className = "activity-retry";

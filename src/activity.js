@@ -1,3 +1,4 @@
+import { replaySupported } from "./activity-replay.js";
 import { redact } from "./domain/redact.js";
 
 export { groupActivity, relativeTime, selectActivity } from "./activity-feed.js";
@@ -131,6 +132,7 @@ const ICON = {
  */
 export function renderActivity(event, now = Date.now()) {
   const kind = KINDS.has(event?.kind) ? event.kind : "action";
+  if (kind === "resolve" || kind === "supersede") return "";
   const verb = VERBS.includes(event?.verb) ? event.verb : "create";
   const template = PHRASES[verb]?.[kind] || GENERIC[kind];
   return collapse(fill(template, event, verb));
@@ -184,7 +186,9 @@ export function appendRetry(session, failureId) {
     changes: failed.changes,
     tool: failed.tool,
     origin: failed.origin,
-    undo: { available: true, until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() },
+    undo: replaySupported(failed, "undo")
+      ? { available: true, until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() }
+      : { available: false, until: "" },
   });
 }
 

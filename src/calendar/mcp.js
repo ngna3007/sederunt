@@ -1,11 +1,15 @@
 const CALENDAR_URL = "https://calendarmcp.googleapis.com/mcp/v1";
-const TIME_ZONE = "Asia/Ho_Chi_Minh";
+
+/** Workspace calendar zone. Override with CALENDAR_TIME_ZONE. */
+export const CALENDAR_TIME_ZONE = "Asia/Ho_Chi_Minh";
+const TIME_ZONE = CALENDAR_TIME_ZONE;
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 /**
  * Google Calendar's remote MCP. The tool list is empty until a token is
- * present, so a write is not named from a guess. A move touches only an
- * event whose summary contains "throwaway".
+ * present, so a write is not named from a guess. `update_event` updates the
+ * event id it is given, with that event's start and end. It does not search
+ * for a throwaway event.
  * An expired access token is refreshed once from the OAuth refresh token.
  * A day read that still cannot be signed returns `{ unavailable: true }`
  * and does not throw. `save` runs only after a refresh succeeds.
@@ -36,14 +40,55 @@ export function createCalendarAdapter(env = process.env, options = {}) {
       if (!Array.isArray(tools)) return [];
       return tools.map((tool) => ({ ...tool, write: tool.name === "update_event" }));
     },
+    async readEvent({ id, title } = {}) {
+      const token = await currentToken(env, fetchImpl, save);
+      const zone = zoneOf(env);
+      if (!token || !id) return null;
+      try {
+        const result = await toolsCall(fetchImpl, token, "get_event", { eventId: id, timeZone: zone });
+        const event = singleEvent(result);
+        if (event?.start) return { id: event.id || id, start: event.start, end: event.end, timeZone: event.timeZone || zone };
+      } catch { /* list_events is the fallback when get_event is absent */ }
+      try {
+        const listed = await toolsCall(fetchImpl, token, "list_events", {
+          fullText: title || id,
+          timeZone: zone,
+          pageSize: 20,
+        });
+        const event = eventsFrom(listed).find((item) => item.id === id);
+        if (!event?.start) return null;
+        return { id: event.id, start: event.start, end: event.end, timeZone: zone };
+      } catch {
+        return null;
+      }
+    },
     async call(name, params) {
       const token = await currentToken(env, fetchImpl, save);
       if (!token || !name) return { id: "" };
-      if (name === "update_event") return moveThrowaway(fetchImpl, token, params);
+      if (name === "update_event") return updateEvent(fetchImpl, token, params, zoneOf(env));
       const result = await toolsCall(fetchImpl, token, name, params || {});
       return { id: eventIdFrom(result) };
     },
   };
+}
+
+function zoneOf(env) {
+  const configured = typeof env.CALENDAR_TIME_ZONE === "string" ? env.CALENDAR_TIME_ZONE.trim() : "";
+  return configured || CALENDAR_TIME_ZONE;
+}
+
+async function updateEvent(fetchImpl, token, params, fallbackZone) {
+  const id = String(params?.id || params?.eventId || "").trim();
+  const start = String(params?.start || params?.startTime || "").trim();
+  const end = String(params?.end || params?.endTime || "").trim();
+  if (!id || !start || !end) return { id: "" };
+  const result = await toolsCall(fetchImpl, token, "update_event", {
+    eventId: id,
+    startTime: start,
+    endTime: end,
+    timeZone: params?.timeZone || fallbackZone,
+  });
+  return { id: eventIdFrom(result) || id };
 }
 
 async function listDay(fetchImpl, env, save, day) {
@@ -51,7 +96,7 @@ async function listDay(fetchImpl, env, save, day) {
   const args = {
     startTime: window.start,
     endTime: window.end,
-    timeZone: TIME_ZONE,
+    timeZone: zoneOf(env),
     pageSize: 20,
   };
   try {
@@ -125,25 +170,6 @@ export function dayBounds(day, now = new Date()) {
     return boundsFor(shiftDate(date, 7));
   }
   return boundsFor(date);
-}
-
-async function moveThrowaway(fetchImpl, token, params) {
-  const day = params?.day || "Friday";
-  const listed = await toolsCall(fetchImpl, token, "list_events", {
-    fullText: "throwaway",
-    timeZone: TIME_ZONE,
-    pageSize: 20,
-  });
-  const event = eventsFrom(listed).find((item) => /throwaway/i.test(item.summary || "") && /review/i.test(item.summary || ""));
-  if (!event?.id || !event.start) return { id: "" };
-  const moved = moveStart(event, day);
-  const result = await toolsCall(fetchImpl, token, "update_event", {
-    eventId: event.id,
-    startTime: moved.start,
-    endTime: moved.end,
-    timeZone: TIME_ZONE,
-  });
-  return { id: eventIdFrom(result) || event.id };
 }
 
 export function moveStart(event, day) {
@@ -247,12 +273,21 @@ function eventsFrom(result) {
   }
 }
 
+function singleEvent(result) {
+  const structured = result?.structuredContent;
+  if (structured && (structured.start || structured.startTime || structured.id || structured.summary)) {
+    return normalizeEvent(structured);
+  }
+  return eventsFrom(result)[0] || null;
+}
+
 function normalizeEvent(event) {
   return {
     id: event?.id || "",
     summary: event?.summary || "",
     start: event?.start?.dateTime || event?.startTime || event?.start || "",
     end: event?.end?.dateTime || event?.endTime || event?.end || "",
+    timeZone: event?.timeZone || event?.start?.timeZone || "",
   };
 }
 

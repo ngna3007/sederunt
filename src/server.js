@@ -31,7 +31,7 @@ import { looksLikeOpenQuestion } from "./parse.js";
 import { createSession } from "./session.js";
 import { postSlackReply, slackAnswer, slackChannelMembers, slackFileBytes, slackQuestion } from "./slack/reply.js";
 import { slackDelivery, verifySlackRequest } from "./slack/sign.js";
-import { companyBoard, downloadFile, handleUtterance, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, undoRecorded } from "./typed-path.js";
+import { companyBoard, downloadFile, handleUtterance, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded } from "./typed-path.js";
 
 const port = Number(process.env.PORT || 8787);
 
@@ -87,6 +87,22 @@ export function defaultDeps(options = {}) {
         linearCalls.push("assign");
         return { identifier: "", id: "" };
       },
+      async updateIssue({ id } = {}) {
+        linearCalls.push("update");
+        return { identifier: id || "", id: id || "" };
+      },
+      async addLabel({ id } = {}) {
+        linearCalls.push("label");
+        return { identifier: id || "", id: id || "" };
+      },
+      async removeLabel({ id } = {}) {
+        linearCalls.push("unlabel");
+        return { identifier: id || "", id: id || "" };
+      },
+      async unassignIssue({ id } = {}) {
+        linearCalls.push("unassign");
+        return { identifier: id || "", id: id || "" };
+      },
     },
     calendar: options.calendar ?? createCalendarAdapter(),
     tatum: options.tatum ?? createTatumReader(),
@@ -115,6 +131,22 @@ function liveLinear(stub, loadToken = loadLinearToken) {
     async assignIssue(input) {
       const client = await pendingClient();
       return client.assignIssue(input);
+    },
+    async updateIssue(input) {
+      const client = await pendingClient();
+      return client.updateIssue(input);
+    },
+    async addLabel(input) {
+      const client = await pendingClient();
+      return client.addLabel(input);
+    },
+    async removeLabel(input) {
+      const client = await pendingClient();
+      return client.removeLabel(input);
+    },
+    async unassignIssue(input) {
+      const client = await pendingClient();
+      return client.unassignIssue(input);
     },
   };
   function pendingClient() {
@@ -425,6 +457,21 @@ export function createApp(options = {}) {
     if (req.method === "GET" && url.pathname === "/console/activity.js") {
       const source = await readFile(resolve("src/activity-feed.js"));
       send(res, 200, "text/javascript; charset=utf-8", source);
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/activity") {
+      const gate = guardConsole(req, env);
+      if (!gate.session) {
+        send(res, 401, "application/json; charset=utf-8", JSON.stringify({ ok: false, reason: "sign-in" }));
+        return;
+      }
+      const current = await prepareWorkspace(workspace, "", false, 2000);
+      const groups = searchPublishedActivity(current, current.rooms || [], {
+        query: url.searchParams.get("q") || "",
+        roomId: url.searchParams.get("room") || "",
+        kind: url.searchParams.get("kind") || "",
+      });
+      send(res, 200, "application/json; charset=utf-8", JSON.stringify({ ok: true, groups }));
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/activity") {

@@ -62,19 +62,37 @@ export function createLinearClient(token, fetchImpl = globalThis.fetch) {
     return result;
   }
 
+  async function saveIdentified(name, args, id) {
+    const result = await callTool(name, args);
+    const parsed = parseToolJson(result);
+    const identifier = findIdentifier(parsed) || findIdentifier(result) || rowId(id);
+    if (!identifier) throw new Error("Linear save returned no issue id.");
+    return { id: identifier, identifier };
+  }
+
+  async function issueLabels(id) {
+    const result = await callTool("get_issue", { id });
+    const parsed = parseToolJson(result);
+    const raw = parsed?.labels || parsed?.issue?.labels || [];
+    if (!Array.isArray(raw)) return [];
+    return raw.map((label) => (typeof label === "string" ? label : label?.name || "")).filter(Boolean);
+  }
+
   return {
     async readOpenTripTickets() {
       const trip = issuesFrom(await callTool("list_issues", { team: "ROW", query: "trip", limit: 25 }));
       const open = issuesFrom(await callTool("list_issues", { team: "ROW", limit: 25 }));
       return { team: "ROW", trip, open };
     },
-    async createIssue({ title }) {
-      const result = await callTool("save_issue", {
+    async createIssue({ title, idempotencyKey }) {
+      const args = {
         title,
         team: "ROW",
         project: "Sederunt",
         description: "Filed from Sederunt after that tool preference allowed this one action.",
-      });
+      };
+      if (idempotencyKey) args.idempotencyKey = idempotencyKey;
+      const result = await callTool("save_issue", args);
       const parsed = parseToolJson(result);
       const identifier = findIdentifier(parsed) || findIdentifier(result);
       if (!identifier) {
@@ -84,11 +102,24 @@ export function createLinearClient(token, fetchImpl = globalThis.fetch) {
       return { id: identifier, identifier };
     },
     async assignIssue({ id, assignee }) {
-      const result = await callTool("save_issue", { id, assignee });
-      const parsed = parseToolJson(result);
-      const identifier = findIdentifier(parsed) || findIdentifier(result) || rowId(id);
-      if (!identifier) throw new Error("Linear assign returned no issue id.");
-      return { id: identifier, identifier };
+      const saved = await saveIdentified("save_issue", { id, assignee }, id);
+      return saved;
+    },
+    async updateIssue({ id, state }) {
+      return saveIdentified("save_issue", { id, state }, id);
+    },
+    async addLabel({ id, label }) {
+      const current = await issueLabels(id);
+      const labels = current.includes(label) ? current : [...current, label];
+      return saveIdentified("save_issue", { id, labels }, id);
+    },
+    async removeLabel({ id, label }) {
+      const current = await issueLabels(id);
+      const labels = current.filter((name) => name.toLowerCase() !== String(label || "").toLowerCase());
+      return saveIdentified("save_issue", { id, labels }, id);
+    },
+    async unassignIssue({ id }) {
+      return saveIdentified("save_issue", { id, assignee: null }, id);
     },
     async findIssuesByTitle(title) {
       const found = issuesFrom(await callTool("list_issues", { team: "ROW", query: title, limit: 20 }));

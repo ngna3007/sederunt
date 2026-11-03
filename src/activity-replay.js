@@ -3,25 +3,70 @@
  * is refused. Nothing here falls through to creating an issue.
  */
 
+import { CALENDAR_TIME_ZONE } from "./calendar/mcp.js";
+
 const TABLE = {
   "linear:move": { replay: "updateIssue", undo: "updateIssue" },
   "linear:label": { replay: "addLabel", undo: "removeLabel" },
   "linear:assign": { replay: "assignIssue", undo: "assignIssue" },
+  "linear:create": { replay: "createIssue", undo: "" },
   "calendar:move": { replay: "update_event", undo: "update_event" },
   "calendar:reschedule": { replay: "update_event", undo: "update_event" },
   "slack:post": { replay: "postMessage", undo: "" },
 };
 
 /**
- * Place a clock on the date of an ISO instant. A value that is already ISO
- * is kept. "4 PM" and "4:00 PM" are the clocks this accepts.
+ * Whether the table has an inverse or a replay for this pair. Undo and Retry
+ * are shown only when this is true.
+ *
+ * @param {{ verb?: string, target?: { system?: string } }} event
+ * @param {"replay" | "undo"} direction
+ */
+export function replaySupported(event, direction) {
+  const system = event?.target?.system || "";
+  const verb = event?.verb || "";
+  const row = TABLE[`${system}:${verb}`];
+  if (!row) return false;
+  return Boolean(direction === "undo" ? row.undo : row.replay);
+}
+
+/**
+ * Method names the production adapters must export. `unassignIssue` is the
+ * assign inverse when the previous assignee is empty. Calendar reads go
+ * through `readEvent` and writes through `call`.
+ */
+export function methodsReferenced() {
+  const linear = new Set(["unassignIssue"]);
+  const calendar = new Set(["readEvent"]);
+  for (const [key, row] of Object.entries(TABLE)) {
+    const system = key.slice(0, key.indexOf(":"));
+    for (const method of [row.replay, row.undo]) {
+      if (!method) continue;
+      if (system === "linear") linear.add(method);
+      if (system === "calendar") calendar.add("call");
+    }
+  }
+  return {
+    linear: [...linear].sort(),
+    calendar: [...calendar].sort(),
+  };
+}
+
+/**
+ * Place a clock on the calendar date of an ISO instant, in `timeZone`.
+ * A value that is already ISO is kept. "4 PM" and "4:00 PM" are the clocks
+ * this accepts. The zone defaults to the calendar's zone, not UTC.
  *
  * @param {string} iso
  * @param {string} clock
+ * @param {string} [timeZone]
  */
-export function clockOnDate(iso, clock) {
+export function clockOnDate(iso, clock, timeZone = CALENDAR_TIME_ZONE) {
   const text = String(clock || "").trim();
-  if (/^\d{4}-\d{2}-\d{2}T/.test(text)) return text;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(text)) {
+    const parsed = new Date(text);
+    return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString();
+  }
   const base = new Date(iso);
   if (Number.isNaN(base.getTime())) return "";
   const match = /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i.exec(text);
@@ -31,7 +76,47 @@ export function clockOnDate(iso, clock) {
   const mer = (match[3] || "").toLowerCase();
   if (mer === "pm" && hours < 12) hours += 12;
   if (mer === "am" && hours === 12) hours = 0;
-  return new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate(), hours, minutes, 0)).toISOString();
+  if (hours > 23 || minutes > 59) return "";
+  const wall = wallParts(base, timeZone);
+  return zonedTimeToUtc(wall.year, wall.month, wall.day, hours, minutes, timeZone).toISOString();
+}
+
+function wallParts(date, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(date);
+  const bag = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+  let hour = Number(bag.hour);
+  let day = Number(bag.day);
+  if (hour === 24) hour = 0;
+  return {
+    year: Number(bag.year),
+    month: Number(bag.month),
+    day,
+    hour,
+    minute: Number(bag.minute),
+    second: Number(bag.second),
+  };
+}
+
+function zonedTimeToUtc(year, month, day, hour, minute, timeZone) {
+  const desired = Date.UTC(year, month - 1, day, hour, minute, 0);
+  let utc = desired;
+  for (let pass = 0; pass < 3; pass += 1) {
+    const got = wallParts(new Date(utc), timeZone);
+    const gotAsUtc = Date.UTC(got.year, got.month - 1, got.day, got.hour, got.minute, got.second);
+    const delta = desired - gotAsUtc;
+    if (delta === 0) break;
+    utc += delta;
+  }
+  return new Date(utc);
 }
 
 /**
@@ -67,19 +152,28 @@ export function replayPlan(event, direction, observed = null) {
     if (!assignee) return { ok: false, reason: "unsupported" };
     return { ok: true, system, method: "assignIssue", args: { id, assignee } };
   }
+  if (system === "linear" && verb === "create") {
+    const title = event.target?.title || "";
+    const idempotencyKey = event.requestId || event.id || "";
+    if (!title || !idempotencyKey) return { ok: false, reason: "unsupported" };
+    return { ok: true, system, method, args: { title, idempotencyKey } };
+  }
   if (system === "calendar") {
-    const live = observed?.start || "";
-    const wanted = direction === "undo" ? (change.from || live) : change.to;
-    const start = clockOnDate(live || wanted, wanted);
+    const timeZone = observed?.timeZone || CALENDAR_TIME_ZONE;
+    const liveStart = observed?.start || "";
+    const liveEnd = observed?.end || "";
+    const duration = Date.parse(liveEnd) - Date.parse(liveStart);
+    if (!liveStart || !Number.isFinite(duration) || duration <= 0) return { ok: false, reason: "unsupported" };
+    const wanted = direction === "undo" ? (change.from || liveStart) : (change.to || liveStart);
+    const start = clockOnDate(liveStart, wanted, timeZone);
     if (!start) return { ok: false, reason: "unsupported" };
-    const endDate = new Date(start);
-    endDate.setHours(endDate.getHours() + 1);
+    const end = new Date(Date.parse(start) + duration).toISOString();
     return {
       ok: true,
       system,
       method,
-      args: { id, title: event.target?.title || "", start, end: endDate.toISOString() },
-      from: live || change.from || "",
+      args: { id, title: event.target?.title || "", start, end, timeZone },
+      from: liveStart,
       to: start,
     };
   }

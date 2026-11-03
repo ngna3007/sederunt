@@ -104,6 +104,7 @@ if (isDirectRun()) {
   const deps = {
     ...base,
     linear: {
+      ...base.linear,
       async readOpenTripTickets() {
         await appendConnectorCall(accountId, "read");
         return base.linear.readOpenTripTickets();

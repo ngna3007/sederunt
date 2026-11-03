@@ -206,15 +206,35 @@ test("retry calls the connector and keeps the request's from value", async () =>
     assert.equal(response.status, 200);
     const calendarCall = calls.find((call) => call[0] === "calendar");
     assert.equal(calendarCall[1], "update_event");
-    assert.match(calendarCall[2].start, /^2026-11-03T/);
+    assert.equal(calendarCall[2].start, "2026-11-03T09:00:00.000Z");
+    assert.equal(calendarCall[2].end, "2026-11-03T10:00:00.000Z");
+    assert.equal(calendarCall[2].timeZone, "Asia/Ho_Chi_Minh");
     const retried = session.activity.find((row) => row.kind === "action" && row.requestId === "req-move" && row.id !== "act-assign");
     assert.equal(retried.changes[0].from, "2026-11-03T15:00:00.000Z");
-    assert.equal(retried.changes[0].to, "2026-11-03T16:00:00.000Z");
+    assert.equal(retried.changes[0].to, "2026-11-03T09:00:00.000Z");
     assert.equal(session.activity.find((row) => row.id === "fail-move").resolved, true);
     const again = await fetch(`http://127.0.0.1:${port}/api/activity`, {
       method: "POST", headers, body: JSON.stringify({ op: "retry", id: "fail-move" }),
     });
     assert.equal(again.status, 409);
+  } finally {
+    app.close();
+  }
+});
+
+test("activity search filters on the server with the feed module", async () => {
+  const app = appFor(seeded(), []);
+  const port = await listen(app);
+  try {
+    const open = await fetch(`http://127.0.0.1:${port}/api/activity?q=signage`);
+    assert.equal(open.status, 401);
+    const found = await fetch(`http://127.0.0.1:${port}/api/activity?q=signage`, { headers: { cookie: cookie() } });
+    assert.equal(found.status, 200);
+    const body = await found.json();
+    const sentences = body.groups.flatMap((group) => group.rows.map((row) => row.sentence));
+    assert.equal(sentences.some((line) => line.includes("ABC-123")), true);
+    assert.equal(sentences.some((line) => line.includes("Design crit")), false);
+    assert.equal(body.groups.some((group) => group.rows.some((row) => row.kind === "resolve")), false);
   } finally {
     app.close();
   }

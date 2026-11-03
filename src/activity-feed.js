@@ -17,10 +17,65 @@ export function relativeTime(ts, now = Date.now()) {
   return `${Math.floor(day / 7)}w ago`;
 }
 
+const ISO_INSTANT = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z/g;
+
+/**
+ * Turn ISO instants in a sentence into the viewer's clocks. A pair on the
+ * same local date is `2:00 PM → 3:00 PM`. The date is included only when the
+ * two instants fall on different local dates.
+ *
+ * @param {string} sentence
+ * @param {string} [timeZone] viewer zone; omitted means the runtime zone
+ */
+export function formatActivitySentence(sentence, timeZone) {
+  const text = String(sentence || "");
+  const found = text.match(ISO_INSTANT);
+  if (!found || !found.length) return text;
+  if (found.length >= 2) {
+    const [left, right] = found;
+    const differ = !sameLocalDay(left, right, timeZone);
+    const formattedLeft = formatClock(left, timeZone, differ);
+    const formattedRight = formatClock(right, timeZone, differ);
+    const fromTo = `from ${left} to ${right}`;
+    if (text.includes(fromTo)) return text.replace(fromTo, `${formattedLeft} → ${formattedRight}`);
+    return text.replace(left, formattedLeft).replace(right, formattedRight);
+  }
+  return text.replace(found[0], formatClock(found[0], timeZone, false));
+}
+
+function sameLocalDay(left, right, timeZone) {
+  return localDayKey(left, timeZone) === localDayKey(right, timeZone);
+}
+
+function localDayKey(iso, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(iso));
+  const bag = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+  return `${bag.year}-${bag.month}-${bag.day}`;
+}
+
+function formatClock(iso, timeZone, withDate) {
+  const date = new Date(iso);
+  const clock = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(date).replace(/\u202f|\u00a0/g, " ");
+  if (!withDate) return clock;
+  const day = new Intl.DateTimeFormat("en-US", { timeZone, month: "short", day: "numeric" }).format(date);
+  return `${day}, ${clock}`;
+}
+
 export function groupActivity(events) {
   const groups = [];
   const byRequest = new Map();
   for (const event of events || []) {
+    if (event?.kind === "resolve" || event?.kind === "supersede") continue;
     const key = event.requestId || event.id;
     let group = byRequest.get(key);
     if (!group) {
