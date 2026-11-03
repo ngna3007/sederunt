@@ -302,7 +302,15 @@ export function renderConsolePage(state = {}) {
   .name-field.name-needed .name-purpose { color: var(--fg); font-weight: 500; }
   #ask-help, #custom-how, #record .ledger, #join-hint, #join-ready { max-width: 40rem; font-size: 13px; color: var(--muted); }
   #custom-how { margin: 8px 0 0; }
-  #ask-block .ask-kicker { margin: 0; padding: 12px 16px 0; border-top: 0; background: #fff; font-size: 13px; font-weight: 600; color: var(--fg); }
+  #ask-block .ask-kicker, #hearing-block .hearing-kicker { margin: 0; padding: 12px 16px 0; border-top: 0; background: #fff; font-size: 13px; font-weight: 600; color: var(--fg); }
+  #hearing-help { margin: 4px 16px 0; font-size: 14px; line-height: 1.45; }
+  .hearing-field { display: flex; flex-direction: column; align-items: stretch; gap: 4px; margin: 12px 16px 0; }
+  .hearing-field label { font-size: 14px; font-weight: 600; color: var(--fg); }
+  .hearing-field p { margin: 0; font-size: 13px; line-height: 1.4; color: var(--muted); }
+  #hearing-triggers { min-height: 5.5rem; resize: vertical; }
+  #hearing-note { margin: 8px 16px 0; font-size: 13px; }
+  #hearing-note:empty { display: none; }
+  #hearing-block .section-next { margin: 12px 16px 16px; }
   #ask-block #ask-help { margin: 0; padding: 4px 16px 10px; border: 0; background: #fff; color: var(--muted); }
   .ask-name { font-size: 13px; font-weight: 500; color: var(--fg); }
   #ask-block { display: flex; flex-direction: column; }
@@ -937,14 +945,16 @@ ${slack}
         </div>
       </div>
       <div class="connectors" id="hearing-block">
-        <p class="ask-kicker">Meeting guest</p>
+        <p class="hearing-kicker">Meeting guest</p>
         <p id="hearing-help">The guest uses this name in the meeting. A line is kept when someone says the name, or one of the trigger words or sentences.</p>
-        <div class="room-set">
-          <label class="set-copy" for="hearing-name"><strong>Name</strong><p>Shown on the guest's camera.</p></label>
+        <div class="hearing-field">
+          <label for="hearing-name">Name</label>
+          <p>Shown on the guest's camera.</p>
           <input id="hearing-name" name="hearing-name" maxlength="40" value="Maple" autocomplete="off">
         </div>
-        <div class="room-set">
-          <label class="set-copy" for="hearing-triggers"><strong>Triggers</strong><p>One word or sentence on each line.</p></label>
+        <div class="hearing-field">
+          <label for="hearing-triggers">Triggers</label>
+          <p>One word or sentence on each line.</p>
           <textarea id="hearing-triggers" name="hearing-triggers" rows="3" placeholder="keep this"></textarea>
         </div>
         <p class="section-next"><button id="hearing-save" type="button">Save the guest</button></p>
