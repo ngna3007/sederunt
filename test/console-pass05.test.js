@@ -27,6 +27,16 @@ test("meeting words separate live, ended, channel, and silence", () => {
   assert.match(block, /#people-table \.people-row > \.num[\s\S]*text-align: left !important/);
   assert.match(block, /#record-list \.decision-row \.room-name[\s\S]*white-space: nowrap !important/);
   assert.match(block, /align-self: center !important/);
+  assert.match(page, /function speakerHue/);
+  assert.match(page, /function utteranceSegments/);
+  assert.match(page, /className = "utter-name"/);
+  assert.match(page, /speaker-dot/);
+  assert.match(page, /transcriptUrl/);
+  assert.match(page, /is-scrub/);
+  assert.match(page, /placeRoomChrome/);
+  assert.match(css, /--dock-pad/);
+  assert.match(css, /\.spk-0 \{ background: #3b6fd8/);
+  assert.doesNotMatch(css.slice(css.indexOf(".spk-0")), /#b42318|#9d174d|#146c34|#0f6e56|#3b6d11/);
 });
 
 function seeded() {
@@ -136,6 +146,46 @@ test("list columns share a gap and history rows stay compact", async (t) => {
       SEDERUNT_MEMBER: "mina",
       COMPANY_MEMWAL_KEY: "k",
       COMPANY_MEMWAL_ACCOUNT_ID: "a",
+    },
+    recall: {
+      async readBot(id) {
+        if (id === "booth") {
+          return {
+            id: "booth",
+            lines: [
+              { participant: { id: 5, name: "Rowan" }, words: [
+                { text: "The", start_timestamp: { relative: 2 }, end_timestamp: { relative: 2.4 } },
+                { text: "booth", start_timestamp: { relative: 2.5 }, end_timestamp: { relative: 3.2 } },
+              ] },
+              { participant: { id: 6, name: "Tomas" }, words: [
+                { text: "Open", start_timestamp: { relative: 9 }, end_timestamp: { relative: 10 } },
+              ] },
+            ],
+            recordings: [{
+              started_at: "2026-11-03T11:00:00.000Z",
+              completed_at: "2026-11-03T11:03:04.000Z",
+              status: { code: "done" },
+              media_shortcuts: {
+                transcript: { data: { download_url: "http://127.0.0.1:9/transcript.json" } },
+              },
+            }],
+          };
+        }
+        if (id === "quiet") {
+          return {
+            id: "quiet",
+            recordings: [{
+              started_at: "2026-11-03T11:00:00.000Z",
+              completed_at: "2026-11-03T11:03:04.000Z",
+              status: { code: "done" },
+              media_shortcuts: {
+                video_mixed: { status: { code: "done" }, data: { download_url: "/missing.mp4" } },
+              },
+            }],
+          };
+        }
+        return null;
+      },
     },
   });
   const browser = await chromium.launch({ executablePath, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
@@ -344,6 +394,118 @@ test("list columns share a gap and history rows stay compact", async (t) => {
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
       assert.equal(overflow, false, `${path} ${width} overflows`);
     }
+  }
+
+  const banned = new Set(["rgb(180, 35, 24)", "rgb(157, 23, 77)", "rgb(20, 108, 52)", "rgb(15, 110, 86)", "rgb(59, 109, 17)"]);
+  for (const width of [390, 768]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`http://127.0.0.1:${port}/console/rooms/booth`, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector("#file-callout .callout-warn", { timeout: 45000 });
+    await page.waitForSelector("#tl-speakers .tl-seg", { timeout: 45000, state: "attached" });
+    const order = await page.evaluate(() => {
+      const pick = (sel) => {
+        const node = document.querySelector(sel);
+        const box = node.getBoundingClientRect();
+        return { top: Math.round(box.top), height: Math.round(box.height), hidden: node.hidden === true };
+      };
+      return {
+        head: pick("#file-head"),
+        alerts: pick("#file-callout"),
+        tabs: pick("#room-left > .underline-tabs"),
+        player: pick("#room-left .player-frame"),
+        transcript: pick("#file-transcript"),
+        failed: !!document.querySelector("#file-callout .callout-bad"),
+        before: document.getElementById("file-callout").previousElementSibling && document.getElementById("file-callout").previousElementSibling.id,
+      };
+    });
+    assert.equal(order.alerts.hidden, false, `${width} alerts hidden`);
+    assert.equal(order.failed, true, `${width} missing failed alert`);
+    assert.equal(order.before, "file-head", `${width} callout follows ${order.before}`);
+    assert.ok(order.alerts.top >= order.head.top + order.head.height - 2, JSON.stringify(order));
+    assert.ok(order.tabs.top >= order.alerts.top + order.alerts.height - 2, JSON.stringify(order));
+    assert.ok(order.player.top >= order.tabs.top + 8, JSON.stringify(order));
+    assert.ok(order.transcript.top >= order.player.top + order.player.height - 2, JSON.stringify(order));
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
+    assert.equal(overflow, false, `room ${width} overflows`);
+  }
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`http://127.0.0.1:${port}/console/rooms/booth`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector("#file-transcript .speaker-dot", { timeout: 45000 });
+  await page.waitForSelector("#tl-speakers .tl-seg", { timeout: 45000 });
+  const speakers = await page.evaluate((bannedList) => {
+    const ink = getComputedStyle(document.body).color;
+    const names = [...document.querySelectorAll("#file-transcript .utter-name")];
+    const dots = [...document.querySelectorAll("#file-transcript .speaker-dot")];
+    const segs = [...document.querySelectorAll("#tl-speakers .tl-seg")];
+    const banned = new Set(bannedList);
+    return {
+      ink,
+      names: names.map((node) => ({ text: node.textContent, color: getComputedStyle(node).color, clipped: node.scrollWidth > node.clientWidth + 1 })),
+      dots: dots.map((node) => ({ cls: node.className, color: getComputedStyle(node).backgroundColor })),
+      segs: segs.map((node) => ({ title: node.title, cls: node.className, color: getComputedStyle(node).backgroundColor })),
+      calloutInOverview: !!document.querySelector("#right-overview #file-callout"),
+    };
+  }, [...banned]);
+  assert.equal(speakers.calloutInOverview, true);
+  assert.ok(speakers.names.length >= 2);
+  assert.equal(speakers.dots.length, speakers.names.length);
+  assert.ok(speakers.names.every((row) => row.color === speakers.ink && !row.clipped), JSON.stringify(speakers.names));
+  assert.ok(speakers.dots.every((row) => /^speaker-dot spk-\d$/.test(row.cls) && !banned.has(row.color)), JSON.stringify(speakers.dots));
+  assert.ok(speakers.segs.length >= 2, JSON.stringify(speakers.segs));
+  assert.ok(speakers.segs.every((row) => /spk-\d/.test(row.cls) && !banned.has(row.color)), JSON.stringify(speakers.segs));
+  assert.ok(speakers.segs.some((row) => row.title === "Rowan") && speakers.segs.some((row) => row.title === "Tomas"));
+
+  for (const width of [1920, 1097, 1024]) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto(`http://127.0.0.1:${port}/console/rooms/booth`, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector("#right-overview .room-settings", { timeout: 45000 });
+    await page.waitForSelector("#timeline:not([hidden])", { timeout: 45000 });
+    const clear = await page.evaluate(() => {
+      const card = document.querySelector("#right-overview .room-settings");
+      let node = card;
+      while (node) {
+        if (node.scrollHeight > node.clientHeight + 2) node.scrollTop = node.scrollHeight;
+        node = node.parentElement;
+      }
+      window.scrollTo(0, document.body.scrollHeight);
+      const cardBox = card.getBoundingClientRect();
+      const dock = document.getElementById("timeline").getBoundingClientRect();
+      return {
+        cardBottom: Math.round(cardBox.bottom),
+        cardTop: Math.round(cardBox.top),
+        dockTop: Math.round(dock.top),
+        dockH: Math.round(dock.height),
+        clear: cardBox.bottom <= dock.top + 1 && cardBox.top < dock.top,
+      };
+    });
+    assert.equal(clear.clear, true, `settings under dock at ${width} ${JSON.stringify(clear)}`);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
+    assert.equal(overflow, false, `room ${width} overflows`);
+  }
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto(`http://127.0.0.1:${port}/console/rooms/quiet`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector("#timeline.is-scrub", { timeout: 45000 });
+  const scrub = await page.evaluate(() => {
+    const dock = document.getElementById("timeline");
+    const track = document.getElementById("tl-track");
+    return {
+      height: Math.round(dock.getBoundingClientRect().height),
+      segs: document.querySelectorAll("#tl-speakers .tl-seg").length,
+      track: getComputedStyle(track).display,
+    };
+  });
+  assert.ok(scrub.height <= 52 && scrub.height >= 44, `scrub height ${scrub.height}`);
+  assert.equal(scrub.segs, 0);
+  assert.equal(scrub.track, "none");
+
+  for (const width of [640, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`http://127.0.0.1:${port}/console/rooms/booth`, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector("#file-transcript .utter", { timeout: 45000 });
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
+    assert.equal(overflow, false, `room ${width} overflows`);
   }
   assert.deepEqual(errors, []);
 });

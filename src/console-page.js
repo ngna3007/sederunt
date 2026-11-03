@@ -2458,6 +2458,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     routeQuiet = false;
     closeNav();
     document.body.classList.toggle("room-open", name === "file");
+    placeRoomChrome();
   }
 
   function closeNav() {
@@ -3255,11 +3256,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var head = document.createElement("span");
       head.className = "utter-head";
       var name = document.createElement("span");
-      name.className = "utter-name " + toneClass(who);
+      name.className = "utter-name";
       name.textContent = who;
+      var dot = document.createElement("span");
+      dot.className = "speaker-dot " + speakerHue(who);
+      dot.setAttribute("aria-hidden", "true");
       var time = document.createElement("time");
       time.textContent = past ? "" : clockText(start);
-      head.append(name, time);
+      head.append(dot, name, time);
       var line = document.createElement("span");
       line.className = "utter-text";
       if (query) {
@@ -3359,6 +3363,24 @@ if (sessionWhen && sessionWhen.dataset.at) {
       callout.append(bad);
     }
     callout.hidden = callout.childElementCount === 0;
+    placeRoomChrome();
+  }
+
+  function placeRoomChrome() {
+    var callout = document.getElementById("file-callout");
+    var head = document.getElementById("file-head");
+    var overview = document.getElementById("right-overview");
+    var facts = document.getElementById("overview-facts");
+    if (!callout || !head || !overview) return;
+    var narrow = document.body.classList.contains("room-open") && window.matchMedia("(max-width: 768px)").matches;
+    if (narrow) {
+      if (callout.previousElementSibling !== head) head.insertAdjacentElement("afterend", callout);
+      return;
+    }
+    if (callout.parentNode !== overview) {
+      if (facts && facts.parentNode === overview) facts.before(callout);
+      else overview.prepend(callout);
+    }
   }
 
   function clockText(seconds) {
@@ -3379,6 +3401,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
     ((roomMediaState && roomMediaState.lines) || []).forEach(function (line) {
       if (line.end > max) max = line.end;
+    });
+    laneSegments().forEach(function (segment) {
+      if (segment.end > max) max = segment.end;
     });
     return max || 60;
   }
@@ -3456,11 +3481,107 @@ if (sessionWhen && sessionWhen.dataset.at) {
     return Math.max(0, Math.min(100, seconds / duration * 100)) + "%";
   }
 
+  function speakerHue(name) {
+    var value = 0;
+    var lower = String(name || "").toLowerCase();
+    for (var i = 0; i < lower.length; i += 1) value = value * 9 + lower.charCodeAt(i);
+    var tone = value % 8;
+    if (tone < 0) tone += 8;
+    return "spk-" + tone;
+  }
+
+  function stampSeconds(value) {
+    if (typeof value === "number" && isFinite(value)) return value;
+    if (!value || typeof value !== "object") return NaN;
+    if (typeof value.relative === "number") return value.relative;
+    return NaN;
+  }
+
+  function utteranceSegments(payload, people) {
+    var rows = Array.isArray(payload) ? payload
+      : (payload && (payload.utterances || payload.lines || payload.transcript)) || [];
+    if (!Array.isArray(rows)) return [];
+    var named = {};
+    (Array.isArray(people) ? people : []).forEach(function (person) {
+      if (person && person.id != null && person.name) named[String(person.id)] = String(person.name);
+    });
+    var out = [];
+    rows.forEach(function (row) {
+      if (!row || typeof row !== "object") return;
+      var participant = row.participant && typeof row.participant === "object" ? row.participant : {};
+      var id = participant.id != null ? String(participant.id) : (row.participant_id != null ? String(row.participant_id) : "");
+      var speaker = participant.name || row.speaker || row.name || named[id] || "Speaker";
+      var words = Array.isArray(row.words) ? row.words : null;
+      if (words && words.length) {
+        var first = words[0];
+        var last = words[words.length - 1];
+        var start = stampSeconds(first.start_timestamp != null ? first.start_timestamp : first.start);
+        var end = stampSeconds(last.end_timestamp != null ? last.end_timestamp : (last.end != null ? last.end : last.start));
+        if (isNaN(start)) return;
+        if (isNaN(end) || end <= start) end = start + 0.4;
+        out.push({ speaker: String(speaker), start: start, end: end });
+        return;
+      }
+      if (typeof row.start === "number") {
+        var endAt = typeof row.end === "number" && row.end > row.start ? row.end : row.start + 1;
+        out.push({ speaker: String(speaker), start: row.start, end: endAt });
+      }
+    });
+    return out;
+  }
+
+  function laneSegments() {
+    var direct = (roomMediaState && roomMediaState.segments) || [];
+    if (direct.length) return direct;
+    var fromLines = utteranceSegments(roomMediaState && roomMediaState.lines, roomMediaState && roomMediaState.participants);
+    if (fromLines.length) return fromLines;
+    return (roomMediaState && roomMediaState.derivedSegments) || [];
+  }
+
+  function httpUrl(value) {
+    return /^https?:\/\//i.test(String(value || "")) ? String(value) : "";
+  }
+
+  function loadSpeakerLanes() {
+    var media = roomMediaState;
+    if (!media) return Promise.resolve();
+    if ((media.segments || []).length || utteranceSegments(media.lines, media.participants).length) return Promise.resolve();
+    var transcript = httpUrl(media.transcriptUrl);
+    var peopleUrl = httpUrl(media.participantsUrl);
+    if (!transcript && !peopleUrl) return Promise.resolve();
+    var asked = media.forRoom || fileRoom;
+    function pull(url) {
+      if (!url) return Promise.resolve(null);
+      return fetch(url).then(function (response) {
+        if (!response.ok) throw new Error("lane");
+        return response.json();
+      }).catch(function () { return null; });
+    }
+    return Promise.all([pull(transcript), pull(peopleUrl)]).then(function (pair) {
+      if (!roomMediaState || (roomMediaState.forRoom || fileRoom) !== asked) return;
+      var people = Array.isArray(pair[1]) ? pair[1] : (pair[1] && (pair[1].participants || pair[1].people)) || [];
+      roomMediaState.participants = people;
+      roomMediaState.derivedSegments = utteranceSegments(pair[0], people);
+    });
+  }
+
+  function reserveDockSpace() {
+    var timeline = document.getElementById("timeline");
+    var height = timeline && !timeline.hidden ? Math.ceil(timeline.getBoundingClientRect().height) : 0;
+    document.documentElement.style.setProperty("--dock-pad", height + "px");
+  }
+
   function paintTimeline() {
     var timeline = document.getElementById("timeline");
-    var useful = roomMediaState && (roomMediaState.state === "ready" || roomMediaState.state === "novideo" || (roomMediaState.segments || []).length);
+    var segments = laneSegments();
+    var mediaEvents = (roomMediaState && roomMediaState.events) || [];
+    var useful = roomMediaState && (roomMediaState.state === "ready" || roomMediaState.state === "novideo" || segments.length || mediaEvents.length);
     if (timeline) timeline.hidden = !useful;
-    if (!useful) return;
+    if (!useful) {
+      if (timeline) timeline.classList.remove("is-scrub");
+      reserveDockSpace();
+      return;
+    }
     var duration = mediaDuration();
     text("tl-end", clockText(duration));
     var when = document.getElementById("tl-when");
@@ -3479,36 +3600,41 @@ if (sessionWhen && sessionWhen.dataset.at) {
       tick.textContent = clockText(duration * i / steps);
       if (ruler) ruler.append(tick);
     }
-    ((roomMediaState && roomMediaState.segments) || []).forEach(function (segment) {
+    segments.forEach(function (segment) {
       var block = document.createElement("span");
-      block.className = "tl-seg " + toneClass(segment.speaker || "");
+      block.className = "tl-seg " + speakerHue(segment.speaker || "");
       block.style.left = pct(segment.start, duration);
       block.style.width = Math.max(0.6, ((segment.end - segment.start) / duration) * 100) + "%";
       block.title = segment.speaker || "";
       if (speakers) speakers.append(block);
     });
-    ((roomMediaState && roomMediaState.events) || []).forEach(function (event) {
+    mediaEvents.forEach(function (event) {
       var dot = document.createElement("span");
       dot.className = "tl-dot";
       dot.style.left = pct(event.at, duration);
       dot.title = (event.kind || "event") + " " + (event.name || "");
       if (events) events.append(dot);
     });
+    var marks = 0;
     if (fileRoom && roomMediaState && roomMediaState.startedAt) {
       var origin = Date.parse(roomMediaState.startedAt);
       decisionsFor(fileRoom).forEach(function (decision) {
         var at = Date.parse(decision.spokenAt || "");
         if (isNaN(origin) || isNaN(at)) return;
         var offset = (at - origin) / 1000;
-        if (duration && offset > duration) return;
+        if (duration && (offset < 0 || offset > duration)) return;
         var mark = document.createElement("span");
         mark.className = "tl-mark";
-        mark.style.left = pct((at - origin) / 1000, duration);
+        mark.style.left = pct(offset, duration);
         mark.title = decision.text || "";
         if (events) events.append(mark);
+        marks += 1;
       });
     }
+    var scrub = segments.length === 0 && mediaEvents.length === 0 && marks === 0;
+    timeline.classList.toggle("is-scrub", scrub);
     placePlayhead(0, duration);
+    reserveDockSpace();
   }
 
   function seekTo(seconds) {
@@ -3570,7 +3696,6 @@ if (sessionWhen && sessionWhen.dataset.at) {
       paintPlayer(media);
       paintArtifacts(media);
       paintFactsMedia(media);
-      paintTimeline();
       if (media.startedAt) {
         var roomLive = roomOf(fileRoom);
         if (roomLive) {
@@ -3582,6 +3707,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         renderFacts(roomLive || room || {}, { when: media.startedAt }, fileRoom ? decisionsFor(fileRoom) : []);
       }
       renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
+      loadSpeakerLanes().then(function () { paintTimeline(); });
     }).catch(function () {
       roomMediaState = { state: "none" };
       paintPlayer(roomMediaState);
@@ -4016,6 +4142,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
   window.addEventListener("resize", function () {
     fitChips();
     reserveComposer();
+    placeRoomChrome();
+    reserveDockSpace();
     if (!window.matchMedia("(max-width: 767px)").matches) {
       try {
         if (localStorage.getItem("sederunt-rail") === "collapsed") document.body.classList.add("rail-collapsed");
