@@ -122,9 +122,8 @@ test("sign-in is off until a passphrase is set, and a set passphrase gates only 
     });
     assert.equal(refused.status, 409);
     const page = await call(port, "GET", "/console/sign-in");
-    assert.equal(page.status, 200);
-    assert.match(page.raw, /Sign-in is not set up/);
-    assert.match(page.raw, /SEDERUNT_CONSOLE_SECRET/);
+    assert.equal(page.status, 302);
+    assert.equal(page.location, "/console");
     const slack = await call(port, "POST", "/api/slack", { body: "{}" });
     assert.equal(slack.status, 200);
   } finally {

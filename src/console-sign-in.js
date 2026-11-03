@@ -64,10 +64,10 @@ export function renderSignInPage(state = {}) {
 
 function signInAlert(configured, memberSet, reason) {
   if (!configured) {
-    return `<p class="alert info" role="status">Sign-in is not set up. Set SEDERUNT_CONSOLE_SECRET to a passphrase, then restart. Until then this page cannot open a session.</p>`;
+    return `<p class="alert info" role="status">Sign-in is not set up on this server, so the console stays open.</p><details class="admin-note"><summary>For the person who runs this process</summary><p>Set SEDERUNT_CONSOLE_SECRET to a passphrase, then restart.</p></details>`;
   }
   if (!memberSet) {
-    return `<p class="alert warn" role="status">SEDERUNT_MEMBER is not set. You can sign in, and the board will have no member to read as.</p>${reasonAlert(reason)}`;
+    return `<p class="alert warn" role="status">This process has no member configured, so the board has no one to read as.</p><details class="admin-note"><summary>For the person who runs this process</summary><p>Set SEDERUNT_MEMBER, then restart.</p></details>${reasonAlert(reason)}`;
   }
   return reasonAlert(reason);
 }

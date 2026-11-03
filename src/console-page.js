@@ -65,7 +65,7 @@ export function renderConsolePage(state = {}) {
   <div class="rail-wrap">
     <div class="rail-head">
       <div class="brand-row">
-      <h1>Sederunt</h1>
+      <p class="brand">Sederunt</p>
       <div id="chip-wrap" class="chip-wrap">
         <button id="workspace-chip" class="chip" type="button" aria-expanded="false" aria-haspopup="menu" aria-controls="workspace-menu">
           <span id="chip-mark" class="tile-mark co" aria-hidden="true">C</span>
@@ -79,22 +79,22 @@ export function renderConsolePage(state = {}) {
           <button id="create-workspace" type="button" role="menuitem"><span class="ws-copy"><span>About Company</span><span class="menu-hint">What Company is</span></span></button>
         </div>
       </div>
-      <button id="goto" class="goto" type="button">Go to<span class="kbd">⌘K</span></button>
+      <button id="goto" class="goto" type="button">Go to<span class="kbd" id="goto-kbd">Ctrl K</span></button>
       </div>
     </div>
     <div class="rail-scroll">
     <button id="rail-prev" class="rail-nudge" type="button" hidden aria-label="Show earlier sections"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10 3.5 5.5 8 10 12.5"/></svg></button>
     <nav class="rail" aria-label="Workspace">
       <p class="rail-label">Work</p>
-      <button type="button" data-show="home">${homeIcon}Home</button>
-      <button type="button" data-show="rooms">${roomsIcon}Rooms</button>
-      <button type="button" data-show="history">${historyIcon}History</button>
-      <button type="button" data-show="record">${recordIcon}Decisions</button>
-      <button type="button" data-show="chat">${chatIcon}Chat</button>
+      <a href="/console" data-show="home">${homeIcon}Home</a>
+      <a href="/console/rooms" data-show="rooms">${roomsIcon}Rooms</a>
+      <a href="/console/history" data-show="history">${historyIcon}History</a>
+      <a href="/console/decisions" data-show="record">${recordIcon}Decisions</a>
+      <a href="/console/chat" data-show="chat">${chatIcon}Chat</a>
       <p class="rail-label">Setup</p>
-      <button id="show-connectors" type="button">${plugIcon}Status</button>
+      <a href="/console/status" id="show-connectors">${plugIcon}Status</a>
       <p class="rail-label">Account</p>
-      <button type="button" data-show="people">${peopleIcon}People</button>
+      <a href="/console/people" data-show="people">${peopleIcon}People</a>
     </nav>
     <button id="rail-next" class="rail-nudge" type="button" hidden aria-label="Show later sections"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5"/></svg></button>
     </div>
@@ -126,11 +126,7 @@ export function renderConsolePage(state = {}) {
       </nav>
       <span id="top-name" class="top-name"></span>
     </div>
-    <div id="read-error" class="state-error" hidden>
-      <p id="read-error-copy">Read the account again.</p>
-      <button id="read-again" type="button">Retry</button>
-    </div>
-    <h2 id="status-title" class="page-title" hidden>Status</h2>
+    <h1 id="status-title" class="page-title" hidden>Status</h1>
     <div class="notices">
       <p id="setup-label" class="setup-label">Rooms</p>
       <button id="setup-toggle" class="setup-toggle" type="button" aria-expanded="false" hidden>Setup is unfinished</button>
@@ -160,11 +156,16 @@ ${slack}
     </section>
     <div id="home" hidden>
       <div class="main">
+    <div id="read-error" class="state-error" hidden>
+      <p id="read-error-copy">The account could not be read.</p>
+      <button id="read-again" type="button">Retry</button>
+    </div>
     <div class="page-head" id="home-head">
     <div>
-    <h2 id="home-title" class="page-title">Home</h2>
+    <h1 id="home-title" class="page-title">Home</h1>
     <p class="page-lede">What is waiting, and which rooms heard a decision.</p>
     </div>
+    <div class="page-actions"></div>
     </div>
     <div class="home-tools">
     <div id="home-empty" class="home-empty" hidden>
@@ -175,8 +176,8 @@ ${slack}
     <div id="home-stats">
       <div id="counts" class="counts"></div>
     </div>
-    <div class="rooms-bar">
-      <button id="new-room" class="primary" type="button">${plusIcon}<span class="room-label">New room</span><span class="sr">New room</span></button>
+    <div class="rooms-bar" hidden>
+      <button id="new-room" class="primary" type="button">${plusIcon}<span class="room-label">New room</span></button>
     </div>
     </div>
     <p id="status"></p>
@@ -187,10 +188,11 @@ ${slack}
       <span class="sk sk-b"></span>
     </div>
     <div id="overview" hidden>
-      <div class="page-head"><div><h2 class="page-title">Status</h2><p class="page-lede">Which tools Sederunt can use, and how the meeting guest listens.</p></div></div>
+      <div class="page-head"><div><h1 class="page-title">Status</h1><p class="page-lede">Which tools Sederunt can use, and how the meeting guest listens.</p></div><div class="page-actions"></div></div>
       <p id="connector-split"></p>
-      <p id="tools-label">Tools</p>
-      <p id="tools-note">Not connected means the tool is not available to Sederunt. Connect opens that product's MCP.</p>
+      <div class="settings-card" id="tools-card">
+      <p class="section-label">Tools</p>
+      <p class="card-help">A tool that is not connected cannot be used from this page.</p>
       <div class="connectors">
         <div class="conn" id="cal-status-row">
           ${calendarIcon}
@@ -220,9 +222,10 @@ ${slack}
           <button type="button" class="conn-connect" id="slack-connect" data-connect="slack">Connect</button>
         </div>
       </div>
-      <div class="connectors" id="ask-block">
-        <p class="ask-kicker">Before sending a change</p>
-        <p id="ask-help">On waits for a confirm. Off sends the change.</p>
+      </div>
+      <div class="settings-card" id="ask-block">
+        <p class="section-label">Before sending a change</p>
+        <p id="ask-help" class="card-help">Waits for a confirm before a change is sent. Sends means the change goes out.</p>
         <div class="conn ask-quiet" id="cal-ask-row">
           <div class="set-copy"><span class="ask-name">Ask first</span><span class="ask-tool"> for Calendar</span></div>
           <div class="conn-ask"><span class="ask-state">Waits</span><label class="switch"><input id="cal-ask" type="checkbox" checked aria-describedby="ask-help"><span class="sr">Ask first for Calendar</span></label></div>
@@ -232,8 +235,8 @@ ${slack}
           <div class="conn-ask"><span class="ask-state">Waits</span><label class="switch"><input id="lin-ask" type="checkbox" checked aria-describedby="ask-help"><span class="sr">Ask first for Linear</span></label></div>
         </div>
       </div>
-      <div class="connectors" id="hearing-block">
-        <p class="hearing-kicker">Meeting guest</p>
+      <div class="settings-card" id="hearing-block">
+        <p class="section-label">Meeting guest</p>
         <p id="hearing-help">The guest uses this name in the meeting. A line is kept when someone says the name, or one of the trigger words or sentences.</p>
         <div class="hearing-grid">
         <div class="hearing-field">
@@ -257,9 +260,10 @@ ${slack}
     <section id="rooms">
       <div class="page-head" id="rooms-head" hidden>
         <div>
-          <h2 class="page-title">Rooms</h2>
+          <h1 class="page-title">Rooms</h1>
           <p class="page-lede">Meetings and channels this workspace has heard.</p>
         </div>
+        <div class="page-actions"></div>
       </div>
       <div class="toolbar" id="room-toolbar" hidden>
         <label class="search">${searchIcon}<span class="sr">Search rooms</span><input id="room-search" type="search" placeholder="Search rooms" autocomplete="off"></label>
@@ -276,7 +280,7 @@ ${slack}
           <span>Speakers</span>
           <span>Waiting</span>
         </div>
-        <p id="room-empty" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.6h10.8v8.8H2.6z"/><path d="M2.6 6.6h10.8"/></svg></span><span id="room-empty-line">No room yet. Bring Sederunt into a meeting or a channel.</span></p>
+        <div id="room-empty" class="empty-state" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.6h10.8v8.8H2.6z"/><path d="M2.6 6.6h10.8"/></svg></span><p class="empty-title" id="room-empty-line">No room yet.</p><p id="room-empty-aside">Bring Sederunt into a meeting or a channel.</p><button type="button" id="clear-filters" hidden>Clear filters</button></div>
         <div id="room-list"></div>
         <p id="room-foot" class="explorer-foot" hidden></p>
       </div>
@@ -286,7 +290,7 @@ ${slack}
       </div>
     </section>
     <section id="history" hidden>
-      <div class="page-head"><div><h2 class="page-title">History</h2><p class="page-lede">What a room heard, and what is waiting on you.</p></div></div>
+      <div class="page-head"><div><h1 class="page-title">History</h1><p class="page-lede">What a room heard, and what is waiting on you.</p></div></div>
       <div class="choices" role="group" aria-label="Whose record">
         <button type="button" data-scope="group" aria-pressed="true">Company</button>
         <button type="button" data-scope="you" aria-pressed="false">You</button>
@@ -297,15 +301,15 @@ ${slack}
         <button type="button" data-kind="action">Waiting</button>
         <button type="button" data-kind="other">Asks</button>
       </div>
-      <p id="history-empty" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="4.6"/><path d="M8 5.6V8l1.7 1.1"/></svg></span><span id="history-line">No company history yet. Questions and decisions from a room show up here.</span></p>
+      <div id="history-empty" class="empty-state" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="4.6"/><path d="M8 5.6V8l1.7 1.1"/></svg></span><p class="empty-title">Nothing in this list.</p><p id="history-line">No company history yet. Questions and decisions from a room show up here.</p></div>
       <p class="section-next"><button id="history-next" class="primary" type="button" hidden>New room</button></p>
       <div id="history-list"></div>
     </section>
     <section id="chat" hidden>
-      <div class="page-head"><div><h2 class="page-title">Chat</h2><p class="page-lede">Ask what this workspace already kept. Chat does not keep a decision.</p></div></div>
+      <div class="page-head"><div><h1 class="page-title">Chat</h1><p class="page-lede">Ask what this workspace already kept. Chat does not keep a decision.</p></div></div>
       <div class="talk-panel">
         <div class="thread" id="chat-log">
-          <p id="chat-empty"><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.4h10.8v6.4H6.2L2.6 12.6V3.4Z"/></svg></span>Ask what was decided.<span class="sr">Nothing has been asked here yet.</span></p>
+          <div id="chat-empty" class="empty-state"><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.4h10.8v6.4H6.2L2.6 12.6V3.4Z"/></svg></span><p class="empty-title">Nothing has been asked yet.</p><p>Ask what was decided.</p></div>
           <p id="chat-purpose"></p>
         </div>
         <p id="chat-next-row" class="section-next"><button id="chat-next" class="primary" type="button">New room</button></p>
@@ -317,9 +321,8 @@ ${slack}
       </div>
     </section>
     <section id="record" hidden>
-      <div class="page-head"><div><h2 class="page-title">Decisions</h2><p class="page-lede">Sentences a room kept, with who kept each one and when.</p></div></div>
-      <span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.8h10v10.4H3z"/><path d="M5 6h6M5 8.4h6M5 10.8h3.5"/></svg></span>
-      <p class="ledger">No decision yet. The decision text from a room shows up here.<span class="sr">The sentence lives in Walrus Memory. This Console tab is the metadata list.</span></p>
+      <div class="page-head"><div><h1 class="page-title">Decisions</h1><p class="page-lede">Sentences a room kept, with who kept each one and when.</p></div><div class="page-actions"></div></div>
+      <div class="empty-state" id="record-empty"><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.8h10v10.4H3z"/><path d="M5 6h6M5 8.4h6M5 10.8h3.5"/></svg></span><p class="empty-title ledger">No decision yet.</p><p>A sentence kept in a room shows up here.</p></div>
       <p class="section-next"><button id="record-next" class="primary" type="button">New room</button></p>
       <div class="record-board">
         <div id="record-list"></div>
@@ -327,81 +330,77 @@ ${slack}
       </div>
     </section>
     <section id="people" hidden>
-      <div class="page-head"><div><h2 class="page-title">People</h2><p class="page-lede">Names heard in a room. A display name is not an id.</p></div></div>
-      <p id="people-empty" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="5.2" r="2.2"/><path d="M3.4 12.6c.7-2 2.4-3 4.6-3s3.9 1 4.6 3"/></svg></span>People from a meeting or a channel show up here.</p>
+      <div class="page-head"><div><h1 class="page-title">People</h1><p class="page-lede">Names heard in a room.</p></div></div>
+      <div id="people-empty" class="empty-state" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="5.2" r="2.2"/><path d="M3.4 12.6c.7-2 2.4-3 4.6-3s3.9 1 4.6 3"/></svg></span><p class="empty-title">No one is listed yet.</p><p>People from a meeting or a channel show up here.</p></div>
       <p class="section-next"><button id="people-next" class="primary" type="button" hidden>Open Home</button></p>
       <div id="people-list"></div>
-      <p class="people-note">A display name is not an id. The name on a face is a label. It is not the member id.</p>
     </section>
     <div id="file-dialog" class="dialog" hidden role="region" aria-labelledby="file-title">
-      <div class="shade" data-close="file-dialog"></div>
       <div class="panel">
-        <div class="panel-bar file-bar">
+        <div class="page-head">
           <div class="file-name">
-            <p id="file-kind"></p>
-            <h2 id="file-title"></h2>
+            <p id="file-kind" class="page-kicker"></p>
+            <h1 id="file-title" class="page-title"></h1>
+            <p id="file-lead" class="page-lede" hidden></p>
+            <p id="file-lead-status" class="meta"></p>
+            <p id="file-proof" class="meta" hidden></p>
           </div>
           <button type="button" class="close" data-close="file-dialog" aria-label="Close">${closeIcon}</button>
         </div>
-        <div class="file-lead-bar">
-          <p id="file-lead" class="lead" hidden></p>
-          <p id="file-lead-status"></p>
-          <p id="file-proof" hidden></p>
-        </div>
-        <div class="panel-body detail-split">
-        <div class="detail-main">
-        <h3>Speakers</h3>
-        <div id="file-heard" class="faces"></div>
-        <p id="file-present">The meeting has not sent who is there.</p>
-        </div>
-        <div class="detail-side">
-        <h3 id="settings-heading">Settings</h3>
-        <div class="room-set">
-          <div class="set-copy">
-            <strong>Ask first</strong>
-            <p id="room-edit-note"></p>
-          </div>
-          <label class="switch"><input id="ask-first" type="checkbox" checked><span class="sr">Ask first</span></label>
-        </div>
-        <div class="room-set">
-          <div class="set-copy">
-            <strong>Voice</strong>
-          </div>
-          <div class="choices voices" role="group" aria-label="How this room reads">
-            <button type="button" data-voice="short">Short</button>
-            <button type="button" data-voice="plain" aria-pressed="true">Plain</button>
-            <button type="button" data-voice="formal">Formal</button>
-          </div>
-        </div>
-        <div class="room-set">
-          <div class="set-copy">
-            <strong>Raise a clash</strong>
-            <p id="clash-note"></p>
-          </div>
-          <label class="switch"><input id="raise-clash" type="checkbox"><span class="sr">Raise a clash</span></label>
-        </div>
-        </div>
-        <div class="detail-main">
-        <h3 id="decisions-heading" hidden>Decisions kept</h3>
-        <div id="file-decisions"></div>
-        <h3 id="files-heading" hidden>Files</h3>
-        <div id="file-files"></div>
-        <div class="file-ledger">
-          <div class="ledger-row" id="waiting-row" hidden>
-            <span class="ledger-k">Waiting</span>
-            <div>
-              <p id="file-action-note"></p>
+        <div class="detail-split">
+          <div class="detail-main">
+            <section class="detail-block">
+              <h2>Decision</h2>
+              <div id="file-decisions"></div>
+            </section>
+            <section class="detail-block" id="waiting-row" hidden>
+              <h2>Waiting changes</h2>
+              <p id="file-action-note" class="meta"></p>
               <div id="file-waiting"></div>
+            </section>
+            <section class="detail-block">
+              <h2>Speakers</h2>
+              <div id="file-heard" class="faces"></div>
+              <p id="file-present">The meeting has not sent who is there.</p>
+            </section>
+            <section class="detail-block" id="files-block">
+              <h2 id="files-heading" hidden>Files</h2>
+              <div id="file-files"></div>
+            </section>
+            <section class="detail-block" id="outside-block" hidden>
+              <h2 id="outside-heading">Not invited</h2>
+              <div id="file-outside"></div>
+            </section>
+          </div>
+          <aside class="detail-side">
+            <h2 id="settings-heading">Settings</h2>
+            <div class="room-set">
+              <div class="set-copy">
+                <strong>Ask first</strong>
+                <p id="room-edit-note"></p>
+              </div>
+              <label class="switch"><input id="ask-first" type="checkbox" checked><span class="sr">Ask first</span></label>
             </div>
-          </div>
-          <div class="ledger-row">
-            <h3 id="outside-heading" class="ledger-k" hidden>Not invited</h3>
-            <div id="file-outside"></div>
-          </div>
-        </div>
+            <div class="room-set">
+              <div class="set-copy"><strong>Voice</strong></div>
+              <div class="choices voices" role="group" aria-label="How this room reads">
+                <button type="button" data-voice="short">Short</button>
+                <button type="button" data-voice="plain" aria-pressed="true">Plain</button>
+                <button type="button" data-voice="formal">Formal</button>
+              </div>
+            </div>
+            <div class="room-set">
+              <div class="set-copy">
+                <strong>Raise a clash</strong>
+                <p id="clash-note"></p>
+              </div>
+              <label class="switch"><input id="raise-clash" type="checkbox"><span class="sr">Raise a clash</span></label>
+            </div>
+          </aside>
         </div>
       </div>
     </div>
+    <div id="toast" class="toast" hidden role="status"></div>
     <p id="read-note"></p>
       </div>
     </div>
@@ -513,6 +512,9 @@ ${slack}
   var waitingClash = false;
   var historyScope = "group";
   var historyKind = "all";
+  var lastQuestion = "";
+  var slowTimer = null;
+  var toastTimer = null;
   var workspaceKind = "company";
   var sectionName = "home";
   var returnSection = "home";
@@ -579,9 +581,9 @@ ${slack}
 
   function proofExplain(decision) {
     if (decision && typeof decision.checkpoint === "number") {
-      return "Proof is checkpoint " + decision.checkpoint + ", the point in Walrus Memory where this sentence was kept.";
+      return "Kept at checkpoint " + decision.checkpoint + ".";
     }
-    return "Proof is unknown. The account did not return a checkpoint.";
+    return "No checkpoint was returned.";
   }
 
   function historyBody(decision) {
@@ -605,11 +607,12 @@ ${slack}
   function paintConn(id, connected) {
     var node = document.getElementById(id);
     if (!node) return;
-    node.textContent = connected ? "Connected." : "Not connected.";
-    node.className = connected ? "conn-state" : "conn-state off";
+    var failed = state && state.read === "failed";
+    node.textContent = failed ? "Unknown." : (connected ? "Connected." : "Not connected.");
+    node.className = failed || !connected ? "conn-state off" : "conn-state";
     var connectId = id === "cal-conn" ? "cal-connect" : id === "lin-conn" ? "lin-connect" : id === "slack-conn" ? "slack-connect" : "";
     var connect = connectId ? document.getElementById(connectId) : null;
-    if (connect) connect.hidden = !!connected;
+    if (connect) connect.hidden = failed || !!connected;
     var askId = id === "cal-conn" ? "cal-ask-row" : id === "lin-conn" ? "lin-ask-row" : "";
     var askRow = askId ? document.getElementById(askId) : null;
     if (askRow) askRow.classList.toggle("ask-quiet", !connected);
@@ -938,15 +941,48 @@ ${slack}
       pending = trimmed;
     });
     flush("");
-    if (facts.length) return { answer: facts.join("\\n"), detail: "" };
-    var stored = storedAnswer();
-    if (stored) return { answer: stored, detail: "Shown from this workspace." };
+    if (facts.length > 1 || (facts.length === 1 && lastQuestion)) return rankAnswer(lastQuestion);
+    if (facts.length === 1) return { answer: facts[0], detail: "" };
+    var stored = rankAnswer(lastQuestion);
+    if (stored.answer) return stored;
     var raw = String(body || "");
     if (raw.indexOf("missing-member") !== -1) return { answer: "This server has no member configured.", detail: "" };
     if (raw.indexOf("not-invited") !== -1) return { answer: "You were not in that room.", detail: "" };
     if (raw.indexOf("there are no notes yet") !== -1) return { answer: "There are no notes yet.", detail: "" };
     if (/(^|\\n)unknown(\\n|$)/.test(raw)) return { answer: "The account could not be read. Read it again.", detail: "" };
     return { answer: "Nothing is stored that you can read.", detail: "" };
+  }
+
+  function rankAnswer(question) {
+    var stop = { what: 1, was: 1, were: 1, decided: 1, about: 1, the: 1, a: 1, an: 1, of: 1, to: 1, in: 1, on: 1, for: 1, and: 1, or: 1, is: 1, this: 1, that: 1, with: 1, from: 1, did: 1, does: 1 };
+    var words = String(question || "").toLowerCase().split(/[^a-z0-9]+/).filter(function (word) {
+      return word.length > 2 && !stop[word];
+    });
+    var rows = ((state && state.decisions) || []).filter(function (decision) { return String(decision.text || "").trim(); });
+    function hits(decision) {
+      var text = String(decision.text || "").toLowerCase();
+      var count = 0;
+      words.forEach(function (word) { if (text.indexOf(word) !== -1) count += 1; });
+      return count;
+    }
+    function line(decision) {
+      var room = ((state && state.rooms) || []).filter(function (item) { return item.id === decision.roomId; })[0];
+      var named = roomLabel(room || {}, decision);
+      return decision.text + (named ? " (in " + named + ")" : "");
+    }
+    if (!rows.length) return { answer: "Nothing is stored that you can read.", detail: "" };
+    var ranked = rows.map(function (decision) { return { decision: decision, score: hits(decision) }; });
+    ranked.sort(function (a, b) {
+      return b.score - a.score || String(b.decision.spokenAt || "").localeCompare(String(a.decision.spokenAt || ""));
+    });
+    var matched = ranked.filter(function (row) { return row.score > 0; }).slice(0, 3);
+    if (!words.length || !matched.length) {
+      var latest = rows.slice().sort(function (a, b) {
+        return String(b.spokenAt || "").localeCompare(String(a.spokenAt || ""));
+      }).slice(0, 3);
+      return { answer: "Nothing stored matches that question.", detail: "Latest: " + latest.map(line).join(" ") };
+    }
+    return { answer: line(matched[0].decision), detail: matched.slice(1).map(function (row) { return line(row.decision); }).join(" ") };
   }
 
   function storedAnswer() {
@@ -1082,9 +1118,10 @@ ${slack}
   }
 
   function addRoomCard(spec) {
-    var card = document.createElement("button");
-    card.type = "button";
+    var card = document.createElement("a");
     card.className = "room";
+    card.href = spec.roomId ? ("/console/rooms/" + encodeURIComponent(spec.roomId)) : "/console/rooms";
+    if (spec.title) card.title = spec.fullTitle || spec.title;
     if (spec.roomId) card.setAttribute("data-room", spec.roomId);
     if (spec.wait) card.setAttribute("data-wait", spec.wait);
     var roomCol = document.createElement("span");
@@ -1125,9 +1162,11 @@ ${slack}
     }
     var waitCol = document.createElement("span");
     waitCol.className = "ex-bot";
-    waitCol.textContent = spec.waitingCount ? (String(spec.waitingCount) + " waiting") : "";
+    waitCol.textContent = spec.waitingCount ? (String(spec.waitingCount) + " waiting") : "None";
     card.append(roomCol, where, heard, waitCol);
-    card.addEventListener("click", function () {
+    card.addEventListener("click", function (event) {
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+      event.preventDefault();
       if (spec.wait) openWaiting(spec);
       else openFile(spec.roomId);
     });
@@ -1190,7 +1229,8 @@ ${slack}
       var last = rows.length ? rows[rows.length - 1] : null;
       var spec = {
         roomId: room.id,
-        title: last ? last.text : "No decision yet.",
+        title: roomLabel(room, last),
+        fullTitle: last ? last.text : "",
         where: room.platform || "",
         countLine: rows.length ? roomCount(rows) : "Waiting for the meeting name",
         people: peopleFor(room.id),
@@ -1205,25 +1245,114 @@ ${slack}
     var empty = document.getElementById("room-empty");
     var emptyLine = document.getElementById("room-empty-line");
     if (empty) empty.hidden = shown > 0;
+    var filteredOut = total > 0 && shown === 0;
+    var failed = state && state.read === "failed";
     if (emptyLine) {
-      emptyLine.textContent = total > 0 && shown === 0
-        ? "No results. Clear the filters to see every room."
-        : "No room yet. Bring Sederunt into a meeting or a channel.";
+      emptyLine.textContent = failed
+        ? "Rooms are unavailable."
+        : filteredOut
+          ? "No results."
+          : "No room yet.";
+    }
+    var aside = document.getElementById("room-empty-aside");
+    if (aside) aside.textContent = failed
+      ? "The account could not be read. Try again."
+      : filteredOut
+        ? "Clear the filters to see every room."
+        : "Bring Sederunt into a meeting or a channel.";
+    var clearFilters = document.getElementById("clear-filters");
+    if (clearFilters) clearFilters.hidden = !filteredOut;
+    var explorer = document.querySelector(".explorer");
+    if (explorer) {
+      var anyWait = waiting.length > 0 || rooms.some(function (room) { return waitingFor(room.id).length > 0; });
+      explorer.classList.toggle("no-wait", !anyWait);
     }
     syncHomeChrome();
     var foot = document.getElementById("room-foot");
     if (foot) {
       foot.hidden = shown === 0;
-      foot.textContent = shown ? ("1–" + shown + " of " + shown + " results") : "";
+      var noun = shown === 1 ? "room" : "rooms";
+      foot.textContent = shown ? (shown === total ? (shown + " " + noun) : (shown + " of " + total + " rooms")) : "";
     }
   }
 
+  function roomLabel(room, lead) {
+    var when = lead ? whenLabel(lead.spokenAt) : "";
+    if (room && room.platform && when) return room.platform + ", " + when;
+    if (room && room.platform) return room.platform;
+    var text = lead && lead.text ? String(lead.text) : "";
+    if (text.length > 52) return text.slice(0, 49).trim() + "...";
+    return text || "Room";
+  }
+
   function roomVisible(spec) {
-    if (roomFilter === "waiting" && spec.kept) return false;
+    var waitingOn = (spec.waitingCount || 0) > 0 || !!spec.wait;
+    if (roomFilter === "waiting" && !waitingOn) return false;
     if (roomFilter === "kept" && !spec.kept) return false;
     if (!roomQuery) return true;
-    var hay = String(spec.title || "") + " " + String(spec.where || "");
+    var hay = String(spec.fullTitle || "") + " " + String(spec.title || "") + " " + String(spec.where || "");
     return hay.toLowerCase().indexOf(roomQuery) !== -1;
+  }
+
+  function addDecisionRow(decision) {
+    var card = document.createElement("button");
+    card.type = "button";
+    card.className = "decision-row";
+    var main = document.createElement("span");
+    var heading = document.createElement("strong");
+    heading.textContent = decision.text || "No decision yet.";
+    var meta = document.createElement("span");
+    meta.className = "meta";
+    var who = personLabel(decision.speaker);
+    var when = whenLabel(decision.spokenAt);
+    var room = roomLabel((((state && state.rooms) || []).filter(function (item) { return item.id === decision.roomId; })[0]) || {}, decision);
+    meta.textContent = [who, when, room].filter(Boolean).join(" · ");
+    main.append(heading, meta);
+    card.append(main);
+    var status = decision.status || "";
+    if (typeof decision.checkpoint === "number" || status === "clashing" || status === "unknown" || status === "replaced") {
+      var badge = document.createElement("span");
+      badge.className = status === "clashing" || status === "unknown" ? "badge bad" : "badge";
+      badge.textContent = typeof decision.checkpoint === "number" ? ("Checkpoint " + decision.checkpoint) : statusLabel(status);
+      card.append(badge);
+    }
+    card.addEventListener("click", function () { openDecision(decision); });
+    document.getElementById("record-list").append(card);
+  }
+
+  function paintPeople() {
+    var list = document.getElementById("people-list");
+    clear("people-list");
+    var map = {};
+    ((state && state.decisions) || []).forEach(function (decision) {
+      var name = personLabel(decision.speaker);
+      if (!name) return;
+      if (!map[name]) map[name] = { name: name, rooms: [], count: 0, last: "" };
+      map[name].count += 1;
+      var room = roomLabel((((state && state.rooms) || []).filter(function (item) { return item.id === decision.roomId; })[0]) || {}, decision);
+      if (room && map[name].rooms.indexOf(room) === -1) map[name].rooms.push(room);
+      if (decision.spokenAt && decision.spokenAt > map[name].last) map[name].last = decision.spokenAt;
+    });
+    var rows = Object.keys(map).map(function (key) { return map[key]; });
+    if (!rows.length) return;
+    var head = document.createElement("div");
+    head.className = "people-head";
+    ["Name", "Rooms", "Decisions", "Last heard"].forEach(function (label) {
+      var cell = document.createElement("span");
+      cell.textContent = label;
+      head.append(cell);
+    });
+    list.append(head);
+    rows.forEach(function (person) {
+      var row = document.createElement("div");
+      row.className = "people-row";
+      [person.name, person.rooms.join(", ") || "Room", String(person.count), whenLabel(person.last) || ""].forEach(function (value) {
+        var cell = document.createElement("span");
+        cell.textContent = value;
+        row.append(cell);
+      });
+      list.append(row);
+    });
   }
 
   function addLine(id, title, body, onPick) {
@@ -1272,8 +1401,8 @@ ${slack}
     var counts = (state && state.counts) || {};
     addCount(box, "Decisions kept", counts.kept || 0, "Sentences kept in this workspace.", null, false);
     addCount(box, "Waiting on you", counts.waiting || 0, counts.waiting ? "Changes waiting for a confirm." : "Nothing is waiting.", (counts.waiting || 0) > 0 ? openWaitingList : null, (counts.waiting || 0) > 0);
-    addCount(box, "Sent", counts.sent || 0, counts.sent ? "The tool accepted the change." : "Nothing has been sent.", null, false);
-    addCount(box, "Failed", counts.failed || 0, counts.failed ? "A change did not go through." : "Nothing has failed.", null, false);
+    if (counts.sent) addCount(box, "Sent", counts.sent, "The tool accepted the change.", null, false);
+    if (counts.failed) addCount(box, "Failed", counts.failed, "A change did not go through.", null, false);
   }
 
   function syncHistoryKinds() {
@@ -1379,40 +1508,20 @@ ${slack}
     text("status", "");
     if (next.workspace === "personal" || next.workspace === "company") workspaceKind = next.workspace;
     paintChip();
-    document.getElementById("loading").hidden = true;
+    document.getElementById("loading").hidden = !next.reading;
+    document.body.classList.toggle("read-failed", next.read === "failed");
     if (next.reading) {
-      readingTries += 1;
-      var missing = document.getElementById("onboard-missing");
-      var still = document.getElementById("onboard-reading");
-      if (readingTries >= 8) {
-        if (still) still.hidden = true;
-        if (missing) {
-          missing.hidden = false;
-          missing.textContent = "The account is taking too long. Read it again.";
-        }
-        showRetry(true, "The account is taking too long. Read it again.");
-        lockNav(false);
-        if (readingTimer) {
-          clearTimeout(readingTimer);
-          readingTimer = null;
-        }
-      } else {
-        if (missing) missing.hidden = true;
-        if (still) still.hidden = false;
-        if (!readingTimer) readingTimer = setTimeout(function () { readingTimer = null; load(); }, 1500);
+      if (!routed) {
+        routed = true;
+        routeQuiet = true;
+        var earlyRoom = roomFromPath(location.pathname);
+        if (earlyRoom) fileRoom = earlyRoom;
+        showSection(earlyRoom ? "file" : sectionFromPath(location.pathname));
       }
-      syncSkeleton(readingTries < 8);
-      if (still && readingTries < 8) still.hidden = true;
-      var cont = document.getElementById("continue");
-      var openBtn = document.getElementById("open-connectors");
-      if (cont) cont.hidden = true;
-      if (openBtn) openBtn.hidden = true;
-      var heading = document.getElementById("onboard-heading");
-      if (heading) heading.textContent = readingTries >= 8 ? "The account is taking too long." : "Reading the account.";
-      if (!operatorLeft) {
-        if (onboard) onboard.hidden = false;
-        if (home) home.hidden = true;
-      }
+      if (onboard) onboard.hidden = true;
+      if (home) home.hidden = false;
+      lockNav(false);
+      if (!readingTimer) readingTimer = setTimeout(function () { readingTimer = null; load(); }, 1500);
       return;
     }
     readingTries = 0;
@@ -1421,7 +1530,9 @@ ${slack}
       readingTimer = null;
     }
     syncSkeleton(false);
-    showRetry(next.read === "failed", "The account could not be read. Read the account again.");
+    clearTimeout(slowTimer);
+    slowTimer = null;
+    showRetry(next.read === "failed", "The account could not be read. Try again.");
     fillHearing(next.hearing);
     var loaded = next.companyLoaded === true;
     document.getElementById("onboard-missing").hidden = loaded;
@@ -1451,9 +1562,9 @@ ${slack}
     if (slackNote) slackNote.textContent = next.slack === "ready"
       ? "Sederunt answers in a channel it has already joined."
       : "";
-    text("cal-line", "Calendar is on " + calendarMode + ".");
-    text("lin-line", "Linear is on " + linearMode + ".");
-    text("prefs", "Calendar is on " + calendarMode + ". Linear is on " + linearMode + ".");
+    text("cal-line", calendarMode === "Ask" ? "Calendar waits before a change." : "Calendar sends the change.");
+    text("lin-line", linearMode === "Ask" ? "Linear waits before a change." : "Linear sends the change.");
+    text("prefs", (calendarMode === "Ask" ? "Calendar waits before a change." : "Calendar sends the change.") + " " + (linearMode === "Ask" ? "Linear waits before a change." : "Linear sends the change."));
     var calAsk = document.getElementById("cal-ask");
     var linAsk = document.getElementById("lin-ask");
     if (calAsk) calAsk.checked = calendarMode === "Ask";
@@ -1469,7 +1580,7 @@ ${slack}
     var askBlock = document.getElementById("ask-block");
     if (askBlock) askBlock.hidden = false;
     if (kicker) kicker.hidden = false;
-    if (askHelp) askHelp.textContent = "On waits for a confirm. Off sends the change.";
+    if (askHelp) askHelp.textContent = "Waits for a confirm before a change is sent. Sends means the change goes out.";
     var note = next.message || "";
     if (!note && !member() && !(next.rooms || []).length && !(next.decisions || []).length) note = "Sign-in is not set up.";
     text("read-note", note);
@@ -1481,38 +1592,11 @@ ${slack}
     clear("people-list");
     text("record-detail", "");
     (next.decisions || []).forEach(function (decision) {
-      var parts = [];
-      var spoken = humanStatus(decision.status || "recorded");
-      if (spoken) parts.push(spoken);
-      var who = personLabel(decision.speaker);
-      var when = whenLabel(decision.spokenAt);
-      if (who && when) parts.push(who + " kept this on " + when + ".");
-      else if (who) parts.push(who + " kept this.");
-      else if (when) parts.push("Kept on " + when + ".");
-      parts.push(proofExplain(decision));
-      var named = fileLine(decision);
-      if (named) parts.push(named);
-      var ticket = ticketLine(decision);
-      if (ticket) parts.push(ticket);
-      var epoch = epochLine(decision);
-      if (epoch) parts.push(epoch);
-      addLine("record-list", decision.text || "No decision yet.", parts.join(" "), function () {
-        openDecision(decision);
-      });
+      addDecisionRow(decision);
     });
     syncNotices();
-    (next.people || []).forEach(function (person) {
-      var row = document.createElement("div");
-      row.className = "card";
-      row.append(face(person));
-      var name = document.createElement("strong");
-      name.textContent = person;
-      var heard = document.createElement("p");
-      heard.textContent = workspaceKind === "personal" ? "Kept as a private note." : "Heard in a room.";
-      row.append(name, heard);
-      document.getElementById("people-list").append(row);
-    });
-    var peopleCount = (next.people || []).length;
+    paintPeople(next);
+    var peopleCount = document.querySelectorAll("#people-list .people-row").length;
     document.getElementById("people-empty").hidden = peopleCount > 0;
     var peopleNext = document.getElementById("people-next");
     if (peopleNext) {
@@ -1523,21 +1607,19 @@ ${slack}
         peopleNext.setAttribute("data-act", "status");
       }
     }
-    var peopleNote = document.querySelector(".people-note");
-    if (peopleNote) peopleNote.hidden = peopleCount === 0;
     var recordNext = document.getElementById("record-next");
-    if (recordNext) recordNext.hidden = workspaceKind === "personal" || (next.decisions || []).length > 0;
+    if (recordNext) recordNext.hidden = workspaceKind === "personal" || (next.decisions || []).length > 0 || (next.read === "failed");
     var recordBoard = document.querySelector(".record-board");
-    var recordMark = document.querySelector("#record .empty-mark");
+    var recordEmpty = document.getElementById("record-empty");
     var noKept = (next.decisions || []).length === 0;
-    var ledger = document.querySelector("#record .ledger");
-    if (ledger && noKept && document.getElementById("meet-block") && document.getElementById("slack-block")) {
-      var ledgerText = ledger.firstChild;
-      if (ledgerText && ledgerText.nodeType === 3) ledgerText.nodeValue = "No decisions yet. A room has to be in use before one can be recorded.";
+    if (recordEmpty) {
+      recordEmpty.hidden = !noKept;
+      var emptyTitle = recordEmpty.querySelector(".empty-title");
+      var emptyLine = recordEmpty.querySelector("p:last-child");
+      if (next.read === "failed" && emptyTitle) emptyTitle.textContent = "Decisions are unavailable.";
+      if (next.read === "failed" && emptyLine) emptyLine.textContent = "The account could not be read. Try again.";
     }
-    if (ledger) ledger.hidden = !noKept;
     if (recordBoard) recordBoard.hidden = noKept;
-    if (recordMark) recordMark.hidden = !noKept;
     var chatNext = document.getElementById("chat-next");
     if (chatNext) chatNext.hidden = !noKept || workspaceKind === "personal";
     var chatForm = document.getElementById("chat-form");
@@ -1570,11 +1652,22 @@ ${slack}
     return "Home";
   }
 
+  function placeNewRoom() {
+    var button = document.getElementById("new-room");
+    if (!button) return;
+    var hostId = sectionName === "rooms" ? "rooms-head" : sectionName === "record" ? "record" : "home-head";
+    var host = hostId === "record"
+      ? document.querySelector("#record .page-actions")
+      : document.querySelector("#" + hostId + " .page-actions");
+    if (host && button.parentNode !== host) host.appendChild(button);
+  }
+
   function syncNewRoom() {
     var button = document.getElementById("new-room");
     if (!button) return;
-    var onList = sectionName === "home" || sectionName === "rooms";
-    button.hidden = workspaceKind === "personal" || !onList;
+    var onList = sectionName === "home" || sectionName === "rooms" || sectionName === "record";
+    button.hidden = workspaceKind === "personal" || !onList || (state && state.read === "failed");
+    placeNewRoom();
   }
 
   function showRetry(on, copy) {
@@ -1584,6 +1677,16 @@ ${slack}
     if (box) box.hidden = !on;
     if (button) button.hidden = !on;
     if (on && copy && line) line.textContent = copy;
+    if (button && on) button.disabled = false;
+  }
+
+  function toast(message) {
+    var node = document.getElementById("toast");
+    if (!node) return;
+    node.textContent = message;
+    node.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { node.hidden = true; }, 4200);
   }
 
   function syncSkeleton(reading) {
@@ -1614,8 +1717,18 @@ ${slack}
     if (setup) setup.removeAttribute("aria-disabled");
   }
 
+  function roomQueryString() {
+    var params = new URLSearchParams();
+    if (roomFilter && roomFilter !== "all") params.set("filter", roomFilter);
+    if (roomQuery) params.set("q", roomQuery);
+    var text = params.toString();
+    return text ? ("?" + text) : "";
+  }
+
   function pathFor(name) {
-    if (name === "rooms" || name === "file") return "/console/rooms";
+    var query = roomQueryString();
+    if (name === "file" && fileRoom) return "/console/rooms/" + encodeURIComponent(fileRoom) + query;
+    if (name === "rooms") return "/console/rooms" + query;
     if (name === "history") return "/console/history";
     if (name === "record") return "/console/decisions";
     if (name === "chat") return "/console/chat";
@@ -1624,7 +1737,14 @@ ${slack}
     return "/console";
   }
 
+  function roomFromPath(path) {
+    var match = String(path || "").match(/^\\/console\\/rooms\\/([^/?#]+)/);
+    if (!match) return "";
+    try { return decodeURIComponent(match[1]); } catch (error) { return match[1]; }
+  }
+
   function sectionFromPath(path) {
+    if (roomFromPath(path)) return "file";
     if (path === "/console/rooms") return "rooms";
     if (path === "/console/history") return "history";
     if (path === "/console/decisions") return "record";
@@ -1654,8 +1774,9 @@ ${slack}
     if (crumbHome) crumbHome.hidden = true;
     if (crumbSep) crumbSep.hidden = true;
     if (onFile) {
-      var title = document.getElementById("file-title");
-      text("crumb-current", (title && title.textContent) || "Room");
+      var kind = document.getElementById("file-kind");
+      var crumb = (kind && kind.textContent) || "Room";
+      text("crumb-current", crumb);
       if (file) file.hidden = false;
     } else {
       text("crumb-current", sectionLabel(name));
@@ -1683,12 +1804,23 @@ ${slack}
     var homeHead = document.getElementById("home-head");
     if (homeHead) homeHead.hidden = name !== "home";
     var label = onFile ? ((document.getElementById("file-title") || {}).textContent || "Room") : sectionLabel(name);
+    if (label.length > 48) label = label.slice(0, 45).trim() + "...";
     document.title = label + " · Sederunt";
     var topName = document.getElementById("top-name");
-    if (topName) topName.textContent = member();
+    if (topName && member()) topName.textContent = member();
+    placeNewRoom();
     if (!routeQuiet && window.history && window.history.pushState) {
-      var path = pathFor(onFile ? "rooms" : name);
-      if (location.pathname !== path) history.pushState({ section: name }, "", path);
+      if (onFile && fileRoom) {
+        var listPath = "/console/rooms" + roomQueryString();
+        var detailPath = pathFor("file");
+        if (location.pathname + location.search !== detailPath) {
+          if (location.pathname !== "/console/rooms") history.pushState({ section: "rooms" }, "", listPath);
+          history.pushState({ section: "file", room: fileRoom }, "", detailPath);
+        }
+      } else {
+        var path = pathFor(name);
+        if (location.pathname + location.search !== path) history.pushState({ section: name }, "", path);
+      }
     }
     routeQuiet = false;
     document.body.classList.remove("nav-open");
@@ -1772,12 +1904,12 @@ ${slack}
     var leadLine = document.getElementById("file-lead");
     if (leadLine) leadLine.hidden = true;
     var status = document.getElementById("file-lead-status");
+    var notable = lead && (lead.status === "clashing" || lead.status === "replaced" || lead.status === "unknown");
     if (status) {
-      var line = lead ? humanStatus(lead.status || "recorded") : "No decision is kept in this room yet.";
-      status.textContent = line;
-      status.hidden = !line;
+      status.textContent = notable ? humanStatus(lead.status) : "";
+      status.hidden = !status.textContent;
     }
-    var proof = lead ? proofExplain(lead) : "Proof is unknown. The account did not return a checkpoint.";
+    var proof = lead && typeof lead.checkpoint === "number" ? proofExplain(lead) : "";
     var ticket = lead ? ticketLine(lead) : "";
     showLine("file-proof", [proof, ticket].filter(Boolean).join(" "));
   }
@@ -1796,6 +1928,8 @@ ${slack}
         if (file.name && names.indexOf(file.name) === -1) names.push(file.name);
       });
     });
+    var filesBlock = document.getElementById("files-block");
+    if (filesBlock) filesBlock.hidden = names.length === 0;
     document.getElementById("files-heading").hidden = names.length === 0;
     clear("file-files");
     names.forEach(function (name) {
@@ -1874,9 +2008,14 @@ ${slack}
       if (body.indexOf("The edit did not happen.") !== -1) note = "The edit did not happen.";
       else if (result && result.allow === "missing-member") note = "This server has no member configured.";
       else if (result && result.allow === "not-invited") note = "You were not in this room.";
-      else if (kind === "confirm" && result && result.allow === "confirmed" && (result.status === "filed" || result.status === "updated")) note = "That change was confirmed.";
+      else if (kind === "confirm" && result && result.allow === "confirmed" && (result.status === "filed" || result.status === "updated")) {
+        var ticket = (body.match(/ROW-[0-9]+/) || [])[0];
+        var toolWord = /linear/i.test(body) ? "Linear" : /calendar/i.test(body) ? "Calendar" : "";
+        note = ticket ? ("Filed as " + ticket + (toolWord ? " in " + toolWord : "") + ".") : "That change was confirmed.";
+      }
       else if (kind === "dismiss" && wasWaiting && !waitingFor(fileRoom).some(function (item) { return item.id === actionId; })) note = "That change was dismissed.";
       text("file-action-note", note);
+      if (note && note !== "That change is still waiting.") toast(note);
     }).catch(function () {
       button.disabled = false;
       text("file-action-note", "The account could not be read. Read the account again.");
@@ -1895,20 +2034,32 @@ ${slack}
     if (waitingRow) waitingRow.hidden = false;
     rows.forEach(function (action) {
       var row = document.createElement("div");
-      row.className = "card";
+      row.className = "wait-card";
+      var toolName = action.tool === "linear" ? "Linear ticket" : action.tool === "calendar" ? "Calendar event" : "Change";
+      var tool = document.createElement("p");
+      tool.className = "wait-tool";
+      var mark = document.createElement("span");
+      mark.className = "tool-logo " + (action.tool || "change");
+      mark.textContent = toolName.slice(0, 1);
+      var label = document.createElement("span");
+      label.textContent = toolName;
+      tool.append(mark, label);
       var line = document.createElement("p");
       line.textContent = action.statement || "A change is waiting.";
-      var tool = document.createElement("p");
-      tool.textContent = action.tool || "Change";
+      var actions = document.createElement("div");
+      actions.className = "wait-actions";
       var confirm = document.createElement("button");
       confirm.type = "button";
+      confirm.className = "primary";
       confirm.textContent = "Confirm";
       confirm.addEventListener("click", function () { sendAction("confirm", action.id, confirm); });
       var dismiss = document.createElement("button");
       dismiss.type = "button";
+      dismiss.className = "secondary";
       dismiss.textContent = "Dismiss";
       dismiss.addEventListener("click", function () { sendAction("dismiss", action.id, dismiss); });
-      row.append(line, tool, confirm, dismiss);
+      actions.append(confirm, dismiss);
+      row.append(tool, line, actions);
       box.append(row);
     });
   }
@@ -1945,7 +2096,10 @@ ${slack}
     if (kind) kind.hidden = !kind.textContent;
     text("file-title", fileWait ? fileWait.title : (lead ? lead.text : "No decision yet."));
     renderLead();
-    if (sectionName === "file") text("crumb-current", document.getElementById("file-title").textContent || "Room");
+    if (sectionName === "file") {
+      var crumbKind = document.getElementById("file-kind");
+      text("crumb-current", (crumbKind && crumbKind.textContent) || "Room");
+    }
     clear("file-heard");
     var present = document.getElementById("file-present");
     if (!people.length) {
@@ -1953,7 +2107,15 @@ ${slack}
       if (present) present.hidden = false;
     } else {
       text("file-heard", "");
-      people.forEach(function (person) { document.getElementById("file-heard").append(face(person)); });
+      people.forEach(function (person) {
+        var item = document.createElement("span");
+        item.className = "person";
+        item.append(face(personLabel(person) || person));
+        var name = document.createElement("span");
+        name.textContent = personLabel(person) || person;
+        item.append(name);
+        document.getElementById("file-heard").append(item);
+      });
       if (present) present.hidden = true;
     }
     var ask = document.getElementById("ask-first");
@@ -1969,18 +2131,15 @@ ${slack}
     text("clash-note", clash.checked ? "This room will raise a clash here. Nothing is sent from this page." : "");
     clear("file-decisions");
     var rows = fileRoom ? decisionsFor(fileRoom) : [];
-    var decisionHeading = document.getElementById("decisions-heading");
-    if (decisionHeading) decisionHeading.hidden = rows.length < 2;
-    if (rows.length >= 2) {
-      rows.slice(0, -1).forEach(function (decision) {
-        var line = document.createElement("button");
-        line.type = "button";
-        line.className = "row-button";
-        line.textContent = statusLabel(decision.status) + ". " + decision.text;
-        line.addEventListener("click", function () { openDecision(decision); });
-        document.getElementById("file-decisions").append(line);
-      });
-    }
+    var titledByRoom = Boolean(room && room.platform);
+    rows.forEach(function (decision, index) {
+      if (!titledByRoom && index === rows.length - 1) return;
+      var line = document.createElement("p");
+      line.textContent = decision.text || "No decision yet.";
+      document.getElementById("file-decisions").append(line);
+    });
+    var decisionBlock = document.getElementById("file-decisions").parentNode;
+    if (decisionBlock) decisionBlock.hidden = !document.getElementById("file-decisions").childElementCount;
     renderWaiting();
     renderFiles();
     renderOutside();
@@ -1992,6 +2151,8 @@ ${slack}
 
   function renderOutside() {
     var rows = fileRoom ? outsideFor(fileRoom) : [];
+    var outsideBlock = document.getElementById("outside-block");
+    if (outsideBlock) outsideBlock.hidden = rows.length === 0;
     var heading = document.getElementById("outside-heading");
     if (heading) heading.hidden = rows.length === 0;
     clear("file-outside");
@@ -2048,6 +2209,9 @@ ${slack}
       if (!wrote(result)) {
         box.checked = !on;
         text(line, result && result.allow === "missing-member" ? "This server has no member configured." : "Ask first was not saved.");
+      } else {
+        text(line, "");
+        toast("Saved.");
       }
     }).catch(function () {
       box.checked = !on;
@@ -2258,9 +2422,22 @@ ${slack}
     load();
   }
 
+  function armSlow() {
+    if (slowTimer) return;
+    slowTimer = setTimeout(function () {
+      showRetry(true, "This is taking longer than usual. Try again.");
+      var again = document.getElementById("read-again");
+      if (again) {
+        again.disabled = false;
+        again.textContent = "Retry";
+      }
+    }, 12000);
+  }
+
   function load() {
     var token = loadToken + 1;
     loadToken = token;
+    armSlow();
     return fetch("/api/console" + consoleQuery()).then(function (response) {
       if (response.status === 401) {
         location.href = "/console/sign-in?reason=expired&next=" + encodeURIComponent(location.pathname);
@@ -2382,11 +2559,13 @@ ${slack}
       syncRail();
     }
   });
-  document.querySelectorAll(".rail [data-show]").forEach(function (button) {
-    button.addEventListener("click", function () {
+  document.querySelectorAll(".rail [data-show], #show-connectors").forEach(function (button) {
+    button.addEventListener("click", function (event) {
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+      event.preventDefault();
       if (button.getAttribute("aria-disabled") === "true") return;
       leaveOnboard();
-      showSection(button.getAttribute("data-show"));
+      showSection(button.getAttribute("data-show") || "connectors");
     });
   });
   document.getElementById("new-room").addEventListener("click", function () {
@@ -2464,7 +2643,8 @@ ${slack}
       body: JSON.stringify({ name: name, triggers: triggers })
     }).then(function (response) { return response.json(); }).then(function (result) {
       fillHearing(result.hearing);
-      if (note) note.textContent = "The meeting guest is " + (result.hearing && result.hearing.name ? result.hearing.name : "Maple") + ".";
+      if (note) note.textContent = "";
+      toast("Saved. The meeting guest is " + (result.hearing && result.hearing.name ? result.hearing.name : "Maple") + ".");
     }).catch(function () {
       if (note) note.textContent = "The guest was not saved.";
     });
@@ -2482,16 +2662,20 @@ ${slack}
   });
   document.getElementById("read-again").addEventListener("click", function () {
     readingTries = 0;
-    var missing = document.getElementById("onboard-missing");
-    var still = document.getElementById("onboard-reading");
-    if (missing) missing.hidden = true;
-    if (still) {
-      still.hidden = false;
-      still.textContent = "Reading the account.";
+    var button = document.getElementById("read-again");
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Retrying...";
     }
+    text("read-error-copy", "Retrying the read.");
     document.getElementById("loading").hidden = false;
-    showRetry(false);
-    fetch("/api/console/read" + consoleQuery(), { method: "POST" }).then(load);
+    fetch("/api/console/read" + consoleQuery(), { method: "POST" }).then(function () {
+      if (button) {
+        button.disabled = false;
+        button.textContent = "Retry";
+      }
+      return load();
+    });
   });
   document.getElementById("chat-form").addEventListener("submit", function (event) {
     event.preventDefault();
@@ -2499,6 +2683,7 @@ ${slack}
     var emptyLine = document.getElementById("chat-empty");
     if (emptyLine) emptyLine.hidden = true;
     var askedNow = sentence.trim();
+    lastQuestion = askedNow;
     addChatTurn("You", askedNow || "The question is missing.", "");
     addChatTurn("Sederunt", "Reading.", "");
     fetch("/api/chat", {
@@ -2640,7 +2825,9 @@ ${slack}
       text("profile-note", "The name was not saved.");
     });
   });
-  document.getElementById("show-connectors").addEventListener("click", function () {
+  document.getElementById("show-connectors").addEventListener("click", function (event) {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    event.preventDefault();
     leaveOnboard();
     showSection("connectors");
   });
@@ -2659,6 +2846,7 @@ ${slack}
     var on = document.body.classList.toggle("rail-collapsed");
     button.setAttribute("aria-pressed", on ? "true" : "false");
     button.setAttribute("aria-label", on ? "Show the sidebar" : "Hide the sidebar");
+    try { localStorage.setItem("sederunt-rail", on ? "collapsed" : "open"); } catch (error) { /* ignore */ }
   });
   document.getElementById("nav-scrim").addEventListener("click", function () {
     document.body.classList.remove("nav-open");
@@ -2691,19 +2879,32 @@ ${slack}
   document.getElementById("palette-input").addEventListener("input", function () {
     paintPalette(document.getElementById("palette-input").value);
   });
+  function applyRoomFilters(filter, query) {
+    roomFilter = filter || "all";
+    roomQuery = String(query || "").trim().toLowerCase();
+    document.querySelectorAll("[data-room-filter]").forEach(function (node) {
+      node.setAttribute("aria-pressed", node.getAttribute("data-room-filter") === roomFilter ? "true" : "false");
+    });
+    var input = document.getElementById("room-search");
+    if (input && document.activeElement !== input) input.value = query || "";
+    var path = location.pathname + roomQueryString();
+    if (location.pathname + location.search !== path) history.replaceState(history.state || { section: sectionName }, "", path);
+    paintRooms();
+  }
   document.querySelectorAll("[data-room-filter]").forEach(function (button) {
     button.addEventListener("click", function () {
-      roomFilter = button.getAttribute("data-room-filter") || "all";
-      document.querySelectorAll("[data-room-filter]").forEach(function (node) {
-        node.setAttribute("aria-pressed", node === button ? "true" : "false");
-      });
-      paintRooms();
+      applyRoomFilters(button.getAttribute("data-room-filter") || "all", document.getElementById("room-search").value);
     });
+  });
+  var clearFilters = document.getElementById("clear-filters");
+  if (clearFilters) clearFilters.addEventListener("click", function () {
+    var input = document.getElementById("room-search");
+    if (input) input.value = "";
+    applyRoomFilters("all", "");
   });
   var roomSearch = document.getElementById("room-search");
   if (roomSearch) roomSearch.addEventListener("input", function () {
-    roomQuery = roomSearch.value.trim().toLowerCase();
-    paintRooms();
+    applyRoomFilters(roomFilter, roomSearch.value);
   });
   document.addEventListener("keydown", function (event) {
     var key = event.key.toLowerCase();
@@ -2715,9 +2916,17 @@ ${slack}
   });
   window.addEventListener("popstate", function () {
     routeQuiet = true;
+    var roomId = roomFromPath(location.pathname);
     var name = sectionFromPath(location.pathname);
     if (name !== "home") leaveOnboard();
-    showSection(name);
+    var params = new URLSearchParams(location.search);
+    roomFilter = params.get("filter") || "all";
+    roomQuery = (params.get("q") || "").trim().toLowerCase();
+    if (roomId) openFile(roomId);
+    else showSection(name);
+  });
+  window.addEventListener("pageshow", function (event) {
+    if (event.persisted) location.reload();
   });
   function openPalette() {
     var palette = document.getElementById("palette");
@@ -2729,6 +2938,21 @@ ${slack}
   }
   function closePalette() {
     document.getElementById("palette").hidden = true;
+  }
+  var paletteIndex = 0;
+  function paletteItems() {
+    return Array.prototype.slice.call(document.querySelectorAll("#palette-list button"));
+  }
+  function selectPalette(index) {
+    var items = paletteItems();
+    if (!items.length) return;
+    if (index < 0) index = items.length - 1;
+    if (index >= items.length) index = 0;
+    paletteIndex = index;
+    items.forEach(function (item, i) {
+      item.setAttribute("aria-selected", i === paletteIndex ? "true" : "false");
+    });
+    if (items[paletteIndex].scrollIntoView) items[paletteIndex].scrollIntoView({ block: "nearest" });
   }
   function paintPalette(query) {
     var list = document.getElementById("palette-list");
@@ -2747,8 +2971,13 @@ ${slack}
       var button = document.createElement("button");
       button.type = "button";
       button.textContent = label;
-      if (count === 0) button.setAttribute("aria-selected", "true");
-      button.addEventListener("click", function () {
+      button.setAttribute("aria-selected", count === 0 ? "true" : "false");
+      button.addEventListener("mouseenter", function () {
+        selectPalette(paletteItems().indexOf(button));
+      });
+      button.addEventListener("click", function (event) {
+        event.preventDefault();
+        event.stopPropagation();
         closePalette();
         run();
       });
@@ -2763,14 +2992,66 @@ ${slack}
     });
     ((state && state.rooms) || []).forEach(function (room) {
       var rows = decisionsFor(room.id);
-      var last = rows.length ? rows[rows.length - 1].text : "";
-      add("Rooms", last || room.platform || "Room", function () {
+      var last = rows.length ? rows[rows.length - 1] : null;
+      add("Rooms", roomLabel(room, last), function () {
         leaveOnboard();
         openFile(room.id);
       });
     });
+    ((state && state.decisions) || []).forEach(function (decision) {
+      if (!decision.text) return;
+      add("Decisions", decision.text, function () {
+        leaveOnboard();
+        openFile(decision.roomId);
+      });
+    });
+    ((state && state.people) || []).forEach(function (person) {
+      var name = typeof person === "string" ? person : (person.name || "");
+      if (!name) return;
+      add("People", name, function () {
+        leaveOnboard();
+        showSection("people");
+      });
+    });
     document.getElementById("palette-empty").hidden = count > 0;
+    paletteIndex = 0;
   }
+  document.getElementById("palette-input").addEventListener("keydown", function (event) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      selectPalette(paletteIndex + 1);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      selectPalette(paletteIndex - 1);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      var items = paletteItems();
+      if (items[paletteIndex]) items[paletteIndex].click();
+    }
+  });
+  var palettePanel = document.querySelector(".palette-panel");
+  if (palettePanel) palettePanel.addEventListener("click", function (event) { event.stopPropagation(); });
+  try {
+    if (localStorage.getItem("sederunt-rail") === "collapsed" && !window.matchMedia("(max-width: 767px)").matches) {
+      document.body.classList.add("rail-collapsed");
+      var toggle = document.getElementById("rail-toggle");
+      toggle.setAttribute("aria-pressed", "true");
+      toggle.setAttribute("aria-label", "Show the sidebar");
+    }
+  } catch (error) { /* ignore */ }
+  var mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+  var hint = document.getElementById("goto-kbd");
+  if (hint) hint.textContent = mac ? "⌘K" : "Ctrl K";
+  var params = new URLSearchParams(location.search);
+  if (params.get("filter")) roomFilter = params.get("filter");
+  if (params.get("q")) roomQuery = params.get("q").trim().toLowerCase();
+  if (onboard) onboard.hidden = true;
+  if (home) home.hidden = false;
+  routeQuiet = true;
+  var startRoom = roomFromPath(location.pathname);
+  if (startRoom) fileRoom = startRoom;
+  showSection(startRoom ? "file" : sectionFromPath(location.pathname));
+  routed = true;
   load();
   syncRail();
 })();

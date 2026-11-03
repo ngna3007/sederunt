@@ -74,7 +74,7 @@ test("a file over the upload cap is refused before the folder is read", async ()
   assert.deepEqual(adapter.calls, ["big.txt"]);
 });
 
-test("the console page says the sentence lives in Walrus Memory", async () => {
+test("the console page keeps storage jargon off the operator view", async () => {
   const app = createApp({ deps: { tatum: { async getObject() { throw new Error("Tatum read failed"); } } } });
   app.listen(0, "127.0.0.1");
   await once(app, "listening");
@@ -89,9 +89,8 @@ test("the console page says the sentence lives in Walrus Memory", async () => {
       req.end();
     });
     assert.equal(opened.status, 200);
-    assert.match(opened.raw, /Onboard/);
-    assert.match(opened.raw, /Walrus Memory/);
-    assert.match(opened.raw, /metadata/);
+    assert.match(opened.raw, /Decisions/);
+    assert.equal(opened.raw.includes("Walrus Memory"), false);
     assert.equal(opened.raw.includes("—"), false);
   } finally {
     await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));

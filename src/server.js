@@ -298,6 +298,10 @@ export function createApp(options = {}) {
       return;
     }
     if (req.method === "GET" && url.pathname === "/console/sign-in") {
+      if (!consoleSecret(env)) {
+        redirect(res, "/console");
+        return;
+      }
       const gate = guardConsole(req, env);
       if (gate.session) {
         redirect(res, safeConsoleNext(url.searchParams.get("next") || "/console"));
