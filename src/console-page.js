@@ -1477,7 +1477,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         fullTitle: ident.full,
         meta: ident.meta,
         where: room.platform || "",
-        whenText: relativeWhen(ident.when),
+        whenText: ident.when ? (relativeWhen(ident.when) || "") : "",
         countLine: rows.length ? roomCount(rows) : "",
         people: peopleFor(room.id),
         waitingCount: waitingFor(room.id).length,
@@ -1582,9 +1582,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
     return "";
   }
 
-  function roomIdentity(room, rows) {
-    var first = rows && rows.length ? rows[0] : null;
-    var when = (room && (room.recordingStart || room.startedAt)) || (first && first.spokenAt) || "";
+  function roomIdentity(room) {
+    var when = (room && (room.startedAt || room.recordingStart)) || "";
     var platform = (room && room.platform) || "";
     var title = roomName(room) || (room && room.id) || "Room";
     var stamp = relativeWhen(when) || whenLabel(when);

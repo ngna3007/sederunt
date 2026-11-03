@@ -136,7 +136,59 @@ test("the room list does not wait for Recall", async () => {
     const body = await response.json();
     assert.equal(body.rooms[0].startedAt || "", "");
     await new Promise((resolve) => setTimeout(resolve, 50));
-    assert.equal(started, 1);
+    assert.equal(started, 0);
+  } finally {
+    app.close();
+  }
+});
+
+test("the room list does not call Recall and room media stores the start", async () => {
+  const session = (await import("../src/session.js")).createSession();
+  const id = "11111111-1111-1111-1111-111111111111";
+  session.rooms.push({ id, kind: "meeting", platform: "Zoom", botPresent: true });
+  session.decisions.push({
+    id: "d1",
+    account: "company",
+    kind: "decision",
+    text: "Kept.",
+    roomId: id,
+    inviteMemberIds: ["mina"],
+    speakerMemberId: "mina",
+    spokenAt: "2026-11-03T08:00:00.000Z",
+    deleted: false,
+  });
+  let reads = 0;
+  const remembered = [];
+  const app = createApp({
+    companyLoaded: true,
+    session,
+    env: { RECALL_API_KEY: KEY },
+    deps: {
+      memory: {
+        async index() { return []; },
+        async recall() { return []; },
+        async remember(input) { remembered.push(input); return { blobId: null }; },
+      },
+    },
+    recall: { async readBot() { reads += 1; return botPayload(); } },
+  });
+  const port = await listen(app);
+  try {
+    const first = await fetch(`http://127.0.0.1:${port}/api/console?member=mina`);
+    assert.equal(first.status, 200);
+    const listed = await first.json();
+    assert.equal(listed.rooms[0].startedAt || "", "");
+    assert.equal(reads, 0);
+    const media = await fetch(`http://127.0.0.1:${port}/console/rooms/${id}/media`);
+    assert.equal(media.status, 200);
+    const body = await media.json();
+    assert.equal(body.startedAt, "2026-11-02T10:29:18.000Z");
+    assert.equal(reads, 1);
+    const second = await fetch(`http://127.0.0.1:${port}/api/console?member=mina`);
+    const again = await second.json();
+    assert.equal(again.rooms[0].startedAt, "2026-11-02T10:29:18.000Z");
+    assert.equal(reads, 1);
+    assert.equal(remembered.some((item) => item?.room?.startedAt === "2026-11-02T10:29:18.000Z"), true);
   } finally {
     app.close();
   }

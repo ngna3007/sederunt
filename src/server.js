@@ -1277,7 +1277,6 @@ async function consolePayload(workspace, current, memberId, kind = "company") {
     counts: board.counts,
     hearing: normalizeHearing(current.hearing),
   };
-  void attachRecordingStarts(workspace, current, board.rooms);
   return payload;
 }
 
@@ -1290,31 +1289,25 @@ function bindMember(env, supplied) {
   return { ok: true, memberId: bound.message.params.arguments.memberId };
 }
 
-async function attachRecordingStarts(workspace, current, rooms) {
-  if (!Array.isArray(rooms) || !rooms.length) return;
-  await Promise.all(rooms.map(async (room) => {
-    if (!room?.id || /slack/i.test(room.platform || "")) return;
-    if (typeof room.startedAt === "string" && room.startedAt) return;
-    try {
-      const media = await roomMedia(workspace, room.id);
-      if (!media?.startedAt) return;
-      room.startedAt = media.startedAt;
-      const live = (current.rooms || []).find((item) => item.id === room.id);
-      if (live) live.startedAt = media.startedAt;
-      const memory = workspace.deps?.memory;
-      if (live && typeof memory?.remember === "function") {
-        await memory.remember({
-          account: "company",
-          kind: "room",
-          text: `${live.id} meeting`,
-          idempotencyKey: `${live.id}:started`,
-          room: { id: live.id, kind: "meeting", platform: live.platform || room.platform || "", startedAt: media.startedAt },
-        });
-      }
-    } catch {
-      // The room keeps the start already on the board.
-    }
-  }));
+async function persistRecordingStart(workspace, current, id, startedAt) {
+  if (!startedAt) return;
+  const room = (current?.rooms || []).find((item) => item.id === id);
+  if (!room || /slack/i.test(room.platform || "")) return;
+  if (typeof room.startedAt === "string" && room.startedAt) return;
+  room.startedAt = startedAt;
+  const memory = workspace.deps?.memory;
+  if (typeof memory?.remember !== "function") return;
+  try {
+    await memory.remember({
+      account: "company",
+      kind: "room",
+      text: `${room.id} meeting`,
+      idempotencyKey: `${room.id}:started`,
+      room: { id: room.id, kind: "meeting", platform: room.platform || "", startedAt },
+    });
+  } catch {
+    // The start is already on the room for this process.
+  }
 }
 
 async function roomMedia(workspace, id) {
@@ -1379,6 +1372,7 @@ async function loadRoomMedia(workspace, id, current, empty) {
     bot = null;
   }
   const body = mediaFromBot(bot);
+  if (body.startedAt) await persistRecordingStart(workspace, current, id, body.startedAt);
   const room = (current.rooms || []).find((item) => item.id === id);
   if (body.title) {
     current.roomNames ??= {};
