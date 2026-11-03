@@ -6,16 +6,25 @@ import { brandLogo } from "./brand-logos.js";
  * The chip switches Company and Personal. Personal has no room.
  * The served console uses the Recall shell: one workspace switcher
  * sits at the top of the sidebar, and the breadcrumb sits over the content column.
- * The name field sits at the bottom of the rail.
+ * The account block sits at the bottom of the rail. Its name is the session
+ * label, or the process member when sign-in is not configured.
  * The room file pins the decision. Each setting is a row, label then control.
  *
- * @param {{ meeting?: boolean, meetingSetup?: string, slackReady?: boolean, signedIn?: boolean, memberName?: string }} [state]
+ * @param {{ meeting?: boolean, meetingSetup?: string, slackReady?: boolean, signedIn?: boolean, accountName?: string, accountMember?: string, accountLine?: string }} [state]
  */
 export function renderConsolePage(state = {}) {
-  const memberName = escapeHtml(state.memberName || "");
-  const signOut = state.signedIn
-    ? `<form id="sign-out-form" method="post" action="/console/sign-out"><button id="sign-out" class="ghost" type="submit">Sign out</button></form>`
-    : "";
+  const signedIn = state.signedIn === true;
+  const accountMember = String(state.accountMember || "").trim();
+  const givenName = String(state.accountName || "").trim();
+  const known = Boolean(givenName || accountMember);
+  const accountName = givenName || accountMember || "Account";
+  const accountLine = state.accountLine || (signedIn ? "Owner" : "Sign-in is not set up");
+  const safeName = escapeHtml(accountName);
+  const safeMember = escapeHtml(accountMember);
+  const safeLine = escapeHtml(accountLine);
+  const accountMenu = signedIn
+    ? `<button type="button" role="menuitem" id="edit-profile">Edit profile</button><form id="sign-out-form" method="post" action="/console/sign-out"><button id="sign-out" type="submit" role="menuitem">Sign out</button></form>`
+    : `<p class="account-note" role="note">Sign-in is not set up.</p>`;
   const meet = state.meeting
     ? ""
     : `<p id="meet-block"><span>No meeting is in use.</span><span class="sr">Meet is not ready.</span><span hidden>${state.meetingSetup || "Set SEDERUNT_PUBLIC_ORIGIN to a public https address, then restart."}</span></p>`;
@@ -36,7 +45,6 @@ export function renderConsolePage(state = {}) {
   const peopleIcon = glyph('<circle cx="6" cy="5.6" r="1.7"/><path d="M3.1 12c.5-1.7 1.7-2.5 2.9-2.5s2.4.8 2.9 2.5"/><circle cx="11.2" cy="6.1" r="1.25"/><path d="M10.2 12c.3-1 .9-1.6 1.6-1.6"/>');
   const plusIcon = glyph('<path d="M8 3.2v9.6M3.2 8h9.6"/>');
   const switchIcon = glyph('<path d="M5 6.1 8 3.5 11 6.1"/><path d="M5 9.9 8 12.5 11 9.9"/>');
-  const userIcon = glyph('<circle cx="8" cy="5.4" r="2.1"/><path d="M3.3 13.1c.55-2.1 2.35-3.2 4.7-3.2s4.15 1.1 4.7 3.2"/>');
   const panelIcon = glyph('<rect x="2.6" y="3" width="10.8" height="10" rx="1.4"/><path d="M6.4 3v10"/>');
   const plugIcon = glyph('<path d="M6 2.6v3M10 2.6v3M4.2 5.6h7.6v2.4a3.8 3.8 0 0 1-7.6 0V5.6Z"/><path d="M8 11.8V14"/>');
   const calendarIcon = brandLogo("google-calendar");
@@ -91,16 +99,20 @@ export function renderConsolePage(state = {}) {
     <button id="rail-next" class="rail-nudge" type="button" hidden aria-label="Show later sections"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5"/></svg></button>
     </div>
     <div class="rail-foot">
-      <p id="name-cue" hidden>Enter your name to use this list.</p>
-      <div id="name-row" class="name-row">
-      <button id="member-open" class="user-btn" type="button" aria-label="Your name">${userIcon}</button>
-      <label class="name-field">
-        <span class="name-label">Your name</span>
-        <input id="member" name="member" autocomplete="name" placeholder="Enter your name" aria-describedby="name-purpose" value="${memberName}">
-        <span id="name-purpose" class="name-purpose">For history and changes.</span>
-      </label>
+      <p id="name-cue" hidden>Sign-in is not set up.</p>
+      <div id="name-row" class="account-wrap">
+        <button id="account" class="account" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" data-known="${known ? "true" : "false"}" data-name="${safeName}" data-member="${safeMember}">
+          <span id="account-avatar" class="account-avatar" aria-hidden="true">${escapeHtml(accountInitials(accountName))}</span>
+          <span class="account-copy">
+            <span id="account-name">${safeName}</span>
+            <span id="account-line">${safeLine}</span>
+          </span>
+          <span class="account-chevron" aria-hidden="true">${switchIcon}</span>
+        </button>
+        <div id="account-menu" class="account-menu" role="menu" hidden>
+          ${accountMenu}
+        </div>
       </div>
-      ${signOut}
     </div>
   </div>
   <div class="stage">
@@ -461,6 +473,21 @@ ${slack}
     <p id="decision-epoch" hidden></p>
     <div id="decision-other"></div>
     </div>
+  </div>
+</div>
+<div id="profile-dialog" class="dialog" hidden role="dialog" aria-modal="true" aria-labelledby="profile-title">
+  <div class="shade" data-close="profile-dialog"></div>
+  <div class="panel">
+    <div class="panel-bar">
+      <h2 id="profile-title">Profile</h2>
+      <button type="button" class="close" data-close="profile-dialog" aria-label="Close">${closeIcon}</button>
+    </div>
+    <form id="profile-form" class="panel-body">
+      <p class="page-lede">This name is shown on the account. It does not change the member configured for this process.</p>
+      <label>Display name <input id="profile-name" name="name" autocomplete="name" maxlength="80"></label>
+      <p id="profile-note" class="page-lede"></p>
+      <button class="primary" type="submit">Save</button>
+    </form>
   </div>
 </div>
 <div id="palette" class="palette" hidden>
@@ -936,14 +963,10 @@ ${slack}
     return lines.join("\\n");
   }
 
+  ${speakerLabel.toString()}
+
   function personLabel(name) {
-    var value = String(name || "").trim();
-    if (!value) return "";
-    if (/^\\d+$/.test(value)) return "";
-    if (/^ROW-\\d+$/i.test(value)) return "";
-    if (/^U[A-Z0-9_]{2,}$/.test(value)) return "";
-    if (/^0x[0-9a-fA-F]+$/.test(value)) return "";
-    return value;
+    return speakerLabel(name, member(), accountMember());
   }
 
   function whenLabel(iso) {
@@ -973,7 +996,14 @@ ${slack}
   }
 
   function member() {
-    return document.getElementById("member").value.trim();
+    var node = document.getElementById("account");
+    if (!node || node.getAttribute("data-known") !== "true") return "";
+    return (node.getAttribute("data-name") || "").trim();
+  }
+
+  function accountMember() {
+    var node = document.getElementById("account");
+    return node ? (node.getAttribute("data-member") || "").trim() : "";
   }
 
   function placeAskHelp() {
@@ -997,21 +1027,14 @@ ${slack}
   }
 
   function syncNameCue() {
-    var field = document.querySelector(".name-field");
     var cue = document.getElementById("name-cue");
-    var needed = sectionName === "history" && historyScope === "you" && !member();
     placeAskHelp();
     placeNameRow();
-    if (field) field.classList.toggle("name-needed", needed);
-    var purpose = document.getElementById("name-purpose");
-    if (purpose && !member()) purpose.textContent = "For history and changes.";
-    var opener = document.getElementById("member-open");
-    if (opener) opener.hidden = false;
     if (cue) cue.hidden = true;
     var line = document.getElementById("history-line");
     if (line) line.hidden = false;
     var historyPane = document.getElementById("history");
-    if (historyPane) historyPane.classList.toggle("name-wait", needed);
+    if (historyPane) historyPane.classList.remove("name-wait");
   }
 
   function initials(name) {
@@ -1317,7 +1340,7 @@ ${slack}
     if (!rows.length) {
       var historyLine = document.getElementById("history-line");
       var historyWords = "No company history yet. Questions and decisions from a room show up here.";
-      if (historyScope === "you" && !member()) historyWords = "Your name identifies later activity from a room. Nothing is here until a room has been in use.";
+      if (historyScope === "you" && !member()) historyWords = "Sign-in is not set up, so this list has no account.";
       else if (historyScope === "you") historyWords = "You lists changes waiting on you. Nothing is waiting.";
       else if (historyKind === "other") historyWords = "Nothing else is in this list.";
       else if (document.getElementById("meet-block") && document.getElementById("slack-block")) historyWords = "No shared history yet. See Status for whether a room is in use.";
@@ -1336,8 +1359,7 @@ ${slack}
         historyNext.classList.remove("primary");
         historyNext.setAttribute("data-act", "status");
       } else if (needsName) {
-        historyNext.textContent = "Enter your name";
-        historyNext.setAttribute("data-act", "name");
+        historyNext.hidden = true;
       } else {
         historyNext.textContent = "New room";
         historyNext.setAttribute("data-act", "room");
@@ -1449,7 +1471,7 @@ ${slack}
     if (kicker) kicker.hidden = false;
     if (askHelp) askHelp.textContent = "On waits for a confirm. Off sends the change.";
     var note = next.message || "";
-    if (!note && !member() && !(next.rooms || []).length && !(next.decisions || []).length) note = "Write your name to see the rooms you were in.";
+    if (!note && !member() && !(next.rooms || []).length && !(next.decisions || []).length) note = "Sign-in is not set up.";
     text("read-note", note);
     syncHomeChrome();
     paintRooms();
@@ -1480,8 +1502,7 @@ ${slack}
     });
     syncNotices();
     (next.people || []).forEach(function (person) {
-      var row = document.createElement("button");
-      row.type = "button";
+      var row = document.createElement("div");
       row.className = "card";
       row.append(face(person));
       var name = document.createElement("strong");
@@ -1489,11 +1510,6 @@ ${slack}
       var heard = document.createElement("p");
       heard.textContent = workspaceKind === "personal" ? "Kept as a private note." : "Heard in a room.";
       row.append(name, heard);
-      row.addEventListener("click", function () {
-        document.getElementById("member").value = person;
-        showSection("home");
-        load();
-      });
       document.getElementById("people-list").append(row);
     });
     var peopleCount = (next.people || []).length;
@@ -1679,7 +1695,7 @@ ${slack}
   }
 
   function dialogOpen() {
-    var ids = ["decision-dialog", "create-dialog", "workspace-dialog"];
+    var ids = ["profile-dialog", "decision-dialog", "create-dialog", "workspace-dialog"];
     for (var i = 0; i < ids.length; i += 1) {
       var node = document.getElementById(ids[i]);
       if (node && !node.hidden) return true;
@@ -2319,13 +2335,7 @@ ${slack}
       return;
     }
     if (act === "name") {
-      document.body.classList.remove("rail-collapsed");
-      var toggle = document.getElementById("rail-toggle");
-      if (toggle) {
-        toggle.setAttribute("aria-pressed", "false");
-        toggle.setAttribute("aria-label", "Hide the sidebar");
-      }
-      document.getElementById("member").focus();
+      document.getElementById("account").click();
       return;
     }
     document.getElementById("new-room").click();
@@ -2396,7 +2406,9 @@ ${slack}
   });
   document.addEventListener("keydown", function (event) {
     if (event.key !== "Escape") return;
-    if (!document.getElementById("palette").hidden) closePalette();
+    if (!document.getElementById("account-menu").hidden) closeAccountMenu();
+    else if (!document.getElementById("profile-dialog").hidden) closeDialog("profile-dialog");
+    else if (!document.getElementById("palette").hidden) closePalette();
     else if (!document.getElementById("decision-dialog").hidden) closeDialog("decision-dialog");
     else if (!document.getElementById("create-dialog").hidden) closeDialog("create-dialog");
     else if (!document.getElementById("file-dialog").hidden) closeDialog("file-dialog");
@@ -2577,12 +2589,56 @@ ${slack}
     log.scrollTop = log.scrollHeight;
   }
 
-  document.getElementById("member-open").addEventListener("click", function () {
-    document.body.classList.remove("rail-collapsed");
-    var toggle = document.getElementById("rail-toggle");
-    toggle.setAttribute("aria-pressed", "false");
-    toggle.setAttribute("aria-label", "Hide the sidebar");
-    document.getElementById("member").focus();
+  var accountButton = document.getElementById("account");
+  var accountMenu = document.getElementById("account-menu");
+  function closeAccountMenu() {
+    if (!accountMenu || !accountButton) return;
+    accountMenu.hidden = true;
+    accountButton.setAttribute("aria-expanded", "false");
+    accountButton.classList.remove("open");
+  }
+  accountButton.addEventListener("click", function (event) {
+    event.stopPropagation();
+    var open = accountMenu.hidden;
+    accountMenu.hidden = !open;
+    accountButton.setAttribute("aria-expanded", open ? "true" : "false");
+    accountButton.classList.toggle("open", open);
+  });
+  accountMenu.addEventListener("click", function (event) { event.stopPropagation(); });
+  document.addEventListener("click", closeAccountMenu);
+  var editProfile = document.getElementById("edit-profile");
+  if (editProfile) editProfile.addEventListener("click", function () {
+    closeAccountMenu();
+    document.getElementById("profile-name").value = member();
+    text("profile-note", "");
+    openDialog("profile-dialog");
+  });
+  var profileForm = document.getElementById("profile-form");
+  if (profileForm) profileForm.addEventListener("submit", function (event) {
+    event.preventDefault();
+    var nextName = document.getElementById("profile-name").value.trim();
+    text("profile-note", "Saving.");
+    fetch("/console/profile", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: nextName })
+    }).then(function (response) {
+      if (!response.ok) throw new Error("no");
+      return response.json();
+    }).then(function (result) {
+      var shown = result && result.name ? result.name : nextName;
+      accountButton.setAttribute("data-known", "true");
+      accountButton.setAttribute("data-name", shown);
+      document.getElementById("account-name").textContent = shown;
+      document.getElementById("account-avatar").textContent = initials(shown);
+      var top = document.getElementById("top-name");
+      if (top) top.textContent = shown;
+      text("profile-note", "");
+      closeDialog("profile-dialog");
+      if (state) paint(state);
+    }).catch(function () {
+      text("profile-note", "The name was not saved.");
+    });
   });
   document.getElementById("show-connectors").addEventListener("click", function () {
     leaveOnboard();
@@ -2606,12 +2662,6 @@ ${slack}
   });
   document.getElementById("nav-scrim").addEventListener("click", function () {
     document.body.classList.remove("nav-open");
-  });
-  document.getElementById("member").addEventListener("change", function () {
-    var purpose = document.getElementById("name-purpose");
-    if (purpose) purpose.textContent = member() ? "Saved for history and changes." : "For history and changes.";
-    syncNameCue();
-    load();
   });
   var chatBox = document.getElementById("chat-text");
   function growChat() {
@@ -2727,6 +2777,33 @@ ${slack}
 </script>
 </body>
 </html>`;
+}
+
+/**
+ * The name shown for who kept a sentence. The session label replaces the
+ * process member id. A raw id, a row id, or an address stays blank.
+ *
+ * @param {string} speaker
+ * @param {string} displayName
+ * @param {string} memberId
+ */
+export function speakerLabel(speaker, displayName, memberId) {
+  const value = String(speaker || "").trim();
+  if (!value) return "";
+  const shown = String(displayName || "").trim();
+  const mine = String(memberId || "").trim();
+  if (shown && (value === shown || (mine && value === mine))) return shown;
+  if (/^\d+$/.test(value)) return "";
+  if (/^ROW-\d+$/i.test(value)) return "";
+  if (/^U[A-Z0-9_]{2,}$/.test(value)) return "";
+  if (/^0x[0-9a-fA-F]+$/.test(value)) return "";
+  return value;
+}
+
+function accountInitials(name) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  const letters = parts.slice(0, 2).map((part) => part.charAt(0).toUpperCase()).join("");
+  return letters || "?";
 }
 
 function escapeHtml(value) {

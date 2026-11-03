@@ -356,6 +356,29 @@ export function createApp(options = {}) {
       redirect(res, next, { "set-cookie": sessionCookie(token, req, Math.floor(CONSOLE_SESSION_MS / 1000)) });
       return;
     }
+    if (req.method === "POST" && url.pathname === "/console/profile") {
+      const secret = consoleSecret(env);
+      const gate = guardConsole(req, env);
+      const body = await readJson(req);
+      const name = typeof body.name === "string" ? body.name.trim().slice(0, 80) : "";
+      if (!secret || !gate.session) {
+        send(res, 409, "application/json; charset=utf-8", JSON.stringify({ error: "Sign-in is not set up." }));
+        return;
+      }
+      if (!name) {
+        send(res, 400, "application/json; charset=utf-8", JSON.stringify({ error: "Enter a display name." }));
+        return;
+      }
+      const token = sealSession({
+        memberId: gate.session.memberId || String(env.SEDERUNT_MEMBER || "").trim(),
+        name,
+        exp: Date.now() + CONSOLE_SESSION_MS,
+      }, secret);
+      send(res, 200, "application/json; charset=utf-8", JSON.stringify({ name }), {
+        "set-cookie": sessionCookie(token, req, Math.floor(CONSOLE_SESSION_MS / 1000)),
+      });
+      return;
+    }
     if (req.method === "POST" && url.pathname === "/console/sign-out") {
       redirect(res, "/console/sign-in", { "set-cookie": clearedSessionCookie(req) });
       return;
@@ -380,7 +403,9 @@ export function createApp(options = {}) {
               : "Check that SEDERUNT_PUBLIC_ORIGIN is a public https address, then restart.",
         slackReady: Boolean(env.SLACK_SIGNING_SECRET && env.SLACK_BOT_TOKEN),
         signedIn: Boolean(gate.session),
-        memberName: gate.session?.name || "",
+        accountMember: String(env.SEDERUNT_MEMBER || "").trim(),
+        accountName: gate.session?.name?.trim() || String(env.SEDERUNT_MEMBER || "").trim(),
+        accountLine: gate.session ? "Owner" : "Sign-in is not set up",
       }));
       return;
     }

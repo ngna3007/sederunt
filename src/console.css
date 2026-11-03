@@ -318,19 +318,55 @@ button.chip .ic { margin-left: auto; color: var(--muted-foreground); }
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 12px;
+  padding: 8px;
   border-top: 1px solid var(--sidebar-border);
 }
-.name-row { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-button.user-btn {
-  display: none;
-}
-.name-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.account-wrap { position: relative; }
+button.account {
   width: 100%;
-  margin: 0;
+  min-height: 52px;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  text-align: left;
+}
+button.account:hover, button.account.open { background: var(--sidebar-accent); }
+.account-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-pill);
+  display: grid;
+  place-items: center;
+  flex: none;
+  background: color-mix(in srgb, var(--primary) 16%, white);
+  color: var(--primary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.account-copy { display: grid; min-width: 0; flex: 1; line-height: 1.25; }
+#account-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+#account-line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted-foreground);
   font-family: var(--font-sans);
   font-size: 12px;
@@ -338,11 +374,52 @@ button.user-btn {
   letter-spacing: 0;
   text-transform: none;
 }
-.name-label { color: var(--foreground); font-size: 12px; font-weight: 600; }
-.name-purpose { color: var(--muted-foreground); }
-.name-field.name-needed input { border-color: var(--primary); }
+.account-chevron { color: var(--muted-foreground); flex: none; }
+.account-menu {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: calc(100% + 6px);
+  z-index: 7;
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+}
+.account-menu button, #sign-out {
+  width: 100%;
+  min-height: 32px;
+  justify-content: flex-start;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 450;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.account-menu button:hover, #sign-out:hover { background: var(--muted); }
 #sign-out-form { margin: 0; }
-#sign-out { width: 100%; }
+.account-note {
+  margin: 0;
+  padding: 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.4;
+}
+#profile-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+#profile-note:empty { display: none; }
 
 .stage {
   position: relative;
@@ -682,7 +759,7 @@ button.room:hover { background: color-mix(in srgb, var(--muted) 50%, white); }
 #history-list:empty, #record-list:empty, #people-list:empty, #file-decisions:empty, #file-waiting:empty, #personal-list:empty, #file-files:empty {
   display: none;
 }
-button.card, .row-button {
+button.card, #people-list .card, .row-button {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
