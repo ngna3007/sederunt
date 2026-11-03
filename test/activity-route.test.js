@@ -220,6 +220,25 @@ test("retry calls the connector and keeps the request's from value", async () =>
   }
 });
 
+test("an unknown console path is a not-found page", async () => {
+  const app = appFor(seeded(), []);
+  const port = await listen(app);
+  const headers = { cookie: cookie() };
+  try {
+    const unknown = await fetch(`http://127.0.0.1:${port}/console/no-such-page`, { headers });
+    assert.equal(unknown.status, 404);
+    const page = await unknown.text();
+    assert.match(page, /Page not found/);
+    assert.match(page, /id="page-missing"/);
+    const home = await fetch(`http://127.0.0.1:${port}/console`, { headers });
+    assert.equal(home.status, 200);
+    const history = await fetch(`http://127.0.0.1:${port}/console/history`, { headers });
+    assert.equal(history.status, 200);
+  } finally {
+    app.close();
+  }
+});
+
 test("chat matches a room on a word boundary and counts only that room", async () => {
   const app = appFor(seeded(), []);
   const port = await listen(app);

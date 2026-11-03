@@ -356,8 +356,10 @@ ${slack}
           <button type="button" class="chip-filter" data-kind="action">Actions</button>
           <button type="button" class="chip-filter" data-kind="failure">Failed</button>
         </div>
-        <label class="search">${searchIcon}<span class="sr">Filter by room</span><select id="history-room"><option value="">All rooms</option></select></label>
-        <label class="search">${searchIcon}<span class="sr">Search history</span><input id="history-search" type="search" placeholder="Search" autocomplete="off"></label>
+        <div class="history-filters">
+          <label class="room-filter"><span class="sr">Filter by room</span><select id="history-room"><option value="">All rooms</option></select></label>
+          <label class="search">${searchIcon}<span class="sr">Search history</span><input id="history-search" type="search" placeholder="Search" autocomplete="off"></label>
+        </div>
       </div>
       <div id="history-empty" class="empty-state" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="4.6"/><path d="M8 5.6V8l1.7 1.1"/></svg></span><p class="empty-title" id="history-line">No history yet.</p><p>Questions and decisions from a room show up here.</p></div>
       <p class="section-next"><button id="history-next" class="primary" type="button" hidden>New room</button></p>
@@ -373,10 +375,7 @@ ${slack}
           <div id="chat-empty" class="chat-hello">
             <p class="hello-title">Ask this workspace</p>
             <p>Nothing has been asked yet.</p>
-            <div class="suggests">
-              <button type="button" data-suggest="What was decided?">What was decided?</button>
-              <button type="button" data-suggest="Who kept the last sentence?">Who kept the last sentence?</button>
-            </div>
+            <div class="suggests" id="chat-suggests"></div>
           </div>
           <p id="chat-purpose"></p>
         </div>
@@ -423,7 +422,7 @@ ${slack}
             <dt class="account-name-row">Name</dt><dd id="account-detail-name" class="account-name-row"></dd>
             <dt>Role</dt><dd id="account-detail-role"></dd>
             <dt>Workspace</dt><dd id="account-detail-workspace">Company</dd>
-            <dt>Session</dt><dd id="account-detail-expiry"${state.accountExpiry ? ` data-at="${escapeHtml(new Date(state.accountExpiry).toISOString())}"` : ""}>${escapeHtml(signedIn ? "This sign-in does not list an expiry." : "Sign-in is not set up.")}</dd>
+            <dt id="account-session-label">${state.accountExpiry ? "Expires" : "Session"}</dt><dd id="account-detail-expiry"${state.accountExpiry ? ` data-at="${escapeHtml(new Date(state.accountExpiry).toISOString())}" data-kind="expiry"` : ""}>${escapeHtml(signedIn ? "This sign-in does not list an expiry." : "Sign-in is not set up.")}</dd>
           </dl>
         </div>
         <div class="settings-card">
@@ -434,6 +433,12 @@ ${slack}
           </div>
         </div>
       </div>
+    </section>
+    <section id="page-missing" class="empty-state" hidden>
+      <span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 13 13"/></svg></span>
+      <p class="empty-title">Page not found</p>
+      <p>That page is not in this workspace.</p>
+      <a class="secondary" href="/console"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10 3.5 5.5 8 10 12.5"/></svg>Back to Home</a>
     </section>
     <section id="people" hidden>
       <div class="page-head"><div><p class="page-title">People</p><p class="page-lede">Names heard in a room.</p></div></div>
@@ -453,9 +458,10 @@ ${slack}
     <div id="file-dialog" class="dialog room-screen" hidden role="region" aria-labelledby="file-title">
       <div class="panel bot-detail room-screen-panel">
         <div id="room-missing" class="empty-state" hidden>
+          <span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 13 13"/></svg></span>
           <p class="empty-title">Room not found</p>
           <p>That room is not in this workspace.</p>
-          <a class="primary" href="/console/rooms" id="room-missing-link"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10 3.5 5.5 8 10 12.5"/></svg>Back to Rooms</a>
+          <a class="secondary" href="/console/rooms" id="room-missing-link"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10 3.5 5.5 8 10 12.5"/></svg>Back to Rooms</a>
         </div>
         <div class="bot-head" id="file-head">
           <p id="file-kind" class="page-kicker sr"></p>
@@ -545,13 +551,37 @@ ${slack}
                 <h2 class="artifact-title">Meeting artifacts</h2>
                 <div id="artifact-list"></div>
               </section>
+              <div class="settings-card room-settings">
+                <h2 id="settings-heading">Settings</h2>
+                <div class="room-set">
+                  <div class="set-copy">
+                    <strong>Run automatically</strong>
+                    <p id="room-edit-note"></p>
+                  </div>
+                  <label class="switch"><input id="ask-first" type="checkbox" checked aria-label="Run automatically"><span class="sr">Run automatically</span></label>
+                </div>
+                <div class="room-set">
+                  <div class="set-copy"><strong>Voice</strong></div>
+                  <div class="choices voices" role="group" aria-label="How this room reads">
+                    <button type="button" data-voice="short">Short</button>
+                    <button type="button" data-voice="plain" aria-pressed="true">Plain</button>
+                    <button type="button" data-voice="formal">Formal</button>
+                  </div>
+                </div>
+                <div class="room-set">
+                  <div class="set-copy">
+                    <strong>Raise a clash</strong>
+                    <p id="clash-note"></p>
+                  </div>
+                  <label class="switch"><input id="raise-clash" type="checkbox" aria-label="Raise a clash"><span class="sr">Raise a clash</span></label>
+                </div>
+              </div>
             </div>
             <div id="right-decisions" class="tab-pane" hidden>
               <div id="file-decisions"></div>
             </div>
             <div id="right-waiting" class="tab-pane" hidden>
               <section class="detail-block" id="waiting-row">
-                <h2 class="artifact-title">Activity</h2>
                 <p id="file-action-note" class="meta"></p>
                 <div id="file-waiting"></div>
               </section>
@@ -565,31 +595,6 @@ ${slack}
             </div>
             <div id="right-raw" class="tab-pane" hidden>
               <pre id="file-raw-side" class="raw-card"></pre>
-            </div>
-            <div class="settings-card room-settings">
-              <h2 id="settings-heading">Settings</h2>
-              <div class="room-set">
-                <div class="set-copy">
-                  <strong>Run automatically</strong>
-                  <p id="room-edit-note"></p>
-                </div>
-                <label class="switch"><input id="ask-first" type="checkbox" checked aria-label="Run automatically"><span class="sr">Run automatically</span></label>
-              </div>
-              <div class="room-set">
-                <div class="set-copy"><strong>Voice</strong></div>
-                <div class="choices voices" role="group" aria-label="How this room reads">
-                  <button type="button" data-voice="short">Short</button>
-                  <button type="button" data-voice="plain" aria-pressed="true">Plain</button>
-                  <button type="button" data-voice="formal">Formal</button>
-                </div>
-              </div>
-              <div class="room-set">
-                <div class="set-copy">
-                  <strong>Raise a clash</strong>
-                  <p id="clash-note"></p>
-                </div>
-                <label class="switch"><input id="raise-clash" type="checkbox" aria-label="Raise a clash"><span class="sr">Raise a clash</span></label>
-              </div>
             </div>
           </aside>
         </div>
@@ -716,7 +721,21 @@ var sessionWhen = document.getElementById("account-detail-expiry");
 if (sessionWhen && sessionWhen.dataset.at) {
   var sessionDate = new Date(sessionWhen.dataset.at);
   if (!isNaN(sessionDate.getTime())) {
-    sessionWhen.textContent = sessionDate.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    var sessionHours = sessionDate.getHours();
+    var sessionMins = String(sessionDate.getMinutes());
+    if (sessionMins.length < 2) sessionMins = "0" + sessionMins;
+    var sessionClock = (sessionHours % 12 || 12) + ":" + sessionMins + (sessionHours >= 12 ? " PM" : " AM");
+    var sessionNow = new Date();
+    var sessionStart = new Date(sessionNow.getFullYear(), sessionNow.getMonth(), sessionNow.getDate()).getTime();
+    var sessionDay = new Date(sessionDate.getFullYear(), sessionDate.getMonth(), sessionDate.getDate()).getTime();
+    var sessionText = sessionDay === sessionStart
+      ? "Today at " + sessionClock
+      : sessionDay === sessionStart - 86400000
+        ? "Yesterday at " + sessionClock
+        : sessionDay === sessionStart + 86400000
+          ? "Tomorrow at " + sessionClock
+          : sessionDate.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) + " at " + sessionClock;
+    sessionWhen.textContent = sessionText;
   }
 }
 (function () {
@@ -1635,7 +1654,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     roomCell.append(roomText);
     var status = decision.status || "recorded";
     var badge = document.createElement("span");
-    badge.className = status === "clashing" || status === "unknown" ? "badge bad" : "badge ok";
+    badge.className = status === "clashing" ? "badge warn" : "badge";
     badge.textContent = typeof decision.checkpoint === "number" ? ("Checkpoint " + decision.checkpoint) : statusLabel(status);
     var view = document.createElement("span");
     view.className = "row-view";
@@ -1736,7 +1755,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function addCount(box, label, number, line, onPick, attention) {
     var cell = onPick ? document.createElement("button") : document.createElement("span");
     if (onPick) cell.type = "button";
-    cell.className = attention ? "count attention" : "count";
+    cell.className = attention === "danger" ? "count danger" : attention ? "count attention" : "count";
     var name = document.createElement("span");
     name.textContent = label;
     var value = document.createElement("strong");
@@ -1766,7 +1785,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var counts = (state && state.counts) || {};
     addCount(box, "Decisions kept", counts.kept || 0, "Sentences kept in this workspace.", null, false);
     addCount(box, "Actions today", counts.actionsToday || 0, "Changes that ran today.", null, false);
-    if (counts.failed) addCount(box, "Failed", counts.failed, "A change did not go through.", null, true);
+    if (counts.failed) addCount(box, "Failed", counts.failed, "A change did not go through.", null, "danger");
     if (counts.sent) addCount(box, "Sent", counts.sent, "The tool accepted the change.", null, false);
   }
 
@@ -1935,6 +1954,24 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (list) list.append(row);
   }
 
+  function paintSuggestions() {
+    var box = document.getElementById("chat-suggests");
+    if (!box) return;
+    box.replaceChildren();
+    var rooms = ((state && state.rooms) || []).filter(function (room) {
+      return decisionsFor(room.id).length > 0;
+    });
+    rooms.slice(0, 3).forEach(function (room) {
+      var title = roomIdentity(room, decisionsFor(room.id)).title || room.id || "";
+      var shortName = String(title).split(":")[0].trim() || title;
+      var button = document.createElement("button");
+      button.type = "button";
+      button.setAttribute("data-suggest", "What did " + shortName + " decide?");
+      button.textContent = "What did " + shortName + " decide?";
+      box.append(button);
+    });
+  }
+
   function paint(next) {
     state = next;
     text("status", "");
@@ -2069,6 +2106,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var chatInput = document.getElementById("chat-text");
     var chatEmpty = document.getElementById("chat-empty");
     if (chatEmpty) chatEmpty.hidden = document.querySelector("#chat-log .chat-turn") != null;
+    paintSuggestions();
     if (chatForm) chatForm.hidden = false;
     if (chatButton) chatButton.disabled = noKept;
     if (chatInput) {
@@ -2115,6 +2153,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (name === "people") return "People";
     if (name === "account") return "Account";
     if (name === "connectors") return "Status";
+    if (name === "missing") return "Not found";
     return "Home";
   }
 
@@ -2200,6 +2239,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (name === "people") return "/console/people";
     if (name === "account") return "/console/account";
     if (name === "connectors") return "/console/status";
+    if (name === "missing") return location.pathname;
     return "/console";
   }
 
@@ -2218,7 +2258,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (path === "/console/people") return "people";
     if (path === "/console/account") return "account";
     if (path === "/console/status") return "connectors";
-    return "home";
+    if (path === "/console" || path === "/console/") return "home";
+    return "missing";
   }
 
   function showSection(name) {
@@ -2233,7 +2274,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     sectionName = name;
     var homeTitle = document.getElementById("home-title");
     if (homeTitle) homeTitle.hidden = name !== "home";
-    var panels = ["rooms", "history", "chat", "record", "people", "account-page"];
+    var panels = ["rooms", "history", "chat", "record", "people", "account-page", "page-missing"];
     var onFile = name === "file";
     document.getElementById("overview").hidden = name !== "connectors";
     var crumbHome = document.getElementById("crumb-home");
@@ -2252,7 +2293,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       text("crumb-current", sectionLabel(name));
     }
     panels.forEach(function (id) {
-      var key = id === "account-page" ? "account" : id;
+      var key = id === "account-page" ? "account" : id === "page-missing" ? "missing" : id;
       var node = document.getElementById(id);
       if (!node) return;
       node.hidden = onFile ? true : (name === "home" ? id !== "rooms" : key !== name);
@@ -2621,11 +2662,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
       wrap.className = "activity-group";
       group.rows.forEach(function (row) {
         var line = document.createElement("div");
-        line.className = "activity-row" + (row.kind === "request" ? "" : " activity-child") + (row.superseded || row.outcome === "undone" ? " muted" : "");
+        line.className = "activity-row" + (row.kind === "request" ? "" : " activity-child") + (row.superseded || row.outcome === "undone" || row.resolved ? " muted" : "");
         line.id = "activity-" + row.id;
         var icon = document.createElement("span");
-        icon.className = "activity-icon" + (row.kind === "failure" ? " bad" : "");
-        icon.innerHTML = activityGlyph(row.kind, row.verb);
+        icon.className = "activity-icon" + (row.kind === "failure" && !row.resolved ? " bad" : "");
+        icon.innerHTML = activityGlyph(row.resolved ? "action" : row.kind, row.verb);
         var text = document.createElement("p");
         var who = document.createElement("strong");
         who.textContent = (row.actor && row.actor.name) || "Someone";
@@ -2634,18 +2675,21 @@ if (sessionWhen && sessionWhen.dataset.at) {
         var rest = sentence.indexOf(who.textContent) === 0 ? sentence.slice(who.textContent.length) : (" " + sentence);
         text.append(document.createTextNode(" "));
         paintRich(text, rest.trim(), row);
-        if (row.verb === "label" && row.kind !== "request" && row.changes && row.changes[0] && row.changes[0].to) {
-          var labelWord = row.changes[0].to;
-          var labelAt = rest.indexOf(labelWord);
+        var outcomeKind = group.rows.some(function (item) { return item.kind === "result"; }) ? "result" : "action";
+        if (row.verb === "label" && row.kind === outcomeKind && row.changes && row.changes[0] && row.changes[0].to) {
+          var labelWord = String(row.changes[0].to);
+          var source = rest.trim();
+          var labelAt = source.indexOf(labelWord);
           if (labelAt >= 0) {
-            text.replaceChildren(who, document.createTextNode(" "));
-            paintRich(text, rest.trim().slice(0, labelAt).trim(), row);
-            text.append(document.createTextNode(" "));
+            var before = source.slice(0, labelAt).trim();
+            var after = source.slice(labelAt + labelWord.length).trim();
+            text.replaceChildren(who);
+            paintRich(text, before ? " " + before + " " : " ", row);
             var pill = document.createElement("span");
             pill.className = "label-pill";
             pill.textContent = labelWord;
             text.append(pill);
-            text.append(document.createTextNode(rest.trim().slice(labelAt + labelWord.length)));
+            if (after) paintRich(text, " " + after, row);
           }
         }
         if (opts.viewRoom && row.origin && Number.isFinite(row.origin.at)) {
@@ -4065,15 +4109,16 @@ if (sessionWhen && sessionWhen.dataset.at) {
       applyRoomTabs();
     });
   });
-  document.querySelectorAll("[data-suggest]").forEach(function (button) {
-    button.addEventListener("click", function () {
-      var input = document.getElementById("chat-text");
-      if (!input || input.disabled) return;
-      input.value = button.getAttribute("data-suggest") || "";
-      growChat();
-      var form = document.getElementById("chat-form");
-      if (form && form.requestSubmit) form.requestSubmit();
-    });
+  var suggestBox = document.getElementById("chat-suggests");
+  if (suggestBox) suggestBox.addEventListener("click", function (event) {
+    var button = event.target.closest("[data-suggest]");
+    if (!button) return;
+    var input = document.getElementById("chat-text");
+    if (!input || input.disabled) return;
+    input.value = button.getAttribute("data-suggest") || "";
+    growChat();
+    var form = document.getElementById("chat-form");
+    if (form && form.requestSubmit) form.requestSubmit();
   });
   var roomPrev = document.getElementById("room-prev");
   var roomNext = document.getElementById("room-next");
@@ -4315,7 +4360,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       list.append(button);
       count += 1;
     }
-    [["home", "Home"], ["rooms", "Rooms"], ["history", "History"], ["record", "Decisions"], ["chat", "Chat"], ["connectors", "Status"], ["people", "People"]].forEach(function (page) {
+    [["home", "Home"], ["rooms", "Rooms"], ["history", "History"], ["record", "Decisions"], ["chat", "Chat"], ["connectors", "Status"], ["account", "Account"], ["people", "People"]].forEach(function (page) {
       add("Navigate", page[1], function () {
         leaveOnboard();
         showSection(page[0]);

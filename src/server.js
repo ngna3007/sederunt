@@ -463,7 +463,15 @@ export function createApp(options = {}) {
       }
       const doors = doorReport(env, false);
       const roomPath = /^\/console\/rooms\/([^/]+)$/.exec(url.pathname);
-      let status = 200;
+      const consolePage = url.pathname === "/console"
+        || url.pathname === "/console/rooms"
+        || url.pathname === "/console/history"
+        || url.pathname === "/console/decisions"
+        || url.pathname === "/console/chat"
+        || url.pathname === "/console/people"
+        || url.pathname === "/console/account"
+        || url.pathname === "/console/status";
+      let status = roomPath || consolePage ? 200 : 404;
       if (roomPath) {
         const current = workspace.session?.readReport ? workspace.session : await prepareWorkspace(workspace, "", false, 0);
         const readable = current.readReport?.ok === true;
