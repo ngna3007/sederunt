@@ -41,7 +41,7 @@ export function renderSignInPage(state = {}) {
   <section class="auth-card" aria-labelledby="sign-title">
     <p class="auth-mark"><span class="tile-mark" aria-hidden="true">S</span> Sederunt</p>
     <h1 id="sign-title">Sign in</h1>
-    <p class="page-lede">The console opens with the passphrase set for this process. It is not a separate account.</p>
+    <p class="page-lede">Enter your workspace passphrase.</p>
     ${alert}
     ${form}
   </section>

@@ -1,4 +1,4 @@
-import { brandLogo } from "./brand-logos.js";
+import { brandLogo, brandSprite } from "./brand-logos.js";
 
 /**
  * The operator workspace. Onboard, home, rooms, history, chat, and record
@@ -22,9 +22,6 @@ export function renderConsolePage(state = {}) {
   const safeName = escapeHtml(accountName);
   const safeMember = escapeHtml(accountMember);
   const safeLine = escapeHtml(accountLine);
-  const accountMenu = signedIn
-    ? `<button type="button" role="menuitem" id="edit-profile">Edit profile</button><form id="sign-out-form" method="post" action="/console/sign-out"><button id="sign-out" type="submit" role="menuitem">Sign out</button></form>`
-    : `<p class="account-note" role="note">Sign-in is not set up.</p>`;
   const meet = state.meeting
     ? ""
     : `<p id="meet-block"><span>No meeting is in use.</span><span class="sr">Meet is not ready.</span><span hidden>${state.meetingSetup || "Set SEDERUNT_PUBLIC_ORIGIN to a public https address, then restart."}</span></p>`;
@@ -45,12 +42,18 @@ export function renderConsolePage(state = {}) {
   const peopleIcon = glyph('<circle cx="6" cy="5.6" r="1.7"/><path d="M3.1 12c.5-1.7 1.7-2.5 2.9-2.5s2.4.8 2.9 2.5"/><circle cx="11.2" cy="6.1" r="1.25"/><path d="M10.2 12c.3-1 .9-1.6 1.6-1.6"/>');
   const plusIcon = glyph('<path d="M8 3.2v9.6M3.2 8h9.6"/>');
   const switchIcon = glyph('<path d="M5 6.1 8 3.5 11 6.1"/><path d="M5 9.9 8 12.5 11 9.9"/>');
+  const userIcon = glyph('<circle cx="8" cy="5.4" r="2.1"/><path d="M3.3 13.1c.55-2.1 2.35-3.2 4.7-3.2s4.15 1.1 4.7 3.2"/>');
   const panelIcon = glyph('<rect x="2.6" y="3" width="10.8" height="10" rx="1.4"/><path d="M6.4 3v10"/>');
   const plugIcon = glyph('<path d="M6 2.6v3M10 2.6v3M4.2 5.6h7.6v2.4a3.8 3.8 0 0 1-7.6 0V5.6Z"/><path d="M8 11.8V14"/>');
   const calendarIcon = brandLogo("google-calendar");
   const linearIcon = brandLogo("linear-icon");
   const channelIcon = brandLogo("slack-icon");
   const searchIcon = glyph('<circle cx="7" cy="7" r="3.2"/><path d="M9.4 9.4 12.5 12.5"/>');
+  const editIcon = glyph('<path d="M9.6 2.7 13.3 6.4 6.4 13.3H2.7V9.6z"/>');
+  const outIcon = glyph('<path d="M6.2 2.8H3.4v10.4h2.8"/><path d="M6.6 8h6.2"/><path d="M10.6 5.4 13.2 8l-2.6 2.6"/>');
+  const accountMenu = signedIn
+    ? `<button type="button" role="menuitem" id="edit-profile">${editIcon}Edit profile</button><div class="menu-rule" role="separator"></div><form id="sign-out-form" method="post" action="/console/sign-out"><button id="sign-out" type="submit" role="menuitem">${outIcon}Sign out</button></form>`
+    : `<p class="account-note" role="note">Sign-in is not set up.</p>`;
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -60,12 +63,14 @@ export function renderConsolePage(state = {}) {
 <link rel="stylesheet" href="/console.css">
 </head>
 <body>
+${brandSprite()}
 <div class="nav-scrim" id="nav-scrim"></div>
 <div class="shell">
   <div class="rail-wrap">
     <div class="rail-head">
       <div class="brand-row">
       <p class="brand">Sederunt</p>
+      <button id="rail-close" class="close rail-close" type="button" aria-label="Close the menu">${closeIcon}</button>
       <div id="chip-wrap" class="chip-wrap">
         <button id="workspace-chip" class="chip" type="button" aria-expanded="false" aria-haspopup="menu" aria-controls="workspace-menu">
           <span id="chip-mark" class="tile-mark co" aria-hidden="true">C</span>
@@ -86,15 +91,16 @@ export function renderConsolePage(state = {}) {
     <button id="rail-prev" class="rail-nudge" type="button" hidden aria-label="Show earlier sections"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10 3.5 5.5 8 10 12.5"/></svg></button>
     <nav class="rail" aria-label="Workspace">
       <p class="rail-label">Work</p>
-      <a href="/console" data-show="home">${homeIcon}Home</a>
-      <a href="/console/rooms" data-show="rooms">${roomsIcon}Rooms</a>
-      <a href="/console/history" data-show="history">${historyIcon}History</a>
-      <a href="/console/decisions" data-show="record">${recordIcon}Decisions</a>
-      <a href="/console/chat" data-show="chat">${chatIcon}Chat</a>
+      <a href="/console" data-show="home" data-label="Home">${homeIcon}Home</a>
+      <a href="/console/rooms" data-show="rooms" data-label="Rooms">${roomsIcon}Rooms</a>
+      <a href="/console/history" data-show="history" data-label="History">${historyIcon}History</a>
+      <a href="/console/decisions" data-show="record" data-label="Decisions">${recordIcon}Decisions</a>
+      <a href="/console/chat" data-show="chat" data-label="Chat">${chatIcon}Chat</a>
       <p class="rail-label">Setup</p>
-      <a href="/console/status" id="show-connectors">${plugIcon}Status</a>
+      <a href="/console/status" id="show-connectors" data-label="Status">${plugIcon}Status</a>
       <p class="rail-label">Account</p>
-      <a href="/console/people" data-show="people">${peopleIcon}People</a>
+      <a href="/console/account" data-show="account" data-label="Account">${userIcon}Account</a>
+      <a href="/console/people" data-show="people" data-label="People">${peopleIcon}People</a>
     </nav>
     <button id="rail-next" class="rail-nudge" type="button" hidden aria-label="Show later sections"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5"/></svg></button>
     </div>
@@ -120,9 +126,11 @@ export function renderConsolePage(state = {}) {
       <button id="rail-toggle" class="panel-btn" type="button" aria-pressed="false" aria-label="Hide the sidebar">${panelIcon}</button>
       <span class="topbar-rule" aria-hidden="true"></span>
       <nav class="crumb" aria-label="Breadcrumb">
-        <button id="crumb-home" class="crumb-link" type="button" hidden>Home</button>
-        <span id="crumb-sep" class="crumb-sep" hidden aria-hidden="true">&gt;</span>
-        <span id="crumb-current" aria-current="page">Rooms</span>
+        <a id="crumb-home" class="crumb-link" href="/console">Home</a>
+        <span id="crumb-sep" class="crumb-sep" aria-hidden="true">›</span>
+        <a id="crumb-rooms" class="crumb-link" href="/console/rooms" hidden>Rooms</a>
+        <span id="crumb-sep2" class="crumb-sep" hidden aria-hidden="true">›</span>
+        <span id="crumb-current" aria-current="page">Home</span>
       </nav>
       <span id="top-name" class="top-name"></span>
     </div>
@@ -225,14 +233,14 @@ ${slack}
       </div>
       <div class="settings-card" id="ask-block">
         <p class="section-label">Before sending a change</p>
-        <p id="ask-help" class="card-help">Waits for a confirm before a change is sent. Sends means the change goes out.</p>
+        <p id="ask-help" class="card-help">On means a change waits for a confirm before it is sent.</p>
         <div class="conn ask-quiet" id="cal-ask-row">
           <div class="set-copy"><span class="ask-name">Ask first</span><span class="ask-tool"> for Calendar</span></div>
-          <div class="conn-ask"><span class="ask-state">Waits</span><label class="switch"><input id="cal-ask" type="checkbox" checked aria-describedby="ask-help"><span class="sr">Ask first for Calendar</span></label></div>
+          <div class="conn-ask"><label class="switch"><input id="cal-ask" type="checkbox" checked aria-label="Ask first for Calendar" aria-describedby="ask-help"></label></div>
         </div>
         <div class="conn ask-quiet" id="lin-ask-row">
           <div class="set-copy"><span class="ask-name">Ask first</span><span class="ask-tool"> for Linear</span></div>
-          <div class="conn-ask"><span class="ask-state">Waits</span><label class="switch"><input id="lin-ask" type="checkbox" checked aria-describedby="ask-help"><span class="sr">Ask first for Linear</span></label></div>
+          <div class="conn-ask"><label class="switch"><input id="lin-ask" type="checkbox" checked aria-label="Ask first for Linear" aria-describedby="ask-help"></label></div>
         </div>
       </div>
       <div class="settings-card" id="hearing-block">
@@ -250,7 +258,7 @@ ${slack}
           <textarea id="hearing-triggers" name="hearing-triggers" rows="4" placeholder="keep this"></textarea>
         </div>
         </div>
-        <p class="section-next"><button id="hearing-save" type="button">Save the guest</button></p>
+        <p class="section-next"><button id="hearing-save" class="primary" type="button">Save the guest</button></p>
         <p id="hearing-note"></p>
       </div>
       <p id="connector-who"></p>
@@ -266,23 +274,24 @@ ${slack}
         <div class="page-actions"></div>
       </div>
       <div class="toolbar" id="room-toolbar" hidden>
-        <label class="search">${searchIcon}<span class="sr">Search rooms</span><input id="room-search" type="search" placeholder="Search rooms" autocomplete="off"></label>
         <div class="chips" role="group" aria-label="Filter rooms">
           <button type="button" class="chip-filter" data-room-filter="all" aria-pressed="true">All</button>
           <button type="button" class="chip-filter" data-room-filter="waiting">Waiting</button>
           <button type="button" class="chip-filter" data-room-filter="kept">Kept a decision</button>
         </div>
+        <label class="search">${searchIcon}<span class="sr">Search rooms</span><input id="room-search" type="search" placeholder="Search" autocomplete="off"></label>
       </div>
       <div class="explorer">
         <div class="explorer-head">
           <span>Room</span>
           <span>Platform</span>
           <span>Speakers</span>
-          <span>Waiting</span>
+          <span>Status</span>
+          <span></span>
         </div>
         <div id="room-empty" class="empty-state" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.6h10.8v8.8H2.6z"/><path d="M2.6 6.6h10.8"/></svg></span><p class="empty-title" id="room-empty-line">No room yet.</p><p id="room-empty-aside">Bring Sederunt into a meeting or a channel.</p><button type="button" id="clear-filters" hidden>Clear filters</button></div>
         <div id="room-list"></div>
-        <p id="room-foot" class="explorer-foot" hidden></p>
+        <div id="room-foot" class="explorer-foot" hidden><span id="room-count"></span><span class="pager"><button id="room-prev" type="button" aria-label="Previous page">‹</button><button id="room-next" type="button" aria-label="Next page">›</button></span></div>
       </div>
       <div id="personal-notes" hidden>
         <p id="personal-empty">A private note is not a room.</p>
@@ -290,32 +299,47 @@ ${slack}
       </div>
     </section>
     <section id="history" hidden>
-      <div class="page-head"><div><h1 class="page-title">History</h1><p class="page-lede">What a room heard, and what is waiting on you.</p></div></div>
-      <div class="choices" role="group" aria-label="Whose record">
-        <button type="button" data-scope="group" aria-pressed="true">Company</button>
-        <button type="button" data-scope="you" aria-pressed="false">You</button>
+      <div class="page-head"><div><h1 class="page-title">History</h1><p class="page-lede">What a room heard.</p></div></div>
+      <div class="history-tools">
+        <div class="choices" role="group" aria-label="Whose record">
+          <button type="button" data-scope="group" aria-pressed="true">Company</button>
+          <button type="button" data-scope="you" aria-pressed="false">You</button>
+        </div>
+        <div class="chips" role="group" aria-label="Kind of record">
+          <button type="button" class="chip-filter" data-kind="all" aria-pressed="true">All</button>
+          <button type="button" class="chip-filter" data-kind="question">Decisions</button>
+          <button type="button" class="chip-filter" data-kind="action">Waiting</button>
+          <button type="button" class="chip-filter" data-kind="other">Asks</button>
+        </div>
       </div>
-      <div class="choices" role="group" aria-label="Kind of record">
-        <button type="button" data-kind="all" aria-pressed="true">All</button>
-        <button type="button" data-kind="question">Decisions</button>
-        <button type="button" data-kind="action">Waiting</button>
-        <button type="button" data-kind="other">Asks</button>
-      </div>
-      <div id="history-empty" class="empty-state" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="4.6"/><path d="M8 5.6V8l1.7 1.1"/></svg></span><p class="empty-title">Nothing in this list.</p><p id="history-line">No company history yet. Questions and decisions from a room show up here.</p></div>
+      <div id="history-empty" class="empty-state" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="4.6"/><path d="M8 5.6V8l1.7 1.1"/></svg></span><p class="empty-title" id="history-line">No history yet.</p><p>Questions and decisions from a room show up here.</p></div>
       <p class="section-next"><button id="history-next" class="primary" type="button" hidden>New room</button></p>
-      <div id="history-list"></div>
+      <div class="explorer" id="history-table">
+        <div class="explorer-head hist-head"><span>What</span><span>Kind</span><span>When</span><span></span></div>
+        <div id="history-list"></div>
+        <div id="history-foot" class="explorer-foot" hidden><span id="history-count"></span></div>
+      </div>
     </section>
     <section id="chat" hidden>
       <div class="page-head"><div><h1 class="page-title">Chat</h1><p class="page-lede">Ask what this workspace already kept. Chat does not keep a decision.</p></div></div>
-      <div class="talk-panel">
+      <div class="talk-panel ai-chat">
         <div class="thread" id="chat-log">
-          <div id="chat-empty" class="empty-state"><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.4h10.8v6.4H6.2L2.6 12.6V3.4Z"/></svg></span><p class="empty-title">Nothing has been asked yet.</p><p>Ask what was decided.</p></div>
+          <div id="chat-empty" class="chat-hello">
+            <h2>What was decided?</h2>
+            <p class="empty-title">Nothing has been asked yet.</p>
+            <p>Ask about a room. Chat does not keep a decision.</p>
+            <div class="suggests">
+              <button type="button" data-suggest="What was decided?">What was decided?</button>
+              <button type="button" data-suggest="What is waiting?">What is waiting?</button>
+              <button type="button" data-suggest="Who kept the last sentence?">Who kept the last sentence?</button>
+            </div>
+          </div>
           <p id="chat-purpose"></p>
         </div>
-        <p id="chat-next-row" class="section-next"><button id="chat-next" class="primary" type="button">New room</button></p>
-        <form id="chat-form">
+        <p id="chat-next-row" class="section-next"><button id="chat-next" class="primary" type="button" hidden>New room</button></p>
+        <form id="chat-form" class="composer">
           <label><span class="sr">Ask the workspace</span><textarea id="chat-text" name="chat" rows="1" placeholder="Ask about a room's decision"></textarea></label>
-          <button class="primary" type="submit">Ask</button>
+          <button class="primary" type="submit" aria-label="Send">Ask</button>
         </form>
         <p class="composer-hint">Enter sends. Shift+Enter adds a line.</p>
       </div>
@@ -323,78 +347,151 @@ ${slack}
     <section id="record" hidden>
       <div class="page-head"><div><h1 class="page-title">Decisions</h1><p class="page-lede">Sentences a room kept, with who kept each one and when.</p></div><div class="page-actions"></div></div>
       <div class="empty-state" id="record-empty"><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.8h10v10.4H3z"/><path d="M5 6h6M5 8.4h6M5 10.8h3.5"/></svg></span><p class="empty-title ledger">No decision yet.</p><p>A sentence kept in a room shows up here.</p></div>
-      <p class="section-next"><button id="record-next" class="primary" type="button">New room</button></p>
-      <div class="record-board">
+      <p class="section-next"><button id="record-next" class="primary" type="button" hidden>New room</button></p>
+      <div class="record-board explorer" id="record-table">
+        <div class="explorer-head decision-head"><span>Decision</span><span>Room</span><span>Status</span><span></span></div>
         <div id="record-list"></div>
-        <p id="record-detail"></p>
+        <div id="record-foot" class="explorer-foot" hidden><span id="record-count"></span></div>
+        <p id="record-detail" hidden></p>
+      </div>
+    </section>
+    <section id="account-page" hidden>
+      <div class="page-head"><div><h1 class="page-title">Account</h1><p class="page-lede">The name shown for you in this workspace.</p></div></div>
+      <div class="overview-card" id="account-card">
+        <p id="account-page-name" class="empty-title"></p>
+        <p id="account-page-role" class="meta"></p>
+        <div class="wait-actions">
+          ${signedIn ? `<button type="button" class="primary" id="account-edit">Edit profile</button><button type="button" class="danger" id="account-signout">Sign out</button>` : `<p class="meta">Sign-in is not set up.</p>`}
+        </div>
       </div>
     </section>
     <section id="people" hidden>
       <div class="page-head"><div><h1 class="page-title">People</h1><p class="page-lede">Names heard in a room.</p></div></div>
       <div id="people-empty" class="empty-state" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="5.2" r="2.2"/><path d="M3.4 12.6c.7-2 2.4-3 4.6-3s3.9 1 4.6 3"/></svg></span><p class="empty-title">No one is listed yet.</p><p>People from a meeting or a channel show up here.</p></div>
       <p class="section-next"><button id="people-next" class="primary" type="button" hidden>Open Home</button></p>
-      <div id="people-list"></div>
+      <div class="explorer" id="people-table">
+        <div id="people-list"></div>
+        <div id="people-foot" class="explorer-foot" hidden><span id="people-count"></span></div>
+      </div>
     </section>
     <div id="file-dialog" class="dialog" hidden role="region" aria-labelledby="file-title">
-      <div class="panel">
-        <div class="page-head">
-          <div class="file-name">
-            <p id="file-kind" class="page-kicker"></p>
-            <h1 id="file-title" class="page-title"></h1>
+      <div class="panel bot-detail">
+        <div id="room-missing" class="empty-state" hidden>
+          <p class="empty-title">Room not found</p>
+          <p>That room is not in this workspace.</p>
+          <a class="primary" href="/console/rooms" id="room-missing-link">Back to Rooms</a>
+        </div>
+        <div class="bot-head" id="file-head">
+          <div class="bot-title-row">
+            <div class="file-name">
+              <p id="file-kind" class="page-kicker"></p>
+              <h1 id="file-title" class="page-title"></h1>
+            </div>
+            <button type="button" class="close" data-close="file-dialog" aria-label="Close">${closeIcon}</button>
+          </div>
+          <div class="meta-strip" id="file-meta">
+            <button type="button" id="copy-room" class="id-chip"><span id="file-id" class="mono"></span></button>
+            <span id="file-status-badge" class="badge"></span>
+            <span id="file-platform-pill"></span>
+            <span id="file-started" class="meta"></span>
             <p id="file-lead" class="page-lede" hidden></p>
             <p id="file-lead-status" class="meta"></p>
             <p id="file-proof" class="meta" hidden></p>
           </div>
-          <button type="button" class="close" data-close="file-dialog" aria-label="Close">${closeIcon}</button>
         </div>
-        <div class="detail-split">
+        <div class="detail-split bot-split">
           <div class="detail-main">
-            <section class="detail-block">
-              <h2>Decision</h2>
-              <div id="file-decisions"></div>
+            <section class="summary-card" id="summary-card">
+              <h2>Summary</h2>
+              <p id="file-summary"></p>
             </section>
-            <section class="detail-block" id="waiting-row" hidden>
-              <h2>Waiting changes</h2>
-              <p id="file-action-note" class="meta"></p>
-              <div id="file-waiting"></div>
-            </section>
-            <section class="detail-block">
-              <h2>Speakers</h2>
+            <div class="underline-tabs" role="tablist" aria-label="Room record">
+              <button type="button" data-left-tab="transcript" aria-selected="true">Transcript</button>
+              <button type="button" data-left-tab="config" aria-selected="false">Config</button>
+              <button type="button" data-left-tab="raw" aria-selected="false">Raw</button>
+            </div>
+            <div id="left-transcript" class="tab-pane">
+              <label class="search pin-search">${searchIcon}<span class="sr">Search the transcript</span><input id="transcript-search" type="search" placeholder="Search transcript" autocomplete="off"></label>
+              <div id="file-transcript"></div>
+              <h2 class="pane-label">Speakers</h2>
               <div id="file-heard" class="faces"></div>
               <p id="file-present">The meeting has not sent who is there.</p>
-            </section>
-            <section class="detail-block" id="files-block">
-              <h2 id="files-heading" hidden>Files</h2>
-              <div id="file-files"></div>
-            </section>
-            <section class="detail-block" id="outside-block" hidden>
-              <h2 id="outside-heading">Not invited</h2>
-              <div id="file-outside"></div>
-            </section>
+            </div>
+            <div id="left-config" class="tab-pane" hidden>
+              <section class="detail-block" id="files-block">
+                <h2 id="files-heading" hidden>Files</h2>
+                <div id="file-files"></div>
+                <p id="files-empty" class="meta">No file is attached.</p>
+              </section>
+            </div>
+            <div id="left-raw" class="tab-pane" hidden>
+              <pre id="file-raw" class="raw-card"></pre>
+            </div>
           </div>
           <aside class="detail-side">
-            <h2 id="settings-heading">Settings</h2>
-            <div class="room-set">
-              <div class="set-copy">
-                <strong>Ask first</strong>
-                <p id="room-edit-note"></p>
-              </div>
-              <label class="switch"><input id="ask-first" type="checkbox" checked><span class="sr">Ask first</span></label>
+            <div class="underline-tabs" role="tablist" aria-label="Room detail">
+              <button type="button" data-right-tab="overview" aria-selected="true">Overview</button>
+              <button type="button" data-right-tab="decisions" aria-selected="false">Decisions</button>
+              <button type="button" data-right-tab="waiting" aria-selected="false">Waiting</button>
+              <button type="button" data-right-tab="history" aria-selected="false">History</button>
+              <button type="button" data-right-tab="raw" aria-selected="false">Raw</button>
             </div>
-            <div class="room-set">
-              <div class="set-copy"><strong>Voice</strong></div>
-              <div class="choices voices" role="group" aria-label="How this room reads">
-                <button type="button" data-voice="short">Short</button>
-                <button type="button" data-voice="plain" aria-pressed="true">Plain</button>
-                <button type="button" data-voice="formal">Formal</button>
+            <div id="right-overview" class="tab-pane">
+              <div class="overview-card" id="file-overview">
+                <h2>Overview</h2>
+                <p id="file-overview-platform" class="meta"></p>
+                <p id="file-overview-when" class="meta"></p>
+                <p id="file-overview-count" class="meta"></p>
+                <div id="file-overview-people" class="faces"></div>
               </div>
+              <p id="file-callout" class="callout" hidden></p>
+              <div class="outcome-card" id="file-outcome"></div>
+              <dl class="kv" id="file-facts"></dl>
             </div>
-            <div class="room-set">
-              <div class="set-copy">
-                <strong>Raise a clash</strong>
-                <p id="clash-note"></p>
+            <div id="right-decisions" class="tab-pane" hidden>
+              <div id="file-decisions"></div>
+            </div>
+            <div id="right-waiting" class="tab-pane" hidden>
+              <section class="detail-block" id="waiting-row">
+                <h2>Waiting changes</h2>
+                <p id="file-action-note" class="meta"></p>
+                <div id="file-waiting"></div>
+              </section>
+            </div>
+            <div id="right-history" class="tab-pane" hidden>
+              <section class="detail-block" id="outside-block">
+                <h2 id="outside-heading">Not invited</h2>
+                <div id="file-outside"></div>
+              </section>
+              <div id="file-history"></div>
+            </div>
+            <div id="right-raw" class="tab-pane" hidden>
+              <pre id="file-raw-side" class="raw-card"></pre>
+            </div>
+            <div class="settings-card room-settings">
+              <h2 id="settings-heading">Settings</h2>
+              <div class="room-set">
+                <div class="set-copy">
+                  <strong>Ask first</strong>
+                  <p id="room-edit-note"></p>
+                </div>
+                <label class="switch"><input id="ask-first" type="checkbox" checked><span class="sr">Ask first</span></label>
               </div>
-              <label class="switch"><input id="raise-clash" type="checkbox"><span class="sr">Raise a clash</span></label>
+              <div class="room-set">
+                <div class="set-copy"><strong>Voice</strong></div>
+                <div class="choices voices" role="group" aria-label="How this room reads">
+                  <button type="button" data-voice="short">Short</button>
+                  <button type="button" data-voice="plain" aria-pressed="true">Plain</button>
+                  <button type="button" data-voice="formal">Formal</button>
+                </div>
+              </div>
+              <div class="room-set">
+                <div class="set-copy">
+                  <strong>Raise a clash</strong>
+                  <p id="clash-note"></p>
+                </div>
+                <label class="switch"><input id="raise-clash" type="checkbox"><span class="sr">Raise a clash</span></label>
+              </div>
             </div>
           </aside>
         </div>
@@ -482,10 +579,10 @@ ${slack}
       <button type="button" class="close" data-close="profile-dialog" aria-label="Close">${closeIcon}</button>
     </div>
     <form id="profile-form" class="panel-body">
-      <p class="page-lede">This name is shown on the account. It does not change the member configured for this process.</p>
+      <p class="page-lede">This is the name shown on your account.</p>
       <label>Display name <input id="profile-name" name="name" autocomplete="name" maxlength="80"></label>
       <p id="profile-note" class="page-lede"></p>
-      <button class="primary" type="submit">Save</button>
+      <div class="wait-actions"><button class="secondary" type="button" data-close="profile-dialog">Cancel</button><button class="primary" type="submit">Save</button></div>
     </form>
   </div>
 </div>
@@ -522,6 +619,11 @@ ${slack}
   var opener = null;
   var roomFilter = "all";
   var roomQuery = "";
+  var roomPage = 0;
+  var roomPageSize = 8;
+  var transcriptQuery = "";
+  var leftTab = "transcript";
+  var rightTab = "overview";
   var operatorLeft = false;
   var routeQuiet = false;
   var routed = false;
@@ -599,9 +701,7 @@ ${slack}
 
   function syncAskState(input) {
     if (!input) return;
-    var row = input.closest(".conn");
-    var word = row ? row.querySelector(".ask-state") : null;
-    if (word) word.textContent = input.checked ? "Waits" : "Sends";
+    input.setAttribute("aria-checked", input.checked ? "true" : "false");
   }
 
   function paintConn(id, connected) {
@@ -631,7 +731,7 @@ ${slack}
     var blockedHome = !!(document.getElementById("meet-block") && document.getElementById("slack-block"));
     if (homeEmpty) homeEmpty.hidden = !emptyHome;
     var stats = document.getElementById("home-stats");
-    if (stats) stats.hidden = sectionName !== "home" || emptyHome;
+    if (stats) stats.hidden = sectionName !== "home" || (state && state.read === "failed");
     var note = document.getElementById("read-note");
     if (note) note.hidden = sectionName !== "home" || emptyHome;
     var explorer = document.querySelector(".explorer");
@@ -639,7 +739,7 @@ ${slack}
     var line = document.getElementById("home-empty-line");
     var aside = document.getElementById("home-empty-aside");
     if (line) line.textContent = blockedHome ? "No meeting or channel is in use." : "No room yet.";
-    if (aside) aside.textContent = blockedHome ? "" : "A meeting or a channel that keeps a decision adds the room.";
+    if (aside) aside.textContent = blockedHome ? "Bring Sederunt into a meeting or a channel." : "A meeting or a channel that keeps a decision adds the room.";
   }
 
   function placeDoors(intoOnboard) {
@@ -942,15 +1042,15 @@ ${slack}
     });
     flush("");
     if (facts.length > 1 || (facts.length === 1 && lastQuestion)) return rankAnswer(lastQuestion);
-    if (facts.length === 1) return { answer: facts[0], detail: "" };
+    if (facts.length === 1) return { answer: facts[0], detail: "", cites: [] };
     var stored = rankAnswer(lastQuestion);
     if (stored.answer) return stored;
     var raw = String(body || "");
-    if (raw.indexOf("missing-member") !== -1) return { answer: "This server has no member configured.", detail: "" };
-    if (raw.indexOf("not-invited") !== -1) return { answer: "You were not in that room.", detail: "" };
-    if (raw.indexOf("there are no notes yet") !== -1) return { answer: "There are no notes yet.", detail: "" };
-    if (/(^|\\n)unknown(\\n|$)/.test(raw)) return { answer: "The account could not be read. Read it again.", detail: "" };
-    return { answer: "Nothing is stored that you can read.", detail: "" };
+    if (raw.indexOf("missing-member") !== -1) return { answer: "This server has no member configured.", detail: "", cites: [] };
+    if (raw.indexOf("not-invited") !== -1) return { answer: "You were not in that room.", detail: "", cites: [] };
+    if (raw.indexOf("there are no notes yet") !== -1) return { answer: "There are no notes yet.", detail: "", cites: [] };
+    if (/(^|\\n)unknown(\\n|$)/.test(raw)) return { answer: "The account could not be read. Read it again.", detail: "", cites: [] };
+    return { answer: "Nothing is stored that you can read.", detail: "", cites: [] };
   }
 
   function rankAnswer(question) {
@@ -965,12 +1065,16 @@ ${slack}
       words.forEach(function (word) { if (text.indexOf(word) !== -1) count += 1; });
       return count;
     }
-    function line(decision) {
+    function cite(decision) {
       var room = ((state && state.rooms) || []).filter(function (item) { return item.id === decision.roomId; })[0];
       var named = roomLabel(room || {}, decision);
-      return decision.text + (named ? " (in " + named + ")" : "");
+      return { roomId: decision.roomId, label: named || "Room", text: decision.text || "" };
     }
-    if (!rows.length) return { answer: "Nothing is stored that you can read.", detail: "" };
+    function line(decision) {
+      var named = cite(decision);
+      return named.text + (named.label ? " (in " + named.label + ")" : "");
+    }
+    if (!rows.length) return { answer: "Nothing is stored that you can read.", detail: "", cites: [] };
     var ranked = rows.map(function (decision) { return { decision: decision, score: hits(decision) }; });
     ranked.sort(function (a, b) {
       return b.score - a.score || String(b.decision.spokenAt || "").localeCompare(String(a.decision.spokenAt || ""));
@@ -980,9 +1084,12 @@ ${slack}
       var latest = rows.slice().sort(function (a, b) {
         return String(b.spokenAt || "").localeCompare(String(a.spokenAt || ""));
       }).slice(0, 3);
-      return { answer: "Nothing stored matches that question.", detail: "Latest: " + latest.map(line).join(" ") };
+      if (!words.length) {
+        return { answer: latest.map(function (decision) { return decision.text; }).join(" "), detail: "", cites: latest.map(cite) };
+      }
+      return { answer: "Nothing stored matches that question.", detail: latest.map(line).join(" "), cites: latest.map(cite) };
     }
-    return { answer: line(matched[0].decision), detail: matched.slice(1).map(function (row) { return line(row.decision); }).join(" ") };
+    return { answer: line(matched[0].decision), detail: matched.slice(1).map(function (row) { return line(row.decision); }).join(" "), cites: matched.map(function (row) { return cite(row.decision); }) };
   }
 
   function storedAnswer() {
@@ -1121,49 +1228,44 @@ ${slack}
     var card = document.createElement("a");
     card.className = "room";
     card.href = spec.roomId ? ("/console/rooms/" + encodeURIComponent(spec.roomId)) : "/console/rooms";
-    if (spec.title) card.title = spec.fullTitle || spec.title;
+    card.title = spec.fullTitle || spec.title || "Room";
     if (spec.roomId) card.setAttribute("data-room", spec.roomId);
-    if (spec.wait) card.setAttribute("data-wait", spec.wait);
     var roomCol = document.createElement("span");
     roomCol.className = "ex-room";
     var title = document.createElement("strong");
-    title.textContent = spec.title;
+    title.textContent = spec.title || "Room";
     var count = document.createElement("span");
     count.className = "ex-count";
-    count.textContent = spec.countLine;
+    count.textContent = spec.meta || spec.countLine || "";
     roomCol.append(title, count);
     var where = document.createElement("span");
     where.className = "where ex-plat";
-    if (spec.where) {
-      var mark = document.createElement("span");
-      mark.className = "room-mark";
-      mark.textContent = spec.where.replace(/[^A-Za-z]/g, "").slice(0, 1).toUpperCase() || "M";
-      var tones = {
-        "Google Meet": "#174ea6",
-        Zoom: "#084298",
-        Teams: "#3b3f8f",
-        Webex: "#0b5e4d",
-        Slack: "#4a154b"
-      };
-      mark.style.background = tones[spec.where] || "#212529";
-      var whereText = document.createElement("span");
-      whereText.textContent = spec.where;
-      where.append(mark, whereText);
-    }
+    if (spec.where) where.append(platformBadge(spec.where));
     var heard = document.createElement("span");
-    heard.className = "faces ex-heard";
+    heard.className = "avatar-stack";
     var people = spec.people || [];
-    people.slice(0, 4).forEach(function (person) { heard.append(face(person)); });
+    heard.title = people.map(function (person) { return personLabel(person) || person; }).join(", ");
+    people.slice(0, 4).forEach(function (person) { heard.append(face(personLabel(person) || person)); });
     if (people.length > 4) {
       var more = document.createElement("span");
-      more.className = "more";
+      more.className = "face more";
       more.textContent = "+" + (people.length - 4);
       heard.append(more);
     }
-    var waitCol = document.createElement("span");
-    waitCol.className = "ex-bot";
-    waitCol.textContent = spec.waitingCount ? (String(spec.waitingCount) + " waiting") : "None";
-    card.append(roomCol, where, heard, waitCol);
+    var status = document.createElement("span");
+    status.className = "status-cell";
+    var badge = document.createElement("span");
+    var waitingOn = (spec.waitingCount || 0) > 0 || spec.wait;
+    badge.className = waitingOn ? "badge warn" : "badge ok";
+    badge.textContent = waitingOn ? "Waiting" : "Done";
+    var when = document.createElement("span");
+    when.className = "when";
+    when.textContent = spec.whenText || "";
+    status.append(badge, when);
+    var view = document.createElement("span");
+    view.className = "row-view";
+    view.textContent = "View >";
+    card.append(roomCol, where, heard, status, view);
     card.addEventListener("click", function (event) {
       if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
       event.preventDefault();
@@ -1171,6 +1273,56 @@ ${slack}
       else openFile(spec.roomId);
     });
     document.getElementById("room-list").append(card);
+  }
+
+  function logoKey(name) {
+    var key = String(name || "");
+    var map = {
+      "Google Meet": "google-meet",
+      "Meet": "google-meet",
+      "Zoom": "zoom",
+      "Teams": "microsoft-teams",
+      "Microsoft Teams": "microsoft-teams",
+      "Webex": "webex",
+      "Slack": "slack-icon",
+      "Calendar": "google-calendar",
+      "Google Calendar": "google-calendar",
+      "Linear": "linear-icon",
+      "Walrus": "walrus",
+      "Recall": "recall"
+    };
+    return map[key] || "";
+  }
+
+  function logoSvg(name) {
+    var key = logoKey(name);
+    if (!key || !document.getElementById("logo-" + key)) return null;
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "brand-mark");
+    svg.setAttribute("width", "16");
+    svg.setAttribute("height", "16");
+    svg.setAttribute("aria-hidden", "true");
+    var use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", "#logo-" + key);
+    svg.append(use);
+    return svg;
+  }
+
+  function platformBadge(name) {
+    var badge = document.createElement("span");
+    badge.className = "plat-badge";
+    var svg = logoSvg(name);
+    if (svg) badge.append(svg);
+    else {
+      var mark = document.createElement("span");
+      mark.className = "tool-logo";
+      mark.textContent = String(name || "M").replace(/[^A-Za-z]/g, "").slice(0, 1).toUpperCase() || "M";
+      badge.append(mark);
+    }
+    var label = document.createElement("span");
+    label.textContent = name === "Google Meet" ? "Meet" : name;
+    badge.append(label);
+    return badge;
   }
 
   function syncWorkspaceMenu() {
@@ -1218,29 +1370,45 @@ ${slack}
     if (explorer) explorer.hidden = false;
     if (notes) notes.hidden = true;
     var rooms = (state && state.rooms) || [];
-    var shown = 0;
+    var specs = [];
+    var usedTitle = {};
     waiting.forEach(function (item) {
       if (!roomVisible(item)) return;
-      shown += 1;
-      addRoomCard(item);
+      specs.push(item);
     });
     rooms.forEach(function (room) {
       var rows = decisionsFor(room.id);
-      var last = rows.length ? rows[rows.length - 1] : null;
+      var ident = roomIdentity(room, rows);
       var spec = {
         roomId: room.id,
-        title: roomLabel(room, last),
-        fullTitle: last ? last.text : "",
+        title: ident.title,
+        fullTitle: ident.full,
+        meta: ident.meta,
         where: room.platform || "",
-        countLine: rows.length ? roomCount(rows) : "Waiting for the meeting name",
+        whenText: relativeWhen(ident.when),
+        countLine: rows.length ? roomCount(rows) : "",
         people: peopleFor(room.id),
         waitingCount: waitingFor(room.id).length,
         kept: rows.length > 0
       };
       if (!roomVisible(spec)) return;
-      shown += 1;
-      addRoomCard(spec);
+      var base = spec.title;
+      if (usedTitle[base]) {
+        usedTitle[base] += 1;
+        var stamp = relativeWhen(ident.when) || whenLabel(ident.when) || String(room.id || "").slice(0, 6);
+        spec.title = base + (stamp ? " (" + stamp + ")" : " (" + usedTitle[base] + ")");
+        if (usedTitle[spec.title]) spec.title = base + " (" + usedTitle[base] + ")";
+      }
+      usedTitle[base] = usedTitle[base] || 1;
+      usedTitle[spec.title] = (usedTitle[spec.title] || 0) + 1;
+      specs.push(spec);
     });
+    var shown = specs.length;
+    var pages = Math.max(1, Math.ceil(shown / roomPageSize));
+    if (roomPage > pages - 1) roomPage = pages - 1;
+    if (roomPage < 0) roomPage = 0;
+    var start = roomPage * roomPageSize;
+    specs.slice(start, start + roomPageSize).forEach(addRoomCard);
     var total = rooms.length + waiting.length;
     var empty = document.getElementById("room-empty");
     var emptyLine = document.getElementById("room-empty-line");
@@ -1269,20 +1437,64 @@ ${slack}
     }
     syncHomeChrome();
     var foot = document.getElementById("room-foot");
-    if (foot) {
-      foot.hidden = shown === 0;
-      var noun = shown === 1 ? "room" : "rooms";
-      foot.textContent = shown ? (shown === total ? (shown + " " + noun) : (shown + " of " + total + " rooms")) : "";
+    var count = document.getElementById("room-count");
+    var prev = document.getElementById("room-prev");
+    var next = document.getElementById("room-next");
+    if (foot) foot.hidden = shown === 0;
+    if (count) {
+      var from = shown ? start + 1 : 0;
+      var to = Math.min(shown, start + roomPageSize);
+      count.textContent = shown ? (from + "-" + to + " of " + shown + " results") : "";
     }
+    if (prev) prev.disabled = roomPage <= 0;
+    if (next) next.disabled = roomPage >= pages - 1;
+  }
+
+  function clipText(text, max) {
+    var value = String(text || "").trim();
+    if (value.length <= max) return value;
+    return value.slice(0, max - 3).trim() + "...";
+  }
+
+  function roomIdentity(room, rows) {
+    var first = rows && rows.length ? rows[0] : null;
+    var last = rows && rows.length ? rows[rows.length - 1] : null;
+    var sentence = (first && first.text) || (last && last.text) || "";
+    var when = (last && last.spokenAt) || (first && first.spokenAt) || "";
+    var platform = (room && room.platform) || "";
+    var stamp = relativeWhen(when) || whenLabel(when);
+    var generic = !sentence || /^(room|untitled room|meeting|channel)$/i.test(sentence.trim());
+    var title = generic
+      ? [platform || "Room", stamp || String((room && room.id) || "").slice(0, 6)].filter(Boolean).join(" · ")
+      : clipText(sentence, 56);
+    return {
+      title: title || "Untitled room",
+      full: sentence || title,
+      meta: [platform, stamp].filter(Boolean).join(" · "),
+      when: when,
+      platform: platform
+    };
+  }
+
+  function relativeWhen(iso) {
+    if (!iso) return "";
+    var date = new Date(iso);
+    if (isNaN(date.getTime())) return "";
+    var now = new Date();
+    var hours = date.getHours();
+    var mins = String(date.getMinutes());
+    if (mins.length < 2) mins = "0" + mins;
+    var clock = (hours % 12 || 12) + ":" + mins + (hours >= 12 ? " PM" : " AM");
+    var start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    var day = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+    if (day === start) return "Today at " + clock;
+    if (day === start - 86400000) return "Yesterday at " + clock;
+    return whenLabel(iso);
   }
 
   function roomLabel(room, lead) {
-    var when = lead ? whenLabel(lead.spokenAt) : "";
-    if (room && room.platform && when) return room.platform + ", " + when;
-    if (room && room.platform) return room.platform;
-    var text = lead && lead.text ? String(lead.text) : "";
-    if (text.length > 52) return text.slice(0, 49).trim() + "...";
-    return text || "Room";
+    var rows = lead ? [lead] : [];
+    return roomIdentity(room || {}, rows).title;
   }
 
   function roomVisible(spec) {
@@ -1297,25 +1509,29 @@ ${slack}
   function addDecisionRow(decision) {
     var card = document.createElement("button");
     card.type = "button";
-    card.className = "decision-row";
+    card.className = "room decision-row";
     var main = document.createElement("span");
+    main.className = "ex-room";
     var heading = document.createElement("strong");
     heading.textContent = decision.text || "No decision yet.";
     var meta = document.createElement("span");
     meta.className = "meta";
     var who = personLabel(decision.speaker);
-    var when = whenLabel(decision.spokenAt);
-    var room = roomLabel((((state && state.rooms) || []).filter(function (item) { return item.id === decision.roomId; })[0]) || {}, decision);
-    meta.textContent = [who, when, room].filter(Boolean).join(" · ");
+    var when = relativeWhen(decision.spokenAt) || whenLabel(decision.spokenAt);
+    meta.textContent = [who, when].filter(Boolean).join(" · ");
     main.append(heading, meta);
-    card.append(main);
-    var status = decision.status || "";
-    if (typeof decision.checkpoint === "number" || status === "clashing" || status === "unknown" || status === "replaced") {
-      var badge = document.createElement("span");
-      badge.className = status === "clashing" || status === "unknown" ? "badge bad" : "badge";
-      badge.textContent = typeof decision.checkpoint === "number" ? ("Checkpoint " + decision.checkpoint) : statusLabel(status);
-      card.append(badge);
-    }
+    var roomName = roomLabel((((state && state.rooms) || []).filter(function (item) { return item.id === decision.roomId; })[0]) || {}, decision);
+    var roomCell = document.createElement("span");
+    roomCell.className = "meta";
+    roomCell.textContent = roomName || "Room";
+    var status = decision.status || "recorded";
+    var badge = document.createElement("span");
+    badge.className = status === "clashing" || status === "unknown" ? "badge bad" : "badge ok";
+    badge.textContent = typeof decision.checkpoint === "number" ? ("Checkpoint " + decision.checkpoint) : statusLabel(status);
+    var view = document.createElement("span");
+    view.className = "row-view";
+    view.textContent = "View >";
+    card.append(main, roomCell, badge, view);
     card.addEventListener("click", function () { openDecision(decision); });
     document.getElementById("record-list").append(card);
   }
@@ -1334,9 +1550,14 @@ ${slack}
       if (decision.spokenAt && decision.spokenAt > map[name].last) map[name].last = decision.spokenAt;
     });
     var rows = Object.keys(map).map(function (key) { return map[key]; });
-    if (!rows.length) return;
+    var foot = document.getElementById("people-foot");
+    var count = document.getElementById("people-count");
+    if (!rows.length) {
+      if (foot) foot.hidden = true;
+      return;
+    }
     var head = document.createElement("div");
-    head.className = "people-head";
+    head.className = "explorer-head people-head";
     ["Name", "Rooms", "Decisions", "Last heard"].forEach(function (label) {
       var cell = document.createElement("span");
       cell.textContent = label;
@@ -1346,13 +1567,41 @@ ${slack}
     rows.forEach(function (person) {
       var row = document.createElement("div");
       row.className = "people-row";
-      [person.name, person.rooms.join(", ") || "Room", String(person.count), whenLabel(person.last) || ""].forEach(function (value) {
-        var cell = document.createElement("span");
-        cell.textContent = value;
-        row.append(cell);
+      var name = document.createElement("span");
+      name.textContent = person.name;
+      var roomsCell = document.createElement("span");
+      roomsCell.className = "room-chips";
+      var shownRooms = person.rooms.slice(0, 2);
+      if (!shownRooms.length) {
+        var none = document.createElement("span");
+        none.className = "mini-chip";
+        none.textContent = "Room";
+        roomsCell.append(none);
+      }
+      shownRooms.forEach(function (room) {
+        var chip = document.createElement("span");
+        chip.className = "mini-chip";
+        chip.textContent = clipText(room, 28);
+        chip.title = room;
+        roomsCell.append(chip);
       });
+      if (person.rooms.length > 2) {
+        var more = document.createElement("span");
+        more.className = "mini-chip";
+        more.textContent = "+" + (person.rooms.length - 2);
+        more.title = person.rooms.slice(2).join(", ");
+        roomsCell.append(more);
+      }
+      var decisions = document.createElement("span");
+      decisions.className = "num";
+      decisions.textContent = String(person.count);
+      var heard = document.createElement("span");
+      heard.textContent = relativeWhen(person.last) || whenLabel(person.last) || "";
+      row.append(name, roomsCell, decisions, heard);
       list.append(row);
     });
+    if (foot) foot.hidden = false;
+    if (count) count.textContent = "1-" + rows.length + " of " + rows.length + " results";
   }
 
   function addLine(id, title, body, onPick) {
@@ -1495,12 +1744,46 @@ ${slack}
       }
     }
     syncNameCue();
+    var table = document.getElementById("history-table");
+    if (table) table.hidden = rows.length === 0;
     rows.forEach(function (row) {
-      addLine("history-list", row.title, row.body, function () {
+      var kind = row.decision ? "Decision" : (row.body && row.body.indexOf("waiting") !== -1 ? "Waiting" : "Ask");
+      var when = row.decision ? (relativeWhen(row.decision.spokenAt) || whenLabel(row.decision.spokenAt)) : "";
+      addTableRow("history-list", [row.title, kind, when], function () {
         if (row.decision) openDecision(row.decision);
         else if (row.roomId) openFile(row.roomId);
       });
     });
+    var historyFoot = document.getElementById("history-foot");
+    var historyCount = document.getElementById("history-count");
+    if (historyFoot) historyFoot.hidden = rows.length === 0;
+    if (historyCount && rows.length) historyCount.textContent = "1-" + rows.length + " of " + rows.length + " results";
+  }
+
+  function addTableRow(listId, cells, onPick) {
+    var row = document.createElement("button");
+    row.type = "button";
+    row.className = "room table-row";
+    cells.forEach(function (value, index) {
+      var cell = document.createElement("span");
+      if (index === 0) {
+        cell.className = "ex-room";
+        var strong = document.createElement("strong");
+        strong.textContent = value || "";
+        cell.append(strong);
+      } else {
+        cell.className = "meta";
+        cell.textContent = value || "";
+      }
+      row.append(cell);
+    });
+    var view = document.createElement("span");
+    view.className = "row-view";
+    view.textContent = "View >";
+    row.append(view);
+    if (onPick) row.addEventListener("click", onPick);
+    var list = document.getElementById(listId);
+    if (list) list.append(row);
   }
 
   function paint(next) {
@@ -1510,6 +1793,7 @@ ${slack}
     paintChip();
     document.getElementById("loading").hidden = !next.reading;
     document.body.classList.toggle("read-failed", next.read === "failed");
+    document.body.classList.toggle("is-reading", next.reading === true);
     if (next.reading) {
       if (!routed) {
         routed = true;
@@ -1532,6 +1816,8 @@ ${slack}
     syncSkeleton(false);
     clearTimeout(slowTimer);
     slowTimer = null;
+    var errorBox = document.getElementById("read-error");
+    if (errorBox && next.read === "failed") errorBox.classList.remove("state-info");
     showRetry(next.read === "failed", "The account could not be read. Try again.");
     fillHearing(next.hearing);
     var loaded = next.companyLoaded === true;
@@ -1580,7 +1866,7 @@ ${slack}
     var askBlock = document.getElementById("ask-block");
     if (askBlock) askBlock.hidden = false;
     if (kicker) kicker.hidden = false;
-    if (askHelp) askHelp.textContent = "Waits for a confirm before a change is sent. Sends means the change goes out.";
+    if (askHelp) askHelp.textContent = "On means a change waits for a confirm before it is sent.";
     var note = next.message || "";
     if (!note && !member() && !(next.rooms || []).length && !(next.decisions || []).length) note = "Sign-in is not set up.";
     text("read-note", note);
@@ -1598,6 +1884,8 @@ ${slack}
     paintPeople(next);
     var peopleCount = document.querySelectorAll("#people-list .people-row").length;
     document.getElementById("people-empty").hidden = peopleCount > 0;
+    var peopleTable = document.getElementById("people-table");
+    if (peopleTable) peopleTable.hidden = peopleCount === 0;
     var peopleNext = document.getElementById("people-next");
     if (peopleNext) {
       peopleNext.hidden = peopleCount > 0 || !(document.getElementById("meet-block") && document.getElementById("slack-block"));
@@ -1608,7 +1896,7 @@ ${slack}
       }
     }
     var recordNext = document.getElementById("record-next");
-    if (recordNext) recordNext.hidden = workspaceKind === "personal" || (next.decisions || []).length > 0 || (next.read === "failed");
+    if (recordNext) recordNext.hidden = true;
     var recordBoard = document.querySelector(".record-board");
     var recordEmpty = document.getElementById("record-empty");
     var noKept = (next.decisions || []).length === 0;
@@ -1620,14 +1908,19 @@ ${slack}
       if (next.read === "failed" && emptyLine) emptyLine.textContent = "The account could not be read. Try again.";
     }
     if (recordBoard) recordBoard.hidden = noKept;
+    var recordFoot = document.getElementById("record-foot");
+    var recordCount = document.getElementById("record-count");
+    var keptCount = (next.decisions || []).length;
+    if (recordFoot) recordFoot.hidden = noKept;
+    if (recordCount && keptCount) recordCount.textContent = "1-" + keptCount + " of " + keptCount + " results";
     var chatNext = document.getElementById("chat-next");
-    if (chatNext) chatNext.hidden = !noKept || workspaceKind === "personal";
+    if (chatNext) chatNext.hidden = true;
     var chatForm = document.getElementById("chat-form");
     var chatButton = document.querySelector("#chat-form button");
     var chatInput = document.getElementById("chat-text");
     var chatEmpty = document.getElementById("chat-empty");
     if (chatEmpty) chatEmpty.hidden = document.querySelector("#chat-log .chat-turn") != null;
-    if (chatForm) chatForm.hidden = noKept;
+    if (chatForm) chatForm.hidden = false;
     if (chatButton) chatButton.disabled = noKept;
     if (chatInput) {
       chatInput.disabled = noKept;
@@ -1648,6 +1941,7 @@ ${slack}
     if (name === "chat") return "Chat";
     if (name === "record") return "Decisions";
     if (name === "people") return "People";
+    if (name === "account") return "Account";
     if (name === "connectors") return "Status";
     return "Home";
   }
@@ -1655,17 +1949,15 @@ ${slack}
   function placeNewRoom() {
     var button = document.getElementById("new-room");
     if (!button) return;
-    var hostId = sectionName === "rooms" ? "rooms-head" : sectionName === "record" ? "record" : "home-head";
-    var host = hostId === "record"
-      ? document.querySelector("#record .page-actions")
-      : document.querySelector("#" + hostId + " .page-actions");
+    var hostId = sectionName === "rooms" ? "rooms-head" : "home-head";
+    var host = document.querySelector("#" + hostId + " .page-actions");
     if (host && button.parentNode !== host) host.appendChild(button);
   }
 
   function syncNewRoom() {
     var button = document.getElementById("new-room");
     if (!button) return;
-    var onList = sectionName === "home" || sectionName === "rooms" || sectionName === "record";
+    var onList = sectionName === "home" || sectionName === "rooms";
     button.hidden = workspaceKind === "personal" || !onList || (state && state.read === "failed");
     placeNewRoom();
   }
@@ -1686,7 +1978,7 @@ ${slack}
     node.textContent = message;
     node.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { node.hidden = true; }, 4200);
+    toastTimer = setTimeout(function () { node.hidden = true; }, 5200);
   }
 
   function syncSkeleton(reading) {
@@ -1733,6 +2025,7 @@ ${slack}
     if (name === "record") return "/console/decisions";
     if (name === "chat") return "/console/chat";
     if (name === "people") return "/console/people";
+    if (name === "account") return "/console/account";
     if (name === "connectors") return "/console/status";
     return "/console";
   }
@@ -1750,6 +2043,7 @@ ${slack}
     if (path === "/console/decisions") return "record";
     if (path === "/console/chat") return "chat";
     if (path === "/console/people") return "people";
+    if (path === "/console/account") return "account";
     if (path === "/console/status") return "connectors";
     return "home";
   }
@@ -1766,23 +2060,29 @@ ${slack}
     sectionName = name;
     var homeTitle = document.getElementById("home-title");
     if (homeTitle) homeTitle.hidden = name !== "home";
-    var panels = ["rooms", "history", "chat", "record", "people"];
+    var panels = ["rooms", "history", "chat", "record", "people", "account-page"];
     var onFile = name === "file";
     document.getElementById("overview").hidden = name !== "connectors";
     var crumbHome = document.getElementById("crumb-home");
     var crumbSep = document.getElementById("crumb-sep");
-    if (crumbHome) crumbHome.hidden = true;
-    if (crumbSep) crumbSep.hidden = true;
+    var roomsCrumb = document.getElementById("crumb-rooms");
+    var sep2 = document.getElementById("crumb-sep2");
+    var onHome = name === "home";
+    if (crumbHome) crumbHome.hidden = onHome;
+    if (crumbSep) crumbSep.hidden = onHome;
+    if (roomsCrumb) roomsCrumb.hidden = !onFile;
+    if (sep2) sep2.hidden = !onFile;
     if (onFile) {
-      var kind = document.getElementById("file-kind");
-      var crumb = (kind && kind.textContent) || "Room";
-      text("crumb-current", crumb);
+      text("crumb-current", (document.getElementById("file-title") || {}).textContent || "Room");
       if (file) file.hidden = false;
     } else {
       text("crumb-current", sectionLabel(name));
     }
     panels.forEach(function (id) {
-      document.getElementById(id).hidden = onFile ? true : (name === "home" ? id !== "rooms" : id !== name);
+      var key = id === "account-page" ? "account" : id;
+      var node = document.getElementById(id);
+      if (!node) return;
+      node.hidden = onFile ? true : (name === "home" ? id !== "rooms" : key !== name);
     });
     var current = onFile ? "rooms" : name;
     document.querySelectorAll(".rail [data-show]").forEach(function (button) {
@@ -1808,6 +2108,10 @@ ${slack}
     document.title = label + " · Sederunt";
     var topName = document.getElementById("top-name");
     if (topName && member()) topName.textContent = member();
+    var pageName = document.getElementById("account-page-name");
+    if (pageName) pageName.textContent = member() || "Account";
+    var pageRole = document.getElementById("account-page-role");
+    if (pageRole) pageRole.textContent = (document.getElementById("account-line") || {}).textContent || "";
     placeNewRoom();
     if (!routeQuiet && window.history && window.history.pushState) {
       if (onFile && fileRoom) {
@@ -1929,7 +2233,9 @@ ${slack}
       });
     });
     var filesBlock = document.getElementById("files-block");
-    if (filesBlock) filesBlock.hidden = names.length === 0;
+    if (filesBlock) filesBlock.hidden = false;
+    var filesEmpty = document.getElementById("files-empty");
+    if (filesEmpty) filesEmpty.hidden = names.length > 0;
     document.getElementById("files-heading").hidden = names.length === 0;
     clear("file-files");
     names.forEach(function (name) {
@@ -2005,15 +2311,16 @@ ${slack}
     }).then(function (result) {
       var note = "That change is still waiting.";
       var body = result && result.body ? String(result.body) : "";
-      if (body.indexOf("The edit did not happen.") !== -1) note = "The edit did not happen.";
-      else if (result && result.allow === "missing-member") note = "This server has no member configured.";
-      else if (result && result.allow === "not-invited") note = "You were not in this room.";
-      else if (kind === "confirm" && result && result.allow === "confirmed" && (result.status === "filed" || result.status === "updated")) {
-        var ticket = (body.match(/ROW-[0-9]+/) || [])[0];
+      var stillWaiting = waitingFor(fileRoom).some(function (item) { return item.id === actionId; });
+      var ticket = (body.match(/ROW-[0-9]+/) || [])[0];
+      if (kind === "confirm" && wasWaiting && !stillWaiting) {
         var toolWord = /linear/i.test(body) ? "Linear" : /calendar/i.test(body) ? "Calendar" : "";
         note = ticket ? ("Filed as " + ticket + (toolWord ? " in " + toolWord : "") + ".") : "That change was confirmed.";
-      }
-      else if (kind === "dismiss" && wasWaiting && !waitingFor(fileRoom).some(function (item) { return item.id === actionId; })) note = "That change was dismissed.";
+      } else if (kind === "dismiss" && wasWaiting && !stillWaiting) note = "That change was dismissed.";
+      else if (body.indexOf("The edit did not happen.") !== -1) note = "The edit did not happen.";
+      else if (result && result.allow === "missing-member") note = "This server has no member configured.";
+      else if (result && result.allow === "not-invited") note = "You were not in this room.";
+      else if (kind === "confirm" && result && result.allow === "confirmed") note = "That change was confirmed.";
       text("file-action-note", note);
       if (note && note !== "That change is still waiting.") toast(note);
     }).catch(function () {
@@ -2028,7 +2335,11 @@ ${slack}
     var rows = fileRoom ? waitingFor(fileRoom) : [];
     var waitingRow = document.getElementById("waiting-row");
     if (!rows.length) {
-      if (waitingRow) waitingRow.hidden = true;
+      if (waitingRow) waitingRow.hidden = false;
+      var empty = document.createElement("p");
+      empty.className = "meta";
+      empty.textContent = "Nothing is waiting.";
+      box.append(empty);
       return;
     }
     if (waitingRow) waitingRow.hidden = false;
@@ -2038,12 +2349,17 @@ ${slack}
       var toolName = action.tool === "linear" ? "Linear ticket" : action.tool === "calendar" ? "Calendar event" : "Change";
       var tool = document.createElement("p");
       tool.className = "wait-tool";
-      var mark = document.createElement("span");
-      mark.className = "tool-logo " + (action.tool || "change");
-      mark.textContent = toolName.slice(0, 1);
+      var svg = logoSvg(action.tool === "linear" ? "Linear" : action.tool === "calendar" ? "Calendar" : "");
+      if (svg) tool.append(svg);
+      else {
+        var mark = document.createElement("span");
+        mark.className = "tool-logo " + (action.tool || "change");
+        mark.textContent = toolName.slice(0, 1);
+        tool.append(mark);
+      }
       var label = document.createElement("span");
       label.textContent = toolName;
-      tool.append(mark, label);
+      tool.append(label);
       var line = document.createElement("p");
       line.textContent = action.statement || "A change is waiting.";
       var actions = document.createElement("div");
@@ -2094,12 +2410,63 @@ ${slack}
     text("file-kind", (fileWait && fileWait.where) || (room && room.platform) || "");
     var kind = document.getElementById("file-kind");
     if (kind) kind.hidden = !kind.textContent;
-    text("file-title", fileWait ? fileWait.title : (lead ? lead.text : "No decision yet."));
+    var named = roomIdentity(room || {}, leadRows);
+    var knownRoom = Boolean(room) || leadRows.length > 0 || fileWait;
+    var missing = document.getElementById("room-missing");
+    var fileHead = document.getElementById("file-head");
+    var split = document.querySelector("#file-dialog .detail-split");
+    if (missing) missing.hidden = knownRoom;
+    if (fileHead) fileHead.hidden = !knownRoom;
+    if (split) split.hidden = !knownRoom;
+    text("file-title", fileWait ? fileWait.title : (knownRoom ? named.title : "Room not found"));
     renderLead();
-    if (sectionName === "file") {
-      var crumbKind = document.getElementById("file-kind");
-      text("crumb-current", (crumbKind && crumbKind.textContent) || "Room");
+    if (sectionName === "file") text("crumb-current", document.getElementById("file-title").textContent || "Room");
+    text("file-overview-platform", (room && room.platform) || "Platform unknown");
+    text("file-overview-when", relativeWhen(named.when) || whenLabel(named.when));
+    text("file-overview-count", leadRows.length === 1 ? "1 decision" : (leadRows.length + " decisions"));
+    text("file-id", fileRoom || "");
+    var copy = document.getElementById("copy-room");
+    if (copy) copy.hidden = !fileRoom;
+    var waitingOn = (fileRoom && waitingFor(fileRoom).length > 0) || !!(fileWait && fileWait.wait);
+    var statusBadge = document.getElementById("file-status-badge");
+    if (statusBadge) {
+      statusBadge.className = waitingOn ? "badge warn" : "badge ok";
+      statusBadge.textContent = knownRoom ? (waitingOn ? "Waiting" : "Done") : "";
     }
+    var pill = document.getElementById("file-platform-pill");
+    if (pill) {
+      pill.replaceChildren();
+      var platformName = (fileWait && fileWait.where) || (room && room.platform) || "";
+      if (platformName) pill.append(platformBadge(platformName));
+    }
+    text("file-started", named.when ? ("Started " + (relativeWhen(named.when) || whenLabel(named.when))) : "");
+    var summary = lead && lead.text ? lead.text : "No decision yet.";
+    text("file-summary", knownRoom ? summary : "");
+    var outcome = document.getElementById("file-outcome");
+    if (outcome) outcome.textContent = knownRoom ? summary : "";
+    var callout = document.getElementById("file-callout");
+    if (callout) {
+      callout.hidden = !waitingOn;
+      callout.textContent = waitingOn ? "A change is waiting for a confirm." : "";
+    }
+    clear("file-overview-people");
+    people.forEach(function (person) {
+      var who = personLabel(person) || person;
+      document.getElementById("file-overview-people").append(face(who));
+    });
+    renderFacts(room, named, leadRows);
+    renderTranscript(leadRows);
+    var raw = JSON.stringify({
+      id: fileRoom,
+      platform: (room && room.platform) || "",
+      title: named.title,
+      decisions: leadRows.map(function (decision) {
+        return { text: decision.text || "", speaker: personLabel(decision.speaker) || "", spokenAt: decision.spokenAt || "", status: decision.status || "" };
+      })
+    }, null, 2);
+    text("file-raw", raw);
+    text("file-raw-side", raw);
+    applyRoomTabs();
     clear("file-heard");
     var present = document.getElementById("file-present");
     if (!people.length) {
@@ -2131,18 +2498,102 @@ ${slack}
     text("clash-note", clash.checked ? "This room will raise a clash here. Nothing is sent from this page." : "");
     clear("file-decisions");
     var rows = fileRoom ? decisionsFor(fileRoom) : [];
-    var titledByRoom = Boolean(room && room.platform);
-    rows.forEach(function (decision, index) {
-      if (!titledByRoom && index === rows.length - 1) return;
+    if (!rows.length) {
+      var none = document.createElement("p");
+      none.className = "meta";
+      none.textContent = "No decision yet.";
+      document.getElementById("file-decisions").append(none);
+    }
+    rows.forEach(function (decision) {
       var line = document.createElement("p");
+      line.className = "decision-line";
+      var who = personLabel(decision.speaker);
+      var when = relativeWhen(decision.spokenAt) || whenLabel(decision.spokenAt);
       line.textContent = decision.text || "No decision yet.";
+      if (who || when) {
+        var meta = document.createElement("span");
+        meta.className = "meta";
+        meta.textContent = [who, when].filter(Boolean).join(" · ");
+        line.append(meta);
+      }
       document.getElementById("file-decisions").append(line);
     });
-    var decisionBlock = document.getElementById("file-decisions").parentNode;
-    if (decisionBlock) decisionBlock.hidden = !document.getElementById("file-decisions").childElementCount;
+    clear("file-history");
+    rows.forEach(function (decision) {
+      var line = document.createElement("p");
+      line.className = "decision-line";
+      line.textContent = decision.text || "No decision yet.";
+      document.getElementById("file-history").append(line);
+    });
     renderWaiting();
     renderFiles();
     renderOutside();
+  }
+
+  function renderFacts(room, named, rows) {
+    var box = document.getElementById("file-facts");
+    if (!box) return;
+    box.replaceChildren();
+    var facts = [
+      ["Platform", (room && room.platform) || "Unknown"],
+      ["Started", relativeWhen(named.when) || whenLabel(named.when) || "Unknown"],
+      ["Decisions", String(rows.length)],
+      ["Voice", voiceWord(voiceFor())],
+      ["Ask first", room && room.ask === false ? "Off" : "On"]
+    ];
+    facts.forEach(function (pair) {
+      var term = document.createElement("dt");
+      term.textContent = pair[0];
+      var value = document.createElement("dd");
+      value.textContent = pair[1];
+      box.append(term, value);
+    });
+  }
+
+  function renderTranscript(rows) {
+    var box = document.getElementById("file-transcript");
+    if (!box) return;
+    box.replaceChildren();
+    var query = transcriptQuery.trim().toLowerCase();
+    var shown = 0;
+    (rows || []).forEach(function (decision) {
+      var who = personLabel(decision.speaker) || "Speaker";
+      var sentence = decision.text || "";
+      if (query && (who + " " + sentence).toLowerCase().indexOf(query) === -1) return;
+      shown += 1;
+      var row = document.createElement("div");
+      row.className = "utter";
+      var name = document.createElement("span");
+      name.className = "utter-name " + toneClass(who);
+      name.textContent = who;
+      var time = document.createElement("time");
+      time.textContent = relativeWhen(decision.spokenAt) || whenLabel(decision.spokenAt);
+      var line = document.createElement("p");
+      line.textContent = sentence;
+      row.append(name, time, line);
+      box.append(row);
+    });
+    if (!shown) {
+      var empty = document.createElement("p");
+      empty.className = "meta";
+      empty.textContent = (rows && rows.length) ? "No matching lines." : "No transcript yet.";
+      box.append(empty);
+    }
+  }
+
+  function applyRoomTabs() {
+    ["transcript", "config", "raw"].forEach(function (name) {
+      var pane = document.getElementById("left-" + name);
+      if (pane) pane.hidden = name !== leftTab;
+      var button = document.querySelector('[data-left-tab="' + name + '"]');
+      if (button) button.setAttribute("aria-selected", name === leftTab ? "true" : "false");
+    });
+    ["overview", "decisions", "waiting", "history", "raw"].forEach(function (name) {
+      var pane = document.getElementById("right-" + name);
+      if (pane) pane.hidden = name !== rightTab;
+      var button = document.querySelector('[data-right-tab="' + name + '"]');
+      if (button) button.setAttribute("aria-selected", name === rightTab ? "true" : "false");
+    });
   }
 
   function outsideFor(roomId) {
@@ -2413,11 +2864,9 @@ ${slack}
     paintChip();
     if (!changed) return;
     document.getElementById("chat-text").value = "";
-    clear("chat-log");
-    var emptyChat = document.createElement("p");
-    emptyChat.id = "chat-empty";
-    emptyChat.textContent = "Nothing has been asked here yet.";
-    document.getElementById("chat-log").append(emptyChat);
+    document.querySelectorAll("#chat-log .chat-turn").forEach(function (node) { node.remove(); });
+    var emptyChat = document.getElementById("chat-empty");
+    if (emptyChat) emptyChat.hidden = false;
     document.getElementById("loading").hidden = false;
     load();
   }
@@ -2425,6 +2874,8 @@ ${slack}
   function armSlow() {
     if (slowTimer) return;
     slowTimer = setTimeout(function () {
+      var slowBox = document.getElementById("read-error");
+      if (slowBox) slowBox.classList.add("state-info");
       showRetry(true, "This is taking longer than usual. Try again.");
       var again = document.getElementById("read-again");
       if (again) {
@@ -2585,6 +3036,10 @@ ${slack}
   });
   document.addEventListener("keydown", function (event) {
     if (event.key !== "Escape") return;
+    if (document.body.classList.contains("nav-open")) {
+      document.body.classList.remove("nav-open");
+      return;
+    }
     if (!document.getElementById("account-menu").hidden) closeAccountMenu();
     else if (!document.getElementById("profile-dialog").hidden) closeDialog("profile-dialog");
     else if (!document.getElementById("palette").hidden) closePalette();
@@ -2699,6 +3154,8 @@ ${slack}
       var purpose = document.getElementById("chat-purpose");
       if (purpose) purpose.hidden = true;
       var reading = document.querySelector("#chat-log .chat-turn:last-child .chat-body > span");
+      var pending = document.querySelector("#chat-log .chat-turn:last-child");
+      if (pending) pending.classList.remove("chat-pending");
       if (reading) reading.textContent = parts.answer || "The room did not answer.";
       if (reading && parts.detail) {
         var extra = document.createElement("span");
@@ -2706,6 +3163,7 @@ ${slack}
         extra.textContent = parts.detail;
         reading.parentNode.append(extra);
       }
+      if (reading && parts.cites) appendCites(reading.parentNode, parts.cites);
       document.getElementById("chat-text").value = "";
       growChat();
       var log = document.getElementById("chat-log");
@@ -2752,9 +3210,29 @@ ${slack}
       text("join-status", "Sederunt could not join that meeting.");
     });
   });
-  function addChatTurn(who, value, detail) {
+  function appendCites(body, cites) {
+    var row = document.createElement("span");
+    row.className = "cite-row";
+    (cites || []).forEach(function (cite) {
+      if (!cite || !cite.label) return;
+      var chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "cite-chip";
+      chip.textContent = cite.label;
+      chip.addEventListener("click", function () {
+        if (!cite.roomId) return;
+        leaveOnboard();
+        openFile(cite.roomId);
+      });
+      row.append(chip);
+    });
+    if (row.childElementCount) body.append(row);
+  }
+
+  function addChatTurn(who, value, detail, cites) {
     var line = document.createElement("p");
     line.className = who === "You" ? "chat-turn chat-you" : "chat-turn chat-bot";
+    if (value === "Reading.") line.classList.add("chat-pending");
     var label = document.createElement("strong");
     label.textContent = who;
     var body = document.createElement("span");
@@ -2768,6 +3246,7 @@ ${slack}
       extra.textContent = detail;
       body.append(extra);
     }
+    if (cites) appendCites(body, cites);
     line.append(label, body);
     var log = document.getElementById("chat-log");
     log.append(line);
@@ -2792,6 +3271,16 @@ ${slack}
   accountMenu.addEventListener("click", function (event) { event.stopPropagation(); });
   document.addEventListener("click", closeAccountMenu);
   var editProfile = document.getElementById("edit-profile");
+  var accountEdit = document.getElementById("account-edit");
+  if (accountEdit) accountEdit.addEventListener("click", function () {
+    if (editProfile) editProfile.click();
+    else openDialog("profile-dialog");
+  });
+  var accountOut = document.getElementById("account-signout");
+  if (accountOut) accountOut.addEventListener("click", function () {
+    var form = document.getElementById("sign-out-form");
+    if (form) form.submit();
+  });
   if (editProfile) editProfile.addEventListener("click", function () {
     closeAccountMenu();
     document.getElementById("profile-name").value = member();
@@ -2851,6 +3340,60 @@ ${slack}
   document.getElementById("nav-scrim").addEventListener("click", function () {
     document.body.classList.remove("nav-open");
   });
+  var railClose = document.getElementById("rail-close");
+  if (railClose) railClose.addEventListener("click", function () {
+    document.body.classList.remove("nav-open");
+    var toggle = document.getElementById("rail-toggle");
+    if (toggle) {
+      toggle.setAttribute("aria-pressed", "false");
+      toggle.setAttribute("aria-label", "Open the menu");
+    }
+  });
+  var copyRoom = document.getElementById("copy-room");
+  if (copyRoom) copyRoom.addEventListener("click", function () {
+    var id = (document.getElementById("file-id") || {}).textContent || "";
+    if (!id) return;
+    var done = function () { toast("Copied the room id."); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(id).then(done).catch(done);
+    else done();
+  });
+  document.querySelectorAll("[data-left-tab]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      leftTab = button.getAttribute("data-left-tab") || "transcript";
+      applyRoomTabs();
+    });
+  });
+  document.querySelectorAll("[data-right-tab]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      rightTab = button.getAttribute("data-right-tab") || "overview";
+      applyRoomTabs();
+    });
+  });
+  document.querySelectorAll("[data-suggest]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var input = document.getElementById("chat-text");
+      if (!input || input.disabled) return;
+      input.value = button.getAttribute("data-suggest") || "";
+      growChat();
+      var form = document.getElementById("chat-form");
+      if (form && form.requestSubmit) form.requestSubmit();
+    });
+  });
+  var roomPrev = document.getElementById("room-prev");
+  var roomNext = document.getElementById("room-next");
+  if (roomPrev) roomPrev.addEventListener("click", function () {
+    roomPage -= 1;
+    paintRooms();
+  });
+  if (roomNext) roomNext.addEventListener("click", function () {
+    roomPage += 1;
+    paintRooms();
+  });
+  var transcriptSearch = document.getElementById("transcript-search");
+  if (transcriptSearch) transcriptSearch.addEventListener("input", function () {
+    transcriptQuery = transcriptSearch.value || "";
+    renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
+  });
   var chatBox = document.getElementById("chat-text");
   function growChat() {
     if (!chatBox) return;
@@ -2882,6 +3425,7 @@ ${slack}
   function applyRoomFilters(filter, query) {
     roomFilter = filter || "all";
     roomQuery = String(query || "").trim().toLowerCase();
+    roomPage = 0;
     document.querySelectorAll("[data-room-filter]").forEach(function (node) {
       node.setAttribute("aria-pressed", node.getAttribute("data-room-filter") === roomFilter ? "true" : "false");
     });

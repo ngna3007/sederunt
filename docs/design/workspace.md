@@ -23,8 +23,11 @@ The visual system is the light console in `src/console.css`. Geist is the UI fac
 | Muted text | `#5e636f` | Secondary sentences and table heads. Passes 4.5:1 on the background |
 | Border | `#dce0e6` | 1px rules |
 | Input | `#d2d6de` | Field borders |
-| Primary | `#524ce3` | The one accent: current section, primary button, focus |
-| Primary text | `#f9fafd` | Text on the accent. Passes 4.5:1 |
+| Primary | `#2458f6` | The landing action blue: current section, primary button, focus. White on it is about 5.5:1 |
+| Primary hover | `#1a46d4` | Pressed and hover fill. White on it stays above 4.5:1 |
+| Primary subtle | `#eef1fb` | Selected nav, chips, and avatar ground. The landing wash |
+| Primary border | `#8ebcff` | Chip and focus edge. The landing light blue |
+| Primary text | `#ffffff` | Text on the accent |
 | Sidebar | `#f1f3f9` | Rail, 240px |
 | Success text | `#146c34` | A kept or sent state. Darker than the fill so small text passes 4.5:1 |
 | Warning text | `#8a5a00` | Waiting. Darker than the fill so small text passes 4.5:1 |
@@ -34,14 +37,14 @@ Radius is 6px on buttons and inputs, 10px on cards and dialogs, and full pills o
 
 Section labels stay short and uppercase. That is the label voice. It is not a poster heading.
 
-The company tile is the indigo primary. The personal tile is solid `#171a24`. The two tiles stay different so the menu can tell the workspaces apart. Cards do not float. The menu and the dialog are the only elevated surfaces. The waiting cell is the one tinted surface, because that count is the action. The top bar may blur. No glow, no radial orbs.
+The company tile is the brand blue. The personal tile is solid `#171a24`. The two tiles stay different so the menu can tell the workspaces apart. Cards do not float. The menu and the dialog are the only elevated surfaces. The waiting cell is the one tinted surface, because that count is the action. The top bar may blur. No glow, no radial orbs.
 
 ## Design Principles
 
 - Home is the waiting count and the rooms. History is a different page.
 - A count is a count of records in the open workspace. It does not name a week, a trend, or a customer base the record does not have.
 - The workspace list lives in the top chip. The sidebar is the sections of the workspace that is open.
-- A room block, and a history row, opens one dialog. The dialog is the file. There is no second column of detail.
+- A room row opens the room page. The page is two panes: the transcript on the left, and overview, decisions, waiting, and settings on the right.
 - Close is the X at the top right, the shade, or Escape.
 - A control that cannot do its action is not drawn.
 - A private note is not a room, and it never appears in the company workspace.

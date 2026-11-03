@@ -40,13 +40,13 @@ The list and the dialog live in the workspace shell from [workspace.md](./worksp
 
 ### Rooms list
 
-Each room is one block in a grid. The list is not a table and not a row. The mark sits beside the title. Under the title is where the room is: the platform name, and the channel when the room is a channel. The bottom line shows who was present, as faces. Each display name keeps one color. The bot is its own face beside the name Sederunt. That face is not the app mark. The last decision is the lead of the dialog, not a line on the block. A block has no preview area. It does not carry a transcript, a file name, a waiting list, or a meeting link. Those stay in the dialog.
+Each room is one row in a full-width table. The columns are Room, Platform, Speakers, Status, and View. The platform cell is a pill with the official mark. Speakers are an avatar stack. Status is Waiting or Done, with a relative time. A row opens the room page. The room title is a distinctive sentence from that room, or the platform and time when the sentence would repeat.
 
 The types are Google Meet, Zoom, Teams, Webex, and Slack. A channel block names the channel, such as #design. A meeting block has no channel, because a meeting is not a channel. The page line "Present while the bot was there" is what the names on the bottom line mean.
 
 A company workspace shows New room. A personal workspace does not. An empty company list says to bring the bot into a meeting or a channel. An empty personal list says a private note is not a room.
 
-A block opens the room dialog. The list does not grow a side pane.
+A row opens the room page. The list does not grow a side pane.
 
 ### New room
 
