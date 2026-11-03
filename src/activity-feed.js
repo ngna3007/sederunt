@@ -198,3 +198,111 @@ function searchText(row) {
     row.origin?.roomName, change.field, change.from, change.to, row.error,
   ].filter(Boolean).join(" ").toLowerCase();
 }
+
+function quoteLabel(value) {
+  return `\u201c${value}\u201d`;
+}
+
+function shownChange(value, zone, viewerZone) {
+  const text = value == null ? "" : String(value);
+  if (!text) return "";
+  return formatActivitySentence(text, zone || undefined, viewerZone || undefined, text);
+}
+
+function undoSubject(target) {
+  const title = String(target?.title || "").trim();
+  const id = String(target?.id || "").trim();
+  if (title) return { quoted: quoteLabel(title) };
+  if (id) return { quoted: id };
+  return { quoted: "it" };
+}
+
+function undoClause(change, target, zone, viewerZone) {
+  const field = String(change?.field || "");
+  const from = shownChange(change?.from, zone, viewerZone);
+  const to = shownChange(change?.to, zone, viewerZone);
+  const subject = undoSubject(target);
+  const id = String(target?.id || "").trim();
+  const place = id || subject.quoted;
+  if (field === "label" && to) {
+    return {
+      ask: `Remove label ${quoteLabel(to)} from ${place}?`,
+      done: `Removed label ${quoteLabel(to)} from ${place}.`,
+    };
+  }
+  if (field === "label" && from) {
+    return {
+      ask: `Add label ${quoteLabel(from)} back to ${place}?`,
+      done: `Added label ${quoteLabel(from)} back to ${place}.`,
+    };
+  }
+  if (field === "start" && from) {
+    return {
+      ask: `Move ${subject.quoted} back to ${from}?`,
+      done: `Moved ${subject.quoted} back to ${from}.`,
+    };
+  }
+  if (field === "end" && from) {
+    return {
+      ask: `Move the end of ${subject.quoted} back to ${from}?`,
+      done: `Moved the end of ${subject.quoted} back to ${from}.`,
+    };
+  }
+  if (field === "assignee" && from) {
+    return {
+      ask: `Assign ${place} back to ${from}?`,
+      done: `Assigned ${place} back to ${from}.`,
+    };
+  }
+  if (field === "assignee") {
+    return {
+      ask: `Clear the assignee on ${place}?`,
+      done: `Cleared the assignee on ${place}.`,
+    };
+  }
+  if ((field === "status" || field === "state") && from) {
+    return {
+      ask: `Move ${subject.quoted} back to ${from}?`,
+      done: `Moved ${subject.quoted} back to ${from}.`,
+    };
+  }
+  if (field === "priority" && from) {
+    return {
+      ask: `Set the priority of ${subject.quoted} back to ${from}?`,
+      done: `Set the priority of ${subject.quoted} back to ${from}.`,
+    };
+  }
+  if (from) {
+    const name = field || "it";
+    return {
+      ask: `Set ${name} on ${subject.quoted} back to ${from}?`,
+      done: `Set ${name} on ${subject.quoted} back to ${from}.`,
+    };
+  }
+  return null;
+}
+
+/**
+ * Confirm and toast copy for the inverse of one recorded action.
+ * Clocks use the calendar zone when the target is a calendar event.
+ *
+ * @param {{ target?: { id?: string, title?: string, system?: string }, changes?: { field?: string, from?: string, to?: string }[] }} row
+ * @param {string} [timeZone]
+ * @param {string} [viewerZone]
+ */
+export function undoPrompt(row, timeZone, viewerZone) {
+  const target = row?.target || {};
+  const zone = target.system === "calendar" ? (timeZone || viewerZone || "") : (viewerZone || timeZone || "");
+  const viewer = viewerZone || timeZone || "";
+  const changes = Array.isArray(row?.changes) ? row.changes : [];
+  const bits = changes.map((change) => undoClause(change, target, zone, viewer)).filter(Boolean);
+  if (!bits.length) {
+    const subject = undoSubject(target);
+    return { ask: `Undo the change to ${subject.quoted}?`, done: `Undid the change to ${subject.quoted}.` };
+  }
+  if (bits.length === 1) return bits[0];
+  return {
+    ask: `${bits.map((bit) => bit.ask.replace(/\?$/, "")).join("; ")}?`,
+    done: `${bits.map((bit) => bit.done.replace(/\.$/, "")).join("; ")}.`,
+  };
+}
