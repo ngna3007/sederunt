@@ -207,6 +207,7 @@ test("join sends one bot to the public camera page and a failed join omits the k
   assert.equal(body.bot_name, "Maple");
   assert.equal(body.output_media.camera.config.url, "https://sederunt.example/meeting?name=Maple");
   assert.deepEqual(body.recording_config, {
+    video_mixed_mp4: {},
     transcript: {
       provider: { recallai_streaming: { mode: "prioritize_low_latency", language_code: "en" } },
       diarization: { use_separate_streams_when_available: true },

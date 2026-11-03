@@ -10,7 +10,7 @@ import { createLinearClient } from "./linear/mcp.js";
 import { loadLinearToken } from "./linear/token.js";
 import { renderCameraPage } from "./meeting/camera.js";
 import { normalizeHearing } from "./hearing.js";
-import { createMeetingAdapter, meetingDoorReady, recallTranscriptDelivery, verifyRecallRequest } from "./meeting/recall.js";
+import { createMeetingAdapter, mediaFromBot, meetingDoorReady, recallBotUrl, recallTranscriptDelivery, verifyRecallRequest } from "./meeting/recall.js";
 import { createTatumReader } from "./tatum/get-object.js";
 import { bindToolMember, handleMcpRequest, memberRefusal, mcpJsonRpc } from "./mcp.js";
 import { renderConsolePage } from "./console-page.js";
@@ -242,6 +242,7 @@ export function createApp(options = {}) {
     deps,
     companyLoaded: loadedCompany(options, deps, env, companies),
     linearReady: options.linearReady === true || (options.env ? false : linearReady()),
+    recall: options.recall || null,
   };
   return createServer(async (req, res) => {
   try {
@@ -387,6 +388,43 @@ export function createApp(options = {}) {
       redirect(res, "/console/sign-in", { "set-cookie": clearedSessionCookie(req) });
       return;
     }
+    if (req.method === "GET" && /^\/console\/rooms\/[^/]+\/media$/.test(url.pathname)) {
+      const gate = guardConsole(req, env);
+      if (gate.required && !gate.session) {
+        send(res, 401, "application/json; charset=utf-8", JSON.stringify({ error: "Sign in." }));
+        return;
+      }
+      const id = decodeURIComponent(url.pathname.slice("/console/rooms/".length, -"/media".length));
+      const body = await roomMedia(workspace, id);
+      const raw = JSON.stringify(body);
+      if (typeof env.RECALL_API_KEY === "string" && env.RECALL_API_KEY && raw.includes(env.RECALL_API_KEY)) {
+        send(res, 502, "application/json; charset=utf-8", JSON.stringify({ state: "none" }));
+        return;
+      }
+      send(res, 200, "application/json; charset=utf-8", raw);
+      return;
+    }
+    if (req.method === "POST" && /^\/console\/rooms\/[^/]+\/name$/.test(url.pathname)) {
+      const gate = guardConsole(req, env);
+      if (gate.required && !gate.session) {
+        send(res, 401, "application/json; charset=utf-8", JSON.stringify({ error: "Sign in." }));
+        return;
+      }
+      const id = decodeURIComponent(url.pathname.slice("/console/rooms/".length, -"/name".length));
+      const posted = await readJson(req);
+      const name = typeof posted.name === "string" ? posted.name.trim().slice(0, 80) : "";
+      if (!name || !/^[A-Za-z0-9_-]{1,80}$/.test(id)) {
+        send(res, 400, "application/json; charset=utf-8", JSON.stringify({ error: "Enter a room name." }));
+        return;
+      }
+      const current = await prepareWorkspace(workspace, "");
+      current.roomNames ??= {};
+      current.roomNames[id] = name;
+      const opened = (current.rooms || []).find((item) => item.id === id);
+      if (opened) opened.name = name;
+      send(res, 200, "application/json; charset=utf-8", JSON.stringify({ id, name }));
+      return;
+    }
     if (req.method === "GET" && (url.pathname === "/console" || url.pathname.startsWith("/console/"))) {
       const gate = guardConsole(req, env);
       if (gate.required && !gate.session) {
@@ -410,6 +448,7 @@ export function createApp(options = {}) {
         accountMember: String(env.SEDERUNT_MEMBER || "").trim(),
         accountName: gate.session?.name?.trim() || String(env.SEDERUNT_MEMBER || "").trim(),
         accountLine: gate.session ? "Owner" : "Sign-in is not set up",
+        accountExpiry: gate.session?.exp || 0,
       }));
       return;
     }
@@ -1056,6 +1095,63 @@ function bindMember(env, supplied) {
   );
   if (bound.refusal) return { ok: false, reason: bound.refusal };
   return { ok: true, memberId: bound.message.params.arguments.memberId };
+}
+
+async function roomMedia(workspace, id) {
+  const empty = {
+    state: "none",
+    title: "",
+    videoUrl: "",
+    transcriptUrl: "",
+    participantsUrl: "",
+    eventsUrl: "",
+    timelineUrl: "",
+    metadataUrl: "",
+    startedAt: "",
+    duration: 0,
+    lines: [],
+    segments: [],
+    events: [],
+  };
+  let current = workspace.session || { rooms: [] };
+  try {
+    current = await prepareWorkspace(workspace, "");
+  } catch {
+    current = workspace.session || { rooms: [] };
+  }
+  const room = (current.rooms || []).find((item) => item.id === id);
+  const platform = typeof room?.platform === "string" ? room.platform : "";
+  if (/slack/i.test(platform)) return { ...empty, state: "channel", title: room?.name || room?.channel || "" };
+  workspace.mediaCache ??= new Map();
+  const hit = workspace.mediaCache.get(id);
+  if (hit && hit.until > Date.now()) return hit.body;
+  let bot = null;
+  const reader = workspace.recall?.readBot || workspace.deps?.recall?.readBot;
+  const key = typeof workspace.env.RECALL_API_KEY === "string" ? workspace.env.RECALL_API_KEY : "";
+  try {
+    if (typeof reader === "function") bot = await reader(id);
+    else if (key && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      const response = await fetch(recallBotUrl(id), {
+        headers: { authorization: `Token ${key}`, accept: "application/json" },
+      });
+      const text = await response.text();
+      if (text.includes(key)) return empty;
+      if (/media has already expired/i.test(text)) return { ...empty, state: "expired" };
+      if (response.ok) bot = JSON.parse(text);
+    }
+  } catch {
+    bot = null;
+  }
+  const body = mediaFromBot(bot);
+  if (body.title) {
+    current.roomNames ??= {};
+    if (!current.roomNames[id]) current.roomNames[id] = body.title;
+    if (room && !room.name) room.name = body.title;
+  }
+  if (body.state !== "expired") {
+    workspace.mediaCache.set(id, { until: Date.now() + (body.state === "processing" ? 15000 : 4 * 60 * 1000), body });
+  }
+  return body;
 }
 
 async function slackPeople(env, deps, channel) {

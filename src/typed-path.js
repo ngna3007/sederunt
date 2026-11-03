@@ -1726,6 +1726,12 @@ export function companyBoard(session, memberId) {
       rooms.push(room);
     }
     if (opened.platform) room.platform = opened.platform;
+    if (typeof opened.name === "string" && opened.name) room.name = opened.name;
+    if (typeof opened.channel === "string" && opened.channel) room.channel = opened.channel;
+  }
+  const named = session?.roomNames && typeof session.roomNames === "object" ? session.roomNames : {};
+  for (const room of rooms) {
+    if (typeof named[room.id] === "string" && named[room.id]) room.name = named[room.id];
   }
   const roomIds = new Set(decisions.map((decision) => decision.roomId));
   const waiting = [];

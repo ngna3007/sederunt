@@ -35,6 +35,11 @@ function header(headers, name) {
 
 const BOT_URL = "https://ap-northeast-1.recall.ai/api/v1/bot/";
 
+/** Retrieve Bot for one id. The key stays on this request. */
+export function recallBotUrl(id) {
+  return `${BOT_URL}${encodeURIComponent(id)}/`;
+}
+
 /**
  * Recall.ai Output Media in ap-northeast-1. Join posts one bot only when the
  * key, an https meeting url, and a public https origin are all present.
@@ -77,6 +82,7 @@ export function createMeetingAdapter(env = process.env, options = {}) {
               camera: { kind: "webpage", config: { url: cameraUrl } },
             },
             recording_config: {
+              video_mixed_mp4: {},
               transcript: {
                 provider: { recallai_streaming: { mode: "prioritize_low_latency", language_code: "en" } },
                 diarization: { use_separate_streams_when_available: true },
@@ -149,6 +155,109 @@ export function recallTranscriptDelivery(payload) {
       memberIds: memberId ? [memberId] : [],
     },
   };
+}
+
+/**
+ * The console media card for one Retrieve Bot payload.
+ * Download URLs are copied through. Nothing here reads an API key.
+ *
+ * @param {unknown} bot
+ * @param {number} [now]
+ */
+export function mediaFromBot(bot, now = Date.now()) {
+  const blank = {
+    state: "none",
+    title: "",
+    videoUrl: "",
+    transcriptUrl: "",
+    participantsUrl: "",
+    eventsUrl: "",
+    timelineUrl: "",
+    metadataUrl: "",
+    startedAt: "",
+    duration: 0,
+    lines: [],
+    segments: [],
+    events: [],
+  };
+  if (!bot || typeof bot !== "object") return blank;
+  const root = /** @type {Record<string, unknown>} */ (bot);
+  const recordings = Array.isArray(root.recordings) ? root.recordings : [];
+  const recording = recordings[0] && typeof recordings[0] === "object" ? recordings[0] : null;
+  const shortcuts = recording && recording.media_shortcuts && typeof recording.media_shortcuts === "object"
+    ? recording.media_shortcuts
+    : {};
+  const video = shortcutData(shortcuts.video_mixed);
+  const transcript = shortcutData(shortcuts.transcript);
+  const people = shortcutData(shortcuts.participant_events);
+  const meta = shortcutData(shortcuts.meeting_metadata);
+  const title = stringField(meta, "title") || stringField(root, "meeting_title");
+  const started = stringField(recording, "started_at") || stringField(root, "join_at");
+  const completed = stringField(recording, "completed_at");
+  const duration = secondsBetween(started, completed);
+  const urls = {
+    title,
+    videoUrl: stringField(video, "download_url"),
+    transcriptUrl: stringField(transcript, "download_url"),
+    participantsUrl: stringField(people, "participants_download_url"),
+    eventsUrl: stringField(people, "participant_events_download_url"),
+    timelineUrl: stringField(people, "speaker_timeline_download_url"),
+    metadataUrl: stringField(meta, "download_url"),
+    startedAt: started,
+    duration,
+    lines: Array.isArray(root.lines) ? root.lines : [],
+    segments: Array.isArray(root.segments) ? root.segments : [],
+    events: Array.isArray(root.events) ? root.events : [],
+  };
+  if (mediaExpired(recording, shortcuts, root, now)) return { ...blank, ...urls, state: "expired", videoUrl: "" };
+  const code = statusCode(recording) || statusCode(shortcuts.video_mixed);
+  if (!recordings.length) {
+    const botCode = lastStatus(root);
+    return { ...blank, ...urls, state: botCode && botCode !== "done" && botCode !== "fatal" ? "processing" : "none" };
+  }
+  if (!urls.videoUrl && code && code !== "done") return { ...blank, ...urls, state: "processing" };
+  if (!urls.videoUrl && !urls.transcriptUrl && !urls.timelineUrl && !urls.participantsUrl) return { ...blank, ...urls, state: "none" };
+  return { ...blank, ...urls, state: urls.videoUrl ? "ready" : "novideo" };
+}
+
+function shortcutData(node) {
+  if (!node || typeof node !== "object") return {};
+  const data = node.data;
+  return data && typeof data === "object" ? data : {};
+}
+
+function stringField(node, key) {
+  if (!node || typeof node !== "object") return "";
+  const value = node[key];
+  return typeof value === "string" ? value : "";
+}
+
+function statusCode(node) {
+  if (!node || typeof node !== "object" || !node.status || typeof node.status !== "object") return "";
+  return typeof node.status.code === "string" ? node.status.code : "";
+}
+
+function lastStatus(bot) {
+  const changes = Array.isArray(bot.status_changes) ? bot.status_changes : [];
+  const last = changes[changes.length - 1];
+  return last && typeof last.code === "string" ? last.code : "";
+}
+
+function mediaExpired(recording, shortcuts, bot, now) {
+  const blob = JSON.stringify({ recording, shortcuts, message: bot.message || bot.detail || "" });
+  if (/media has already expired/i.test(blob)) return true;
+  const stamps = [recording?.expires_at, shortcuts.video_mixed?.expires_at].filter((value) => typeof value === "string");
+  return stamps.some((value) => {
+    const time = Date.parse(value);
+    return !Number.isNaN(time) && time <= now;
+  });
+}
+
+function secondsBetween(start, end) {
+  const a = Date.parse(start || "");
+  const b = Date.parse(end || "");
+  if (Number.isNaN(a) || Number.isNaN(b) || b < a) return 0;
+  return Math.round((b - a) / 1000);
 }
 
 function httpsUrl(value) {

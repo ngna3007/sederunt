@@ -19,7 +19,7 @@ export function renderSignInPage(state = {}) {
   const form = configured
     ? `<form method="post" action="/console/sign-in" id="sign-in-form">
         <input type="hidden" name="next" value="${next}">
-        <label>Name
+        <label>Name (optional)
           <input id="sign-name" name="name" autocomplete="name" maxlength="80" value="${name}" placeholder="The name you use in the room">
         </label>
         <label>Passphrase

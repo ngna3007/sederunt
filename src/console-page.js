@@ -1,5 +1,45 @@
 import { brandLogo, brandSprite } from "./brand-logos.js";
 
+const RANK_STOP = {
+  what: 1, was: 1, were: 1, decided: 1, decide: 1, decision: 1, decisions: 1,
+  about: 1, the: 1, a: 1, an: 1, of: 1, to: 1, in: 1, on: 1, for: 1, and: 1,
+  or: 1, is: 1, this: 1, that: 1, with: 1, from: 1, did: 1, does: 1, we: 1, do: 1,
+};
+
+/**
+ * Every decision in a room that matches the question. The chip label is the
+ * sentence itself, with no room suffix.
+ *
+ * @param {string} question
+ * @param {{ text?: string, roomId?: string, spokenAt?: string }[]} decisions
+ * @param {{ id?: string, platform?: string }[]} rooms
+ */
+export function rankDecisions(question, decisions, rooms) {
+  const words = String(question || "").toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 2 && !RANK_STOP[word]);
+  const rows = (decisions || []).filter((decision) => String(decision.text || "").trim());
+  const roomText = (roomId) => {
+    const room = (rooms || []).find((item) => item.id === roomId);
+    const named = room ? ((room.platform || "") + " " + (room.id || "")) : "";
+    return (named + " " + rows.filter((decision) => decision.roomId === roomId).map((decision) => decision.text).join(" ")).toLowerCase();
+  };
+  if (!rows.length) return { answer: "Nothing is stored that you can read.", detail: "", cites: [] };
+  let picked = rows;
+  if (words.length) {
+    const roomsHit = {};
+    rows.forEach((decision) => {
+      const blob = (String(decision.text || "") + " " + roomText(decision.roomId)).toLowerCase();
+      if (words.some((word) => blob.includes(word))) roomsHit[decision.roomId || ""] = true;
+    });
+    picked = rows.filter((decision) => roomsHit[decision.roomId || ""]);
+    if (!picked.length) return { answer: "Nothing stored matches that question.", detail: "", cites: [] };
+  } else {
+    picked = rows.slice().sort((a, b) => String(b.spokenAt || "").localeCompare(String(a.spokenAt || ""))).slice(0, 3);
+  }
+  picked = picked.slice().sort((a, b) => String(b.spokenAt || "").localeCompare(String(a.spokenAt || "")));
+  const cites = picked.map((decision) => ({ roomId: decision.roomId, label: decision.text || "", text: decision.text || "" }));
+  return { answer: picked.map((decision) => decision.text).join(" "), detail: "", cites };
+}
+
 /**
  * The operator workspace. Onboard, home, rooms, history, chat, and record
  * read the process. The page has no key field.
@@ -49,6 +89,7 @@ export function renderConsolePage(state = {}) {
   const linearIcon = brandLogo("linear-icon");
   const channelIcon = brandLogo("slack-icon");
   const searchIcon = glyph('<circle cx="7" cy="7" r="3.2"/><path d="M9.4 9.4 12.5 12.5"/>');
+  const kebabIcon = glyph('<circle cx="8" cy="3.4" r="0.8" fill="currentColor"/><circle cx="8" cy="8" r="0.8" fill="currentColor"/><circle cx="8" cy="12.6" r="0.8" fill="currentColor"/>');
   const editIcon = glyph('<path d="M9.6 2.7 13.3 6.4 6.4 13.3H2.7V9.6z"/>');
   const outIcon = glyph('<path d="M6.2 2.8H3.4v10.4h2.8"/><path d="M6.6 8h6.2"/><path d="M10.6 5.4 13.2 8l-2.6 2.6"/>');
   const accountMenu = signedIn
@@ -134,7 +175,8 @@ ${brandSprite()}
       </nav>
       <span id="top-name" class="top-name"></span>
     </div>
-    <h1 id="status-title" class="page-title" hidden>Status</h1>
+    <h1 id="view-title" class="sr">Home</h1>
+    <p id="status-title" class="page-title" hidden>Status</p>
     <div class="notices">
       <p id="setup-label" class="setup-label">Rooms</p>
       <button id="setup-toggle" class="setup-toggle" type="button" aria-expanded="false" hidden>Setup is unfinished</button>
@@ -164,13 +206,13 @@ ${slack}
     </section>
     <div id="home" hidden>
       <div class="main">
-    <div id="read-error" class="state-error" hidden>
-      <p id="read-error-copy">The account could not be read.</p>
+    <div id="read-error" class="state-error empty-state" hidden>
+      <p id="read-error-copy" class="empty-title">Couldn't load your workspace. Try again.</p>
       <button id="read-again" type="button">Retry</button>
     </div>
     <div class="page-head" id="home-head">
     <div>
-    <h1 id="home-title" class="page-title">Home</h1>
+    <p id="home-title" class="page-title">Home</p>
     <p class="page-lede">What is waiting, and which rooms heard a decision.</p>
     </div>
     <div class="page-actions"></div>
@@ -189,14 +231,15 @@ ${slack}
     </div>
     </div>
     <p id="status"></p>
-    <div id="loading" class="skeletons" aria-busy="true">
+    <div id="loading" class="skeletons table-skel" aria-busy="true">
       <span class="sr">Reading the account.</span>
-      <span class="sk sk-h"></span>
-      <span class="sk sk-l"></span>
-      <span class="sk sk-b"></span>
+      <span class="sk sk-row"></span>
+      <span class="sk sk-row"></span>
+      <span class="sk sk-row"></span>
+      <span class="sk sk-row"></span>
     </div>
     <div id="overview" hidden>
-      <div class="page-head"><div><h1 class="page-title">Status</h1><p class="page-lede">Which tools Sederunt can use, and how the meeting guest listens.</p></div><div class="page-actions"></div></div>
+      <div class="page-head"><div><p class="page-title">Status</p><p class="page-lede">Which tools Sederunt can use, and how the meeting guest listens.</p></div><div class="page-actions"></div></div>
       <p id="connector-split"></p>
       <div class="settings-card" id="tools-card">
       <p class="section-label">Tools</p>
@@ -268,7 +311,7 @@ ${slack}
     <section id="rooms">
       <div class="page-head" id="rooms-head" hidden>
         <div>
-          <h1 class="page-title">Rooms</h1>
+          <p class="page-title">Rooms</p>
           <p class="page-lede">Meetings and channels this workspace has heard.</p>
         </div>
         <div class="page-actions"></div>
@@ -299,7 +342,7 @@ ${slack}
       </div>
     </section>
     <section id="history" hidden>
-      <div class="page-head"><div><h1 class="page-title">History</h1><p class="page-lede">What a room heard.</p></div></div>
+      <div class="page-head"><div><p class="page-title">History</p><p class="page-lede">What a room heard.</p></div></div>
       <div class="history-tools">
         <div class="choices" role="group" aria-label="Whose record">
           <button type="button" data-scope="group" aria-pressed="true">Company</button>
@@ -311,23 +354,23 @@ ${slack}
           <button type="button" class="chip-filter" data-kind="action">Waiting</button>
           <button type="button" class="chip-filter" data-kind="other">Asks</button>
         </div>
+        <label class="search">${searchIcon}<span class="sr">Search history</span><input id="history-search" type="search" placeholder="Search" autocomplete="off"></label>
       </div>
       <div id="history-empty" class="empty-state" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="4.6"/><path d="M8 5.6V8l1.7 1.1"/></svg></span><p class="empty-title" id="history-line">No history yet.</p><p>Questions and decisions from a room show up here.</p></div>
       <p class="section-next"><button id="history-next" class="primary" type="button" hidden>New room</button></p>
       <div class="explorer" id="history-table">
         <div class="explorer-head hist-head"><span>What</span><span>Kind</span><span>When</span><span></span></div>
         <div id="history-list"></div>
-        <div id="history-foot" class="explorer-foot" hidden><span id="history-count"></span></div>
+        <div id="history-foot" class="explorer-foot" hidden><span id="history-count"></span><span class="pager"><button id="history-prev" type="button" aria-label="Previous page">‹</button><button id="history-next-page" type="button" aria-label="Next page">›</button></span></div>
       </div>
     </section>
     <section id="chat" hidden>
-      <div class="page-head"><div><h1 class="page-title">Chat</h1><p class="page-lede">Ask what this workspace already kept. Chat does not keep a decision.</p></div></div>
+      <div class="page-head"><div><p class="page-title">Chat</p><p class="page-lede">Ask what this workspace already kept. Chat does not keep a decision.</p></div></div>
       <div class="talk-panel ai-chat">
         <div class="thread" id="chat-log">
           <div id="chat-empty" class="chat-hello">
-            <h2>What was decided?</h2>
-            <p class="empty-title">Nothing has been asked yet.</p>
-            <p>Ask about a room. Chat does not keep a decision.</p>
+            <p class="hello-title">Ask this workspace</p>
+            <p>Nothing has been asked yet.</p>
             <div class="suggests">
               <button type="button" data-suggest="What was decided?">What was decided?</button>
               <button type="button" data-suggest="What is waiting?">What is waiting?</button>
@@ -345,37 +388,69 @@ ${slack}
       </div>
     </section>
     <section id="record" hidden>
-      <div class="page-head"><div><h1 class="page-title">Decisions</h1><p class="page-lede">Sentences a room kept, with who kept each one and when.</p></div><div class="page-actions"></div></div>
+      <div class="page-head"><div><p class="page-title">Decisions</p><p class="page-lede">Sentences a room kept, with who kept each one and when.</p></div><div class="page-actions"></div></div>
+      <div class="toolbar" id="record-toolbar">
+        <div class="chips" role="group" aria-label="Filter decisions">
+          <button type="button" class="chip-filter" data-decision-filter="all" aria-pressed="true">All</button>
+          <button type="button" class="chip-filter" data-decision-filter="current">Current</button>
+          <button type="button" class="chip-filter" data-decision-filter="clashing">Clashing</button>
+        </div>
+        <label class="search">${searchIcon}<span class="sr">Search decisions</span><input id="record-search" type="search" placeholder="Search" autocomplete="off"></label>
+      </div>
       <div class="empty-state" id="record-empty"><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.8h10v10.4H3z"/><path d="M5 6h6M5 8.4h6M5 10.8h3.5"/></svg></span><p class="empty-title ledger">No decision yet.</p><p>A sentence kept in a room shows up here.</p></div>
       <p class="section-next"><button id="record-next" class="primary" type="button" hidden>New room</button></p>
       <div class="record-board explorer" id="record-table">
         <div class="explorer-head decision-head"><span>Decision</span><span>Room</span><span>Status</span><span></span></div>
         <div id="record-list"></div>
-        <div id="record-foot" class="explorer-foot" hidden><span id="record-count"></span></div>
+        <div id="record-foot" class="explorer-foot" hidden><span id="record-count"></span><span class="pager"><button id="record-prev" type="button" aria-label="Previous page">‹</button><button id="record-next-page" type="button" aria-label="Next page">›</button></span></div>
         <p id="record-detail" hidden></p>
       </div>
     </section>
     <section id="account-page" hidden>
-      <div class="page-head"><div><h1 class="page-title">Account</h1><p class="page-lede">The name shown for you in this workspace.</p></div></div>
-      <div class="overview-card" id="account-card">
-        <p id="account-page-name" class="empty-title"></p>
-        <p id="account-page-role" class="meta"></p>
-        <div class="wait-actions">
-          ${signedIn ? `<button type="button" class="primary" id="account-edit">Edit profile</button><button type="button" class="danger" id="account-signout">Sign out</button>` : `<p class="meta">Sign-in is not set up.</p>`}
+      <div class="page-head"><div><p class="page-title">Account</p><p class="page-lede">The name shown for you in this workspace.</p></div></div>
+      <div class="account-layout">
+        <div class="overview-card account-hero" id="account-card">
+          <span id="account-page-avatar" class="account-avatar lg" aria-hidden="true">${escapeHtml(accountInitials(accountName))}</span>
+          <div>
+            <p id="account-page-name" class="empty-title"></p>
+            <p id="account-page-role" class="meta"></p>
+          </div>
+        </div>
+        <div class="settings-card">
+          <p class="section-label">Details</p>
+          <dl class="kv account-kv">
+            <dt>Name</dt><dd id="account-detail-name"></dd>
+            <dt>Role</dt><dd id="account-detail-role"></dd>
+            <dt>Workspace</dt><dd id="account-detail-workspace">Company</dd>
+            <dt>Session</dt><dd id="account-detail-expiry">${escapeHtml(state.accountExpiry ? new Date(state.accountExpiry).toUTCString() : (signedIn ? "This sign-in does not list an expiry." : "Sign-in is not set up."))}</dd>
+          </dl>
+        </div>
+        <div class="settings-card">
+          <p class="section-label">Sessions</p>
+          <p class="card-help">This browser keeps one sign-in for the workspace.</p>
+          <div class="wait-actions">
+            ${signedIn ? `<button type="button" class="primary" id="account-edit">Edit profile</button><button type="button" class="danger" id="account-signout">Sign out</button>` : `<p class="meta">Sign-in is not set up.</p>`}
+          </div>
         </div>
       </div>
     </section>
     <section id="people" hidden>
-      <div class="page-head"><div><h1 class="page-title">People</h1><p class="page-lede">Names heard in a room.</p></div></div>
+      <div class="page-head"><div><p class="page-title">People</p><p class="page-lede">Names heard in a room.</p></div></div>
+      <div class="toolbar" id="people-toolbar">
+        <div class="chips" role="group" aria-label="Filter people">
+          <button type="button" class="chip-filter" data-people-filter="all" aria-pressed="true">All</button>
+        </div>
+        <label class="search">${searchIcon}<span class="sr">Search people</span><input id="people-search" type="search" placeholder="Search" autocomplete="off"></label>
+      </div>
       <div id="people-empty" class="empty-state" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="5.2" r="2.2"/><path d="M3.4 12.6c.7-2 2.4-3 4.6-3s3.9 1 4.6 3"/></svg></span><p class="empty-title">No one is listed yet.</p><p>People from a meeting or a channel show up here.</p></div>
       <p class="section-next"><button id="people-next" class="primary" type="button" hidden>Open Home</button></p>
       <div class="explorer" id="people-table">
         <div id="people-list"></div>
-        <div id="people-foot" class="explorer-foot" hidden><span id="people-count"></span></div>
+        <div id="people-foot" class="explorer-foot" hidden><span id="people-count"></span><span class="pager"><button id="people-prev" type="button" aria-label="Previous page">‹</button><button id="people-next-page" type="button" aria-label="Next page">›</button></span></div>
       </div>
     </section>
-    <div id="file-dialog" class="dialog" hidden role="region" aria-labelledby="file-title">
-      <div class="panel bot-detail">
+    <div id="file-dialog" class="dialog room-screen" hidden role="region" aria-labelledby="file-title">
+      <div class="panel bot-detail room-screen-panel">
         <div id="room-missing" class="empty-state" hidden>
           <p class="empty-title">Room not found</p>
           <p>That room is not in this workspace.</p>
@@ -385,23 +460,43 @@ ${slack}
           <div class="bot-title-row">
             <div class="file-name">
               <p id="file-kind" class="page-kicker"></p>
-              <h1 id="file-title" class="page-title"></h1>
+              <p id="file-title" class="page-title"></p>
             </div>
-            <button type="button" class="close" data-close="file-dialog" aria-label="Close">${closeIcon}</button>
+            <div class="room-actions">
+              <button type="button" id="room-menu-btn" class="close" aria-haspopup="menu" aria-expanded="false" aria-controls="room-menu" aria-label="Room actions">${kebabIcon}</button>
+              <div id="room-menu" class="menu room-menu" role="menu" hidden>
+                <button type="button" id="copy-room" role="menuitem">Copy id</button>
+                <button type="button" id="copy-link" role="menuitem">Copy link</button>
+                <button type="button" id="open-meeting" role="menuitem">Open meeting</button>
+              </div>
+              <button type="button" class="close" data-close="file-dialog" aria-label="Close">${closeIcon}</button>
+            </div>
           </div>
           <div class="meta-strip" id="file-meta">
-            <button type="button" id="copy-room" class="id-chip"><span id="file-id" class="mono"></span></button>
-            <span id="file-status-badge" class="badge"></span>
-            <span id="file-platform-pill"></span>
-            <span id="file-started" class="meta"></span>
+            <button type="button" id="file-id-chip" class="id-chip"><span id="file-id" class="mono"></span></button>
+            <span class="meta-item"><span class="meta-label">Status</span><span id="file-status-badge" class="badge"></span></span>
+            <span class="meta-rule" aria-hidden="true"></span>
+            <span class="meta-item"><span class="meta-label">Platform</span><span id="file-platform-pill"></span></span>
+            <span class="meta-rule" aria-hidden="true"></span>
+            <span class="meta-item"><span class="meta-label">Started</span><span id="file-started" class="meta"></span></span>
             <p id="file-lead" class="page-lede" hidden></p>
             <p id="file-lead-status" class="meta"></p>
             <p id="file-proof" class="meta" hidden></p>
           </div>
         </div>
-        <div class="detail-split bot-split">
-          <div class="detail-main">
-            <section class="summary-card" id="summary-card">
+        <div class="room-body">
+        <div class="room-split detail-split bot-split" id="room-split">
+          <div class="detail-main room-left" id="room-left">
+            <div class="player-frame">
+              <div class="player" id="player">
+                <video id="player-video" playsinline preload="metadata"></video>
+                <div id="player-fallback" class="player-fallback">
+                  <p id="player-name"></p>
+                  <p id="player-note"></p>
+                </div>
+              </div>
+            </div>
+            <section class="summary-card" id="summary-card" hidden>
               <h2>Summary</h2>
               <p id="file-summary"></p>
             </section>
@@ -410,13 +505,13 @@ ${slack}
               <button type="button" data-left-tab="config" aria-selected="false">Config</button>
               <button type="button" data-left-tab="raw" aria-selected="false">Raw</button>
             </div>
-            <div id="left-transcript" class="tab-pane">
-              <label class="search pin-search">${searchIcon}<span class="sr">Search the transcript</span><input id="transcript-search" type="search" placeholder="Search transcript" autocomplete="off"></label>
+            <div id="left-transcript" class="tab-pane left-scroll">
               <div id="file-transcript"></div>
               <h2 class="pane-label">Speakers</h2>
               <div id="file-heard" class="faces"></div>
               <p id="file-present">The meeting has not sent who is there.</p>
             </div>
+            <label class="search dock-search">${searchIcon}<span class="sr">Search the transcript</span><input id="transcript-search" type="search" placeholder="Search transcript" autocomplete="off"></label>
             <div id="left-config" class="tab-pane" hidden>
               <section class="detail-block" id="files-block">
                 <h2 id="files-heading" hidden>Files</h2>
@@ -428,7 +523,8 @@ ${slack}
               <pre id="file-raw" class="raw-card"></pre>
             </div>
           </div>
-          <aside class="detail-side">
+          <div id="room-resizer" class="room-resizer" role="separator" aria-orientation="vertical" aria-label="Resize the transcript" tabindex="0"></div>
+          <aside class="detail-side room-right">
             <div class="underline-tabs" role="tablist" aria-label="Room detail">
               <button type="button" data-right-tab="overview" aria-selected="true">Overview</button>
               <button type="button" data-right-tab="decisions" aria-selected="false">Decisions</button>
@@ -437,15 +533,20 @@ ${slack}
               <button type="button" data-right-tab="raw" aria-selected="false">Raw</button>
             </div>
             <div id="right-overview" class="tab-pane">
-              <div class="overview-card" id="file-overview">
+              <div class="overview-card" id="file-overview" hidden>
                 <h2>Overview</h2>
                 <p id="file-overview-platform" class="meta"></p>
                 <p id="file-overview-when" class="meta"></p>
                 <p id="file-overview-count" class="meta"></p>
                 <div id="file-overview-people" class="faces"></div>
               </div>
-              <p id="file-callout" class="callout" hidden></p>
-              <div class="outcome-card" id="file-outcome"></div>
+              <div id="file-callout" class="callout" hidden></div>
+              <div class="outcome-card" id="file-outcome" hidden></div>
+              <div class="overview-facts" id="overview-facts"></div>
+              <section class="artifacts" id="artifacts">
+                <h2>Meeting artifacts</h2>
+                <div id="artifact-list"></div>
+              </section>
               <dl class="kv" id="file-facts"></dl>
             </div>
             <div id="right-decisions" class="tab-pane" hidden>
@@ -475,7 +576,7 @@ ${slack}
                   <strong>Ask first</strong>
                   <p id="room-edit-note"></p>
                 </div>
-                <label class="switch"><input id="ask-first" type="checkbox" checked><span class="sr">Ask first</span></label>
+                <label class="switch"><input id="ask-first" type="checkbox" checked aria-label="Ask first"><span class="sr">Ask first</span></label>
               </div>
               <div class="room-set">
                 <div class="set-copy"><strong>Voice</strong></div>
@@ -490,10 +591,28 @@ ${slack}
                   <strong>Raise a clash</strong>
                   <p id="clash-note"></p>
                 </div>
-                <label class="switch"><input id="raise-clash" type="checkbox"><span class="sr">Raise a clash</span></label>
+                <label class="switch"><input id="raise-clash" type="checkbox" aria-label="Raise a clash"><span class="sr">Raise a clash</span></label>
               </div>
             </div>
           </aside>
+        </div>
+        <section id="timeline" class="timeline" aria-label="Timeline">
+          <div class="timeline-bar">
+            <button type="button" id="tl-play" class="tl-play" aria-label="Play">▶</button>
+            <button type="button" id="tl-restart" class="tl-restart" aria-label="Restart">↺</button>
+            <span id="tl-clock" class="tl-clock"><span id="tl-now">00:00</span><span class="tl-sep">/</span><span id="tl-end">00:00</span></span>
+            <span id="tl-when" class="tl-when"></span>
+            <span class="tl-hints"><kbd>Space</kbd><kbd>J</kbd><kbd>K</kbd></span>
+            <button type="button" id="tl-hide" class="tl-hide" aria-pressed="false">Hide timeline</button>
+          </div>
+          <div id="tl-track" class="tl-track">
+            <div id="tl-ruler" class="tl-ruler"></div>
+            <div class="tl-lane"><span class="tl-lane-label">Speakers</span><div id="tl-speakers" class="tl-lane-body"></div></div>
+            <div class="tl-lane"><span class="tl-lane-label">Events</span><div id="tl-events" class="tl-lane-body"></div></div>
+            <div class="tl-lane"><span class="tl-lane-label">Kept</span><div id="tl-marks" class="tl-lane-body"></div></div>
+            <div id="tl-head" class="tl-head" hidden></div>
+          </div>
+        </section>
         </div>
       </div>
     </div>
@@ -619,7 +738,14 @@ ${slack}
   var opener = null;
   var roomFilter = "all";
   var roomQuery = "";
-  var roomPage = 0;
+    var roomPage = 0;
+  var recordPage = 0;
+  var historyPage = 0;
+  var peoplePage = 0;
+  var recordQuery = "";
+  var historyQuery = "";
+  var peopleQuery = "";
+  var recordFilter = "all";
   var roomPageSize = 8;
   var transcriptQuery = "";
   var leftTab = "transcript";
@@ -726,7 +852,8 @@ ${slack}
 
   function syncHomeChrome() {
     var personal = workspaceKind === "personal";
-    var emptyHome = !personal && roomTotal() === 0 && sectionName === "home";
+    var pending = !state || state.reading === true;
+    var emptyHome = !personal && !pending && roomTotal() === 0 && sectionName === "home";
     var homeEmpty = document.getElementById("home-empty");
     var blockedHome = !!(document.getElementById("meet-block") && document.getElementById("slack-block"));
     if (homeEmpty) homeEmpty.hidden = !emptyHome;
@@ -735,7 +862,7 @@ ${slack}
     var note = document.getElementById("read-note");
     if (note) note.hidden = sectionName !== "home" || emptyHome;
     var explorer = document.querySelector(".explorer");
-    if (explorer && !personal) explorer.hidden = sectionName === "home" && emptyHome;
+    if (explorer && !personal) explorer.hidden = pending || (sectionName === "home" && emptyHome);
     var line = document.getElementById("home-empty-line");
     var aside = document.getElementById("home-empty-aside");
     if (line) line.textContent = blockedHome ? "No meeting or channel is in use." : "No room yet.";
@@ -1053,43 +1180,10 @@ ${slack}
     return { answer: "Nothing is stored that you can read.", detail: "", cites: [] };
   }
 
+  ${rankDecisions.toString()}
+
   function rankAnswer(question) {
-    var stop = { what: 1, was: 1, were: 1, decided: 1, about: 1, the: 1, a: 1, an: 1, of: 1, to: 1, in: 1, on: 1, for: 1, and: 1, or: 1, is: 1, this: 1, that: 1, with: 1, from: 1, did: 1, does: 1 };
-    var words = String(question || "").toLowerCase().split(/[^a-z0-9]+/).filter(function (word) {
-      return word.length > 2 && !stop[word];
-    });
-    var rows = ((state && state.decisions) || []).filter(function (decision) { return String(decision.text || "").trim(); });
-    function hits(decision) {
-      var text = String(decision.text || "").toLowerCase();
-      var count = 0;
-      words.forEach(function (word) { if (text.indexOf(word) !== -1) count += 1; });
-      return count;
-    }
-    function cite(decision) {
-      var room = ((state && state.rooms) || []).filter(function (item) { return item.id === decision.roomId; })[0];
-      var named = roomLabel(room || {}, decision);
-      return { roomId: decision.roomId, label: named || "Room", text: decision.text || "" };
-    }
-    function line(decision) {
-      var named = cite(decision);
-      return named.text + (named.label ? " (in " + named.label + ")" : "");
-    }
-    if (!rows.length) return { answer: "Nothing is stored that you can read.", detail: "", cites: [] };
-    var ranked = rows.map(function (decision) { return { decision: decision, score: hits(decision) }; });
-    ranked.sort(function (a, b) {
-      return b.score - a.score || String(b.decision.spokenAt || "").localeCompare(String(a.decision.spokenAt || ""));
-    });
-    var matched = ranked.filter(function (row) { return row.score > 0; }).slice(0, 3);
-    if (!words.length || !matched.length) {
-      var latest = rows.slice().sort(function (a, b) {
-        return String(b.spokenAt || "").localeCompare(String(a.spokenAt || ""));
-      }).slice(0, 3);
-      if (!words.length) {
-        return { answer: latest.map(function (decision) { return decision.text; }).join(" "), detail: "", cites: latest.map(cite) };
-      }
-      return { answer: "Nothing stored matches that question.", detail: latest.map(line).join(" "), cites: latest.map(cite) };
-    }
-    return { answer: line(matched[0].decision), detail: matched.slice(1).map(function (row) { return line(row.decision); }).join(" "), cites: matched.map(function (row) { return cite(row.decision); }) };
+    return rankDecisions(question, (state && state.decisions) || [], (state && state.rooms) || []);
   }
 
   function storedAnswer() {
@@ -1234,6 +1328,7 @@ ${slack}
     roomCol.className = "ex-room";
     var title = document.createElement("strong");
     title.textContent = spec.title || "Room";
+    if (spec.title && spec.title === spec.roomId) title.classList.add("mono");
     var count = document.createElement("span");
     count.className = "ex-count";
     count.textContent = spec.meta || spec.countLine || "";
@@ -1297,10 +1392,12 @@ ${slack}
   function logoSvg(name) {
     var key = logoKey(name);
     if (!key || !document.getElementById("logo-" + key)) return null;
+    var symbol = document.getElementById("logo-" + key);
     var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("class", "brand-mark");
     svg.setAttribute("width", "16");
     svg.setAttribute("height", "16");
+    svg.setAttribute("viewBox", (symbol && symbol.getAttribute("viewBox")) || "0 0 24 24");
     svg.setAttribute("aria-hidden", "true");
     var use = document.createElementNS("http://www.w3.org/2000/svg", "use");
     use.setAttribute("href", "#logo-" + key);
@@ -1456,20 +1553,25 @@ ${slack}
     return value.slice(0, max - 3).trim() + "...";
   }
 
+  function roomName(room) {
+    if (!room) return "";
+    if (room.name) return String(room.name);
+    if (room.channel) {
+      var channel = String(room.channel);
+      return channel.charAt(0) === "#" ? channel : ("#" + channel);
+    }
+    return "";
+  }
+
   function roomIdentity(room, rows) {
-    var first = rows && rows.length ? rows[0] : null;
     var last = rows && rows.length ? rows[rows.length - 1] : null;
-    var sentence = (first && first.text) || (last && last.text) || "";
-    var when = (last && last.spokenAt) || (first && first.spokenAt) || "";
+    var when = (room && room.startedAt) || (last && last.spokenAt) || "";
     var platform = (room && room.platform) || "";
+    var title = roomName(room) || (room && room.id) || "Room";
     var stamp = relativeWhen(when) || whenLabel(when);
-    var generic = !sentence || /^(room|untitled room|meeting|channel)$/i.test(sentence.trim());
-    var title = generic
-      ? [platform || "Room", stamp || String((room && room.id) || "").slice(0, 6)].filter(Boolean).join(" · ")
-      : clipText(sentence, 56);
     return {
-      title: title || "Untitled room",
-      full: sentence || title,
+      title: title,
+      full: title,
       meta: [platform, stamp].filter(Boolean).join(" · "),
       when: when,
       platform: platform
@@ -1520,10 +1622,13 @@ ${slack}
     var when = relativeWhen(decision.spokenAt) || whenLabel(decision.spokenAt);
     meta.textContent = [who, when].filter(Boolean).join(" · ");
     main.append(heading, meta);
-    var roomName = roomLabel((((state && state.rooms) || []).filter(function (item) { return item.id === decision.roomId; })[0]) || {}, decision);
+    var decisionRoom = (((state && state.rooms) || []).filter(function (item) { return item.id === decision.roomId; })[0]) || {};
     var roomCell = document.createElement("span");
-    roomCell.className = "meta";
-    roomCell.textContent = roomName || "Room";
+    roomCell.className = "ex-plat";
+    if (decisionRoom.platform) roomCell.append(platformBadge(decisionRoom.platform));
+    var roomText = document.createElement("span");
+    roomText.textContent = roomName(decisionRoom) || decisionRoom.id || "Room";
+    roomCell.append(roomText);
     var status = decision.status || "recorded";
     var badge = document.createElement("span");
     badge.className = status === "clashing" || status === "unknown" ? "badge bad" : "badge ok";
@@ -1935,6 +2040,29 @@ ${slack}
     }
   }
 
+  function setViewTitle(label) {
+    var shown = label || "Sederunt";
+    var heading = document.getElementById("view-title");
+    if (heading) heading.textContent = shown;
+    if (shown.length > 48) shown = shown.slice(0, 45).trim() + "...";
+    document.title = shown + " · Sederunt";
+  }
+
+  function placeNotice() {
+    var box = document.getElementById("read-error");
+    if (!box) return;
+    var head = document.getElementById("home-head");
+    if (sectionName === "rooms") head = document.getElementById("rooms-head");
+    else if (sectionName === "history") head = document.querySelector("#history .page-head");
+    else if (sectionName === "record") head = document.querySelector("#record .page-head");
+    else if (sectionName === "chat") head = document.querySelector("#chat .page-head");
+    else if (sectionName === "people") head = document.querySelector("#people .page-head");
+    else if (sectionName === "account") head = document.querySelector("#account-page .page-head");
+    else if (sectionName === "connectors") head = document.querySelector("#overview .page-head");
+    else if (sectionName === "file") head = document.getElementById("file-head");
+    if (head && head.parentNode) head.parentNode.insertBefore(box, head.nextSibling);
+  }
+
   function sectionLabel(name) {
     if (name === "rooms") return "Rooms";
     if (name === "history") return "History";
@@ -1959,6 +2087,7 @@ ${slack}
     if (!button) return;
     var onList = sectionName === "home" || sectionName === "rooms";
     button.hidden = workspaceKind === "personal" || !onList || (state && state.read === "failed");
+    button.disabled = !state || state.reading === true || (state && state.read === "failed");
     placeNewRoom();
   }
 
@@ -2100,18 +2229,26 @@ ${slack}
     var roomsHead = document.getElementById("rooms-head");
     var roomTools = document.getElementById("room-toolbar");
     if (roomsHead) roomsHead.hidden = name !== "rooms";
-    if (roomTools) roomTools.hidden = name !== "rooms";
+    if (roomTools) roomTools.hidden = name !== "rooms" && name !== "home";
     var homeHead = document.getElementById("home-head");
     if (homeHead) homeHead.hidden = name !== "home";
     var label = onFile ? ((document.getElementById("file-title") || {}).textContent || "Room") : sectionLabel(name);
-    if (label.length > 48) label = label.slice(0, 45).trim() + "...";
-    document.title = label + " · Sederunt";
+    setViewTitle(label);
+    placeNotice();
     var topName = document.getElementById("top-name");
     if (topName && member()) topName.textContent = member();
     var pageName = document.getElementById("account-page-name");
-    if (pageName) pageName.textContent = member() || "Account";
+    var shownName = member() || "Account";
+    if (pageName) pageName.textContent = shownName;
     var pageRole = document.getElementById("account-page-role");
-    if (pageRole) pageRole.textContent = (document.getElementById("account-line") || {}).textContent || "";
+    var roleLine = (document.getElementById("account-line") || {}).textContent || "";
+    if (pageRole) pageRole.textContent = roleLine;
+    text("account-detail-name", shownName);
+    text("account-detail-role", roleLine);
+    var avatar = document.getElementById("account-page-avatar");
+    if (avatar) avatar.textContent = initials(shownName);
+    var workspaceLabel = document.getElementById("account-detail-workspace");
+    if (workspaceLabel) workspaceLabel.textContent = workspaceKind === "personal" ? "Personal" : "Company";
     placeNewRoom();
     if (!routeQuiet && window.history && window.history.pushState) {
       if (onFile && fileRoom) {
@@ -2128,6 +2265,7 @@ ${slack}
     }
     routeQuiet = false;
     document.body.classList.remove("nav-open");
+    document.body.classList.toggle("room-open", name === "file");
   }
 
   function dialogOpen() {
@@ -2418,9 +2556,12 @@ ${slack}
     if (missing) missing.hidden = knownRoom;
     if (fileHead) fileHead.hidden = !knownRoom;
     if (split) split.hidden = !knownRoom;
-    text("file-title", fileWait ? fileWait.title : (knownRoom ? named.title : "Room not found"));
+    text("file-title", fileWait ? (fileWait.title || "Room") : (knownRoom ? named.title : "Room not found"));
     renderLead();
-    if (sectionName === "file") text("crumb-current", document.getElementById("file-title").textContent || "Room");
+    if (sectionName === "file") {
+      text("crumb-current", document.getElementById("file-title").textContent || "Room");
+      setViewTitle(document.getElementById("file-title").textContent || "Room");
+    }
     text("file-overview-platform", (room && room.platform) || "Platform unknown");
     text("file-overview-when", relativeWhen(named.when) || whenLabel(named.when));
     text("file-overview-count", leadRows.length === 1 ? "1 decision" : (leadRows.length + " decisions"));
@@ -2439,16 +2580,11 @@ ${slack}
       var platformName = (fileWait && fileWait.where) || (room && room.platform) || "";
       if (platformName) pill.append(platformBadge(platformName));
     }
-    text("file-started", named.when ? ("Started " + (relativeWhen(named.when) || whenLabel(named.when))) : "");
-    var summary = lead && lead.text ? lead.text : "No decision yet.";
-    text("file-summary", knownRoom ? summary : "");
+    text("file-started", relativeWhen(named.when) || whenLabel(named.when));
+    text("file-summary", "");
     var outcome = document.getElementById("file-outcome");
-    if (outcome) outcome.textContent = knownRoom ? summary : "";
-    var callout = document.getElementById("file-callout");
-    if (callout) {
-      callout.hidden = !waitingOn;
-      callout.textContent = waitingOn ? "A change is waiting for a confirm." : "";
-    }
+    if (outcome) { outcome.hidden = true; outcome.textContent = ""; }
+    paintCallout(fileRoom);
     clear("file-overview-people");
     people.forEach(function (person) {
       var who = personLabel(person) || person;
@@ -2467,6 +2603,7 @@ ${slack}
     text("file-raw", raw);
     text("file-raw-side", raw);
     applyRoomTabs();
+    loadRoomMedia();
     clear("file-heard");
     var present = document.getElementById("file-present");
     if (!people.length) {
@@ -2563,14 +2700,28 @@ ${slack}
       shown += 1;
       var row = document.createElement("div");
       row.className = "utter";
+      var origin = roomMediaState && roomMediaState.startedAt ? Date.parse(roomMediaState.startedAt) : NaN;
+      var spoken = Date.parse(decision.spokenAt || "");
+      if (!isNaN(origin) && !isNaN(spoken)) {
+        var start = Math.max(0, (spoken - origin) / 1000);
+        row.setAttribute("data-start", String(start));
+        row.setAttribute("data-end", String(start + 4));
+      }
+      var head = document.createElement("div");
+      head.className = "utter-head";
       var name = document.createElement("span");
       name.className = "utter-name " + toneClass(who);
       name.textContent = who;
       var time = document.createElement("time");
       time.textContent = relativeWhen(decision.spokenAt) || whenLabel(decision.spokenAt);
+      head.append(name, time);
       var line = document.createElement("p");
       line.textContent = sentence;
-      row.append(name, time, line);
+      row.append(head, line);
+      row.addEventListener("click", function () {
+        var at = Number(row.getAttribute("data-start"));
+        if (!isNaN(at)) seekTo(at);
+      });
       box.append(row);
     });
     if (!shown) {
@@ -2594,6 +2745,282 @@ ${slack}
       var button = document.querySelector('[data-right-tab="' + name + '"]');
       if (button) button.setAttribute("aria-selected", name === rightTab ? "true" : "false");
     });
+    var search = document.querySelector(".dock-search");
+    if (search) search.hidden = leftTab !== "transcript";
+  }
+
+  var roomMediaState = null;
+
+  function paintCallout(roomId) {
+    var callout = document.getElementById("file-callout");
+    if (!callout) return;
+    var rows = roomId ? waitingFor(roomId) : [];
+    callout.replaceChildren();
+    callout.hidden = rows.length === 0;
+    if (!rows.length) return;
+    var action = rows[0];
+    var toolName = action.tool === "linear" ? "Linear ticket" : action.tool === "calendar" ? "Calendar event" : "Change";
+    var line = document.createElement("p");
+    line.textContent = toolName + " waiting for your OK: " + (action.statement || "A change");
+    var actions = document.createElement("div");
+    actions.className = "wait-actions";
+    var confirm = document.createElement("button");
+    confirm.type = "button";
+    confirm.className = "primary";
+    confirm.textContent = "Confirm";
+    confirm.addEventListener("click", function () { sendAction("confirm", action.id, confirm); });
+    var dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.className = "secondary";
+    dismiss.textContent = "Dismiss";
+    dismiss.addEventListener("click", function () { sendAction("dismiss", action.id, dismiss); });
+    var review = document.createElement("button");
+    review.type = "button";
+    review.className = "secondary";
+    review.textContent = "Review";
+    review.addEventListener("click", function () {
+      rightTab = "waiting";
+      applyRoomTabs();
+    });
+    actions.append(confirm, dismiss, review);
+    callout.append(line, actions);
+  }
+
+  function clockText(seconds) {
+    var value = Math.max(0, Math.floor(seconds || 0));
+    var mins = Math.floor(value / 60);
+    var secs = String(value % 60);
+    if (secs.length < 2) secs = "0" + secs;
+    return mins + ":" + secs;
+  }
+
+  function mediaDuration() {
+    var video = document.getElementById("player-video");
+    if (video && isFinite(video.duration) && video.duration > 0) return video.duration;
+    if (roomMediaState && roomMediaState.duration) return roomMediaState.duration;
+    var max = 0;
+    ((roomMediaState && roomMediaState.segments) || []).forEach(function (segment) {
+      if (segment.end > max) max = segment.end;
+    });
+    ((roomMediaState && roomMediaState.lines) || []).forEach(function (line) {
+      if (line.end > max) max = line.end;
+    });
+    return max || 60;
+  }
+
+  function paintPlayer(media) {
+    var video = document.getElementById("player-video");
+    var fallback = document.getElementById("player-fallback");
+    var note = document.getElementById("player-note");
+    var name = document.getElementById("player-name");
+    var people = fileRoom ? peopleFor(fileRoom) : [];
+    if (name) name.textContent = people.length ? (personLabel(people[0]) || people[0]) : (media && media.title) || "";
+    var copy = "No recording.";
+    if (media && media.state === "processing") copy = "Recording is still processing.";
+    else if (media && media.state === "expired") copy = "Media has already expired.";
+    else if (media && media.state === "channel") copy = "This room is a channel. It has no recording.";
+    else if (media && (media.state === "ready" || media.state === "novideo")) copy = "";
+    if (note) note.textContent = copy;
+    if (video && media && media.videoUrl && media.state === "ready") {
+      if (video.getAttribute("src") !== media.videoUrl) video.src = media.videoUrl;
+      video.hidden = false;
+      if (fallback) fallback.hidden = true;
+    } else if (video) {
+      video.removeAttribute("src");
+      video.hidden = true;
+      if (fallback) fallback.hidden = false;
+    }
+  }
+
+  function paintArtifacts(media) {
+    var list = document.getElementById("artifact-list");
+    if (!list) return;
+    list.replaceChildren();
+    var rows = [
+      ["Video", media && media.videoUrl],
+      ["Transcript", media && media.transcriptUrl],
+      ["Participants", media && media.participantsUrl],
+      ["Participant events", media && media.eventsUrl],
+      ["Speaker timeline", media && media.timelineUrl]
+    ];
+    rows.forEach(function (row) {
+      var item = document.createElement("div");
+      item.className = row[1] ? "artifact-row" : "artifact-row off";
+      var label = document.createElement("span");
+      label.textContent = row[0];
+      var actions = document.createElement("span");
+      actions.className = "artifact-actions";
+      var view = document.createElement("a");
+      view.textContent = "<>";
+      view.setAttribute("aria-label", "View raw " + row[0]);
+      var save = document.createElement("a");
+      save.textContent = "↓";
+      save.setAttribute("aria-label", "Download " + row[0]);
+      if (row[1]) {
+        view.href = row[1];
+        save.href = row[1];
+        save.setAttribute("download", "");
+        view.target = "_blank";
+        view.rel = "noopener";
+      } else {
+        view.setAttribute("aria-disabled", "true");
+        save.setAttribute("aria-disabled", "true");
+      }
+      actions.append(view, save);
+      item.append(label, actions);
+      list.append(item);
+    });
+  }
+
+  function paintTimeline() {
+    var duration = mediaDuration();
+    text("tl-end", clockText(duration));
+    var when = document.getElementById("tl-when");
+    if (when) {
+      var start = roomMediaState && roomMediaState.startedAt ? new Date(roomMediaState.startedAt) : null;
+      when.textContent = start && !isNaN(start.getTime()) ? start.toLocaleString("en-GB", { timeZone: "Asia/Bangkok", hour12: false }) : "";
+    }
+    var ruler = document.getElementById("tl-ruler");
+    var speakers = document.getElementById("tl-speakers");
+    var events = document.getElementById("tl-events");
+    var marks = document.getElementById("tl-marks");
+    if (ruler) ruler.replaceChildren();
+    if (speakers) speakers.replaceChildren();
+    if (events) events.replaceChildren();
+    if (marks) marks.replaceChildren();
+    var steps = 6;
+    for (var i = 0; i <= steps; i += 1) {
+      var tick = document.createElement("span");
+      tick.className = "tl-tick";
+      tick.style.left = (i / steps * 100) + "%";
+      tick.textContent = clockText(duration * i / steps);
+      if (ruler) ruler.append(tick);
+    }
+    ((roomMediaState && roomMediaState.segments) || []).forEach(function (segment) {
+      var block = document.createElement("span");
+      block.className = "tl-seg " + toneClass(segment.speaker || "");
+      block.style.left = (segment.start / duration * 100) + "%";
+      block.style.width = Math.max(0.6, (segment.end - segment.start) / duration * 100) + "%";
+      block.title = segment.speaker || "";
+      if (speakers) speakers.append(block);
+    });
+    ((roomMediaState && roomMediaState.events) || []).forEach(function (event) {
+      var dot = document.createElement("span");
+      dot.className = "tl-dot";
+      dot.style.left = (event.at / duration * 100) + "%";
+      dot.title = (event.kind || "event") + " " + (event.name || "");
+      if (events) events.append(dot);
+    });
+    if (fileRoom && roomMediaState && roomMediaState.startedAt) {
+      var origin = Date.parse(roomMediaState.startedAt);
+      decisionsFor(fileRoom).forEach(function (decision) {
+        var at = Date.parse(decision.spokenAt || "");
+        if (isNaN(origin) || isNaN(at)) return;
+        var mark = document.createElement("span");
+        mark.className = "tl-mark";
+        mark.style.left = Math.max(0, Math.min(100, (at - origin) / 1000 / duration * 100)) + "%";
+        mark.title = decision.text || "";
+        if (marks) marks.append(mark);
+      });
+    }
+  }
+
+  function seekTo(seconds) {
+    var video = document.getElementById("player-video");
+    var duration = mediaDuration();
+    var next = Math.max(0, Math.min(duration, seconds || 0));
+    if (video && video.src) {
+      video.currentTime = next;
+    }
+    placePlayhead(next, duration);
+    text("tl-now", clockText(next));
+    markTranscript(next);
+  }
+
+  function placePlayhead(seconds, duration) {
+    var head = document.getElementById("tl-head");
+    if (!head || !duration) return;
+    head.hidden = false;
+    head.style.left = "calc(4.5rem + (100% - 4.5rem) * " + (seconds / duration) + ")";
+  }
+
+  function markTranscript(seconds) {
+    document.querySelectorAll("#file-transcript .utter").forEach(function (row) {
+      var start = Number(row.getAttribute("data-start") || 0);
+      var end = Number(row.getAttribute("data-end") || start + 2);
+      row.classList.toggle("active", seconds >= start && seconds < end);
+    });
+  }
+
+  function loadRoomMedia() {
+    var room = roomOf(fileRoom);
+    var channel = room && /slack/i.test(room.platform || "");
+    if (!fileRoom || channel) {
+      roomMediaState = channel ? { state: "channel", title: roomName(room) } : { state: "none" };
+      paintPlayer(roomMediaState);
+      paintArtifacts(roomMediaState);
+      paintTimeline();
+      return;
+    }
+    fetch("/console/rooms/" + encodeURIComponent(fileRoom) + "/media").then(function (response) {
+      if (!response.ok) throw new Error("media");
+      return response.json();
+    }).then(function (media) {
+      if (!media) return;
+      roomMediaState = media;
+      if (media.title && room && !room.name) {
+        room.name = media.title;
+        text("file-title", media.title);
+        if (sectionName === "file") {
+          text("crumb-current", media.title);
+          setViewTitle(media.title);
+        }
+      }
+      paintPlayer(media);
+      paintArtifacts(media);
+      paintFactsMedia(media);
+      paintTimeline();
+    }).catch(function () {
+      roomMediaState = { state: "none" };
+      paintPlayer(roomMediaState);
+      paintArtifacts(roomMediaState);
+    });
+  }
+
+  function paintFactsMedia(media) {
+    var box = document.getElementById("overview-facts");
+    if (!box) return;
+    box.replaceChildren();
+    var row = document.createElement("div");
+    row.className = "fact-row";
+    var platform = document.createElement("span");
+    platform.className = "meta-item";
+    var platformLabel = document.createElement("span");
+    platformLabel.className = "meta-label";
+    platformLabel.textContent = "Platform";
+    platform.append(platformLabel);
+    var room = roomOf(fileRoom);
+    if (room && room.platform) platform.append(platformBadge(room.platform));
+    var status = document.createElement("span");
+    status.className = "meta-item";
+    var statusLabelNode = document.createElement("span");
+    statusLabelNode.className = "meta-label";
+    statusLabelNode.textContent = "Status";
+    var badge = document.createElement("span");
+    badge.className = media && media.state === "processing" ? "badge warn" : "badge ok";
+    badge.textContent = media && media.state === "processing" ? "Processing" : "Done";
+    status.append(statusLabelNode, badge);
+    var usage = document.createElement("span");
+    usage.className = "meta-item";
+    var usageLabel = document.createElement("span");
+    usageLabel.className = "meta-label";
+    usageLabel.textContent = "Usage";
+    var chip = document.createElement("span");
+    chip.className = "usage-chip";
+    chip.textContent = media && media.duration ? clockText(media.duration) : "";
+    usage.append(usageLabel, chip);
+    row.append(platform, status, usage);
+    box.append(row);
   }
 
   function outsideFor(roomId) {
@@ -3388,6 +3815,88 @@ ${slack}
   if (roomNext) roomNext.addEventListener("click", function () {
     roomPage += 1;
     paintRooms();
+  });
+  var resizer = document.getElementById("room-resizer");
+  if (resizer) {
+    resizer.addEventListener("mousedown", function (event) {
+      event.preventDefault();
+      var split = document.getElementById("room-split");
+      var left = document.getElementById("room-left");
+      if (!split || !left) return;
+      function move(next) {
+        var bounds = split.getBoundingClientRect();
+        var width = Math.min(bounds.width * 0.5, Math.max(360, next.clientX - bounds.left));
+        left.style.width = width + "px";
+        left.style.flex = "none";
+      }
+      function up() {
+        window.removeEventListener("mousemove", move);
+        window.removeEventListener("mouseup", up);
+      }
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup", up);
+    });
+    resizer.addEventListener("keydown", function (event) {
+      var left = document.getElementById("room-left");
+      if (!left) return;
+      var width = left.getBoundingClientRect().width;
+      if (event.key === "ArrowLeft") left.style.width = Math.max(360, width - 24) + "px";
+      if (event.key === "ArrowRight") {
+        var split = document.getElementById("room-split");
+        var max = split ? split.getBoundingClientRect().width * 0.5 : width + 24;
+        left.style.width = Math.min(max, width + 24) + "px";
+      }
+    });
+  }
+  var tlPlay = document.getElementById("tl-play");
+  var tlRestart = document.getElementById("tl-restart");
+  var tlHide = document.getElementById("tl-hide");
+  var playerVideo = document.getElementById("player-video");
+  if (tlPlay) tlPlay.addEventListener("click", function () {
+    if (!playerVideo || !playerVideo.src) return;
+    if (playerVideo.paused) { playerVideo.play(); tlPlay.textContent = "❚❚"; tlPlay.setAttribute("aria-label", "Pause"); }
+    else { playerVideo.pause(); tlPlay.textContent = "▶"; tlPlay.setAttribute("aria-label", "Play"); }
+  });
+  if (tlRestart) tlRestart.addEventListener("click", function () { seekTo(0); });
+  if (tlHide) tlHide.addEventListener("click", function () {
+    var track = document.getElementById("tl-track");
+    var hidden = track && !track.hidden;
+    if (track) track.hidden = hidden;
+    tlHide.setAttribute("aria-pressed", hidden ? "true" : "false");
+    tlHide.textContent = hidden ? "Show timeline" : "Hide timeline";
+  });
+  var ruler = document.getElementById("tl-ruler");
+  if (ruler) ruler.addEventListener("click", function (event) {
+    var box = ruler.getBoundingClientRect();
+    var ratio = (event.clientX - box.left) / box.width;
+    seekTo(ratio * mediaDuration());
+  });
+  if (playerVideo) playerVideo.addEventListener("timeupdate", function () {
+    text("tl-now", clockText(playerVideo.currentTime));
+    placePlayhead(playerVideo.currentTime, mediaDuration());
+    markTranscript(playerVideo.currentTime);
+  });
+  if (playerVideo) playerVideo.addEventListener("error", function () {
+    playerVideo.hidden = true;
+    var fallback = document.getElementById("player-fallback");
+    var note = document.getElementById("player-note");
+    if (fallback) fallback.hidden = false;
+    if (note && !note.textContent) note.textContent = "Media has already expired.";
+  });
+  document.addEventListener("keydown", function (event) {
+    if (!document.body.classList.contains("room-open")) return;
+    var tag = event.target && event.target.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA") return;
+    if (event.key === " ") {
+      event.preventDefault();
+      if (tlPlay) tlPlay.click();
+    } else if (event.key === "j" || event.key === "J") {
+      var video = document.getElementById("player-video");
+      seekTo((video && video.currentTime ? video.currentTime : 0) - 10);
+    } else if (event.key === "k" || event.key === "K") {
+      var playing = document.getElementById("player-video");
+      seekTo((playing && playing.currentTime ? playing.currentTime : 0) + 10);
+    }
   });
   var transcriptSearch = document.getElementById("transcript-search");
   if (transcriptSearch) transcriptSearch.addEventListener("input", function () {
