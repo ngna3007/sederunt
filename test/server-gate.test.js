@@ -245,6 +245,7 @@ test("MCP act under ask does not call, and a meeting participant set is the invi
   const linear = countingLinear();
   const app = await listen(defaultDeps({ linear, memory: null }), { SEDERUNT_MEMBER: "rowan" });
   try {
+    await post(app.port, "/api/typed", { text: "set linear to ask", memberId: "rowan", room: room(), deliveryId: "ask-pref" });
     const acted = await post(app.port, "/api/mcp", {
       name: "act",
       arguments: {

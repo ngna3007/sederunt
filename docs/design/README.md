@@ -22,6 +22,7 @@ shaped that way.
 - [access.md](./access.md) — who may hear a sentence.
 - [record.md](./record.md) — Walrus Memory, Walrus Console, and the Tatum proof.
 - [actions.md](./actions.md) — write preference and connector calls.
+- [activity-log.md](./activity-log.md) — one event shape for every request and its effect.
 - [workspace.md](./workspace.md) — the operator workspace. Shell, home, and history.
 - [rooms.md](./rooms.md) — bringing the bot into a room, and the room dialog.
 

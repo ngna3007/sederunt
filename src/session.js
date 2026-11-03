@@ -7,6 +7,7 @@ export function createSession() {
     deliveries: new Set(),
     decisions: [],
     actions: [],
+    activity: [],
     preferences: [],
     roomSettings: [],
     rooms: [],

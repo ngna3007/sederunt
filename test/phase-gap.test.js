@@ -240,7 +240,7 @@ test("the six adapters own their calls and do not open the network when unconfig
   const session = createSession();
   const linear = { calls: [], async createIssue() { this.calls.push("create"); return { id: "ROW-1" }; } };
   await handleUtterance(utterance(session, "File the venue ticket hall-wait", { deliveryId: "wait-1" }), { linear });
-  assert.deepEqual(linear.calls, []);
+  assert.deepEqual(linear.calls, ["create"]);
 });
 
 test("a long transcript stores one sentence and facts, and one idempotency key yields one blob id", async () => {

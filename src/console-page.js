@@ -250,7 +250,7 @@ ${slack}
           <div class="set-copy">
             <strong>Calendar</strong>
             <p id="cal-conn" class="conn-state off">Not connected.</p>
-            <p id="cal-line" class="sr">Calendar is on Ask.</p>
+            <p id="cal-line" class="sr">Calendar runs automatically.</p>
           </div>
           <button type="button" class="conn-connect" id="cal-connect" data-connect="calendar">Connect</button>
         </div>
@@ -259,7 +259,7 @@ ${slack}
           <div class="set-copy">
             <strong>Linear</strong>
             <p id="lin-conn" class="conn-state off">Not connected.</p>
-            <p id="lin-line" class="sr">Linear is on Ask.</p>
+            <p id="lin-line" class="sr">Linear runs automatically.</p>
           </div>
           <button type="button" class="conn-connect" id="lin-connect" data-connect="linear">Connect</button>
         </div>
@@ -276,14 +276,14 @@ ${slack}
       </div>
       <div class="settings-card" id="ask-block">
         <p class="section-label">Before sending a change</p>
-        <p id="ask-help" class="card-help">On means a change waits for a confirm before it is sent.</p>
+        <p id="ask-help" class="card-help">On means a change runs as soon as it is asked.</p>
         <div class="conn ask-quiet" id="cal-ask-row">
-          <div class="set-copy"><span class="ask-name">Ask first</span><span class="ask-tool"> for Calendar</span></div>
-          <div class="conn-ask"><label class="switch"><input id="cal-ask" type="checkbox" checked aria-label="Ask first for Calendar" aria-describedby="ask-help"></label></div>
+          <div class="set-copy"><span class="ask-name">Run automatically</span><span class="ask-tool"> for Calendar</span></div>
+          <div class="conn-ask"><label class="switch"><input id="cal-ask" type="checkbox" checked aria-label="Run automatically for Calendar" aria-describedby="ask-help"></label></div>
         </div>
         <div class="conn ask-quiet" id="lin-ask-row">
-          <div class="set-copy"><span class="ask-name">Ask first</span><span class="ask-tool"> for Linear</span></div>
-          <div class="conn-ask"><label class="switch"><input id="lin-ask" type="checkbox" checked aria-label="Ask first for Linear" aria-describedby="ask-help"></label></div>
+          <div class="set-copy"><span class="ask-name">Run automatically</span><span class="ask-tool"> for Linear</span></div>
+          <div class="conn-ask"><label class="switch"><input id="lin-ask" type="checkbox" checked aria-label="Run automatically for Linear" aria-describedby="ask-help"></label></div>
         </div>
       </div>
       <div class="settings-card" id="hearing-block">
@@ -350,9 +350,9 @@ ${slack}
         </div>
         <div class="chips" role="group" aria-label="Kind of record">
           <button type="button" class="chip-filter" data-kind="all" aria-pressed="true">All</button>
-          <button type="button" class="chip-filter" data-kind="question">Decisions</button>
-          <button type="button" class="chip-filter" data-kind="action">Waiting</button>
-          <button type="button" class="chip-filter" data-kind="other">Asks</button>
+          <button type="button" class="chip-filter" data-kind="request">Requests</button>
+          <button type="button" class="chip-filter" data-kind="action">Actions</button>
+          <button type="button" class="chip-filter" data-kind="failure">Failed</button>
         </div>
         <label class="search">${searchIcon}<span class="sr">Search history</span><input id="history-search" type="search" placeholder="Search" autocomplete="off"></label>
       </div>
@@ -419,7 +419,7 @@ ${slack}
         <div class="settings-card">
           <p class="section-label">Details</p>
           <dl class="kv account-kv">
-            <dt>Name</dt><dd id="account-detail-name"></dd>
+            <dt class="account-name-row">Name</dt><dd id="account-detail-name" class="account-name-row"></dd>
             <dt>Role</dt><dd id="account-detail-role"></dd>
             <dt>Workspace</dt><dd id="account-detail-workspace">Company</dd>
             <dt>Session</dt><dd id="account-detail-expiry">${escapeHtml(state.accountExpiry ? new Date(state.accountExpiry).toUTCString() : (signedIn ? "This sign-in does not list an expiry." : "Sign-in is not set up."))}</dd>
@@ -499,6 +499,7 @@ ${slack}
               <button type="button" data-left-tab="transcript" aria-selected="true">Transcript</button>
               <button type="button" data-left-tab="config" aria-selected="false">Config</button>
               <button type="button" data-left-tab="raw" aria-selected="false">Raw</button>
+              <button type="button" class="tab-more" aria-label="Transcript actions">⋮</button>
             </div>
             <div id="left-transcript" class="tab-pane left-scroll">
               <div id="file-transcript"></div>
@@ -523,7 +524,7 @@ ${slack}
             <div class="underline-tabs" role="tablist" aria-label="Room detail">
               <button type="button" data-right-tab="overview" aria-selected="true">Overview</button>
               <button type="button" data-right-tab="decisions" aria-selected="false">Decisions</button>
-              <button type="button" data-right-tab="waiting" aria-selected="false">Waiting</button>
+              <button type="button" data-right-tab="waiting" aria-selected="false">Activity</button>
               <button type="button" data-right-tab="history" aria-selected="false">History</button>
               <button type="button" data-right-tab="raw" aria-selected="false">Raw</button>
             </div>
@@ -540,7 +541,7 @@ ${slack}
               <div class="overview-facts" id="overview-facts"></div>
               <section id="participants" class="participants"></section>
               <section class="artifacts" id="artifacts">
-                <h2>Meeting artifacts</h2>
+                <h2 class="artifact-title">Meeting artifacts</h2>
                 <div id="artifact-list"></div>
               </section>
               <dl class="kv" id="file-facts"></dl>
@@ -550,7 +551,7 @@ ${slack}
             </div>
             <div id="right-waiting" class="tab-pane" hidden>
               <section class="detail-block" id="waiting-row">
-                <h2>Waiting changes</h2>
+                <h2 class="artifact-title">Activity</h2>
                 <p id="file-action-note" class="meta"></p>
                 <div id="file-waiting"></div>
               </section>
@@ -569,10 +570,10 @@ ${slack}
               <h2 id="settings-heading">Settings</h2>
               <div class="room-set">
                 <div class="set-copy">
-                  <strong>Ask first</strong>
+                  <strong>Run automatically</strong>
                   <p id="room-edit-note"></p>
                 </div>
-                <label class="switch"><input id="ask-first" type="checkbox" checked aria-label="Ask first"><span class="sr">Ask first</span></label>
+                <label class="switch"><input id="ask-first" type="checkbox" checked aria-label="Run automatically"><span class="sr">Run automatically</span></label>
               </div>
               <div class="room-set">
                 <div class="set-copy"><strong>Voice</strong></div>
@@ -1658,7 +1659,7 @@ ${slack}
     }
     var head = document.createElement("div");
     head.className = "explorer-head people-head";
-    ["Name", "Rooms", "Decisions", "Last heard"].forEach(function (label) {
+    ["Name", "Rooms", "Decisions", "Last heard", ""].forEach(function (label) {
       var cell = document.createElement("span");
       cell.textContent = label;
       head.append(cell);
@@ -1668,7 +1669,11 @@ ${slack}
       var row = document.createElement("div");
       row.className = "people-row";
       var name = document.createElement("span");
-      name.textContent = person.name;
+      name.className = "person";
+      name.append(face(person.name));
+      var label = document.createElement("span");
+      label.textContent = person.name;
+      name.append(label);
       var roomsCell = document.createElement("span");
       roomsCell.className = "room-chips";
       var shownRooms = person.rooms.slice(0, 2);
@@ -1697,7 +1702,10 @@ ${slack}
       decisions.textContent = String(person.count);
       var heard = document.createElement("span");
       heard.textContent = relativeWhen(person.last) || whenLabel(person.last) || "";
-      row.append(name, roomsCell, decisions, heard);
+      var view = document.createElement("span");
+      view.className = "row-open";
+      view.textContent = "View >";
+      row.append(name, roomsCell, decisions, heard, view);
       list.append(row);
     });
     if (foot) foot.hidden = false;
@@ -1749,20 +1757,14 @@ ${slack}
     clear("counts");
     var counts = (state && state.counts) || {};
     addCount(box, "Decisions kept", counts.kept || 0, "Sentences kept in this workspace.", null, false);
-    addCount(box, "Waiting on you", counts.waiting || 0, counts.waiting ? "Changes waiting for a confirm." : "Nothing is waiting.", (counts.waiting || 0) > 0 ? openWaitingList : null, (counts.waiting || 0) > 0);
+    addCount(box, "Actions today", counts.actionsToday || 0, "Changes that ran today.", null, false);
+    if (counts.failed) addCount(box, "Failed", counts.failed, "A change did not go through.", null, true);
     if (counts.sent) addCount(box, "Sent", counts.sent, "The tool accepted the change.", null, false);
     if (counts.failed) addCount(box, "Failed", counts.failed, "A change did not go through.", null, false);
   }
 
   function syncHistoryKinds() {
-    var you = historyScope === "you";
-    if (you && (historyKind === "question" || historyKind === "other")) historyKind = "all";
-    if (!you && historyKind === "action") historyKind = "all";
-    document.querySelectorAll("[data-kind]").forEach(function (button) {
-      var kind = button.getAttribute("data-kind");
-      var hide = you ? (kind === "question" || kind === "other") : (kind === "action");
-      button.hidden = hide;
-    });
+    if (historyKind !== "all" && historyKind !== "request" && historyKind !== "action" && historyKind !== "failure") historyKind = "all";
   }
 
   function setHistoryPressed() {
@@ -1778,6 +1780,20 @@ ${slack}
   function paintHistory() {
     setHistoryPressed();
     clear("history-list");
+    var feed = activityRows("");
+    if (historyKind !== "all") feed = feed.filter(function (row) { return row.kind === historyKind || (historyKind === "action" && row.kind === "result"); });
+    var query = ((document.getElementById("history-search") || {}).value || "").trim().toLowerCase();
+    if (query) feed = feed.filter(function (row) { return (row.sentence || "").toLowerCase().indexOf(query) !== -1; });
+    paintActivity(document.getElementById("history-list"), feed);
+    var empty = document.getElementById("history-empty");
+    if (empty) empty.hidden = feed.length > 0;
+    var table = document.getElementById("history-table");
+    if (table) table.hidden = feed.length === 0;
+    var historyCount = document.getElementById("history-count");
+    var historyFoot = document.getElementById("history-foot");
+    if (historyFoot) historyFoot.hidden = feed.length === 0;
+    if (historyCount && feed.length) historyCount.textContent = "1\u2013" + feed.length + " of " + feed.length;
+    return;
     var rows = [];
     var decisions = (state && state.decisions) || [];
     var waitingRows = (state && state.waiting) || [];
@@ -1948,13 +1964,13 @@ ${slack}
     if (slackNote) slackNote.textContent = next.slack === "ready"
       ? "Sederunt answers in a channel it has already joined."
       : "";
-    text("cal-line", calendarMode === "Ask" ? "Calendar waits before a change." : "Calendar sends the change.");
-    text("lin-line", linearMode === "Ask" ? "Linear waits before a change." : "Linear sends the change.");
-    text("prefs", (calendarMode === "Ask" ? "Calendar waits before a change." : "Calendar sends the change.") + " " + (linearMode === "Ask" ? "Linear waits before a change." : "Linear sends the change."));
+    text("cal-line", calendarMode === "Ask" ? "Calendar waits before a change." : "Calendar runs automatically.");
+    text("lin-line", linearMode === "Ask" ? "Linear waits before a change." : "Linear runs automatically.");
+    text("prefs", (calendarMode === "Ask" ? "Calendar waits before a change." : "Calendar runs automatically.") + " " + (linearMode === "Ask" ? "Linear waits before a change." : "Linear runs automatically."));
     var calAsk = document.getElementById("cal-ask");
     var linAsk = document.getElementById("lin-ask");
-    if (calAsk) calAsk.checked = calendarMode === "Ask";
-    if (linAsk) linAsk.checked = linearMode === "Ask";
+    if (calAsk) calAsk.checked = calendarMode !== "Ask";
+    if (linAsk) linAsk.checked = linearMode !== "Ask";
     syncAskState(calAsk);
     syncAskState(linAsk);
     var calRow = document.getElementById("cal-ask-row");
@@ -1966,7 +1982,7 @@ ${slack}
     var askBlock = document.getElementById("ask-block");
     if (askBlock) askBlock.hidden = false;
     if (kicker) kicker.hidden = false;
-    if (askHelp) askHelp.textContent = "On means a change waits for a confirm before it is sent.";
+    if (askHelp) askHelp.textContent = "On means a change runs as soon as it is asked.";
     var note = next.message || "";
     if (!note && !member() && !(next.rooms || []).length && !(next.decisions || []).length) note = "Sign-in is not set up.";
     text("read-note", note);
@@ -2227,6 +2243,10 @@ ${slack}
     if (roomTools) roomTools.hidden = name !== "rooms" && name !== "home";
     var homeHead = document.getElementById("home-head");
     if (homeHead) homeHead.hidden = name !== "home";
+    var homeTools = document.querySelector(".home-tools");
+    var homeStats = document.getElementById("home-stats");
+    if (homeTools) homeTools.hidden = name !== "home" && name !== "rooms";
+    if (homeStats) homeStats.hidden = name !== "home";
     var label = onFile ? ((document.getElementById("file-title") || {}).textContent || "Room") : sectionLabel(name);
     setViewTitle(label);
     placeNotice();
@@ -2462,55 +2482,75 @@ ${slack}
     });
   }
 
-  function renderWaiting() {
-    var box = document.getElementById("file-waiting");
-    clear("file-waiting");
-    var rows = fileRoom ? waitingFor(fileRoom) : [];
-    var waitingRow = document.getElementById("waiting-row");
+  function activityRows(roomId) {
+    return ((state && state.activity) || []).filter(function (row) {
+      if (!row) return false;
+      if (!roomId) return true;
+      var origin = row.origin || {};
+      return !origin.roomId || origin.roomId === roomId;
+    });
+  }
+
+  function paintActivity(box, rows) {
+    if (!box) return;
+    box.replaceChildren();
     if (!rows.length) {
-      if (waitingRow) waitingRow.hidden = false;
       var empty = document.createElement("p");
       empty.className = "meta";
-      empty.textContent = "Nothing is waiting.";
+      empty.textContent = "No activity yet.";
       box.append(empty);
       return;
     }
-    if (waitingRow) waitingRow.hidden = false;
-    rows.forEach(function (action) {
-      var row = document.createElement("div");
-      row.className = "wait-card";
-      var toolName = action.tool === "linear" ? "Linear ticket" : action.tool === "calendar" ? "Calendar event" : "Change";
-      var tool = document.createElement("p");
-      tool.className = "wait-tool";
-      var svg = logoSvg(action.tool === "linear" ? "Linear" : action.tool === "calendar" ? "Calendar" : "");
-      if (svg) tool.append(svg);
-      else {
-        var mark = document.createElement("span");
-        mark.className = "tool-logo " + (action.tool || "change");
-        mark.textContent = toolName.slice(0, 1);
-        tool.append(mark);
+    var feed = document.createElement("div");
+    feed.className = "activity-feed";
+    var seen = {};
+    rows.forEach(function (row) {
+      var key = row.requestId || row.id;
+      var group = seen[key];
+      if (!group) {
+        group = document.createElement("div");
+        group.className = "activity-group";
+        seen[key] = group;
+        feed.append(group);
       }
-      var label = document.createElement("span");
-      label.textContent = toolName;
-      tool.append(label);
-      var line = document.createElement("p");
-      line.textContent = action.statement || "A change is waiting.";
-      var actions = document.createElement("div");
-      actions.className = "wait-actions";
-      var confirm = document.createElement("button");
-      confirm.type = "button";
-      confirm.className = "primary";
-      confirm.textContent = "Confirm";
-      confirm.addEventListener("click", function () { sendAction("confirm", action.id, confirm); });
-      var dismiss = document.createElement("button");
-      dismiss.type = "button";
-      dismiss.className = "secondary";
-      dismiss.textContent = "Dismiss";
-      dismiss.addEventListener("click", function () { sendAction("dismiss", action.id, dismiss); });
-      actions.append(confirm, dismiss);
-      row.append(tool, line, actions);
-      box.append(row);
+      var line = document.createElement("div");
+      line.className = "activity-row" + (row.kind === "request" ? "" : " activity-child");
+      line.id = "activity-" + row.id;
+      var icon = document.createElement("span");
+      icon.className = "activity-icon" + (row.kind === "failure" ? " bad" : "");
+      icon.textContent = row.kind === "failure" ? "!" : "•";
+      var text = document.createElement("p");
+      var who = document.createElement("strong");
+      who.textContent = (row.actor && row.actor.name) || "Someone";
+      text.append(who);
+      var sentence = row.sentence || "";
+      var rest = sentence.indexOf(who.textContent) === 0 ? sentence.slice(who.textContent.length) : (" " + sentence);
+      text.append(document.createTextNode(rest));
+      var roomName = row.origin && row.origin.roomName;
+      if (roomName) {
+        var chip = document.createElement("span");
+        chip.className = "mini-chip";
+        chip.textContent = roomName;
+        text.append(chip);
+      }
+      if (row.kind === "failure") {
+        var retry = document.createElement("button");
+        retry.type = "button";
+        retry.className = "linkish";
+        retry.textContent = "Retry";
+        text.append(retry);
+      }
+      line.append(icon, text);
+      group.append(line);
     });
+    box.append(feed);
+  }
+
+  function renderWaiting() {
+    var box = document.getElementById("file-waiting");
+    var waitingRow = document.getElementById("waiting-row");
+    if (waitingRow) waitingRow.hidden = false;
+    paintActivity(box, activityRows(fileRoom));
   }
 
   function openDecision(decision) {
@@ -2581,7 +2621,10 @@ ${slack}
     text("file-started", relativeWhen(named.when) || whenLabel(named.when));
     text("file-summary", "");
     var outcome = document.getElementById("file-outcome");
-    if (outcome) { outcome.hidden = true; outcome.textContent = ""; }
+    if (outcome) {
+      outcome.hidden = !knownRoom;
+      outcome.textContent = knownRoom ? "Call ended. The room kept " + leadRows.length + " decision" + (leadRows.length === 1 ? "" : "s") + "." : "";
+    }
     paintCallout(fileRoom);
     clear("file-overview-people");
     people.forEach(function (person) {
@@ -2638,7 +2681,7 @@ ${slack}
     }
     var ask = document.getElementById("ask-first");
     ask.disabled = !fileRoom;
-    if (room) ask.checked = room.ask !== false;
+    if (room) ask.checked = room.ask !== true;
     else ask.checked = true;
     var voice = voiceFor();
     document.querySelectorAll("[data-voice]").forEach(function (button) {
@@ -2690,7 +2733,7 @@ ${slack}
       ["Started", relativeWhen(named.when) || whenLabel(named.when) || "Unknown"],
       ["Decisions", String(rows.length)],
       ["Voice", voiceWord(voiceFor())],
-      ["Ask first", room && room.ask === false ? "Off" : "On"]
+      ["Run automatically", room && room.ask === true ? "Off" : "On"]
     ];
     facts.forEach(function (pair) {
       var term = document.createElement("dt");
@@ -2775,36 +2818,14 @@ ${slack}
   function paintCallout(roomId) {
     var callout = document.getElementById("file-callout");
     if (!callout) return;
-    var rows = roomId ? waitingFor(roomId) : [];
+    var failed = activityRows(roomId).filter(function (row) { return row.kind === "failure" && row.outcome === "failed"; });
     callout.replaceChildren();
-    callout.hidden = rows.length === 0;
-    if (!rows.length) return;
-    var action = rows[0];
-    var toolName = action.tool === "linear" ? "Linear ticket" : action.tool === "calendar" ? "Calendar event" : "Change";
+    callout.hidden = failed.length === 0;
+    callout.classList.toggle("callout-bad", failed.length > 0);
+    if (!failed.length) return;
     var line = document.createElement("p");
-    line.textContent = toolName + " waiting for your OK: " + (action.statement || "A change");
-    var actions = document.createElement("div");
-    actions.className = "wait-actions";
-    var confirm = document.createElement("button");
-    confirm.type = "button";
-    confirm.className = "primary";
-    confirm.textContent = "Confirm";
-    confirm.addEventListener("click", function () { sendAction("confirm", action.id, confirm); });
-    var dismiss = document.createElement("button");
-    dismiss.type = "button";
-    dismiss.className = "secondary";
-    dismiss.textContent = "Dismiss";
-    dismiss.addEventListener("click", function () { sendAction("dismiss", action.id, dismiss); });
-    var review = document.createElement("button");
-    review.type = "button";
-    review.className = "secondary";
-    review.textContent = "Review";
-    review.addEventListener("click", function () {
-      rightTab = "waiting";
-      applyRoomTabs();
-    });
-    actions.append(confirm, dismiss, review);
-    callout.append(line, actions);
+    line.textContent = failed[0].sentence || "A change did not go through.";
+    callout.append(line);
   }
 
   function clockText(seconds) {
@@ -2837,10 +2858,10 @@ ${slack}
     var people = fileRoom ? peopleFor(fileRoom) : [];
     var named = media && (media.state === "ready" || media.state === "novideo");
     if (name) name.textContent = named && people.length ? (personLabel(people[0]) || people[0]) : "";
-    var copy = "No recording.";
+    var copy = "No recording was made";
     if (media && media.state === "processing") copy = "Recording is still processing.";
-    else if (media && media.state === "expired") copy = "Media has already expired.";
-    else if (media && media.state === "channel") copy = "This room is a channel. It has no recording.";
+    else if (media && media.state === "expired") copy = "Recording expired";
+    else if (media && media.state === "channel") copy = "Slack channels aren't recorded";
     else if (media && (media.state === "ready" || media.state === "novideo")) copy = "";
     if (note) note.textContent = copy;
     if (video && media && media.videoUrl && media.state === "ready") {
@@ -3121,8 +3142,8 @@ ${slack}
   function saveToolAsk(tool, on) {
     var box = document.getElementById(tool === "calendar" ? "cal-ask" : "lin-ask");
     var line = tool === "calendar" ? "cal-line" : "lin-line";
-    var value = on ? "ask" : "do";
-    text(line, "Saving Ask first.");
+    var value = on ? "do" : "ask";
+    text(line, "Saving Run automatically.");
     fetch("/api/typed", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -3132,7 +3153,7 @@ ${slack}
     }).then(function (result) {
       if (!wrote(result)) {
         box.checked = !on;
-        text(line, result && result.allow === "missing-member" ? "This server has no member configured." : "Ask first was not saved.");
+        text(line, result && result.allow === "missing-member" ? "This server has no member configured." : "Run automatically was not saved.");
       } else {
         text(line, "");
         toast("Saved.");
@@ -3151,8 +3172,8 @@ ${slack}
       text("room-edit-note", "This room cannot be edited from here.");
       return;
     }
-    var value = on ? "ask" : "do";
-    text("room-edit-note", "Saving Ask first.");
+    var value = on ? "do" : "ask";
+    text("room-edit-note", "Saving Run automatically.");
     var tools = ["linear", "calendar"];
     var pending = Promise.resolve();
     var failed = null;
@@ -3170,8 +3191,8 @@ ${slack}
     pending.then(function () { return load(); }).then(function () {
       if (failed) box.checked = !on;
       if (failed && failed.allow === "missing-member") text("room-edit-note", "This server has no member configured.");
-      else if (failed) text("room-edit-note", "Ask first was not saved.");
-      else text("room-edit-note", on ? "This room waits before a change." : "This room sends the change.");
+      else if (failed) text("room-edit-note", "Run automatically was not saved.");
+      else text("room-edit-note", on ? "This room runs a change as soon as it is asked." : "This room does not run a change.");
     }).catch(function () {
       box.checked = !on;
       text("room-edit-note", "The account could not be read. Read the account again.");
@@ -3899,7 +3920,7 @@ ${slack}
       if (resizer.setPointerCapture) resizer.setPointerCapture(event.pointerId);
       function move(next) {
         var bounds = split.getBoundingClientRect();
-        var width = Math.min(bounds.width * 0.5, Math.max(360, next.clientX - bounds.left));
+        var width = Math.min(bounds.width - 420, Math.max(360, next.clientX - bounds.left));
         left.style.width = width + "px";
         left.style.flex = "none";
       }

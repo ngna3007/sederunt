@@ -1,3 +1,4 @@
+import { displayName, logAction, logFailure, logRequest, renderActivity } from "./activity.js";
 import { authorize } from "./domain/allow.js";
 import { clashStatuses } from "./domain/clash.js";
 import { checkInvite } from "./domain/invite.js";
@@ -163,6 +164,7 @@ function ensureSession(session) {
   session.deliveries ??= new Set();
   session.decisions ??= [];
   session.actions ??= [];
+  session.activity ??= [];
   session.preferences ??= [];
   session.roomSettings ??= [];
   session.rooms ??= [];
@@ -270,6 +272,10 @@ async function requestWrite(input, session, deps, parsed) {
     edit: parsed.edit,
     inviteMemberIds: snapshot(input, invited.room),
     state: "waiting",
+    speaker: displayName(input.memberId),
+    source: activitySource(input),
+    roomName: roomLabel(input, invited.room),
+    offset: Number.isFinite(input.offset) ? input.offset : null,
   };
   session.actions.push(action);
   await remember(deps, {
@@ -292,12 +298,18 @@ async function requestWrite(input, session, deps, parsed) {
     });
   }
   const auth = authorize({ action: "write", tool: parsed.tool, preference });
+  await noteActivity(session, deps, action, {
+    role: "request",
+    actor: action.speaker,
+    actorKind: "person",
+    outcome: auth.allowed ? "sent" : "paused",
+  });
   if (!auth.allowed) {
-    action.state = "waiting";
+    action.state = "paused";
     return finish(session, {
       status: "recorded",
       kind: "ticket",
-      body: `${action.statement}\nrecorded\npreference ask\nWaiting for confirmation of ${action.id}.`,
+      body: `${action.statement}\nrecorded\npreference ask\nRun automatically is off.`,
       allow: auth.reason,
       preference: "ask",
       actionId: action.id,
@@ -354,7 +366,7 @@ async function confirmAction(input, session, deps, actionId) {
 
 function dismissAction(session, actionId) {
   const action = session.actions.find((item) => item.id === actionId);
-  if (action && action.state === "waiting") action.state = "dismissed";
+  if (action && (action.state === "waiting" || action.state === "paused")) action.state = "dismissed";
   return finish(session, {
     status: "recorded",
     kind: "ticket",
@@ -369,10 +381,11 @@ async function callConnector(session, deps, action, auth) {
   let created;
   try {
     created = await runConnector(deps, action);
-  } catch {
+  } catch (error) {
     action.state = "available";
     action.connectorId = null;
-    return didNotHappen(session, action, auth);
+    const message = error instanceof Error ? error.message : "";
+    return didNotHappen(session, deps, action, auth, message);
   }
   const issueId = connectorId(created);
   const assigning = action.edit === "assign";
@@ -380,7 +393,7 @@ async function callConnector(session, deps, action, auth) {
   if (status !== "filed" && status !== "updated") {
     action.state = "available";
     action.connectorId = null;
-    return didNotHappen(session, action, auth);
+    return didNotHappen(session, deps, action, auth, "");
   }
   action.state = "closed";
   action.connectorId = issueId;
@@ -409,6 +422,14 @@ async function callConnector(session, deps, action, auth) {
     }
   }
   session.items.push({ kind: "ticket", status, text: action.statement, issueId });
+  await noteActivity(session, deps, action, {
+    role: "action",
+    actor: "Sederunt",
+    actorKind: "sederunt",
+    outcome: "done",
+    entityId: issueId,
+    undoToken: action.id,
+  });
   await remember(deps, {
     account: "company",
     kind: "action",
@@ -481,8 +502,15 @@ async function runConnector(deps, action) {
   return deps.linear.createIssue({ title: action.params.title, idempotencyKey: action.id });
 }
 
-function didNotHappen(session, action, auth) {
+async function didNotHappen(session, deps, action, auth, message) {
   session.items.push({ kind: "ticket", status: "recorded", text: action.statement, issueId: null });
+  await noteActivity(session, deps, action, {
+    role: "failure",
+    actor: "Sederunt",
+    actorKind: "sederunt",
+    outcome: "failed",
+    error: failureText(message),
+  });
   return finish(session, {
     status: "recorded",
     kind: "ticket",
@@ -495,6 +523,89 @@ function didNotHappen(session, action, auth) {
 
 function connectorId(created) {
   return String(created?.identifier || created?.eventId || created?.id || "").trim();
+}
+
+function activitySource(input) {
+  if (input?.door === "mcp") return `MCP: ${input.clientName || "client"}`;
+  if (input?.door === "channel" || input?.room?.source === "slack") return "Slack";
+  if (input?.door === "meeting") return input.room?.platform || "Google Meet";
+  return "Console";
+}
+
+function roomLabel(input, room) {
+  return input?.room?.name || input?.room?.channel || room?.name || room?.id || "";
+}
+
+function failureText(message) {
+  const text = String(message || "").trim();
+  if (!text || text.length > 160) return "The change did not go through.";
+  if (renderSafe(text) !== text) return "The change did not go through.";
+  return text;
+}
+
+function renderSafe(text) {
+  return text.replace(/0x[0-9a-fA-F]{6,}/g, "").replace(/\bBearer\s+\S+/gi, "").replace(/\blin_api_\S+/g, "");
+}
+
+function verbFor(action) {
+  if (action.edit === "assign") return "assign";
+  if (action.tool === "calendar") return "move";
+  if (action.tool === "slack") return "post";
+  return "create";
+}
+
+async function noteActivity(session, deps, action, fields) {
+  const kind = fields.role === "failure" ? "failure" : (fields.role === "request" ? "request" : "action");
+  const input = {
+    id: nextId(session, "activity"),
+    requestId: action.id,
+    actor: {
+      type: fields.actorKind === "sederunt" ? "sederunt" : "person",
+      name: fields.actorKind === "sederunt" ? "Sederunt" : displayName(fields.actor),
+      via: fields.actorKind === "sederunt" ? "MCP: sederunt" : (action.source || "Console"),
+    },
+    verb: verbFor(action),
+    target: {
+      system: action.tool === "calendar" ? "calendar" : (action.tool === "slack" ? "slack" : "linear"),
+      type: action.tool === "calendar" ? "event" : "issue",
+      id: fields.entityId || action.params?.id || "",
+      title: action.params?.title || action.statement || "",
+    },
+    changes: activityChanges(action),
+    tool: { name: "act", server: "sederunt-mcp" },
+    origin: {
+      roomId: action.roomId || "",
+      roomName: action.roomName || "",
+      at: Number.isFinite(action.offset) ? action.offset : null,
+    },
+    outcome: kind === "failure" ? "failed" : "ok",
+    error: kind === "failure" ? failureText(fields.error) : "",
+    undo: kind === "action" ? { available: true, until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() } : undefined,
+  };
+  let event;
+  try {
+    event = kind === "request" ? logRequest(session, input) : (kind === "failure" ? logFailure(session, input) : logAction(session, input));
+  } catch {
+    return null;
+  }
+  await remember(deps, {
+    account: "company",
+    kind: "activity",
+    text: renderActivity(event),
+    idempotencyKey: event.id,
+    activity: event,
+  });
+  return event;
+}
+
+function activityChanges(action) {
+  if (action.edit === "assign" && action.params?.assignee) {
+    return [{ field: "assignee", from: "", to: displayName(action.params.assignee) }];
+  }
+  if (action.tool === "calendar" && action.params?.day) {
+    return [{ field: "start", from: "", to: String(action.params.day) }];
+  }
+  return [];
 }
 
 async function storePreference(input, session, deps, parsed) {
@@ -824,28 +935,7 @@ async function keepDecision(input, session, deps, draft) {
   }
   session.decisions.push(decision);
   session.items.push({ kind: "decision", status: "recorded", text: decision.text, issueId: null });
-  const shown = renderVisible(session, input.memberId, decision.roomId, null);
-  if (input.door === "meeting" && decision.account === "company" && decision.kind === "decision") {
-    const action = {
-      id: nextId(session, "action"),
-      deliveryId: decision.sourceDeliveryId,
-      decisionId: decision.id,
-      roomId: decision.roomId,
-      memberId: input.memberId,
-      tool: "linear",
-      preference: "ask",
-      statement: decision.text,
-      params: { title: decision.text },
-      missingFact: "",
-      connectorId: null,
-      edit: "create",
-      state: "waiting",
-    };
-    session.actions.push(action);
-    shown.actionId = action.id;
-    shown.body = `${shown.body}\nWaiting for confirmation of ${action.id}.`;
-  }
-  return shown;
+  return renderVisible(session, input.memberId, decision.roomId, null);
 }
 
 async function forgetDelivery(input, session, deps) {
@@ -1056,6 +1146,7 @@ function applyIndexedDocuments(session, docs, blankText) {
     absorbOpenedRoom(session, copyOpenedRoom(doc));
     absorbAccess(session, copyAccess(doc));
     absorbHearing(session, copyHearing(doc));
+    absorbActivity(session, doc?.activity);
     const observedId = typeof doc?.expiry?.decisionId === "string" ? doc.expiry.decisionId : "";
     const observed = epochOf(doc?.expiry?.expiryEpoch);
     if (observedId && observed != null && !epochs.has(observedId)) epochs.set(observedId, observed);
@@ -1456,6 +1547,7 @@ async function remember(deps, document) {
       room: document.room,
       access: document.access,
       hearing: document.hearing,
+      activity: document.activity,
     });
     const blobId = saved && typeof saved.blobId === "string" ? saved.blobId : null;
     return { blobId, expiryEpoch: epochOf(saved?.expiryEpoch) };
@@ -1584,31 +1676,8 @@ export async function rebuildCompanyIndex(session, deps = {}) {
   return { ok: true, empty: current.decisions.length === 0 };
 }
 
-function restoreMeetingConfirms(session) {
-  const meetings = new Set((session.rooms ?? []).filter((room) => room.kind === "meeting").map((room) => room.id));
-  session.actions ??= [];
-  for (const decision of session.decisions ?? []) {
-    if (decision.deleted || decision.account === "personal" || decision.kind === "note") continue;
-    if (typeof decision.connectorId === "string" && decision.connectorId) continue;
-    if (!meetings.has(decision.roomId)) continue;
-    if (session.actions.some((action) => action.decisionId === decision.id)) continue;
-    session.actions.push({
-      id: nextId(session, "action"),
-      deliveryId: decision.sourceDeliveryId || "",
-      decisionId: decision.id,
-      roomId: decision.roomId,
-      memberId: decision.speakerMemberId || "",
-      tool: "linear",
-      preference: "ask",
-      statement: decision.text,
-      params: { title: decision.text },
-      missingFact: "",
-      connectorId: null,
-      edit: "create",
-      state: "waiting",
-      inviteMemberIds: [...(decision.inviteMemberIds ?? [])],
-    });
-  }
+function restoreMeetingConfirms() {
+  // A kept sentence is not a change waiting for confirm.
 }
 
 /**
@@ -1777,14 +1846,45 @@ export function companyBoard(session, memberId) {
       kept: decisions.length,
       waiting: waiting.length,
       sent,
-      failed: 0,
+      failed: (session?.activity ?? []).filter((row) => row.kind === "failure" && row.outcome === "failed").length,
+      actionsToday: (session?.activity ?? []).filter((row) => row.kind === "action" && String(row.ts || "").slice(0, 10) === new Date().toISOString().slice(0, 10)).length,
     },
+    activity: publicActivity(session, rooms),
     preferences: {
       linear: resolvePreference(preferences, "linear", ""),
       calendar: resolvePreference(preferences, "calendar", ""),
     },
     access: accessRows(session, rooms),
   };
+}
+
+function publicActivity(session, rooms) {
+  const visible = new Set((rooms || []).map((room) => room.id));
+  return (session?.activity ?? [])
+    .filter((row) => row && (!row.origin?.roomId || visible.has(row.origin.roomId)))
+    .map((row) => ({
+      id: row.id,
+      requestId: row.requestId,
+      ts: row.ts,
+      kind: row.kind,
+      actor: row.actor,
+      verb: row.verb,
+      target: row.target,
+      changes: row.changes,
+      tool: row.tool,
+      origin: row.origin,
+      outcome: row.outcome,
+      error: row.error,
+      undo: row.undo,
+      sentence: renderActivity(row),
+    }));
+}
+
+function absorbActivity(session, activity) {
+  if (!activity || typeof activity.id !== "string" || !activity.id) return;
+  session.activity ??= [];
+  if (session.activity.some((row) => row.id === activity.id)) return;
+  session.activity.push(activity);
 }
 
 function accessRows(session, rooms) {

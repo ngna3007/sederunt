@@ -1078,6 +1078,7 @@ async function consolePayload(workspace, current, memberId, kind = "company") {
     rooms: board.rooms,
     people: board.people,
     waiting: board.waiting,
+    activity: board.activity ?? [],
     tickets: board.tickets ?? [],
     access: board.access,
     counts: board.counts,

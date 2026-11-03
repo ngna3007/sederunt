@@ -420,6 +420,7 @@ test("stdio recall matches the web screen and ask does not reach the connector",
       deliveryId: "stdio-store",
     });
     assert.match(stored.body.body, /kiln/);
+    await post(app.port, "/api/typed", { text: "set linear to ask", memberId: "rowan", room: room(), deliveryId: "stdio-ask" });
     const web = await post(app.port, "/api/typed", {
       text: "what was decided",
       memberId: "rowan",

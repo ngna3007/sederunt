@@ -356,7 +356,7 @@ test("the room keeps a clash and a replacement for the person in the room", asyn
     assert.equal(joined.raw.includes("secret"), false);
     const before = JSON.parse((await get(port, "/api/room?room=desk")).raw);
     assert.deepEqual(before.decisions, []);
-    assert.deepEqual(before.preferences, { linear: "ask", calendar: "ask" });
+    assert.deepEqual(before.preferences, { linear: "do", calendar: "do" });
 
     const ready = await get(port, "/api/ready");
     assert.equal(ready.status, 200);

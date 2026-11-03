@@ -67,6 +67,7 @@ export async function indexCompany({ client, env = process.env } = {}) {
       room: parsed.room ?? null,
       access: parsed.access ?? null,
       hearing: parsed.hearing ?? null,
+      activity: parsed.activity ?? null,
     });
   }
   return rows;
@@ -85,6 +86,7 @@ function decisionPayload(input) {
     room: input?.room ?? null,
     access: input?.access ?? null,
     hearing: input?.hearing ?? null,
+    activity: input?.activity ?? null,
   });
 }
 
@@ -93,7 +95,7 @@ function readDecisionPayload(text) {
   try {
     const parsed = JSON.parse(text);
     if (!parsed || parsed.mark !== DECISION_MARK) return null;
-    if (!parsed.decision && !parsed.preference && !parsed.roomSetting && !parsed.expiry && !parsed.room && !parsed.access && !parsed.hearing) return null;
+    if (!parsed.decision && !parsed.preference && !parsed.roomSetting && !parsed.expiry && !parsed.room && !parsed.access && !parsed.hearing && !parsed.activity) return null;
     return parsed;
   } catch {
     return null;

@@ -1,7 +1,7 @@
 /**
  * The live preference is the one without replacedBy. A room override wins
- * over the account default. A missing document means ask. When more than
- * one live document matches, the highest id wins, so a restart that still
+ * over the account default. A missing document means do, so a change runs.
+ * When more than one live document matches, the highest id wins, so a restart that still
  * holds the older copy does not put that copy back in force.
  *
  * @param {Array<{ id?: string, tool: string, value?: string, roomId?: string, replacedBy?: string | null }>} preferences
@@ -16,7 +16,8 @@ export function resolvePreference(preferences, tool, roomId) {
     if (override?.value === "do" || override?.value === "ask") return override.value;
   }
   const account = newestPreference(live.filter((pref) => !pref.roomId));
-  return account?.value === "do" ? "do" : "ask";
+  if (account?.value === "ask") return "ask";
+  return "do";
 }
 
 function preferenceRank(pref) {
