@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { activityEvent } from "../src/activity.js";
-import { replayPlan, replaySupported, runReplay, toUtcIso } from "../src/activity-replay.js";
+import { canReplay, canUndo, replayPlan, replaySupported, runReplay, toUtcIso } from "../src/activity-replay.js";
 import { formatActivitySentence, groupActivity } from "../src/activity-feed.js";
 import { companyBoard, handleUtterance, replayFailure, undoRecorded } from "../src/typed-path.js";
 import { rebuildCompanyIndex } from "../src/typed-path.js";
@@ -589,4 +589,115 @@ test("a slack failure with no channel hides retry, and a #name post stores the i
   const filed = posting.activity.find((row) => row.kind === "action" && row.verb === "post");
   assert.equal(filed.target.channel, "C0DESIGN");
   assert.equal(filed.target.url, "https://acme.slack.com/archives/C0DESIGN/p1710000000000100");
+});
+
+test("an unresolved slack channel is not retryable and does not list conversations", async () => {
+  const session = createSession();
+  const { logFailure } = await import("../src/activity.js");
+  logFailure(session, {
+    id: "fail-name",
+    requestId: "req-name",
+    actor: { type: "sederunt", name: "Sederunt" },
+    verb: "post",
+    target: { system: "slack", type: "message", title: "Booth notes", channel: "#no-such-room" },
+    changes: [{ field: "body", to: "Hello" }],
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    tool: { name: "act", server: "sederunt-mcp" },
+  });
+  session.rooms.push({ id: "booth", name: "Booth planning", platform: "Google Meet" });
+  session.decisions.push({
+    id: "d-booth",
+    account: "company",
+    kind: "decision",
+    text: "Kept.",
+    roomId: "booth",
+    inviteMemberIds: ["mina"],
+    speakerMemberId: "mina",
+    spokenAt: "2026-11-03T08:00:00.000Z",
+  });
+  const board = companyBoard(session, "mina", {});
+  assert.equal(board.activity.find((row) => row.id === "fail-name").retryable, false);
+  assert.equal(canReplay(session.activity.find((row) => row.id === "fail-name"), {}), false);
+  const listed = [];
+  const refused = await replayFailure(session, {
+    slack: { async resolveChannel() { listed.push("list"); return ""; }, async postMessage() { throw new Error("posted"); } },
+    memory: { async remember() { return { blobId: null }; } },
+  }, "fail-name");
+  assert.equal(refused.reason, "unsupported");
+  assert.equal(listed.length, 0);
+});
+
+test("a priority field hides undo and the server refuses it", () => {
+  const row = {
+    kind: "action",
+    verb: "move",
+    target: { system: "linear", id: "ROW-1", title: "Booth power strips" },
+    changes: [
+      { field: "status", from: "Backlog", to: "Todo" },
+      { field: "priority", from: "Low", to: "High" },
+    ],
+    undo: { available: true, until: "2099-01-01T00:00:00.000Z" },
+    outcome: "ok",
+  };
+  assert.equal(canUndo(row), false);
+  assert.equal(replayPlan(row, "undo").reason, "unsupported");
+});
+
+test("a calendar retry does not invent a linear url", async () => {
+  const session = createSession();
+  const { logFailure } = await import("../src/activity.js");
+  logFailure(session, {
+    id: "fail-cal",
+    requestId: "req-cal",
+    actor: { type: "sederunt", name: "Sederunt" },
+    verb: "move",
+    target: { system: "calendar", type: "event", id: "evt-design-crit", title: "Design crit" },
+    changes: [{ field: "start", from: "2:00 PM", to: "4:00 PM" }],
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    tool: { name: "act", server: "sederunt-mcp" },
+  });
+  await replayFailure(session, {
+    app: { timeZone: "Asia/Ho_Chi_Minh", linearWorkspace: "acme" },
+    calendar: {
+      async readEvent() { return observed; },
+      async call() { return { id: "evt-design-crit" }; },
+    },
+    memory: { async remember() { return { blobId: null }; } },
+  }, "fail-cal");
+  const filed = session.activity.find((row) => row.kind === "action" && row.verb === "move");
+  assert.equal(filed.target.url, "");
+});
+
+test("a failed second step rolls back the first, or records a partial", async () => {
+  const calls = [];
+  const linear = {
+    async updateIssue(args) { calls.push(["updateIssue", args]); return { id: args.id }; },
+    async assignIssue() { throw new Error("assign failed"); },
+  };
+  const plan = replayPlan({
+    verb: "move",
+    target: { system: "linear", id: "ROW-1", title: "Booth power strips" },
+    changes: [
+      { field: "status", from: "Backlog", to: "Todo" },
+      { field: "assignee", from: "Priya", to: "Tomas" },
+    ],
+  }, "replay");
+  await assert.rejects(() => runReplay({ linear }, plan), /assign failed/);
+  assert.deepEqual(calls, [
+    ["updateIssue", { id: "ROW-1", state: "Todo" }],
+    ["updateIssue", { id: "ROW-1", state: "Backlog" }],
+  ]);
+  calls.length = 0;
+  const stuck = {
+    async updateIssue(args) {
+      calls.push(args.state);
+      if (args.state === "Backlog") throw new Error("rollback failed");
+      return { id: "ROW-1" };
+    },
+    async assignIssue() { throw new Error("assign failed"); },
+  };
+  await assert.rejects(
+    () => runReplay({ linear: stuck }, plan),
+    (error) => error.reason === "partial" && error.partial.includes("updateIssue"),
+  );
 });

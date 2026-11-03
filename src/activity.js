@@ -335,7 +335,7 @@ function fill(template, event, verb) {
     title: target.title || "",
     to: change.to || "",
     from: change.from || "",
-    room: origin.roomName || "",
+    room: postedChannel(event) || origin.roomName || "",
     via: via.startsWith("MCP") ? "MCP" : via,
     system: SYSTEMS[target.system] || target.system || "",
     error: event?.error || "",
@@ -345,8 +345,27 @@ function fill(template, event, verb) {
   return template.replace(/\{(\w+)\}/g, (_, key) => values[key] || "");
 }
 
+function postedChannel(event) {
+  if (event?.target?.system !== "slack") return "";
+  const raw = String(
+    event?.target?.channel
+    || (event?.changes || []).find((change) => change?.field === "channel")?.to
+    || "",
+  ).trim();
+  if (!raw || /^[CDGW][A-Z0-9]{2,}$/.test(raw)) return "";
+  return raw.startsWith("#") ? raw : `#${raw.replace(/^#/, "")}`;
+}
+
 function withChanges(sentence, event) {
-  const extra = (event?.changes || []).slice(1).map(changeClause).filter(Boolean);
+  if (event?.kind === "undo") return undoSentence(event) || sentence;
+  const skip = event?.verb === "post" || event?.target?.system === "slack"
+    ? new Set(["body", "channel"])
+    : null;
+  const extra = (event?.changes || [])
+    .slice(1)
+    .filter((change) => !skip?.has(change?.field))
+    .map((change) => changeClause(change, event?.kind))
+    .filter(Boolean);
   if (!extra.length) return sentence;
   const clause = ` and ${extra.join(" and ")}`;
   const on = sentence.indexOf(" on ");
@@ -354,15 +373,38 @@ function withChanges(sentence, event) {
   return `${sentence}${clause}`;
 }
 
-function changeClause(change) {
+function undoSentence(event) {
+  const changes = event?.changes || [];
+  if (!changes.length) return "";
+  const actor = event?.actor?.name || "Someone";
+  const title = event?.target?.title || event?.target?.id || "it";
+  const bits = changes.map(undoBit).filter(Boolean);
+  const detail = bits.length ? ` (${bits.join(", ")})` : "";
+  return `${actor} undid the change to ${title}${detail}`;
+}
+
+function undoBit(change) {
+  const field = String(change?.field || "");
+  const from = change?.from || "";
+  if ((field === "status" || field === "state") && from) return `status back to ${from}`;
+  if (field === "assignee" && from) return `assignee back to ${from}`;
+  if (field === "assignee") return "assignee cleared";
+  if (field === "label") return `label ${change?.to || from} removed`;
+  if (field === "body" || field === "channel") return "";
+  if (from) return `${field} back to ${from}`;
+  return "";
+}
+
+function changeClause(change, kind) {
   const field = String(change?.field || "");
   const to = change?.to || "";
   const from = change?.from || "";
-  if (field === "assignee" && to) return `assigned it to ${to}`;
-  if (field === "assignee" && from) return `unassigned ${from}`;
-  if ((field === "status" || field === "state") && from && to) return `moved it from ${from} to ${to}`;
-  if (field === "label" && to) return `added the label ${to}`;
-  if (field && to) return `set ${field} to ${to}`;
+  const ask = kind === "request";
+  if (field === "assignee" && to) return ask ? `assign it to ${to}` : `assigned it to ${to}`;
+  if (field === "assignee" && from) return ask ? `unassign ${from}` : `unassigned ${from}`;
+  if ((field === "status" || field === "state") && from && to) return ask ? `move it from ${from} to ${to}` : `moved it from ${from} to ${to}`;
+  if (field === "label" && to) return ask ? `add the label ${to}` : `added the label ${to}`;
+  if (field && to) return ask ? `set ${field} to ${to}` : `set ${field} to ${to}`;
   return "";
 }
 
@@ -411,6 +453,7 @@ function safeUrl(url) {
     return "";
   }
   if (parsed.protocol !== "https:" || parsed.username || parsed.password) return "";
+  if (parsed.port && parsed.port !== "443") return "";
   const host = parsed.hostname.toLowerCase();
   if (host !== "linear.app" && !slackHost(host)) return "";
   return `${parsed.origin}${parsed.pathname}`;

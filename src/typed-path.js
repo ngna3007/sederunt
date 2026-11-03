@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { displayName, logAction, logFailure, logRequest, logUndo, renderActivity, undoRefusal } from "./activity.js";
 import { formatActivitySentence, selectActivity } from "./activity-feed.js";
-import { canReplay, readCalendarEvent, replayPlan, replaySupported, runReplay } from "./activity-replay.js";
+import { canReplay, canUndo, readCalendarEvent, replayPlan, replaySupported, runReplay } from "./activity-replay.js";
 import { authorize } from "./domain/allow.js";
 import { clashStatuses } from "./domain/clash.js";
 import { checkInvite } from "./domain/invite.js";
@@ -698,10 +698,14 @@ export async function replayFailure(session, deps, failureId) {
     const observed = await readCalendarEvent(deps, named);
     const planned = { ...named, changes: request?.changes?.length ? request.changes : named.changes };
     if (planned.target?.system === "slack") {
-      const channel = await slackChannelFor(
-        deps,
-        planned.target?.channel || channelChange(planned) || request?.target?.channel || channelChange(request) || deps.app?.slackChannel || "",
-      );
+      if (!canReplay(planned, { slackChannel: deps.app?.slackChannel || "" })) {
+        return { ok: false, reason: "unsupported" };
+      }
+      const channel = slackChannelId(planned.target?.channel)
+        || slackChannelId(channelChange(planned))
+        || slackChannelId(request?.target?.channel)
+        || slackChannelId(channelChange(request))
+        || slackChannelId(deps.app?.slackChannel);
       if (!channel) return { ok: false, reason: "unsupported" };
       planned.target = { ...planned.target, channel };
     }
@@ -719,9 +723,10 @@ export async function replayFailure(session, deps, failureId) {
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       if (error?.reason === "unsupported") return { ok: false, reason: "unsupported" };
-      const event = logFailure(session, effectOf(named, { error: failureText(message), changes: named.changes }));
+      const honest = error?.partial ? "Part of the change went through." : failureText(message);
+      const event = logFailure(session, effectOf(named, { error: honest, changes: named.changes }));
       await storeActivity(session, deps, event);
-      return { ok: false, reason: "failed", id: event.id };
+      return { ok: false, reason: error?.partial ? "partial" : "failed", id: event.id };
     }
     if (!connectorSucceeded(named.target?.system, created)) {
       const event = logFailure(session, effectOf(named, {
@@ -760,7 +765,7 @@ export async function undoRecorded(session, deps, id, actorName) {
   const event = (session.activity || []).find((row) => row.id === id);
   const reason = undoRefusal(event);
   if (reason) return { ok: false, reason };
-  if (!replaySupported(event, "undo")) return { ok: false, reason: "unsupported" };
+  if (!canUndo(event)) return { ok: false, reason: "unsupported" };
   const observed = await readCalendarEvent(deps, event);
   const plan = replayPlan(event, "undo", observed, deps.app?.timeZone || "");
   if (!plan.ok) return plan;
@@ -769,6 +774,11 @@ export async function undoRecorded(session, deps, id, actorName) {
     if (!connectorSucceeded(event.target?.system, created)) return { ok: false, reason: "failed" };
   } catch (error) {
     if (error?.reason === "unsupported") return { ok: false, reason: "unsupported" };
+    if (error?.partial) {
+      const noted = logFailure(session, effectOf(event, { error: "Part of the undo went through." }));
+      await storeActivity(session, deps, noted);
+      return { ok: false, reason: "partial", id: noted.id };
+    }
     return { ok: false, reason: "failed" };
   }
   const undo = logUndo(session, {
@@ -861,7 +871,8 @@ function appliedTarget(named, created, deps) {
   }
   if (named.verb === "create") {
     const id = String(created?.identifier || created?.id || "").trim();
-    const url = (typeof created?.url === "string" && created.url) || linearIssueUrl(deps, id);
+    const url = (typeof created?.url === "string" && created.url)
+    || (previous.system === "linear" || !previous.system ? linearIssueUrl(deps, id) : "");
     return {
       system: previous.system || "linear",
       type: previous.type || "issue",
@@ -875,7 +886,9 @@ function appliedTarget(named, created, deps) {
   const createdId = connectorId(created);
   const sameIssue = !createdId || createdId === previous.id;
   const connectorUrl = typeof created?.url === "string" && created.url ? created.url : "";
-  const url = connectorUrl || (sameIssue ? (previous.url || "") : "") || linearIssueUrl(deps, id);
+  const url = connectorUrl
+    || (sameIssue ? (previous.url || "") : "")
+    || ((previous.system || "") === "linear" ? linearIssueUrl(deps, id) : "");
   return {
     system: previous.system || "",
     type: previous.type || "",
@@ -889,6 +902,7 @@ function appliedTarget(named, created, deps) {
 async function slackChannelFor(deps, raw) {
   const direct = slackChannelId(raw);
   if (direct) return direct;
+  if (!slackName(raw)) return slackChannelId(deps.app?.slackChannel);
   if (typeof deps.slack?.resolveChannel === "function") {
     try {
       const resolved = slackChannelId(await deps.slack.resolveChannel(raw));
@@ -898,6 +912,12 @@ async function slackChannelFor(deps, raw) {
     }
   }
   return slackChannelId(deps.app?.slackChannel);
+}
+
+function slackName(value) {
+  const text = String(value || "").trim().replace(/^#/, "");
+  if (!text || slackChannelId(text)) return "";
+  return /^[a-z0-9][a-z0-9_-]{0,79}$/i.test(text) ? text : "";
 }
 
 function slackChannelId(value) {
@@ -2327,7 +2347,7 @@ function publishedUndo(row, now = Date.now()) {
   const open = row.undo?.available === true
     && row.outcome !== "undone"
     && row.superseded !== true
-    && replaySupported(row, "undo")
+    && canUndo(row)
     && !Number.isNaN(until)
     && until > now;
   if (!row.undo && !open) return undefined;

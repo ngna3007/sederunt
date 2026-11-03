@@ -1256,6 +1256,7 @@ async function consolePayload(workspace, current, memberId, kind = "company") {
   }
   const empty = report.empty && board.decisions.length === 0;
   await readProofs(current, board, workspace.deps?.tatum);
+  await attachRecordingStarts(workspace, current, board.rooms);
   return {
     companyLoaded: true,
     workspace: open,
@@ -1283,6 +1284,22 @@ function bindMember(env, supplied) {
   );
   if (bound.refusal) return { ok: false, reason: bound.refusal };
   return { ok: true, memberId: bound.message.params.arguments.memberId };
+}
+
+async function attachRecordingStarts(workspace, current, rooms) {
+  if (!Array.isArray(rooms) || !rooms.length) return;
+  await Promise.all(rooms.map(async (room) => {
+    if (!room?.id || /slack/i.test(room.platform || "")) return;
+    try {
+      const media = await roomMedia(workspace, room.id);
+      if (!media?.startedAt) return;
+      room.startedAt = media.startedAt;
+      const live = (current.rooms || []).find((item) => item.id === room.id);
+      if (live) live.startedAt = media.startedAt;
+    } catch {
+      // The room keeps the start already on the board.
+    }
+  }));
 }
 
 async function roomMedia(workspace, id) {

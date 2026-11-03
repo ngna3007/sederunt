@@ -65,16 +65,6 @@ test("table headers and cells share an x at 1920, 1024, 768, and 640", async (t)
       fileNames: [],
     });
   }
-  const app = createApp({
-    session,
-    companyLoaded: true,
-    deps: { memory: { async remember() { return { blobId: null }; } }, tatum: { async getObject() { return { text: "" }; } } },
-    env: { SEDERUNT_CONSOLE_SECRET: SECRET, SEDERUNT_MEMBER: "mina", COMPANY_MEMWAL_KEY: "k", COMPANY_MEMWAL_ACCOUNT_ID: "a" },
-  });
-  app.listen(0, "127.0.0.1");
-  const port = await once(app, "listening").then(() => app.address().port);
-  const token = sealSession({ memberId: "mina", name: "Mina", exp: Date.now() + 60_000 }, SECRET);
-  const cookie = sessionCookie(token, { headers: {}, socket: {} }, 60).split(";")[0];
   let chromium;
   try {
     ({ chromium } = await import("playwright"));
@@ -87,9 +77,22 @@ test("table headers and cells share an x at 1920, 1024, 768, and 640", async (t)
     t.skip("no browser binary found");
     return;
   }
+  const app = createApp({
+    session,
+    companyLoaded: true,
+    deps: { memory: { async remember() { return { blobId: null }; } }, tatum: { async getObject() { return { text: "" }; } } },
+    env: { SEDERUNT_CONSOLE_SECRET: SECRET, SEDERUNT_MEMBER: "mina", COMPANY_MEMWAL_KEY: "k", COMPANY_MEMWAL_ACCOUNT_ID: "a" },
+  });
   const browser = await chromium.launch({ executablePath, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
-  try {
-    const context = await browser.newContext();
+  t.after(() => {
+    browser.close();
+    app.close();
+  });
+  app.listen(0, "127.0.0.1");
+  const port = await once(app, "listening").then(() => app.address().port);
+  const token = sealSession({ memberId: "mina", name: "Mina", exp: Date.now() + 60_000 }, SECRET);
+  const cookie = sessionCookie(token, { headers: {}, socket: {} }, 60).split(";")[0];
+  const context = await browser.newContext();
     const eq = cookie.indexOf("=");
     await context.addCookies([{ name: cookie.slice(0, eq), value: cookie.slice(eq + 1), url: `http://127.0.0.1:${port}` }]);
     const page = await context.newPage();
@@ -122,12 +125,15 @@ test("table headers and cells share an x at 1920, 1024, 768, and 640", async (t)
       });
       for (const key of ["sentence", "room", "status", "action"]) {
         const pair = aligned[key];
-        assert.ok(pair.head && pair.cell, `${width} ${key} header and cell are visible`);
+        if (!pair.head || !pair.cell) {
+          assert.ok(width <= 900, `${width} ${key} header and cell are visible`);
+          continue;
+        }
         assert.ok(Math.abs(pair.head.x - pair.cell.x) <= 2, `${width} ${key} header ${pair.head.x} cell ${pair.cell.x}`);
       }
       assert.ok(aligned.rowPad >= 8, `${width} decision row padding ${aligned.rowPad}`);
-      if (width === 768) {
-        assert.ok(aligned.sentence.cell.width >= 80, `decision text column is ${aligned.sentence.cell.width}px`);
+      if (width <= 900) {
+        assert.ok(aligned.sentence.cell && aligned.sentence.cell.width >= 300, `decision text column is ${aligned.sentence.cell?.width}px`);
       }
       if (aligned.headBottom && aligned.rowTop) {
         assert.ok(aligned.rowTop - aligned.headBottom <= 2, `${width} header gap ${aligned.rowTop - aligned.headBottom}`);
@@ -148,6 +154,7 @@ test("table headers and cells share an x at 1920, 1024, 768, and 640", async (t)
           rooms: { head: at('.people-head [data-col="rooms"]'), cell: at('.people-row [data-col="rooms"]') },
           count: { head: at('.people-head [data-col="count"]'), cell: at('.people-row [data-col="count"]') },
           overflow: chips.filter((chip) => chip.scrollWidth > chip.clientWidth + 1).map((chip) => chip.textContent),
+          named: chips.filter((chip) => chip.className.indexOf("more-") === -1).length,
         };
       });
       for (const key of ["name", "rooms", "count"]) {
@@ -159,9 +166,6 @@ test("table headers and cells share an x at 1920, 1024, 768, and 640", async (t)
         }
       }
       assert.deepEqual(people.overflow, [], `${width} chip overflow ${people.overflow.join(",")}`);
+      if (width <= 1200) assert.equal(people.named, 1, `${width} shows ${people.named} room chips`);
     }
-  } finally {
-    await browser.close();
-    app.close();
-  }
 });

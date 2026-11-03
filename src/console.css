@@ -2536,9 +2536,25 @@ label.search.dock-search { background: var(--card); z-index: 2; }
   }
   #chat { padding-top: 12px; }
 }
+@media (max-width: 1200px) {
+  .chip-second, .chip-rest, .more-wide { display: none !important; }
+  .more-narrow { display: inline-flex; }
+  .room-chips { flex-wrap: nowrap; }
+}
 @media (max-width: 900px) {
-  #record-table > .decision-head,
-  #record-list .decision-row {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 9rem) 6.5rem 4.5rem;
+  #record-table > .decision-head {
+    grid-template-columns: minmax(0, 1fr) 4.5rem;
+    grid-template-areas: none;
   }
+  #record-table > .decision-head > span:nth-child(2),
+  #record-table > .decision-head > span:nth-child(3),
+  #record-list .decision-row .badge { display: none; }
+  #record-list .decision-row {
+    grid-template-columns: minmax(0, 1fr) 4.5rem;
+    grid-template-areas: "sentence view" "room view";
+  }
+  #record-list .decision-row .ex-room { grid-area: sentence; width: auto; max-width: none; }
+  #record-list .decision-row .ex-room strong { white-space: normal; }
+  #record-list .decision-row .ex-plat { grid-area: room; width: auto; max-width: 100%; }
+  #record-list .decision-row .row-view { grid-area: view; align-self: start; }
 }

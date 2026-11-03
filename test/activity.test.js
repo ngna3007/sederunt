@@ -126,6 +126,57 @@ test("a sentence names every change", () => {
   assert.match(sentence, /and assigned it to Tomas/);
 });
 
+test("a request uses the infinitive and an undo names the fields going back", () => {
+  const asked = renderActivity({
+    kind: "request",
+    verb: "move",
+    actor: { type: "person", name: "Tomas" },
+    target: { system: "linear", title: "Booth power strips" },
+    changes: [
+      { field: "status", from: "Backlog", to: "Todo" },
+      { field: "assignee", to: "Tomas" },
+    ],
+  }, NOW);
+  assert.equal(asked, "Tomas asked to move Booth power strips to Todo and assign it to Tomas");
+  const undone = renderActivity({
+    kind: "undo",
+    verb: "move",
+    actor: { type: "person", name: "Mina" },
+    target: { system: "linear", title: "Booth power strips" },
+    changes: [
+      { field: "status", from: "Backlog", to: "Todo" },
+      { field: "assignee", from: "Priya", to: "Tomas" },
+    ],
+  }, NOW);
+  assert.equal(undone, "Mina undid the change to Booth power strips (status back to Backlog, assignee back to Priya)");
+});
+
+test("a slack post names the channel and leaves the message body out of the sentence", () => {
+  const sentence = renderActivity({
+    kind: "action",
+    verb: "post",
+    actor: { type: "sederunt", name: "Sederunt", via: "Slack" },
+    target: { system: "slack", type: "message", title: "Doors open at ten", channel: "sederunt-demo" },
+    origin: { roomName: "Booth planning" },
+    changes: [
+      { field: "channel", to: "sederunt-demo" },
+      { field: "body", to: "Doors open at ten." },
+    ],
+  }, NOW);
+  assert.match(sentence, /in #sederunt-demo/);
+  assert.equal(sentence.includes("Booth planning"), false);
+  assert.equal(sentence.includes("set body"), false);
+});
+
+test("a slack url on a non-default port is dropped", () => {
+  const dropped = activityEvent({
+    verb: "post",
+    actor: { name: "Sederunt", type: "sederunt" },
+    target: { system: "slack", url: "https://slack.com:8443/archives/C1/p1" },
+  });
+  assert.equal(dropped.target.url, "");
+});
+
 test("a calendar reschedule and an MCP action use the same renderer", () => {
   const rescheduled = {
     kind: "action",

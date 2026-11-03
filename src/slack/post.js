@@ -64,7 +64,7 @@ async function resolveChannelName(fetchImpl, token, env, name) {
   const fallback = String(env.SLACK_DEFAULT_CHANNEL || "").trim();
   const fallbackId = CHANNEL_ID.test(fallback) ? fallback : "";
   const wanted = raw.replace(/^#/, "").toLowerCase();
-  if (!token) return fallbackId;
+  if (!wanted || !token) return fallbackId;
   try {
     const channels = await listChannels(fetchImpl, token);
     const hit = wanted ? channels.find((item) => String(item?.name || "").toLowerCase() === wanted) : null;

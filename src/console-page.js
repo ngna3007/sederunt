@@ -1471,7 +1471,6 @@ if (sessionWhen && sessionWhen.dataset.at) {
       specs.push(item);
     });
     rooms.forEach(function (room) {
-      askRecording(room);
       var rows = decisionsFor(room.id);
       var ident = roomIdentity(room, rows);
       var spec = {
@@ -1543,20 +1542,6 @@ if (sessionWhen && sessionWhen.dataset.at) {
     }
     if (prev) prev.disabled = roomPage <= 0;
     if (next) next.disabled = roomPage >= pages - 1;
-  }
-
-  function askRecording(room) {
-    if (!room || !room.id || room.recordingAsked || /slack/i.test(room.platform || "")) return;
-    room.recordingAsked = true;
-    fetch("/console/rooms/" + encodeURIComponent(room.id) + "/media").then(function (response) {
-      if (!response.ok) return null;
-      return response.json();
-    }).then(function (media) {
-      if (!media || !media.startedAt || media.startedAt === room.recordingStart) return;
-      room.startedAt = media.startedAt;
-      room.recordingStart = media.startedAt;
-      paintRooms();
-    }).catch(function () { /* The list keeps the room's own start. */ });
   }
 
   function clipText(text, max) {
@@ -3336,6 +3321,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
   }
 
+  var mediaFlight = "";
+
   function loadRoomMedia() {
     var room = roomOf(fileRoom);
     var channel = room && /slack/i.test(room.platform || "");
@@ -3346,12 +3333,16 @@ if (sessionWhen && sessionWhen.dataset.at) {
       paintTimeline();
       return;
     }
-    fetch("/console/rooms/" + encodeURIComponent(fileRoom) + "/media").then(function (response) {
+    if (mediaFlight === fileRoom || (roomMediaState && roomMediaState.forRoom === fileRoom)) return;
+    var asked = fileRoom;
+    mediaFlight = asked;
+    fetch("/console/rooms/" + encodeURIComponent(asked) + "/media").then(function (response) {
       if (!response.ok) throw new Error("media");
       return response.json();
     }).then(function (media) {
       if (!media) return;
       roomMediaState = media;
+      roomMediaState.forRoom = asked;
       if (media.title && room && !room.name) {
         room.name = media.title;
         text("file-title", media.title);
@@ -3377,6 +3368,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
       roomMediaState = { state: "none" };
       paintPlayer(roomMediaState);
       paintArtifacts(roomMediaState);
+    }).finally(function () {
+      if (mediaFlight === asked) mediaFlight = "";
     });
   }
 

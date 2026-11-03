@@ -35,8 +35,10 @@ export function replaySupported(event, direction) {
 const CHANNEL_ID = /^[CDGW][A-Z0-9]{2,}$/;
 
 /**
- * Whether Retry can run. Slack needs a channel id, a channel name that can
- * be resolved, or the configured default. The page uses the same answer.
+ * Whether Retry can run. Slack needs a channel id already in hand: on the
+ * row, on a change, or as the configured default. A channel name is not
+ * enough, because a name that does not resolve would show a button the
+ * server then refuses. The page uses this same answer.
  *
  * @param {{ verb?: string, target?: { system?: string, channel?: string }, changes?: { field?: string, to?: string }[] }} event
  * @param {{ slackChannel?: string }} [options]
@@ -46,14 +48,22 @@ export function canReplay(event, options = {}) {
   if ((event?.target?.system || "") !== "slack") return true;
   const fallback = options.slackChannel || "";
   const noted = (event?.changes || []).find((change) => change?.field === "channel")?.to || "";
-  return Boolean(
-    channelId(event?.target?.channel)
-    || channelId(noted)
-    || channelId(fallback)
-    || channelName(event?.target?.channel)
-    || channelName(noted)
-    || channelName(fallback),
-  );
+  return Boolean(channelId(event?.target?.channel) || channelId(noted) || channelId(fallback));
+}
+
+/**
+ * Whether Undo can run. A Linear row with several fields must be able to
+ * invert every one of them. The page uses this same answer.
+ *
+ * @param {{ verb?: string, target?: { system?: string, id?: string }, changes?: { field?: string, from?: string, to?: string }[] }} event
+ */
+export function canUndo(event) {
+  if (!replaySupported(event, "undo")) return false;
+  const changes = (event?.changes || []).filter((change) => change?.field);
+  if ((event?.target?.system || "") === "linear" && changes.length > 1) {
+    return Boolean(linearSteps(event, "undo")?.ok);
+  }
+  return true;
 }
 
 function channelName(value) {
@@ -250,25 +260,39 @@ function linearSteps(event, direction) {
 }
 
 function linearFieldStep(change, direction, id) {
+  const pair = linearFieldPair(change, id);
+  if (!pair) return null;
+  const step = direction === "undo" ? pair.back : pair.forward;
+  const undo = direction === "undo" ? pair.forward : pair.back;
+  return { method: step.method, args: step.args, undo };
+}
+
+function linearFieldPair(change, id) {
   const field = String(change.field || "").trim();
   if (field === "status" || field === "state") {
-    const state = direction === "undo" ? change.from : change.to;
-    if (!state) return null;
-    return { method: "updateIssue", args: { id, state } };
+    if (!change.from || !change.to) return null;
+    return {
+      forward: { method: "updateIssue", args: { id, state: change.to } },
+      back: { method: "updateIssue", args: { id, state: change.from } },
+    };
   }
   if (field === "assignee") {
-    const name = direction === "undo" ? change.from : change.to;
-    if (!name) {
-      const other = direction === "undo" ? change.to : change.from;
-      if (!other) return null;
-      return { method: "unassignIssue", args: { id } };
-    }
-    return { method: "assignIssue", args: { id, assignee: name } };
+    if (!change.to && !change.from) return null;
+    const forward = change.to
+      ? { method: "assignIssue", args: { id, assignee: change.to } }
+      : { method: "unassignIssue", args: { id } };
+    const back = change.from
+      ? { method: "assignIssue", args: { id, assignee: change.from } }
+      : { method: "unassignIssue", args: { id } };
+    return { forward, back };
   }
   if (field === "label") {
     const label = String(change.to || change.from || "");
     if (!label) return null;
-    return { method: direction === "undo" ? "removeLabel" : "addLabel", args: { id, label } };
+    return {
+      forward: { method: "addLabel", args: { id, label } },
+      back: { method: "removeLabel", args: { id, label } },
+    };
   }
   return null;
 }
@@ -296,11 +320,35 @@ export async function runReplay(deps, plan) {
   const steps = Array.isArray(plan.steps) && plan.steps.length
     ? plan.steps
     : [{ method: plan.method, args: plan.args }];
+  const done = [];
   let last;
-  for (const step of steps) {
-    last = await runOne(deps, { system: plan.system, method: step.method, args: step.args });
+  try {
+    for (const step of steps) {
+      last = await runOne(deps, { system: plan.system, method: step.method, args: step.args });
+      done.push(step);
+    }
+    return last;
+  } catch (error) {
+    if (done.length && done.length < steps.length) {
+      const stuck = [];
+      for (const step of [...done].reverse()) {
+        if (!step.undo) {
+          stuck.push(step.method);
+          continue;
+        }
+        try {
+          await runOne(deps, { system: plan.system, method: step.undo.method, args: step.undo.args });
+        } catch {
+          stuck.push(step.method);
+        }
+      }
+      if (stuck.length) {
+        error.partial = stuck;
+        error.reason = "partial";
+      }
+    }
+    throw error;
   }
-  return last;
 }
 
 async function runOne(deps, plan) {
