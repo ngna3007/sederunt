@@ -1,4 +1,4 @@
-import logos from "@iconify-json/logos/icons.json" with { type: "json" };
+import { brandLogo } from "./brand-logos.js";
 
 /**
  * The operator workspace. Onboard, home, rooms, history, chat, and record
@@ -35,12 +35,6 @@ export function renderConsolePage(state = {}) {
   const userIcon = glyph('<circle cx="8" cy="5.4" r="2.1"/><path d="M3.3 13.1c.55-2.1 2.35-3.2 4.7-3.2s4.15 1.1 4.7 3.2"/>');
   const panelIcon = glyph('<rect x="2.6" y="3" width="10.8" height="10" rx="1.4"/><path d="M6.4 3v10"/>');
   const plugIcon = glyph('<path d="M6 2.6v3M10 2.6v3M4.2 5.6h7.6v2.4a3.8 3.8 0 0 1-7.6 0V5.6Z"/><path d="M8 11.8V14"/>');
-  const brandLogo = (name) => {
-    const icon = logos.icons[name];
-    const width = icon.width || logos.width;
-    const height = icon.height || logos.height;
-    return `<span class="conn-mark" aria-hidden="true"><svg class="brand-mark" viewBox="0 0 ${width} ${height}" width="20" height="20">${icon.body}</svg></span>`;
-  };
   const calendarIcon = brandLogo("google-calendar");
   const linearIcon = brandLogo("linear-icon");
   const channelIcon = brandLogo("slack-icon");
