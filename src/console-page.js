@@ -9,12 +9,12 @@ import logos from "@iconify-json/logos/icons.json" with { type: "json" };
  * The name field sits at the bottom of the rail.
  * The room file pins the decision. Each setting is a row, label then control.
  *
- * @param {{ meeting?: boolean, slackReady?: boolean }} [state]
+ * @param {{ meeting?: boolean, meetingSetup?: string, slackReady?: boolean }} [state]
  */
 export function renderConsolePage(state = {}) {
   const meet = state.meeting
     ? ""
-    : `<p id="meet-block"><span>No meeting is in use.</span><span class="sr">Meet is not ready.</span><span hidden>Set SEDERUNT_PUBLIC_ORIGIN to a public https address, then restart.</span></p>`;
+    : `<p id="meet-block"><span>No meeting is in use.</span><span class="sr">Meet is not ready.</span><span hidden>${state.meetingSetup || "Set SEDERUNT_PUBLIC_ORIGIN to a public https address, then restart."}</span></p>`;
   const slack = state.slackReady
     ? ""
     : `<p id="slack-block"><span>No channel is in use.</span><span class="sr">The channel door is not set up.</span><span hidden>Set SLACK_SIGNING_SECRET, then restart.</span></p>`;
@@ -870,7 +870,8 @@ ${slack}
         <span class="empty-mark" aria-hidden="true"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V6.2A1.2 1.2 0 0 1 5.2 5h7.1A1.2 1.2 0 0 1 13.5 6.2V21"/><path d="M13.5 10.2h4.3A1.2 1.2 0 0 1 19 11.4V21"/><path d="M3 21h18"/><path d="M7.2 8.4h2.6M7.2 12h2.6M7.2 15.6h2.6"/></svg></span>
         <h2 class="sr">Onboard</h2>
         <h2 id="onboard-heading">No meeting or channel is in use</h2>
-        <p id="onboard-missing">The company account is not loaded. Add the delegate outside this page, then restart.</p>
+        <p id="onboard-reading">Reading the account.</p>
+        <p id="onboard-missing" hidden>The company account is not loaded. Add the delegate outside this page, then restart.</p>
         <p id="onboard-ready" hidden>A room appears when a meeting or a channel is in use.</p>
         <p id="onboard-next" hidden>Meeting and Channel were not turned on when Sederunt started.</p>
         <button id="open-connectors" type="button" hidden>Go to Status</button>
@@ -931,7 +932,7 @@ ${slack}
       </div>
       <div class="connectors" id="ask-block">
         <p class="ask-kicker">Before sending a change</p>
-        <p id="ask-help">On waits for a confirm. Off sends the change. Write your name first.</p>
+        <p id="ask-help">On waits for a confirm. Off sends the change.</p>
         <div class="conn ask-quiet" id="cal-ask-row">
           <div class="set-copy"><span class="ask-name">Ask first</span><span class="ask-tool"> for Calendar</span></div>
           <div class="conn-ask"><span class="ask-state">Waits</span><label class="switch"><input id="cal-ask" type="checkbox" checked aria-describedby="ask-help"><span class="sr">Ask first for Calendar</span></label></div>
@@ -940,6 +941,20 @@ ${slack}
           <div class="set-copy"><span class="ask-name">Ask first</span><span class="ask-tool"> for Linear</span></div>
           <div class="conn-ask"><span class="ask-state">Waits</span><label class="switch"><input id="lin-ask" type="checkbox" checked aria-describedby="ask-help"><span class="sr">Ask first for Linear</span></label></div>
         </div>
+      </div>
+      <div class="connectors" id="hearing-block">
+        <p class="ask-kicker">Meeting guest</p>
+        <p id="hearing-help">The guest uses this name in the meeting. A line is kept when someone says the name, or one of the trigger words or sentences.</p>
+        <div class="room-set">
+          <label class="set-copy" for="hearing-name"><strong>Name</strong><p>Shown on the guest's camera.</p></label>
+          <input id="hearing-name" name="hearing-name" maxlength="40" value="Maple" autocomplete="off">
+        </div>
+        <div class="room-set">
+          <label class="set-copy" for="hearing-triggers"><strong>Triggers</strong><p>One word or sentence on each line.</p></label>
+          <textarea id="hearing-triggers" name="hearing-triggers" rows="3" placeholder="keep this"></textarea>
+        </div>
+        <p class="section-next"><button id="hearing-save" type="button">Save the guest</button></p>
+        <p id="hearing-note"></p>
       </div>
       <p id="connector-who"></p>
       <p id="custom-how" class="sr">A tool other than Calendar, Linear, or Slack cannot be connected from this page.</p>
@@ -982,7 +997,7 @@ ${slack}
       <h2 class="page-title">Chat</h2>
       <div class="talk-panel">
         <div class="thread" id="chat-log">
-          <p id="chat-empty"><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.4h10.8v6.4H6.2L2.6 12.6V3.4Z"/></svg></span>Chat waits until a room is in use.<span class="sr">Nothing has been asked here yet.</span></p>
+          <p id="chat-empty"><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.4h10.8v6.4H6.2L2.6 12.6V3.4Z"/></svg></span>Ask what was decided.<span class="sr">Nothing has been asked here yet.</span></p>
           <p id="chat-purpose"></p>
         </div>
         <p id="chat-next-row" class="section-next"><button id="chat-next" class="primary" type="button">New room</button></p>
@@ -1140,6 +1155,7 @@ ${slack}
     <div class="panel-body">
     <p id="decision-heard"></p>
     <p id="decision-file" hidden></p>
+    <p id="decision-ticket" hidden></p>
     <p id="decision-proof"></p>
     <p id="decision-epoch" hidden></p>
     <div id="decision-other"></div>
@@ -1154,6 +1170,8 @@ ${slack}
   var waiting = [];
   var fileRoom = "";
   var fileWait = null;
+  var readingTimer = null;
+  var readingTries = 0;
   var waitingVoice = "plain";
   var waitingClash = false;
   var historyScope = "group";
@@ -1174,6 +1192,16 @@ ${slack}
     if (!node) return;
     node.textContent = value || "";
     node.hidden = !value;
+  }
+
+  function roomCount(rows) {
+    var filed = rows.map(function (row) { return row.connectorId; }).filter(Boolean);
+    var line = countLine(rows.length);
+    return filed.length ? line + " Filed as " + filed[filed.length - 1] + "." : line;
+  }
+
+  function ticketLine(decision) {
+    return decision.connectorId ? "Filed as " + decision.connectorId + "." : "";
   }
 
   function fileLine(decision) {
@@ -1547,31 +1575,26 @@ ${slack}
 
   function chatParts(body) {
     var lines = splitLines(body);
-    var sentences = [];
-    var details = [];
-    var sawMeta = false;
+    var facts = [];
+    var pending = "";
+    function flush(issue) {
+      if (!pending) return;
+      facts.push(issue ? "Decided: " + pending + " (" + issue + ")" : pending);
+      pending = "";
+    }
     lines.forEach(function (line) {
       var trimmed = line.trim();
       if (!trimmed) return;
-      if (isStatusWord(trimmed)) {
-        sawMeta = true;
-        details.push("Status is " + trimmed + ".");
+      if (isStatusWord(trimmed) || trimmed.indexOf("preference ") === 0 || trimmed.indexOf("checkpoint ") === 0) return;
+      if (/^ROW-[0-9]+$/.test(trimmed)) {
+        flush(trimmed);
         return;
       }
-      if (trimmed.indexOf("preference ") === 0) {
-        sawMeta = true;
-        details.push("Preference is " + trimmed.slice(11) + ".");
-        return;
-      }
-      if (trimmed.indexOf("checkpoint ") === 0) {
-        sawMeta = true;
-        details.push("Checkpoint is " + trimmed.slice(11) + ".");
-        return;
-      }
-      sentences.push(trimmed);
+      flush("");
+      pending = trimmed;
     });
-    if (!sawMeta) return { answer: String(body || ""), detail: "" };
-    return { answer: sentences.join(" "), detail: details.join(" ") };
+    flush("");
+    return { answer: facts.join("\\n") || "Nothing is stored that you can read.", detail: "" };
   }
 
   function epochLine(decision) {
@@ -1582,6 +1605,14 @@ ${slack}
   function clear(id) {
     var node = document.getElementById(id);
     if (node) node.replaceChildren();
+  }
+
+  function fillHearing(hearing) {
+    var heard = hearing || { name: "Maple", triggers: [] };
+    var name = document.getElementById("hearing-name");
+    var triggers = document.getElementById("hearing-triggers");
+    if (name && document.activeElement !== name) name.value = heard.name || "Maple";
+    if (triggers && document.activeElement !== triggers) triggers.value = (heard.triggers || []).join("\\n");
   }
 
   function member() {
@@ -1776,7 +1807,7 @@ ${slack}
         roomId: room.id,
         title: last ? last.text : "No decision yet.",
         where: room.platform || "",
-        countLine: rows.length ? countLine(rows.length) : "Waiting for the meeting name",
+        countLine: rows.length ? roomCount(rows) : "Waiting for the meeting name",
         people: peopleFor(room.id),
         waitingCount: waitingFor(room.id).length
       });
@@ -1946,9 +1977,41 @@ ${slack}
     if (next.workspace === "personal" || next.workspace === "company") workspaceKind = next.workspace;
     paintChip();
     document.getElementById("loading").hidden = true;
+    if (next.reading) {
+      readingTries += 1;
+      var missing = document.getElementById("onboard-missing");
+      var still = document.getElementById("onboard-reading");
+      if (readingTries >= 8) {
+        if (still) still.hidden = true;
+        if (missing) {
+          missing.hidden = false;
+          missing.textContent = "The account is taking too long. Read it again.";
+        }
+        document.getElementById("read-again").hidden = false;
+        if (readingTimer) {
+          clearTimeout(readingTimer);
+          readingTimer = null;
+        }
+      } else {
+        if (missing) missing.hidden = true;
+        if (still) still.hidden = false;
+        if (!readingTimer) readingTimer = setTimeout(function () { readingTimer = null; load(); }, 1500);
+      }
+      if (onboard) onboard.hidden = false;
+      if (home) home.hidden = true;
+      return;
+    }
+    readingTries = 0;
+    if (readingTimer) {
+      clearTimeout(readingTimer);
+      readingTimer = null;
+    }
     document.getElementById("read-again").hidden = next.read !== "failed";
+    fillHearing(next.hearing);
     var loaded = next.companyLoaded === true;
     document.getElementById("onboard-missing").hidden = loaded;
+    var reading = document.getElementById("onboard-reading");
+    if (reading) reading.hidden = true;
     document.getElementById("onboard-ready").hidden = !loaded;
     syncJoinReady();
     if (!loaded) {
@@ -1989,10 +2052,9 @@ ${slack}
     var askBlock = document.getElementById("ask-block");
     if (askBlock) askBlock.hidden = false;
     if (kicker) kicker.hidden = false;
-    if (askHelp) askHelp.textContent = "On waits for a confirm. Off sends the change. Write your name first.";
+    if (askHelp) askHelp.textContent = "On waits for a confirm. Off sends the change.";
     var note = next.message || "";
-    if (!note && !member()) note = "Write your name to see the rooms you were in.";
-    else if (!note && member() && (next.decisions || []).length === 0 && next.read === "ok") note = "No sentence is stored for this name.";
+    if (!note && !member() && !(next.rooms || []).length && !(next.decisions || []).length) note = "Write your name to see the rooms you were in.";
     text("read-note", note);
     syncHomeChrome();
     paintRooms();
@@ -2009,6 +2071,8 @@ ${slack}
       parts.push(proofExplain(decision));
       var named = fileLine(decision);
       if (named) parts.push(named);
+      var ticket = ticketLine(decision);
+      if (ticket) parts.push(ticket);
       var epoch = epochLine(decision);
       if (epoch) parts.push(epoch);
       addLine("record-list", decision.text || "No decision yet.", parts.join(" "), function () {
@@ -2063,6 +2127,8 @@ ${slack}
     var chatForm = document.getElementById("chat-form");
     var chatButton = document.querySelector("#chat-form button");
     var chatInput = document.getElementById("chat-text");
+    var chatEmpty = document.getElementById("chat-empty");
+    if (chatEmpty) chatEmpty.hidden = document.querySelector("#chat-log .chat-turn") != null;
     if (chatForm) chatForm.hidden = noKept;
     if (chatButton) chatButton.disabled = noKept;
     if (chatInput) {
@@ -2235,7 +2301,9 @@ ${slack}
       status.textContent = line;
       status.hidden = !line;
     }
-    showLine("file-proof", lead ? proofExplain(lead) : "Proof is unknown. The account did not return a checkpoint.");
+    var proof = lead ? proofExplain(lead) : "Proof is unknown. The account did not return a checkpoint.";
+    var ticket = lead ? ticketLine(lead) : "";
+    showLine("file-proof", [proof, ticket].filter(Boolean).join(" "));
   }
 
   function fileMark(name) {
@@ -2270,19 +2338,15 @@ ${slack}
   }
 
   function downloadNamed(name, button) {
-    if (!member()) {
-      text("file-action-note", "Write your name before opening this file.");
-      return;
-    }
     button.disabled = true;
     fetch("/api/download", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: name, memberId: member(), room: { id: fileRoom } })
+      body: JSON.stringify({ name: name, room: { id: fileRoom } })
     }).then(function (response) { return response.json(); }).then(function (result) {
       button.disabled = false;
       if (!result || result.allow === "missing-member") {
-        text("file-action-note", "Write your name before opening this file.");
+        text("file-action-note", "This server has no member configured.");
         return;
       }
       if (result.allow === "not-invited") {
@@ -2316,10 +2380,6 @@ ${slack}
   }
 
   function sendAction(kind, actionId, button) {
-    if (!member()) {
-      text("room-edit-note", "Write your name before changing this.");
-      return;
-    }
     if (!plainRoom(actionId)) {
       text("room-edit-note", "This change cannot be edited from here.");
       return;
@@ -2329,14 +2389,14 @@ ${slack}
     fetch("/api/typed", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: kind + " " + actionId, memberId: member() })
+      body: JSON.stringify({ text: kind + " " + actionId })
     }).then(function (response) { return response.json(); }).then(function (result) {
       return load().then(function () { return result; });
     }).then(function (result) {
       var note = "That change is still waiting.";
       var body = result && result.body ? String(result.body) : "";
       if (body.indexOf("The edit did not happen.") !== -1) note = "The edit did not happen.";
-      else if (result && result.allow === "missing-member") note = "Write your name before changing this.";
+      else if (result && result.allow === "missing-member") note = "This server has no member configured.";
       else if (result && result.allow === "not-invited") note = "You were not in this room.";
       else if (kind === "confirm" && result && result.allow === "confirmed" && (result.status === "filed" || result.status === "updated")) note = "That change was confirmed.";
       else if (kind === "dismiss" && wasWaiting && !waitingFor(fileRoom).some(function (item) { return item.id === actionId; })) note = "That change was dismissed.";
@@ -2382,6 +2442,7 @@ ${slack}
     text("decision-sentence", decision.text || "");
     text("decision-heard", decision.speaker ? (decision.speaker + " spoke.") : "No one is recorded yet.");
     showLine("decision-file", fileLine(decision));
+    showLine("decision-ticket", ticketLine(decision));
     showLine("decision-proof", proofExplain(decision));
     showLine("decision-epoch", epochLine(decision));
     clear("decision-other");
@@ -2497,23 +2558,18 @@ ${slack}
   function saveToolAsk(tool, on) {
     var box = document.getElementById(tool === "calendar" ? "cal-ask" : "lin-ask");
     var line = tool === "calendar" ? "cal-line" : "lin-line";
-    if (!member()) {
-      box.checked = !on;
-      text(line, "Write your name before changing Ask first.");
-      return;
-    }
     var value = on ? "ask" : "do";
     text(line, "Saving Ask first.");
     fetch("/api/typed", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: "set " + tool + " to " + value, memberId: member() })
+      body: JSON.stringify({ text: "set " + tool + " to " + value })
     }).then(function (response) { return response.json(); }).then(function (result) {
       return load().then(function () { return result; });
     }).then(function (result) {
       if (!wrote(result)) {
         box.checked = !on;
-        text(line, result && result.allow === "missing-member" ? "Write your name before changing Ask first." : "Ask first was not saved.");
+        text(line, result && result.allow === "missing-member" ? "This server has no member configured." : "Ask first was not saved.");
       }
     }).catch(function () {
       box.checked = !on;
@@ -2529,11 +2585,6 @@ ${slack}
       text("room-edit-note", "This room cannot be edited from here.");
       return;
     }
-    if (!member()) {
-      box.checked = !on;
-      text("room-edit-note", "Write your name before changing Ask first.");
-      return;
-    }
     var value = on ? "ask" : "do";
     text("room-edit-note", "Saving Ask first.");
     var tools = ["linear", "calendar"];
@@ -2544,7 +2595,7 @@ ${slack}
         return fetch("/api/typed", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ text: "set " + tool + " to " + value + " in room " + roomId, memberId: member() })
+          body: JSON.stringify({ text: "set " + tool + " to " + value + " in room " + roomId })
         }).then(function (response) { return response.json(); }).then(function (result) {
           if (!wrote(result)) failed = result;
         });
@@ -2552,7 +2603,7 @@ ${slack}
     });
     pending.then(function () { return load(); }).then(function () {
       if (failed) box.checked = !on;
-      if (failed && failed.allow === "missing-member") text("room-edit-note", "Write your name before changing Ask first.");
+      if (failed && failed.allow === "missing-member") text("room-edit-note", "This server has no member configured.");
       else if (failed) text("room-edit-note", "Ask first was not saved.");
       else text("room-edit-note", on ? "This room waits before a change." : "This room sends the change.");
     }).catch(function () {
@@ -2568,21 +2619,16 @@ ${slack}
       if (fail) fail();
       return;
     }
-    if (!member()) {
-      text("room-edit-note", "Write your name before changing this room.");
-      if (fail) fail();
-      return;
-    }
     text("room-edit-note", "Saving this room.");
     fetch("/api/typed", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: sentence, memberId: member() })
+      body: JSON.stringify({ text: sentence })
     }).then(function (response) { return response.json(); }).then(function (result) {
       return load().then(function () { return result; });
     }).then(function (result) {
       if (!wrote(result)) {
-        text("room-edit-note", result && result.allow === "missing-member" ? "Write your name before changing this room." : "That change was not saved.");
+        text("room-edit-note", result && result.allow === "missing-member" ? "This server has no member configured." : "That change was not saved.");
         if (fail) fail();
         return;
       }
@@ -2691,9 +2737,7 @@ ${slack}
   }
 
   function consoleQuery() {
-    var query = "?workspace=" + encodeURIComponent(workspaceKind);
-    if (member()) query += "&member=" + encodeURIComponent(member());
-    return query;
+    return "?workspace=" + encodeURIComponent(workspaceKind);
   }
 
   function closeMenu() {
@@ -2930,6 +2974,22 @@ ${slack}
       saveVoice(voice);
     });
   });
+  document.getElementById("hearing-save").addEventListener("click", function () {
+    var name = document.getElementById("hearing-name").value;
+    var triggers = document.getElementById("hearing-triggers").value;
+    var note = document.getElementById("hearing-note");
+    if (note) note.textContent = "Saving the guest.";
+    fetch("/api/hearing", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: name, triggers: triggers })
+    }).then(function (response) { return response.json(); }).then(function (result) {
+      fillHearing(result.hearing);
+      if (note) note.textContent = "The meeting guest is " + (result.hearing && result.hearing.name ? result.hearing.name : "Maple") + ".";
+    }).catch(function () {
+      if (note) note.textContent = "The guest was not saved.";
+    });
+  });
   document.getElementById("ask-first").addEventListener("change", function () {
     saveAsk(document.getElementById("ask-first").checked);
   });
@@ -2942,29 +3002,45 @@ ${slack}
     saveToolAsk("linear", document.getElementById("lin-ask").checked);
   });
   document.getElementById("read-again").addEventListener("click", function () {
+    readingTries = 0;
+    var missing = document.getElementById("onboard-missing");
+    var still = document.getElementById("onboard-reading");
+    if (missing) missing.hidden = true;
+    if (still) {
+      still.hidden = false;
+      still.textContent = "Reading the account.";
+    }
     document.getElementById("loading").hidden = false;
     fetch("/api/console/read" + consoleQuery(), { method: "POST" }).then(load);
   });
   document.getElementById("chat-form").addEventListener("submit", function (event) {
     event.preventDefault();
     var sentence = document.getElementById("chat-text").value;
+    var emptyLine = document.getElementById("chat-empty");
+    if (emptyLine) emptyLine.hidden = true;
+    var askedNow = sentence.trim();
+    addChatTurn("You", askedNow || "The question is missing.", "");
+    addChatTurn("Sederunt", "Reading.", "");
     fetch("/api/chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: sentence, memberId: member(), workspace: workspaceKind })
+      body: JSON.stringify({ text: sentence, workspace: workspaceKind })
     }).then(function (response) { return response.json(); }).then(function (result) {
-      var asked = sentence.trim();
       var answer = result.body || "";
       if (answer === "A decision is kept from a room.") {
         answer = "A decision is kept from a room. Chat does not keep a decision. Ask what was decided.";
       }
       var parts = chatParts(answer);
-      var emptyLine = document.getElementById("chat-empty");
-      if (emptyLine) emptyLine.hidden = true;
       var purpose = document.getElementById("chat-purpose");
       if (purpose) purpose.hidden = true;
-      addChatTurn("You", asked || "The question is missing.", "");
-      addChatTurn("Sederunt", parts.answer || "The room did not answer.", parts.detail);
+      var reading = document.querySelector("#chat-log .chat-turn:last-child .chat-body > span");
+      if (reading) reading.textContent = parts.answer || "The room did not answer.";
+      if (reading && parts.detail) {
+        var extra = document.createElement("span");
+        extra.className = "chat-detail";
+        extra.textContent = parts.detail;
+        reading.parentNode.append(extra);
+      }
       document.getElementById("chat-text").value = "";
       var log = document.getElementById("chat-log");
       log.scrollTop = log.scrollHeight;

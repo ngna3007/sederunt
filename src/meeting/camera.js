@@ -2,7 +2,7 @@
  * The bot's camera. Paper and navy are the existing Sederunt screen.
  * The word sits low so the frame stays mostly empty, which is the quiet face.
  */
-export const CAMERA_PAGE = `<!doctype html>
+const CAMERA_TEMPLATE = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -37,7 +37,22 @@ export const CAMERA_PAGE = `<!doctype html>
 </style>
 </head>
 <body>
-  <p><span></span>Sederunt<small>Quiet until addressed.</small></p>
+  <p><span></span>{{name}}<small>Quiet until addressed.</small></p>
 </body>
 </html>
 `;
+
+/** The camera page for one guest name. The product title stays Sederunt. */
+export function renderCameraPage(name) {
+  const label = escapeName(name);
+  return CAMERA_TEMPLATE.replace("{{name}}", label);
+}
+
+export const CAMERA_PAGE = renderCameraPage("Maple");
+
+function escapeName(name) {
+  return String(name || "Maple")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}

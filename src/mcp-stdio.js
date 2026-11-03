@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { appendConnectorCall, ledgerMemory } from "./memory/ledger.js";
-import { dispatchMcp } from "./mcp.js";
+import { bindToolMember, dispatchMcp, memberRefusal } from "./mcp.js";
 import { createSession } from "./session.js";
 import { defaultDeps } from "./server.js";
 import { rebuildCompanyIndex } from "./typed-path.js";
@@ -20,7 +20,7 @@ function encodeMessage(message) {
   ]);
 }
 
-export function serveMcpStdio({ input, output, session, deps }) {
+export function serveMcpStdio({ input, output, session, deps, memberId }) {
   const ready = rebuildCompanyIndex(session, deps);
   let buffer = Buffer.alloc(0);
   let pending = 0;
@@ -28,12 +28,29 @@ export function serveMcpStdio({ input, output, session, deps }) {
   const finish = () => {
     if (ended && pending === 0 && output === process.stdout) process.exit(0);
   };
+  const configured = typeof memberId === "string" && memberId.trim()
+    ? memberId.trim()
+    : String(process.env.SEDERUNT_MEMBER || "").trim();
   const take = async (message) => {
     await ready;
     if (message?.id == null) return;
+    const bound = bindToolMember(message, configured);
     let response;
     try {
-      const result = await dispatchMcp(message, session, deps);
+      if (bound.refusal) {
+        const refusal = memberRefusal(bound.refusal);
+        response = {
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            content: [{ type: "text", text: JSON.stringify(refusal) }],
+            structuredContent: refusal,
+          },
+        };
+        await new Promise((resolve) => output.write(encodeMessage(response), resolve));
+        return;
+      }
+      const result = await dispatchMcp(bound.message, session, deps);
       response = result
         ? { jsonrpc: "2.0", id: message.id, result }
         : { jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "unknown method" } };
@@ -94,6 +111,10 @@ if (isDirectRun()) {
       async createIssue(input) {
         await appendConnectorCall(accountId, "create");
         return base.linear.createIssue(input);
+      },
+      async assignIssue(input) {
+        await appendConnectorCall(accountId, "assign");
+        return base.linear.assignIssue(input);
       },
     },
   };

@@ -17,6 +17,7 @@ const SENTINELS = [
   "account-id-sentinel",
   "calendar-token-sentinel",
   "recall-key-sentinel",
+  "recall-webhook-sentinel",
   "slack-secret-sentinel",
 ];
 
@@ -26,8 +27,22 @@ function cleanEnv(extra = {}) {
     COMPANY_MEMWAL_ACCOUNT_ID: "account-id-sentinel",
     CALENDAR_MCP_TOKEN: "calendar-token-sentinel",
     RECALL_API_KEY: "recall-key-sentinel",
+    RECALL_WEBHOOK_SECRET: "recall-webhook-sentinel",
     ...extra,
   };
+}
+
+function liveWalkEnv(extra = {}) {
+  return cleanEnv({
+    SEDERUNT_PUBLIC_ORIGIN: "https://camera.example",
+    SLACK_SIGNING_SECRET: "slack-signing-sentinel",
+    SLACK_BOT_TOKEN: "slack-bot-sentinel",
+    SEDERUNT_MEMBER: "U_MINA",
+    CONSOLE_API_KEY: "console-key-sentinel",
+    CONSOLE_SERVICE_PRIVATE_KEY: "console-service-sentinel",
+    CONSOLE_FOLDER_ID: "folder-sentinel",
+    ...extra,
+  });
 }
 
 function quietTatum() {
@@ -242,7 +257,7 @@ test("a kept sentence survives a new process, and a private note stays out", asy
     await close(first);
   }
 
-  const second = createApp({ deps, env: cleanEnv(), companyLoaded: true });
+  const second = createApp({ deps, env: cleanEnv({ SEDERUNT_MEMBER: "mina" }), companyLoaded: true });
   const port = await listen(second);
   try {
     const present = JSON.parse((await get(port, "/api/console?member=mina")).raw);
@@ -384,7 +399,7 @@ test("chat recalls a sentence and does not keep a statement", async () => {
   const memory = mockAccount({ accountId: "company-chat", delegates: ["delegate-chat"] });
   const app = createApp({
     deps: { memory, tatum: quietTatum() },
-    env: cleanEnv(),
+    env: cleanEnv({ SEDERUNT_MEMBER: "mina" }),
     companyLoaded: true,
   });
   const port = await listen(app);
@@ -543,7 +558,7 @@ test("the alpha walk keeps one sentence and stdio recall matches the console", a
     await close(first);
   }
 
-  const second = createApp({ deps, env: cleanEnv(), companyLoaded: true });
+  const second = createApp({ deps, env: cleanEnv({ SEDERUNT_MEMBER: "mina" }), companyLoaded: true });
   const port = await listen(second);
   try {
     const board = JSON.parse((await get(port, "/api/console?member=mina")).raw);
@@ -623,15 +638,18 @@ test("a signed slack channel stores one decision and a huddle stores none", asyn
     deps: {
       memory,
       tatum: quietTatum(),
-      slack: { async postMessage(message) { posts.push(message); } },
+      slack: {
+        async postMessage(message) { posts.push(message); },
+        async members() { return ["U1"]; },
+      },
     },
-    env: cleanEnv({ SLACK_SIGNING_SECRET: secret }),
+    env: cleanEnv({ SLACK_SIGNING_SECRET: secret, SEDERUNT_MEMBER: "U1" }),
     companyLoaded: true,
   });
   const port = await listen(app);
   try {
     const page = await get(port, "/console");
-    assert.equal(page.raw.includes("The channel door is not set up"), false);
+    assert.match(page.raw, /The channel door is not set up/);
     assert.equal(page.raw.includes(secret), false);
     const huddle = signed({
       type: "huddle",
@@ -657,7 +675,7 @@ test("a signed slack channel stores one decision and a huddle stores none", asyn
     assert.equal(stored.body.decisions, 1);
     const board = JSON.parse((await get(port, "/api/console?member=U1")).raw);
     assert.equal(board.decisions.some((item) => item.text === "The booth opens at nine."), true);
-    assert.equal(board.slack, "ready");
+    assert.equal(board.slack, "not-set-up");
 
     const asked = signed({
       type: "message",
@@ -700,6 +718,122 @@ test("a signed slack channel stores one decision and a huddle stores none", asyn
   }
 });
 
+test("a Slack delete that only names deleted_ts forgets the stored message", async () => {
+  const memory = mockAccount({ accountId: "company-slack-delete", delegates: ["delegate-slack-delete"] });
+  const secret = "slack-secret-sentinel";
+  const app = createApp({
+    deps: {
+      memory,
+      tatum: quietTatum(),
+      slack: { async members() { return ["U1"]; } },
+    },
+    env: cleanEnv({ SLACK_SIGNING_SECRET: secret, SEDERUNT_MEMBER: "U1" }),
+    companyLoaded: true,
+  });
+  const port = await listen(app);
+  try {
+    const message = signed({
+      type: "message",
+      user: "U1",
+      channel: "C1",
+      text: "The floor plan is floor-plan.pdf",
+      ts: "1700000001.000",
+      client_msg_id: "file-client",
+    }, secret);
+    const stored = await post(port, "/api/slack", message.payload, message.headers);
+    assert.equal(stored.body.decisions, 1);
+    const deleted = signed({
+      type: "message",
+      subtype: "message_deleted",
+      hidden: true,
+      channel: "C1",
+      ts: "1700000099.000",
+      deleted_ts: "1700000001.000",
+    }, secret);
+    const gone = await post(port, "/api/slack", deleted.payload, deleted.headers);
+    assert.match(gone.body.body, /^deleted/);
+    const board = JSON.parse((await get(port, "/api/console?member=U1")).raw);
+    assert.equal(board.decisions.some((item) => /floor plan/i.test(item.text)), false);
+  } finally {
+    await close(app);
+  }
+});
+
+test("a Slack channel join is not stored", async () => {
+  const memory = mockAccount({ accountId: "company-slack-join", delegates: ["delegate-slack-join"] });
+  const secret = "slack-secret-sentinel";
+  const app = createApp({
+    deps: {
+      memory,
+      tatum: quietTatum(),
+      slack: { async members() { return ["U1"]; } },
+    },
+    env: cleanEnv({ SLACK_SIGNING_SECRET: secret, SEDERUNT_MEMBER: "U1" }),
+    companyLoaded: true,
+  });
+  const port = await listen(app);
+  try {
+    const joined = signed({
+      type: "message",
+      subtype: "channel_join",
+      user: "U1",
+      channel: "C1",
+      text: "<@U1> has joined the channel",
+      ts: "1700000003.000",
+    }, secret);
+    const ignored = await post(port, "/api/slack", joined.payload, joined.headers);
+    assert.deepEqual(ignored.body, { slack: "ignored" });
+    const board = JSON.parse((await get(port, "/api/console?member=U1")).raw);
+    assert.equal(board.decisions.length, 0);
+  } finally {
+    await close(app);
+  }
+});
+
+test("a repeated Slack question is posted once", async () => {
+  const memory = mockAccount({ accountId: "company-slack-retry", delegates: ["delegate-slack-retry"] });
+  const secret = "slack-secret-sentinel";
+  const posts = [];
+  const app = createApp({
+    deps: {
+      memory,
+      tatum: quietTatum(),
+      slack: {
+        async postMessage(message) { posts.push(message); },
+        async members() { return ["U1"]; },
+      },
+    },
+    env: cleanEnv({ SLACK_SIGNING_SECRET: secret, SEDERUNT_MEMBER: "U1" }),
+    companyLoaded: true,
+  });
+  const port = await listen(app);
+  try {
+    const message = signed({
+      type: "message",
+      user: "U1",
+      channel: "C1",
+      text: "The booth opens at nine.",
+      ts: "1700000004.000",
+    }, secret);
+    await post(port, "/api/slack", message.payload, message.headers);
+    const asked = signed({
+      type: "message",
+      user: "U1",
+      channel: "C1",
+      text: "what was decided",
+      ts: "1700000005.000",
+    }, secret);
+    const first = await post(port, "/api/slack", asked.payload, asked.headers);
+    const second = await post(port, "/api/slack", asked.payload, asked.headers);
+    assert.match(first.body.body, /The booth opens at nine/);
+    assert.equal(first.body.posted, true);
+    assert.equal(second.body.posted, false);
+    assert.equal(posts.length, 1);
+  } finally {
+    await close(app);
+  }
+});
+
 test("slack without a signing secret does not store", async () => {
   const memory = mockAccount({ accountId: "company-slack-off", delegates: ["delegate-slack-off"] });
   const app = createApp({
@@ -723,7 +857,16 @@ test("slack without a signing secret does not store", async () => {
 test("the room file names a file and a waiting change, and hides a clash the member cannot see", async () => {
   const memory = mockAccount({ accountId: "company-room-file", delegates: ["delegate-room-file"] });
   const app = createApp({
-    deps: { memory, tatum: quietTatum() },
+    deps: {
+      memory,
+      tatum: quietTatum(),
+      console: {
+        async upload(input) {
+          assert.equal(input.bytes, "PDFBYTES");
+          return { id: "console-brief", folderId: "folder-brief" };
+        },
+      },
+    },
     env: cleanEnv(),
     companyLoaded: true,
   });
@@ -734,6 +877,7 @@ test("the room file names a file and a waiting change, and hides a clash the mem
       memberId: "mina",
       room: room(),
       deliveryId: "file-name-1",
+      file: { name: "brief.pdf", bytes: "PDFBYTES" },
     });
     assert.equal(kept.status, 200);
     const waiting = await post(port, "/api/typed", {
@@ -752,6 +896,8 @@ test("the room file names a file and a waiting change, and hides a clash the mem
     assert.match(board.waiting[0].statement, /venue ticket hall/);
     assert.equal(board.counts.waiting, 1);
     assert.equal(JSON.stringify(board).includes("consoleFileId"), false);
+    assert.equal(JSON.stringify(board).includes("PDFBYTES"), false);
+    assert.equal(JSON.stringify(board).includes("console-brief"), false);
     noSecret(JSON.stringify(board));
   } finally {
     await close(app);
@@ -827,7 +973,7 @@ test("a personal workspace keeps the private note and has no room", async () => 
   const memory = mockAccount({ accountId: "company-personal", delegates: ["delegate-personal"] });
   const app = createApp({
     deps: { memory, tatum: quietTatum() },
-    env: cleanEnv(),
+    env: cleanEnv({ SEDERUNT_MEMBER: "mina" }),
     companyLoaded: true,
   });
   const port = await listen(app);
@@ -1463,7 +1609,8 @@ test("an accepted meeting join keeps the waiting room after a new process and le
   const link = "https://meet.google.com/abc-defg-hij?token=room-query-token";
   const open = () => createApp({
     deps: { memory, meeting, tatum: quietTatum() },
-    env: cleanEnv({ SEDERUNT_PUBLIC_ORIGIN: "https://camera.example" }),
+    env: liveWalkEnv(),
+    linearReady: true,
     companyLoaded: true,
   });
   const first = open();
@@ -1530,7 +1677,8 @@ test("an accepted meeting join keeps the waiting room after a new process and le
   };
   const failed = createApp({
     deps: { memory, meeting: failedMeeting, tatum: quietTatum() },
-    env: cleanEnv({ SEDERUNT_PUBLIC_ORIGIN: "https://camera.example" }),
+    env: liveWalkEnv(),
+    linearReady: true,
     companyLoaded: true,
   });
   const failedPort = await listen(failed);
@@ -1548,7 +1696,8 @@ test("an accepted meeting join keeps the waiting room after a new process and le
   const slackMeeting = { calls: [], async join() { this.calls.push("join"); } };
   const slack = createApp({
     deps: { memory, meeting: slackMeeting, tatum: quietTatum() },
-    env: cleanEnv({ SEDERUNT_PUBLIC_ORIGIN: "https://camera.example" }),
+    env: liveWalkEnv(),
+    linearReady: true,
     companyLoaded: true,
   });
   const slackPort = await listen(slack);
@@ -1576,8 +1725,7 @@ test("the shipped adapter keeps an opened meeting room and leaves the link out",
       return { results: stored.map((text, index) => ({ text, blob_id: `fake-${index + 1}`, distance: 0 })) };
     },
   };
-  const env = cleanEnv({
-    SEDERUNT_PUBLIC_ORIGIN: "https://camera.example",
+  const env = liveWalkEnv({
     COMPANY_MEMWAL_KEY: "delegate-join-sentinel",
     COMPANY_MEMWAL_ACCOUNT_ID: "account-join-sentinel",
   });
@@ -1591,6 +1739,7 @@ test("the shipped adapter keeps an opened meeting room and leaves the link out",
       env,
       memwal: client,
       companyLoaded: true,
+      linearReady: true,
       tatum: quietTatum(),
       meeting,
     });
@@ -1962,7 +2111,7 @@ function stdioTools(session, deps, calls) {
   const output = new PassThrough();
   const chunks = [];
   output.on("data", (chunk) => chunks.push(chunk));
-  serveMcpStdio({ input, output, session, deps });
+  serveMcpStdio({ input, output, session, deps, memberId: "mina" });
   const wanted = new Set(calls.map((call) => call.id));
   input.write(frameMessage({
     jsonrpc: "2.0",
@@ -1993,6 +2142,71 @@ function stdioTools(session, deps, calls) {
     finish();
   });
 }
+
+test("a Slack challenge is echoed and the console confirm uses the configured member", async () => {
+  const memory = mockAccount({ accountId: "company-live-member", delegates: ["delegate-live-member"] });
+  const secret = "slack-secret-sentinel";
+  const linear = {
+    calls: [],
+    async createIssue() {
+      this.calls.push("create");
+      return { identifier: "ROW-91", id: "ROW-91" };
+    },
+    async assignIssue() {
+      return { identifier: "ROW-91", id: "ROW-91" };
+    },
+  };
+  const app = createApp({
+    deps: { memory, tatum: quietTatum(), linear },
+    env: cleanEnv({ SLACK_SIGNING_SECRET: secret, SEDERUNT_MEMBER: "U_MINA" }),
+    companyLoaded: true,
+  });
+  const port = await listen(app);
+  try {
+    const challengeBody = JSON.stringify({ type: "url_verification", challenge: "challenge-token" });
+    const timestamp = "1700000000";
+    const signature = `v0=${createHmac("sha256", secret).update(`v0:${timestamp}:${challengeBody}`).digest("hex")}`;
+    const challenge = await post(port, "/api/slack", challengeBody, {
+      "x-slack-request-timestamp": timestamp,
+      "x-slack-signature": signature,
+    });
+    assert.equal(challenge.body.challenge, "challenge-token");
+
+    const kept = await post(port, "/api/typed", {
+      text: "Hey Maple the booth opens at nine.",
+      door: "meeting",
+      addressed: true,
+      deliveryId: "live-booth",
+      participants: ["U_MINA"],
+      room: { id: "bot-live", kind: "meeting", source: "recall", botPresent: true, memberIds: ["U_MINA"] },
+    });
+    assert.match(kept.body.body, /booth opens at nine/);
+    const board = JSON.parse((await get(port, "/api/console?member=U_MINA")).raw);
+    const confirmId = board.waiting[0].id;
+    const filed = await post(port, "/api/typed", { text: `confirm ${confirmId}` });
+    assert.equal(filed.body.allow, "confirmed");
+    assert.deepEqual(linear.calls, ["create"]);
+    const again = await post(port, "/api/typed", { text: `confirm ${confirmId}` });
+    assert.deepEqual(linear.calls, ["create"]);
+    assert.notEqual(again.body.status, "filed");
+
+    const ask = signed({
+      type: "message",
+      user: "U_MINA",
+      channel: "C1",
+      text: "<@UBOT> what was decided",
+      client_msg_id: "ask-mention",
+    }, secret);
+    const before = JSON.parse((await get(port, "/api/console?member=U_MINA")).raw).decisions.length;
+    const answer = await post(port, "/api/slack", ask.payload, ask.headers);
+    assert.match(answer.body.body, /booth opens at nine/);
+    assert.match(answer.body.body, /ROW-91/);
+    const after = JSON.parse((await get(port, "/api/console?member=U_MINA")).raw).decisions.length;
+    assert.equal(after, before);
+  } finally {
+    await close(app);
+  }
+});
 
 function signed(event, secret) {
   const payload = JSON.stringify({ event });

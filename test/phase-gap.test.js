@@ -377,7 +377,7 @@ test("the same spoken request waits on ask and completes once on do", async () =
   const meet = room({ id: "room-spoken", memberIds: ["sam"] });
   await handleUtterance({
     door: "meeting",
-    text: "Hey @Sederunt set linear to ask",
+    text: "Hey @Maple set linear to ask",
     session,
     memberId: "rowan",
     room: meet,
@@ -387,7 +387,7 @@ test("the same spoken request waits on ask and completes once on do", async () =
   }, { linear });
   const waiting = await handleUtterance({
     door: "meeting",
-    text: "Hey @Sederunt File the venue ticket spoken-hall",
+    text: "Hey @Maple File the venue ticket spoken-hall",
     session,
     memberId: "rowan",
     room: meet,
@@ -400,7 +400,7 @@ test("the same spoken request waits on ask and completes once on do", async () =
   assert.deepEqual(linear.calls, []);
   await handleUtterance({
     door: "meeting",
-    text: "Hey @Sederunt set linear to do",
+    text: "Hey @Maple set linear to do",
     session,
     memberId: "rowan",
     room: meet,
@@ -410,7 +410,7 @@ test("the same spoken request waits on ask and completes once on do", async () =
   }, { linear });
   const filed = await handleUtterance({
     door: "meeting",
-    text: "Hey @Sederunt File the venue ticket spoken-hall",
+    text: "Hey @Maple File the venue ticket spoken-hall",
     session,
     memberId: "rowan",
     room: meet,
@@ -431,7 +431,7 @@ test("the bot's own line does not become a second decision", async () => {
   assert.match(answer.body, /booth/);
   const echo = await handleUtterance({
     door: "meeting",
-    text: "Hey @Sederunt The booth ships on Friday",
+    text: "Hey @Maple The booth ships on Friday",
     session,
     memberId: "sederunt",
     room: meet,

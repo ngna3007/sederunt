@@ -75,6 +75,44 @@ export async function mcpJsonRpc(message, session, deps) {
   }
 }
 
+/**
+ * The process is configured with one member id.
+ * A tool argument may repeat that id. A different id is not the caller.
+ */
+export function bindToolMember(message, configured) {
+  if (message?.method !== "tools/call") return { message, refusal: null };
+  const args = message?.params?.arguments ?? {};
+  const member = typeof configured === "string" ? configured.trim() : "";
+  const claimed = typeof args.memberId === "string" ? args.memberId.trim() : "";
+  if (!member) return { message, refusal: "missing-member" };
+  if (claimed && claimed !== member) return { message, refusal: "not-invited" };
+  return {
+    message: {
+      ...message,
+      params: {
+        ...message.params,
+        arguments: { ...args, memberId: member },
+      },
+    },
+    refusal: null,
+  };
+}
+
+export function memberRefusal(reason) {
+  return {
+    status: "recorded",
+    kind: "answer",
+    body: `${reason}\nrecorded\npreference ask`,
+    allow: reason,
+    preference: "ask",
+    issueId: null,
+    entered: true,
+    decisionId: null,
+    actionId: null,
+    checkpoint: null,
+  };
+}
+
 /** Invite check and the decision sentence. No write preference and no connector. */
 export function recall(input, deps) {
   return handleUtterance({

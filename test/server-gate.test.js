@@ -39,8 +39,8 @@ function countingLinear(createResult = { identifier: "ROW-44", id: "ROW-44" }) {
   };
 }
 
-async function listen(deps) {
-  const server = createApp({ deps });
+async function listen(deps, env = {}) {
+  const server = createApp({ deps, env });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
@@ -160,7 +160,7 @@ test("the process calendar, tatum, console, and meeting adapters answer without 
       return { blobId: "blob-9", accountId: "0xcc67abcdef1234567890" };
     },
   };
-  const app = await listen({ ...deps, memory });
+  const app = await listen({ ...deps, memory }, { SEDERUNT_MEMBER: "rowan" });
   try {
     const day = await post(app.port, "/api/typed", { text: "what is on Thursday" });
     assert.equal(day.status, 200);
@@ -181,6 +181,7 @@ test("the process calendar, tatum, console, and meeting adapters answer without 
       memberId: "rowan",
       room: room(),
       deliveryId: "file-http",
+      file: { name: "brief.pdf", bytes: "PDFBYTES" },
     });
     assert.match(stored.body.body, /brief\.pdf/);
     assert.doesNotMatch(stored.raw, /PDFBYTES/);
@@ -201,7 +202,7 @@ test("the process calendar, tatum, console, and meeting adapters answer without 
 });
 
 test("POST /mcp speaks MCP so any agent can recall", async () => {
-  const app = await listen(defaultDeps({ memory: null }));
+  const app = await listen(defaultDeps({ memory: null }), { SEDERUNT_MEMBER: "rowan" });
   try {
     const init = await post(app.port, "/mcp", {
       jsonrpc: "2.0",
@@ -217,7 +218,7 @@ test("POST /mcp speaks MCP so any agent can recall", async () => {
     assert.equal(noted.status, 202);
     await post(app.port, "/api/typed", {
       door: "meeting",
-      text: "Hey @Sederunt the offsite is in Lisbon",
+      text: "Hey @Maple the offsite is in Lisbon",
       memberId: "rowan",
       room: room({ memberIds: ["sam"] }),
       participants: ["rowan", "alex"],
@@ -242,7 +243,7 @@ test("POST /mcp speaks MCP so any agent can recall", async () => {
 
 test("MCP act under ask does not call, and a meeting participant set is the invite", async () => {
   const linear = countingLinear();
-  const app = await listen(defaultDeps({ linear, memory: null }));
+  const app = await listen(defaultDeps({ linear, memory: null }), { SEDERUNT_MEMBER: "rowan" });
   try {
     const acted = await post(app.port, "/api/mcp", {
       name: "act",
@@ -260,7 +261,7 @@ test("MCP act under ask does not call, and a meeting participant set is the invi
 
     const heard = await post(app.port, "/api/typed", {
       door: "meeting",
-      text: "Hey @Sederunt the offsite is in Lisbon",
+      text: "Hey @Maple the offsite is in Lisbon",
       memberId: "rowan",
       room: room({ memberIds: ["sam"] }),
       participants: ["rowan", "alex"],

@@ -28,7 +28,7 @@ function room(overrides = {}) {
 }
 
 function listen(deps) {
-  const server = createApp({ deps });
+  const server = createApp({ deps, env: { SEDERUNT_MEMBER: "rowan" } });
   server.listen(0, "127.0.0.1");
   return once(server, "listening").then(() => ({
     port: server.address().port,
@@ -517,7 +517,7 @@ test("a scripted meeting stores a decision, answers, and completes one allowed a
 
   const stored = await handleUtterance({
     door: "meeting",
-    text: `Hey @Sederunt ${sentence}`,
+    text: `Hey @Maple ${sentence}`,
     session,
     memberId: "rowan",
     room: meet,
@@ -530,7 +530,7 @@ test("a scripted meeting stores a decision, answers, and completes one allowed a
 
   const answer = await handleUtterance({
     door: "meeting",
-    text: "Hey @Sederunt what was decided",
+    text: "Hey @Maple what was decided",
     session,
     memberId: "alex",
     room: meet,
@@ -542,7 +542,7 @@ test("a scripted meeting stores a decision, answers, and completes one allowed a
   assert.equal(answer.status, "current");
   const mina = await handleUtterance({
     door: "meeting",
-    text: "Hey @Sederunt what was decided",
+    text: "Hey @Maple what was decided",
     session,
     memberId: "mina",
     room: meet,
@@ -555,7 +555,7 @@ test("a scripted meeting stores a decision, answers, and completes one allowed a
 
   await handleUtterance({
     door: "meeting",
-    text: "Hey @Sederunt set linear to do",
+    text: "Hey @Maple set linear to do",
     session,
     memberId: "rowan",
     room: meet,
@@ -565,7 +565,7 @@ test("a scripted meeting stores a decision, answers, and completes one allowed a
   }, { linear, meeting });
   const filed = await handleUtterance({
     door: "meeting",
-    text: "Hey @Sederunt File the venue ticket booth-hall",
+    text: "Hey @Maple File the venue ticket booth-hall",
     session,
     memberId: "rowan",
     room: meet,
@@ -580,7 +580,7 @@ test("a scripted meeting stores a decision, answers, and completes one allowed a
 
   const outsider = await handleUtterance({
     door: "meeting",
-    text: "Hey @Sederunt what was decided",
+    text: "Hey @Maple what was decided",
     session,
     memberId: "sam",
     room: meet,

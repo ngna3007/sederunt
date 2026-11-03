@@ -3,6 +3,8 @@ import { createHmac, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { request } from "node:http";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFile, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { ledgerMemory } from "../src/memory/ledger.js";
@@ -112,7 +114,7 @@ function frame(message) {
   ]);
 }
 
-function stdioRecall(accountId, delegateKey) {
+function stdioCalls(accountId, delegateKey, calls) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["src/mcp-stdio.js"], {
       cwd: root,
@@ -120,6 +122,7 @@ function stdioRecall(accountId, delegateKey) {
         PATH: process.env.PATH ?? "",
         SEDERUNT_ACCOUNT: accountId,
         SEDERUNT_DELEGATE: delegateKey,
+        SEDERUNT_MEMBER: "mina",
       },
     });
     const stdout = [];
@@ -129,18 +132,14 @@ function stdioRecall(accountId, delegateKey) {
       reject(new Error("stdio mcp timed out"));
     }, 8000);
     child.stdin.write(frame({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }));
-    child.stdin.write(frame({
-      jsonrpc: "2.0",
-      id: 2,
-      method: "tools/call",
-      params: { name: "recall", arguments: { text: "what was decided", memberId: "mina" } },
-    }));
-    child.stdin.write(frame({
-      jsonrpc: "2.0",
-      id: 3,
-      method: "tools/call",
-      params: { name: "act", arguments: { text: "what was decided", memberId: "mina" } },
-    }));
+    calls.forEach((call, index) => {
+      child.stdin.write(frame({
+        jsonrpc: "2.0",
+        id: index + 2,
+        method: "tools/call",
+        params: { name: call.name, arguments: call.arguments },
+      }));
+    });
     child.stdin.end();
     child.on("close", () => {
       clearTimeout(timer);
@@ -164,26 +163,54 @@ function stdioRecall(accountId, delegateKey) {
   });
 }
 
-test("the demo keeps one meeting sentence, files it once, answers on three doors, returns a related file, and forgets a deleted message", async () => {
+function stdioBody(messages, id) {
+  return JSON.parse(messages.find((message) => message.id === id).result.content[0].text).body;
+}
+
+function mcpText(response) {
+  return response.body.result.content[0].text;
+}
+
+const BOOTH = /the booth opens at nine\./i;
+const ASSIGNED = /ROW-91 was assigned to mina/;
+
+function threeFacts(text, where) {
+  assert.match(text, BOOTH, `${where}: booth sentence`);
+  assert.match(text, /ROW-90/, `${where}: ROW-90`);
+  assert.match(text, ASSIGNED, `${where}: ROW-91 assignment`);
+}
+
+test("the demo runs eleven ordered steps through the real handler with every outside service injected", async () => {
   const suffix = randomBytes(8).toString("hex");
   const accountId = `company-demo-flow-${suffix}`;
   const delegateKey = `delegate-demo-flow-${suffix}`;
+  const ledgerDir = fileURLToPath(new URL(`../.local/ledgers/${createHash("sha256").update(accountId).digest("hex")}`, import.meta.url));
+  const issued = ["ROW-91", "ROW-90"];
   const linear = {
     calls: [],
     async readOpenTripTickets() { return { trip: [], open: [] }; },
-    async createIssue() {
-      this.calls.push("create");
-      return { identifier: "ROW-90", id: "ROW-90" };
+    async createIssue(input) {
+      const id = issued.shift();
+      this.calls.push(`create ${JSON.stringify(input.title)} -> ${id}`);
+      return { identifier: id, id };
+    },
+    async assignIssue(input) {
+      this.calls.push(`assign ${input.id} -> ${input.assignee}`);
+      return { identifier: input.id, id: input.id };
     },
   };
-  const meeting = { calls: [], async join() { this.calls.push("join"); } };
+  const meeting = { calls: [], async join() { this.calls.push("join"); return { botId: "bot-live" }; } };
   const uploads = [];
+  const downloads = [];
   const posts = [];
+  const memberLists = [];
+  const fileFetches = [];
   const env = {
     SLACK_SIGNING_SECRET: secret,
     RECALL_WEBHOOK_SECRET: webhook,
     COMPANY_MEMWAL_KEY: "key-sentinel-value",
     COMPANY_MEMWAL_ACCOUNT_ID: "account-id-sentinel",
+    SEDERUNT_MEMBER: "mina",
   };
   const app = createApp({
     env,
@@ -197,204 +224,247 @@ test("the demo keeps one meeting sentence, files it once, answers on three doors
         tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
         console: {
           async upload(input) {
-            uploads.push({ name: input.name, bytes: String(input.bytes ?? "") });
+            const bytes = String(input.bytes ?? "");
+            uploads.push({ name: input.name, bytes });
             return { id: "console-file-1", folderId: "folder-1" };
+          },
+          async download(input) {
+            downloads.push(input?.id);
+            const found = input?.id === "console-file-1" ? uploads.find((item) => item.name) : null;
+            return found ? found.bytes : null;
           },
         },
       }),
-      slack: { async postMessage(message) { posts.push(message); } },
+      slack: {
+        async postMessage(message) { posts.push(message); },
+        async members(channel) { memberLists.push(channel); return ["mina"]; },
+        async downloadFile(file) {
+          fileFetches.push(file.url_private_download || file.url || "");
+          return { name: file.name, bytes: "PDFBYTES" };
+        },
+      },
     },
   });
   const port = await listen(app);
+  const consoleBoard = async () => (await get(port, "/api/console?member=mina")).body;
+  const slackAs = (event) => {
+    const message = signed({ type: "message", ...event }, secret);
+    return post(port, "/api/slack", message.payload, message.headers);
+  };
   try {
+    // Step 1. Setup ticket through MCP act, confirmed from the console.
+    const setup = await post(port, "/mcp", {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "act",
+        arguments: {
+          text: "create a test ticket titled \"Booth test ticket\"",
+          memberId: "mina",
+          room: { id: "desk-mina", botPresent: true, memberIds: ["mina"] },
+          deliveryId: "mcp-setup-1",
+        },
+      },
+    });
+    const setupBody = JSON.parse(mcpText(setup));
+    assert.equal(setupBody.preference, "ask");
+    assert.ok(setupBody.actionId);
+    assert.deepEqual(linear.calls, []);
+    const setupConfirm = await post(port, "/api/typed", { text: `confirm ${setupBody.actionId}`, memberId: "mina" });
+    assert.equal(setupConfirm.body.allow, "confirmed");
+    assert.equal(setupConfirm.body.issueId, "ROW-91");
+    assert.deepEqual(linear.calls, ["create \"Booth test ticket\" -> ROW-91"]);
+    await post(port, "/api/typed", { text: `confirm ${setupBody.actionId}`, memberId: "mina" });
+    assert.equal(linear.calls.length, 1);
+    const afterSetup = await consoleBoard();
+    assert.equal(afterSetup.tickets.some((row) => row.connectorId === "ROW-91" && row.edit === "create"), true);
+
+    // Step 2. Join without a public origin.
     const joined = await post(port, "/api/join", { url: "https://meet.google.com/abc-defg-hij" });
     assert.deepEqual(joined.body, { join: "not-configured" });
-    assert.equal(joined.raw.includes("bot-"), false);
+    assert.equal(/bot-/.test(joined.raw), false);
     assert.deepEqual(meeting.calls, []);
 
-    const quiet = transcript("The weather is fine today.", "quiet-1");
-    assert.equal((await recallPost(port, quiet, "msg-quiet")).status, 204);
-    const before = await get(port, "/api/console?member=mina");
-    assert.equal(before.body.decisions.some((item) => /weather/.test(item.text)), false);
+    // Step 3. A quiet line is not kept.
+    assert.equal((await recallPost(port, transcript("The weather is fine today.", "quiet-1"), "msg-quiet")).status, 204);
+    assert.equal((await consoleBoard()).decisions.some((item) => /weather/i.test(item.text)), false);
 
-    const spoken = transcript("Hey Sederunt the booth opens at nine.", "spoken-1");
-    assert.equal((await recallPost(port, spoken, "msg-spoken")).status, 204);
-    const kept = await get(port, "/api/console?member=mina");
-    const sentence = kept.body.decisions.find((item) => /booth opens at nine/.test(item.text));
-    assert.ok(sentence);
-    assert.equal(sentence.connectorId, "");
-    assert.equal(kept.body.waiting.length, 1);
-    assert.match(kept.body.waiting[0].statement, /booth opens at nine/);
-    const confirmId = kept.body.waiting[0].id;
-    assert.ok(confirmId);
-    assert.deepEqual(linear.calls, []);
-    const consoleConfirm = { text: `confirm ${confirmId}`, memberId: "mina" };
-    assert.deepEqual(Object.keys(consoleConfirm).sort(), ["memberId", "text"]);
-    const refused = await post(port, "/api/typed", { text: `confirm ${confirmId}`, memberId: "outsider" });
-    assert.equal(refused.body.allow, "not-invited");
-    assert.deepEqual(linear.calls, []);
-    const filed = await post(port, "/api/typed", consoleConfirm);
-    assert.equal(filed.body.allow, "confirmed");
+    // Step 4. An addressed decision is kept with no ticket yet.
+    assert.equal((await recallPost(port, transcript("Hey Maple the booth opens at nine.", "spoken-1"), "msg-spoken")).status, 204);
+    const kept = await consoleBoard();
+    const booth = kept.decisions.find((item) => BOOTH.test(item.text));
+    assert.ok(booth);
+    assert.equal(booth.connectorId, "");
+    assert.equal(linear.calls.length, 1);
+
+    // Step 5. Assign ROW-91 to mina, under Ask.
+    assert.equal((await recallPost(port, transcript("Hey Maple assign ROW-91 to mina.", "assign-1"), "msg-assign")).status, 204);
+    const pending = await consoleBoard();
+    const assignWait = pending.waiting.find((row) => /assign ROW-91 to mina/.test(row.statement));
+    assert.ok(assignWait, "the assignment waits for confirmation, not for an owner");
+    assert.equal(JSON.stringify(pending).includes("Who owns it?"), false);
+    assert.equal(linear.calls.length, 1);
+    const assigned = await post(port, "/api/typed", { text: `confirm ${assignWait.id}`, memberId: "mina" });
+    assert.equal(assigned.body.allow, "confirmed");
+    assert.equal(assigned.body.status, "updated");
+    assert.equal(assigned.body.issueId, "ROW-91");
+    assert.doesNotMatch(assigned.body.body, /Who owns it\?/);
+    assert.deepEqual(linear.calls, ["create \"Booth test ticket\" -> ROW-91", "assign ROW-91 -> mina"]);
+    await post(port, "/api/typed", { text: `confirm ${assignWait.id}`, memberId: "mina" });
+    assert.equal(linear.calls.length, 2);
+    const afterAssign = await consoleBoard();
+    const boothStill = afterAssign.decisions.find((item) => BOOTH.test(item.text));
+    assert.equal(boothStill.connectorId, "");
+    assert.equal(afterAssign.decisions.some((item) => ASSIGNED.test(item.text) && item.connectorId === "ROW-91"), true);
+    assert.equal(afterAssign.tickets.some((row) => row.connectorId === "ROW-91" && row.edit === "assign"), true);
+
+    // Step 6. Confirm the booth decision's waiting create.
+    const boothWait = afterAssign.waiting.find((row) => BOOTH.test(row.statement));
+    assert.ok(boothWait);
+    const filed = await post(port, "/api/typed", { text: `confirm ${boothWait.id}`, memberId: "mina" });
     assert.equal(filed.body.status, "filed");
-    assert.match(filed.body.body, /ROW-90/);
-    assert.deepEqual(linear.calls, ["create"]);
-    const again = await post(port, "/api/typed", { text: `confirm ${confirmId}`, memberId: "mina" });
-    assert.deepEqual(linear.calls, ["create"]);
-    assert.doesNotMatch(again.body.body, /filed/);
-    const board = await get(port, "/api/console?member=mina");
-    const filedRow = board.body.decisions.find((item) => /booth opens at nine/.test(item.text));
-    assert.equal(filedRow.connectorId, "ROW-90");
+    assert.equal(filed.body.issueId, "ROW-90");
+    await post(port, "/api/typed", { text: `confirm ${boothWait.id}`, memberId: "mina" });
+    assert.deepEqual(linear.calls, [
+      "create \"Booth test ticket\" -> ROW-91",
+      "assign ROW-91 -> mina",
+      "create \"the booth opens at nine.\" -> ROW-90",
+    ]);
+    const afterFile = await consoleBoard();
+    assert.equal(afterFile.decisions.find((item) => BOOTH.test(item.text)).connectorId, "ROW-90");
 
-    const channel = signed({
-      type: "message",
+    // Step 7. Recall in every door.
+    const slackAsk = await slackAs({ user: "mina", channel: "CDEMO", text: "what was decided", client_msg_id: "ask-1" });
+    assert.equal(posts.at(-1).channel, "CDEMO");
+    threeFacts(posts.at(-1).text, "slack channel post");
+    const decisionsBeforeChat = (await consoleBoard()).decisions.length;
+    const chat = await post(port, "/api/chat", { text: "what was decided", memberId: "mina" });
+    threeFacts(chat.body.body, "/api/chat");
+    assert.equal(chat.body.stored, false);
+    assert.equal((await consoleBoard()).decisions.length, decisionsBeforeChat);
+    assert.equal(chat.body.body, slackAsk.body.body);
+    const httpRecall = await post(port, "/mcp", {
+      jsonrpc: "2.0", id: 3, method: "tools/call",
+      params: { name: "recall", arguments: { text: "what was decided", memberId: "mina" } },
+    });
+    threeFacts(mcpText(httpRecall), "POST /mcp recall");
+    const httpAct = await post(port, "/mcp", {
+      jsonrpc: "2.0", id: 4, method: "tools/call",
+      params: { name: "act", arguments: { text: "what was decided", memberId: "mina" } },
+    });
+    threeFacts(mcpText(httpAct), "POST /mcp act");
+    const stdio = await stdioCalls(accountId, delegateKey, [
+      { name: "recall", arguments: { text: "what was decided", memberId: "mina" } },
+      { name: "act", arguments: { text: "what was decided", memberId: "mina" } },
+    ]);
+    threeFacts(stdioBody(stdio, 2), "stdio recall");
+    threeFacts(stdioBody(stdio, 3), "stdio act");
+    const postsBeforeOutsider = posts.length;
+    const hidden = await slackAs({ user: "outsider", channel: "CDEMO", text: "what was decided", client_msg_id: "ask-out" });
+    assert.equal(hidden.raw.includes("booth opens at nine"), false);
+    assert.equal(hidden.raw.includes("floor-plan.pdf"), false);
+    assert.equal(posts.length, postsBeforeOutsider);
+
+    // Step 8. A channel file is fetched by url and stored in the Console.
+    const stored = await slackAs({
       user: "mina",
       channel: "CDEMO",
       text: "The floor plan is floor-plan.pdf",
       client_msg_id: "file-1",
-      members: ["mina"],
-      files: [{ name: "floor-plan.pdf", bytes: "PDFBYTES" }],
-    }, secret);
-    const stored = await post(port, "/api/slack", channel.payload, channel.headers);
-    assert.equal(stored.body.decisions >= 2, true);
+      members: ["outsider"],
+      files: [{
+        name: "floor-plan.pdf",
+        bytes: "NOT-THE-FILE",
+        url_private_download: "https://files.slack.com/files-pri/TDEMO/F1/download/floor-plan.pdf",
+      }],
+    });
+    assert.equal(memberLists.includes("CDEMO"), true);
+    assert.deepEqual(fileFetches, ["https://files.slack.com/files-pri/TDEMO/F1/download/floor-plan.pdf"]);
+    assert.deepEqual(uploads, [{ name: "floor-plan.pdf", bytes: "PDFBYTES" }]);
+    for (const secretish of ["PDFBYTES", "NOT-THE-FILE", "console-file-1"]) {
+      assert.equal(stored.raw.includes(secretish), false, `slack response leaks ${secretish}`);
+    }
+    const boardWithFile = await consoleBoard();
+    const fileRow = boardWithFile.decisions.find((item) => /floor plan/i.test(item.text));
+    assert.deepEqual(fileRow.fileNames, [{ name: "floor-plan.pdf" }]);
+    const boardRaw = JSON.stringify(boardWithFile);
+    for (const secretish of ["PDFBYTES", "NOT-THE-FILE", "console-file-1"]) {
+      assert.equal(boardRaw.includes(secretish), false, `console board leaks ${secretish}`);
+    }
+    const ledgerRaw = await readFile(`${ledgerDir}/record.json`, "utf8");
+    const fileDocs = JSON.parse(ledgerRaw).documents.filter((doc) => doc.decision?.sourceDeliveryId === "file-1");
+    assert.equal(fileDocs.length > 0, true);
+    assert.equal(fileDocs.some((doc) => doc.decision.fileNames.some((file) => file.name === "floor-plan.pdf" && file.consoleFileId === "console-file-1")), true);
+    assert.equal(ledgerRaw.includes("PDFBYTES"), false);
+    assert.equal(ledgerRaw.includes("NOT-THE-FILE"), false);
+    await slackAs({ user: "mina", channel: "CDEMO", text: "The badge list is badges.pdf", client_msg_id: "file-none" });
+    const noBytes = (await consoleBoard()).decisions.find((item) => /badge list/i.test(item.text));
+    assert.ok(noBytes);
+    assert.deepEqual(noBytes.fileNames, []);
     assert.equal(uploads.length, 1);
-    assert.equal(uploads[0].name, "floor-plan.pdf");
-    assert.equal(uploads[0].bytes, "PDFBYTES");
+    const outsiderAfterFile = posts.length;
+    const hiddenFile = await slackAs({ user: "outsider", channel: "CDEMO", text: "what about the floor plan", client_msg_id: "ask-out-2" });
+    assert.equal(hiddenFile.raw.includes("floor-plan.pdf"), false);
+    assert.equal(hiddenFile.raw.includes("PDFBYTES"), false);
+    assert.equal(posts.length, outsiderAfterFile);
 
-    const ask = signed({
-      type: "message",
-      user: "mina",
-      channel: "CDEMO",
-      text: "what was decided",
-      client_msg_id: "ask-1",
-      members: ["mina"],
-    }, secret);
-    const slack = await post(port, "/api/slack", ask.payload, ask.headers);
-    assert.match(slack.body.body, /booth opens at nine/);
-    assert.match(slack.body.body, /ROW-90/);
-    assert.equal(posts.at(-1).channel, "CDEMO");
-    assert.match(posts.at(-1).text, /ROW-90/);
-    assert.equal(posts.at(-1).file || "", "");
-
-    const beforeChat = (await get(port, "/api/console?member=mina")).body.decisions.length;
-    const chat = await post(port, "/api/chat", { text: "what was decided", memberId: "mina" });
-    assert.match(chat.body.body, /booth opens at nine/);
-    assert.match(chat.body.body, /ROW-90/);
-    assert.equal(chat.body.stored, false);
-    assert.equal(chat.body.decisions, beforeChat);
-
-    const httpRecall = await post(port, "/mcp", {
-      jsonrpc: "2.0",
-      id: 3,
-      method: "tools/call",
-      params: { name: "recall", arguments: { text: "what was decided", memberId: "mina" } },
-    });
-    assert.match(httpRecall.body.result.content[0].text, /booth opens at nine/);
-    assert.match(httpRecall.body.result.content[0].text, /ROW-90/);
-    const httpAct = await post(port, "/mcp", {
-      jsonrpc: "2.0",
-      id: 4,
-      method: "tools/call",
-      params: { name: "act", arguments: { text: "what was decided", memberId: "mina" } },
-    });
-    assert.match(httpAct.body.result.content[0].text, /booth opens at nine/);
-    assert.match(httpAct.body.result.content[0].text, /ROW-90/);
-
-    const messages = await stdioRecall(accountId, delegateKey);
-    const heard = JSON.parse(messages.find((message) => message.id === 2).result.content[0].text);
-    const acted = JSON.parse(messages.find((message) => message.id === 3).result.content[0].text);
-    assert.match(heard.body, /booth opens at nine/);
-    assert.match(heard.body, /ROW-90/);
-    assert.match(acted.body, /booth opens at nine/);
-    assert.match(acted.body, /ROW-90/);
-
-    const postsBeforeOutsider = posts.length;
-    const outsider = signed({
-      type: "message",
-      user: "outsider",
-      channel: "CDEMO",
-      text: "what was decided",
-      client_msg_id: "ask-out",
-      members: ["mina"],
-    }, secret);
-    const hidden = await post(port, "/api/slack", outsider.payload, outsider.headers);
-    assert.equal(hidden.body.body.includes("booth opens at nine"), false);
-    assert.equal(hidden.body.body.includes("floor-plan.pdf"), false);
-    assert.equal(posts.length, postsBeforeOutsider);
-
-    const related = signed({
-      type: "message",
-      user: "mina",
-      channel: "DMINA",
-      channel_type: "im",
-      text: "what about the floor plan",
-      client_msg_id: "dm-1",
-      members: ["mina"],
-    }, secret);
-    const dm = await post(port, "/api/slack", related.payload, related.headers);
+    // Step 9. DM questions.
+    const dm = await slackAs({ user: "mina", channel: "DMINA", channel_type: "im", text: "what about the floor plan", client_msg_id: "dm-1" });
     assert.equal(posts.at(-1).channel, "DMINA");
-    assert.match(posts.at(-1).text, /floor plan/);
+    assert.match(posts.at(-1).text, /floor plan/i);
     assert.match(posts.at(-1).text, /floor-plan\.pdf/);
-    assert.equal(posts.at(-1).file, "floor-plan.pdf");
-    assert.match(dm.body.body, /floor plan/);
-
-    const other = signed({
-      type: "message",
-      user: "mina",
-      channel: "DMINA",
-      channel_type: "im",
-      text: "what is the weather tomorrow",
-      client_msg_id: "dm-2",
-      members: ["mina"],
-    }, secret);
-    await post(port, "/api/slack", other.payload, other.headers);
+    assert.equal(posts.at(-1).file?.name, "floor-plan.pdf");
+    assert.equal(posts.at(-1).file?.bytes, "PDFBYTES");
+    assert.equal(downloads.includes("console-file-1"), true);
+    assert.equal(dm.raw.includes("PDFBYTES"), false);
+    await slackAs({ user: "mina", channel: "DMINA", channel_type: "im", text: "what is the weather tomorrow", client_msg_id: "dm-2" });
+    assert.equal(posts.at(-1).channel, "DMINA");
     assert.equal(posts.at(-1).file || "", "");
     assert.equal(/floor-plan\.pdf/.test(posts.at(-1).text), false);
 
-    const removed = signed({
-      type: "message",
+    // Step 10. A deleted Slack message drops only its decision, also after a reload.
+    await slackAs({
       subtype: "message_deleted",
       user: "mina",
       channel: "CDEMO",
       deleted_ts: "1700000001.000",
-      previous_message: {
-        user: "mina",
-        text: "The floor plan is floor-plan.pdf",
-        client_msg_id: "file-1",
-      },
-      members: ["mina"],
-    }, secret);
-    await post(port, "/api/slack", removed.payload, removed.headers);
-    const after = await get(port, "/api/console?member=mina");
-    assert.equal(after.body.decisions.some((item) => /floor plan/.test(item.text)), false);
-    assert.equal(after.body.decisions.some((item) => /booth opens at nine/.test(item.text) && item.connectorId === "ROW-90"), true);
-
-    const channelAgain = signed({
-      type: "message",
-      user: "mina",
-      channel: "CDEMO",
-      text: "what about the floor plan",
-      client_msg_id: "ask-gone",
-      members: ["mina"],
-    }, secret);
-    await post(port, "/api/slack", channelAgain.payload, channelAgain.headers);
-    assert.equal(/floor plan/.test(posts.at(-1).text), false);
+      previous_message: { user: "mina", text: "The floor plan is floor-plan.pdf", client_msg_id: "file-1" },
+    });
+    const after = await consoleBoard();
+    assert.equal(after.decisions.some((item) => /floor plan/i.test(item.text)), false);
+    assert.equal(after.decisions.some((item) => BOOTH.test(item.text) && item.connectorId === "ROW-90"), true);
+    assert.equal(after.decisions.some((item) => ASSIGNED.test(item.text)), true);
+    await slackAs({ user: "mina", channel: "CDEMO", text: "what was decided", client_msg_id: "ask-gone" });
+    assert.equal(posts.at(-1).channel, "CDEMO");
+    threeFacts(posts.at(-1).text, "slack channel after delete");
+    assert.equal(/floor plan|floor-plan\.pdf/i.test(posts.at(-1).text), false);
     assert.equal(posts.at(-1).file || "", "");
-
-    const dmAgain = signed({
-      type: "message",
-      user: "mina",
-      channel: "DMINA",
-      channel_type: "im",
-      text: "what about the floor plan",
-      client_msg_id: "dm-gone",
-      members: ["mina"],
-    }, secret);
-    await post(port, "/api/slack", dmAgain.payload, dmAgain.headers);
+    await slackAs({ user: "mina", channel: "DMINA", channel_type: "im", text: "what about the floor plan", client_msg_id: "dm-gone" });
+    assert.equal(posts.at(-1).channel, "DMINA");
     assert.equal(/floor-plan\.pdf/.test(posts.at(-1).text), false);
     assert.equal(posts.at(-1).file || "", "");
-    const still = await get(port, "/api/console?member=mina");
-    assert.equal(still.body.decisions.some((item) => /booth opens at nine/.test(item.text) && item.connectorId === "ROW-90"), true);
+    const reloaded = await stdioCalls(accountId, delegateKey, [
+      { name: "recall", arguments: { text: "what was decided", memberId: "mina" } },
+    ]);
+    const reloadedBody = stdioBody(reloaded, 2);
+    threeFacts(reloadedBody, "new process after delete");
+    assert.equal(/floor plan|floor-plan\.pdf/i.test(reloadedBody), false);
+    assert.match(reloadedBody, /the booth opens at nine\.\n(?:recorded|current)\nROW-90\n/);
+
+    // Step 11. No Slack huddle was added: every Slack event above is a plain message.
+    assert.equal(posts.every((message) => !/huddle/i.test(JSON.stringify(message))), true);
+
+    // The whole run, in order.
+    assert.deepEqual(linear.calls, [
+      "create \"Booth test ticket\" -> ROW-91",
+      "assign ROW-91 -> mina",
+      "create \"the booth opens at nine.\" -> ROW-90",
+    ]);
+    assert.deepEqual(meeting.calls, []);
+    console.log(`LINEAR_CALLS ${JSON.stringify(linear.calls)}`);
   } finally {
     await close(app);
+    await rm(ledgerDir, { recursive: true, force: true });
   }
 });

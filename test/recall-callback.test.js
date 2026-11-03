@@ -56,9 +56,124 @@ test("a signed callback is accepted and a bad signature leaves the typed path wo
   }
 });
 
+test("the configured member can read a meeting sentence spoken under a Recall id", async () => {
+  const app = createApp({
+    companyLoaded: true,
+    env: { RECALL_WEBHOOK_SECRET: secret, SEDERUNT_MEMBER: "U_MINA" },
+    deps: {
+      memory: { async remember() { return { blobId: null }; }, async index() { return []; }, async recall() { return []; } },
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+    },
+  });
+  app.listen(0, "127.0.0.1");
+  await once(app, "listening");
+  const port = app.address().port;
+  try {
+    const payload = JSON.stringify({
+      event: "transcript.data",
+      data: {
+        bot: { id: "bot-live" },
+        transcript: { id: "tr-live" },
+        data: {
+          participant: { id: 100, name: "Mina" },
+          words: [{ text: "Hey" }, { text: "Maple" }, { text: "the" }, { text: "booth" }, { text: "opens" }, { text: "at" }, { text: "nine." }],
+        },
+      },
+    });
+    const id = "msg-live";
+    const timestamp = "1731705121";
+    const accepted = await post(port, "/api/recall", payload, {
+      "webhook-id": id,
+      "webhook-timestamp": timestamp,
+      "webhook-signature": `v1,${sign(secret, id, timestamp, payload)}`,
+    });
+    assert.equal(accepted.status, 204);
+    const mine = await get(port, "/api/console?member=U_MINA");
+    const other = await get(port, "/api/console?member=U_OTHER");
+    assert.match(mine.raw, /booth opens at nine/);
+    assert.equal(other.raw.includes("booth opens at nine"), false);
+  } finally {
+    await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
+test("a transcript lands on the opened meeting room without a typed name", async () => {
+  const app = createApp({
+    companyLoaded: true,
+    linearReady: true,
+    env: {
+      RECALL_API_KEY: "recall-key",
+      RECALL_WEBHOOK_SECRET: secret,
+      SEDERUNT_PUBLIC_ORIGIN: "https://camera.example",
+      SLACK_SIGNING_SECRET: "slack-signing",
+      SLACK_BOT_TOKEN: "slack-bot",
+      SEDERUNT_MEMBER: "U_MINA",
+      CONSOLE_API_KEY: "console-key",
+      CONSOLE_SERVICE_PRIVATE_KEY: "console-service",
+      CONSOLE_FOLDER_ID: "folder",
+      COMPANY_MEMWAL_KEY: "company-key",
+      COMPANY_MEMWAL_ACCOUNT_ID: "company-account",
+    },
+    deps: {
+      meeting: { async join() { return { id: "bot-live" }; } },
+      memory: {
+        async remember() { return { blobId: null }; },
+        async index() { return []; },
+        async recall() { return []; },
+      },
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+    },
+  });
+  app.listen(0, "127.0.0.1");
+  await once(app, "listening");
+  const port = app.address().port;
+  const deliver = (words, deliveryId) => {
+    const payload = JSON.stringify({
+      event: "transcript.data",
+      data: {
+        bot: { id: "bot-live" },
+        transcript: { id: deliveryId },
+        data: { participant: { id: 100, name: "Anh" }, words: words.map((text) => ({ text })) },
+      },
+    });
+    return post(port, "/api/recall", payload, {
+      "webhook-id": deliveryId,
+      "webhook-timestamp": "1731705121",
+      "webhook-signature": `v1,${sign(secret, deliveryId, "1731705121", payload)}`,
+    });
+  };
+  try {
+    const joined = await post(port, "/api/join", JSON.stringify({
+      url: "https://meet.google.com/abc-defg-hij",
+    }), { "content-type": "application/json" });
+    assert.deepEqual(JSON.parse(joined.raw), { join: "sent" });
+    const quiet = await deliver(
+      ["the", "weather", "is", "fine", "today", "k", "said", "her", "and", "the", "booth", "opens", "at", "nine"],
+      "tr-quiet",
+    );
+    assert.equal(quiet.status, 204);
+    const hidden = await get(port, "/api/console");
+    assert.equal(hidden.raw.includes("booth opens"), false);
+    assert.equal(hidden.raw.includes("weather"), false);
+    const heard = await deliver(
+      ["Hey", "Maple", "the", "booth", "opens", "at", "nine."],
+      "tr-heard",
+    );
+    assert.equal(heard.status, 204);
+    const board = JSON.parse((await get(port, "/api/console")).raw);
+    assert.equal(board.rooms.length, 1);
+    assert.equal(board.rooms[0].id, "bot-live");
+    assert.equal(board.rooms[0].platform, "Google Meet");
+    assert.match(board.decisions[0].text, /booth opens at nine/);
+    assert.equal(board.decisions[0].roomId, "bot-live");
+  } finally {
+    await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
 test("join sends one bot to the public camera page and a failed join omits the key", async () => {
   const key = "recall-key-toolsecret";
-  const env = { RECALL_API_KEY: key, SEDERUNT_PUBLIC_ORIGIN: "https://sederunt.example" };
+  const env = { RECALL_API_KEY: key, RECALL_WEBHOOK_SECRET: secret, SEDERUNT_PUBLIC_ORIGIN: "https://sederunt.example" };
   const meeting = { url: "https://meet.google.com/abc-defg-hij" };
   let calls = 0;
   const guard = {
@@ -69,6 +184,7 @@ test("join sends one bot to the public camera page and a failed join omits the k
   };
   await assert.rejects(() => createMeetingAdapter({}, guard).join(meeting), /not configured/);
   await assert.rejects(() => createMeetingAdapter({ RECALL_API_KEY: key }, guard).join(meeting), /not configured/);
+  await assert.rejects(() => createMeetingAdapter({ RECALL_API_KEY: key, SEDERUNT_PUBLIC_ORIGIN: env.SEDERUNT_PUBLIC_ORIGIN }, guard).join(meeting), /not configured/);
   await assert.rejects(
     () => createMeetingAdapter({ ...env, SEDERUNT_PUBLIC_ORIGIN: "http://127.0.0.1:8787" }, guard).join(meeting),
     /not configured/,
@@ -88,8 +204,19 @@ test("join sends one bot to the public camera page and a failed join omits the k
   assert.equal(sent[0].init.headers.authorization, `Token ${key}`);
   const body = JSON.parse(sent[0].init.body);
   assert.equal(body.meeting_url, "https://meet.google.com/abc-defg-hij");
-  assert.equal(body.bot_name, "Sederunt");
-  assert.equal(body.output_media.camera.config.url, "https://sederunt.example/meeting");
+  assert.equal(body.bot_name, "Maple");
+  assert.equal(body.output_media.camera.config.url, "https://sederunt.example/meeting?name=Maple");
+  assert.deepEqual(body.recording_config, {
+    transcript: {
+      provider: { recallai_streaming: { mode: "prioritize_low_latency", language_code: "en" } },
+      diarization: { use_separate_streams_when_available: true },
+    },
+    realtime_endpoints: [{
+      type: "webhook",
+      url: "https://sederunt.example/api/recall",
+      events: ["transcript.data"],
+    }],
+  });
 
   await assert.rejects(
     () => createMeetingAdapter(env, {
@@ -117,6 +244,25 @@ test("verification rejects a secret that does not sign the raw body", () => {
   assert.equal(verifyRecallRequest({ secret, headers, payload }), true);
   assert.equal(verifyRecallRequest({ secret, headers, payload: payload + " " }), false);
   assert.equal(verifyRecallRequest({ secret: "", headers, payload }), false);
+});
+
+test("Meet stays unavailable and names the missing verification secret", async () => {
+  const app = createApp({
+    env: { RECALL_API_KEY: "recall-key", SEDERUNT_PUBLIC_ORIGIN: "https://sederunt.example" },
+  });
+  app.listen(0, "127.0.0.1");
+  await once(app, "listening");
+  try {
+    const port = app.address().port;
+    const consolePage = await get(port, "/console");
+    assert.match(consolePage.raw, /Set RECALL_WEBHOOK_SECRET to the Recall workspace verification secret/);
+    const joined = await post(port, "/api/join", JSON.stringify({ url: "https://meet.google.com/abc-defg-hij" }), {
+      "content-type": "application/json",
+    });
+    assert.deepEqual(JSON.parse(joined.raw), { join: "not-configured" });
+  } finally {
+    await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
+  }
 });
 
 function sign(value, id, timestamp, payload) {

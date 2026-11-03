@@ -8,18 +8,19 @@ import { createCalendarAdapter } from "./calendar/mcp.js";
 import { createConsoleAdapter } from "./console/upload.js";
 import { createLinearClient } from "./linear/mcp.js";
 import { loadLinearToken } from "./linear/token.js";
-import { CAMERA_PAGE } from "./meeting/camera.js";
+import { renderCameraPage } from "./meeting/camera.js";
+import { normalizeHearing } from "./hearing.js";
 import { createMeetingAdapter, meetingDoorReady, recallTranscriptDelivery, verifyRecallRequest } from "./meeting/recall.js";
 import { createTatumReader } from "./tatum/get-object.js";
-import { handleMcpRequest, mcpJsonRpc } from "./mcp.js";
+import { bindToolMember, handleMcpRequest, memberRefusal, mcpJsonRpc } from "./mcp.js";
 import { renderConsolePage } from "./console-page.js";
 import { renderLanding } from "./landing.js";
-import { loadLocalEnv } from "./local-env.js";
+import { loadCompanyEnv, loadLocalEnv } from "./local-env.js";
 import { looksLikeOpenQuestion } from "./parse.js";
 import { createSession } from "./session.js";
-import { postSlackReply, slackAnswer, slackQuestion } from "./slack/reply.js";
+import { postSlackReply, slackAnswer, slackChannelMembers, slackFileBytes, slackQuestion } from "./slack/reply.js";
 import { slackDelivery, verifySlackRequest } from "./slack/sign.js";
-import { companyBoard, downloadFile, handleUtterance, personalBoard, readProofs, rebuildCompanyIndex, roomLedger } from "./typed-path.js";
+import { companyBoard, downloadFile, handleUtterance, personalBoard, readProofs, rebuildCompanyIndex, roomLedger, saveHearing } from "./typed-path.js";
 
 const port = Number(process.env.PORT || 8787);
 
@@ -71,11 +72,15 @@ export function defaultDeps(options = {}) {
         linearCalls.push("create");
         return { identifier: "", id: "" };
       },
+      async assignIssue() {
+        linearCalls.push("assign");
+        return { identifier: "", id: "" };
+      },
     },
     calendar: options.calendar ?? createCalendarAdapter(),
     tatum: options.tatum ?? createTatumReader(),
     console: options.console ?? createConsoleAdapter(),
-    meeting: options.meeting ?? createMeetingAdapter(),
+    meeting: options.meeting ?? createMeetingAdapter(env),
     memory: options.memory === undefined ? memoryAdapter(env, options.memwal) : options.memory,
   };
   if (options.liveLinear === true) {
@@ -96,6 +101,10 @@ function liveLinear(stub, loadToken = loadLinearToken) {
       const client = await pendingClient();
       return client.createIssue(input);
     },
+    async assignIssue(input) {
+      const client = await pendingClient();
+      return client.assignIssue(input);
+    },
   };
   function pendingClient() {
     if (!pending) {
@@ -115,10 +124,21 @@ function liveLinear(stub, loadToken = loadLinearToken) {
 
 /** Door flags for the room. The values are booleans, and the secrets stay out. */
 export function doorReport(env = process.env, linearReady = false) {
+  const meeting = meetingDoorReady(env);
+  const slack = Boolean(env.SLACK_SIGNING_SECRET && env.SLACK_BOT_TOKEN);
+  const member = Boolean(String(env.SEDERUNT_MEMBER || "").trim());
+  const consoleReady = Boolean(env.CONSOLE_API_KEY && env.CONSOLE_SERVICE_PRIVATE_KEY && env.CONSOLE_FOLDER_ID);
+  const company = Boolean(env.COMPANY_MEMWAL_KEY && env.COMPANY_MEMWAL_ACCOUNT_ID);
+  const linear = linearReady === true;
   return {
-    meeting: meetingDoorReady(env),
+    meeting,
     calendar: Boolean(env.CALENDAR_MCP_TOKEN || env.CALENDAR_OAUTH_REFRESH_TOKEN),
-    linear: linearReady === true,
+    linear,
+    slack,
+    member,
+    console: consoleReady,
+    company,
+    walk: meeting && slack && member && consoleReady && company && linear,
   };
 }
 
@@ -257,12 +277,33 @@ export function createApp(options = {}) {
       const doors = doorReport(env, false);
       send(res, 200, "text/html; charset=utf-8", renderConsolePage({
         meeting: doors.meeting,
-        slackReady: Boolean(env.SLACK_SIGNING_SECRET),
+        meetingSetup: !env.SEDERUNT_PUBLIC_ORIGIN
+          ? "Set SEDERUNT_PUBLIC_ORIGIN to a public https address, then restart."
+          : !env.RECALL_API_KEY
+            ? "Set RECALL_API_KEY, then restart."
+            : !env.RECALL_WEBHOOK_SECRET
+              ? "Set RECALL_WEBHOOK_SECRET to the Recall workspace verification secret, then restart."
+              : "Check that SEDERUNT_PUBLIC_ORIGIN is a public https address, then restart.",
+        slackReady: Boolean(env.SLACK_SIGNING_SECRET && env.SLACK_BOT_TOKEN),
       }));
       return;
     }
     if (req.method === "GET" && url.pathname === "/meeting") {
-      send(res, 200, "text/html; charset=utf-8", CAMERA_PAGE);
+      send(res, 200, "text/html; charset=utf-8", renderCameraPage(url.searchParams.get("name") || ""));
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/hearing") {
+      const body = await readJson(req);
+      const companyId = typeof body.company === "string" ? body.company : "";
+      const current = await prepareWorkspace(workspace, companyId);
+      const triggers = typeof body.triggers === "string"
+        ? body.triggers.split(/\n+/)
+        : body.triggers;
+      const hearing = await saveHearing(current, depsFor(workspace, companyId), {
+        name: body.name,
+        triggers,
+      });
+      send(res, 200, "application/json; charset=utf-8", JSON.stringify({ hearing: normalizeHearing(hearing) }));
       return;
     }
     if (req.method === "GET" && url.pathname === "/room") {
@@ -272,11 +313,13 @@ export function createApp(options = {}) {
     }
     if (req.method === "GET" && url.pathname === "/api/console") {
       const companyId = url.searchParams.get("company") || "";
-      const current = await prepareWorkspace(workspace, companyId);
+      const current = await prepareWorkspace(workspace, companyId, false, 2000);
+      const requested = (url.searchParams.get("member") || "").trim();
+      const configured = typeof env.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(await consolePayload(
         workspace,
         current,
-        url.searchParams.get("member") || "",
+        requested || configured,
         url.searchParams.get("workspace") || "",
       )));
       return;
@@ -293,7 +336,7 @@ export function createApp(options = {}) {
       return;
     }
     if (req.method === "GET" && url.pathname === "/api/ready") {
-      const report = doorReport(process.env, linearReady());
+      const report = doorReport(env, workspace.linearReady === true);
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(report));
       return;
     }
@@ -308,14 +351,18 @@ export function createApp(options = {}) {
       const body = await readJson(req);
       const meetingUrl = typeof body.url === "string" ? body.url : "";
       let join = "not-configured";
-      if (!meetingDoorReady(env)) {
+      if (!doorReport(env, workspace.linearReady === true).walk) {
         send(res, 200, "application/json; charset=utf-8", JSON.stringify({ join }));
         return;
       }
+      let botId = "";
       if (deps.meeting?.join) {
         try {
-          await deps.meeting.join({ url: meetingUrl });
+          const ready = await prepareWorkspace(workspace, "");
+          const guest = normalizeHearing(ready?.hearing).name;
+          const sent = await deps.meeting.join({ url: meetingUrl, name: guest });
           join = "sent";
+          botId = typeof sent?.id === "string" ? sent.id : "";
         } catch (error) {
           const message = error instanceof Error ? error.message : "";
           join = message === "Meeting join is not configured" ? "not-configured" : "failed";
@@ -328,7 +375,7 @@ export function createApp(options = {}) {
             const current = await prepareWorkspace(workspace, "");
             await handleUtterance({
               session: current,
-              openedRoom: { platform },
+              openedRoom: { platform, id: botId },
             }, depsFor(workspace, ""));
           } catch {
             // The door already sent the bot. A missed record does not change that word.
@@ -349,6 +396,12 @@ export function createApp(options = {}) {
         try {
           const delivery = recallTranscriptDelivery(JSON.parse(raw || "{}"));
           if (delivery) {
+            const configured = typeof env.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
+            if (configured) {
+              const people = [...new Set([...(delivery.participants ?? []), configured].filter(Boolean))];
+              delivery.participants = people;
+              delivery.room.memberIds = people;
+            }
             const current = await prepareWorkspace(workspace, "");
             await handleUtterance({ ...delivery, session: current }, depsFor(workspace, ""));
           }
@@ -361,6 +414,8 @@ export function createApp(options = {}) {
     }
     if (req.method === "POST" && url.pathname === "/api/typed") {
       const delivery = await readRequest(req);
+      const configured = typeof env.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
+      if (!delivery.memberId && configured) delivery.memberId = configured;
       const current = await prepareWorkspace(workspace, delivery.company || "");
       const result = await handleUtterance({ ...delivery, session: current }, depsFor(workspace, delivery.company || ""));
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(result));
@@ -391,11 +446,20 @@ export function createApp(options = {}) {
         }));
         return;
       }
+      const bound = bindMember(env, body.memberId);
+      if (!bound.ok) {
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify({
+          body: memberRefusal(bound.reason).body,
+          decisions: before,
+          stored: false,
+        }));
+        return;
+      }
       const result = await handleUtterance({
         text,
         intent: "recall",
         door: "mcp",
-        memberId: typeof body.memberId === "string" ? body.memberId : "",
+        memberId: bound.memberId,
         workspace: scope,
         session: current,
       }, depsFor(workspace, companyId));
@@ -430,34 +494,108 @@ export function createApp(options = {}) {
       const companyId = typeof parsed.company === "string" ? parsed.company : "";
       const current = await prepareWorkspace(workspace, companyId);
       const event = parsed.event && typeof parsed.event === "object" ? parsed.event : parsed;
-      if (event.bot_id || event.subtype === "bot_message") {
+      const subtype = typeof event.subtype === "string" ? event.subtype : "";
+      const noise = subtype && subtype !== "file_share" && subtype !== "message_deleted" && subtype !== "huddle";
+      if (event.bot_id || subtype === "bot_message" || (noise && event.type !== "huddle")) {
         send(res, 200, "application/json; charset=utf-8", JSON.stringify({ slack: "ignored" }));
         return;
       }
-      const delivery = slackDelivery(event);
-      const question = delivery.intent !== "delete" && slackQuestion(delivery.text);
-      const result = await handleUtterance({
-        ...delivery,
-        intent: delivery.intent === "delete" ? "delete" : (question ? "recall" : undefined),
-        session: current,
-      }, depsFor(workspace, companyId));
-      if (question && result?.body && result.allow !== "not-invited" && result.allow !== "missing-member") {
-        const channel = delivery.room?.askChannel || (typeof event.channel === "string" ? event.channel : "");
-        const answer = slackAnswer(result.visible, delivery.text, result.body);
-        const reply = {
-          channel,
-          text: answer.text,
-          file: answer.file,
-          thread: typeof event.thread_ts === "string" ? event.thread_ts : "",
-        };
-        if (typeof deps.slack?.postMessage === "function") await deps.slack.postMessage(reply);
-        else await postSlackReply({ token: env.SLACK_BOT_TOKEN, ...reply });
+      // Slack retries an event_callback that is still open after three seconds.
+      // Memory and Console can take longer than that. Ack first on the live
+      // token path, then finish the work. Tests inject deps.slack and read the body.
+      let acked = false;
+      const replyHttp = (status, contentType, body) => {
+        if (acked) return;
+        acked = true;
+        send(res, status, contentType, body);
+      };
+      const liveAck = parsed.type === "event_callback" && Boolean(env.SLACK_BOT_TOKEN) && !deps.slack;
+      if (liveAck) replyHttp(200, "application/json; charset=utf-8", JSON.stringify({ slack: "accepted" }));
+      try {
+        const delivery = slackDelivery(event);
+        const question = delivery.intent !== "delete" && slackQuestion(delivery.text);
+        const huddle = delivery.room?.kind === "huddle" || delivery.room?.source === "slack-huddle";
+        let storedFile = null;
+        if (!question && delivery.intent !== "delete" && !huddle) {
+          const channel = delivery.room?.askChannel || "";
+          const people = await slackPeople(env, deps, channel);
+          if (!people.length) {
+            replyHttp(200, "application/json; charset=utf-8", JSON.stringify({
+              body: "The channel has not sent who is there.",
+              decisions: current.decisions.filter((item) => !item.deleted).length,
+            }));
+            return;
+          }
+          delivery.participants = people;
+          delivery.room.memberIds = people;
+          if (delivery.file) {
+            const loaded = await slackBytes(env, deps, delivery.file);
+            storedFile = loaded;
+            if (!loaded?.bytes) {
+              if (env.SLACK_BOT_TOKEN && channel) {
+                await postSlackReply({
+                  token: env.SLACK_BOT_TOKEN,
+                  fetchImpl: deps.slack?.fetch,
+                  channel,
+                  text: "The file did not arrive.",
+                });
+              }
+              replyHttp(200, "application/json; charset=utf-8", JSON.stringify({
+                body: "The file did not arrive.",
+                decisions: current.decisions.filter((item) => !item.deleted).length,
+              }));
+              return;
+            }
+            delivery.file = loaded;
+          }
+        }
+        const result = await handleUtterance({
+          ...delivery,
+          intent: delivery.intent === "delete" ? "delete" : (question ? "recall" : undefined),
+          session: current,
+        }, depsFor(workspace, companyId));
+        const repeat = result?.allow === "duplicate-delivery" || result?.outcome === "duplicate-delivery" || result?.outcome === "duplicate";
+        if (!question && storedFile?.name && !repeat && result?.allow !== "not-invited" && result?.allow !== "missing-member" && env.SLACK_BOT_TOKEN) {
+          const channel = delivery.room?.askChannel || (typeof event.channel === "string" ? event.channel : "");
+          if (channel) {
+            await postSlackReply({
+              token: env.SLACK_BOT_TOKEN,
+              fetchImpl: deps.slack?.fetch,
+              channel,
+              text: `Kept ${storedFile.name}.`,
+            });
+          }
+        }
+        if (question && result?.body && !repeat && result.allow !== "not-invited" && result.allow !== "missing-member") {
+          const channel = delivery.room?.askChannel || (typeof event.channel === "string" ? event.channel : "");
+          const answer = slackAnswer(result.visible, delivery.text);
+          const bytes = answer.file ? await consoleFileBytes(current, answer.file, deps) : null;
+          const reply = {
+            channel,
+            text: answer.text,
+            file: answer.file && bytes != null ? { name: answer.file, bytes } : undefined,
+            thread: typeof event.thread_ts === "string" ? event.thread_ts : "",
+          };
+          if (typeof deps.slack?.postMessage === "function") await deps.slack.postMessage(reply);
+          if (env.SLACK_BOT_TOKEN) {
+            await postSlackReply({
+              token: env.SLACK_BOT_TOKEN,
+              fetchImpl: deps.slack?.fetch,
+              channel: reply.channel,
+              text: reply.text,
+              thread: reply.thread,
+              file: reply.file,
+            });
+          }
+        }
+        replyHttp(200, "application/json; charset=utf-8", JSON.stringify({
+          body: result.body,
+          decisions: current.decisions.filter((item) => item.account !== "personal" && item.kind !== "note" && !item.deleted).length,
+          posted: question === true && !repeat,
+        }));
+      } catch {
+        replyHttp(500, "text/plain; charset=utf-8", "slack event failed");
       }
-      send(res, 200, "application/json; charset=utf-8", JSON.stringify({
-        body: result.body,
-        decisions: current.decisions.filter((item) => item.account !== "personal" && item.kind !== "note" && !item.deleted).length,
-        posted: question === true,
-      }));
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/download") {
@@ -513,7 +651,24 @@ export function createApp(options = {}) {
       const args = message?.params?.arguments ?? {};
       const companyId = typeof args.company === "string" ? args.company : "";
       const current = await prepareWorkspace(workspace, companyId);
-      const outcome = await mcpJsonRpc(message, current, depsFor(workspace, companyId));
+      const bound = bindToolMember(message, env.SEDERUNT_MEMBER);
+      if (bound.refusal) {
+        const refusal = memberRefusal(bound.refusal);
+        const outcome = {
+          status: 200,
+          body: {
+            jsonrpc: "2.0",
+            id: message.id,
+            result: {
+              content: [{ type: "text", text: JSON.stringify(refusal) }],
+              structuredContent: refusal,
+            },
+          },
+        };
+        send(res, outcome.status, "application/json; charset=utf-8", JSON.stringify(outcome.body));
+        return;
+      }
+      const outcome = await mcpJsonRpc(bound.message, current, depsFor(workspace, companyId));
       if (outcome.status === 202) {
         res.writeHead(202);
         res.end();
@@ -538,9 +693,14 @@ export function createApp(options = {}) {
       const args = message?.arguments ?? message?.params?.arguments ?? {};
       const companyId = typeof args.company === "string" ? args.company : "";
       const current = await prepareWorkspace(workspace, companyId);
+      const bound = bindToolMember({ method: "tools/call", params: { arguments: args } }, env.SEDERUNT_MEMBER);
+      if (bound.refusal) {
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify(memberRefusal(bound.refusal)));
+        return;
+      }
       const result = await handleMcpRequest({
         name,
-        arguments: { ...deliveryFrom(args), session: current },
+        arguments: { ...deliveryFrom(bound.message.params.arguments), session: current },
       }, depsFor(workspace, companyId));
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(result));
       return;
@@ -593,12 +753,15 @@ function isDirectRun() {
 
 if (isDirectRun()) {
   loadLocalEnv();
+  loadCompanyEnv();
   const server = createApp({ liveLinear: true, calendar: createCalendarAdapter(process.env, { save: saveCalendarEnv }) });
-  server.listen(port, "127.0.0.1", () => {
+  const onListen = () => {
     console.log(`Sederunt typed path http://127.0.0.1:${port}`);
     console.log('POST /api/typed {"text":"..."}');
     console.log("A Linear create waits until that tool's preference allows it.");
-  });
+  };
+  if (process.env.VERCEL) server.listen(port, onListen);
+  else server.listen(port, "127.0.0.1", onListen);
 }
 
 function loadedCompany(options, deps, env, companies) {
@@ -626,7 +789,7 @@ function depsFor(workspace, companyId) {
   return { ...workspace.deps, memory: workspace.companies[companyKey(workspace, companyId)] };
 }
 
-async function prepareWorkspace(workspace, companyId, retry = false) {
+async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0) {
   const current = sessionFor(workspace, companyId);
   if (!workspace.companyLoaded) {
     current.readReport = { ok: true, empty: true, blocked: true };
@@ -641,14 +804,22 @@ async function prepareWorkspace(workspace, companyId, retry = false) {
     });
     workspace.loads.set(id, pending);
   }
-  await workspace.loads.get(id);
+  const pending = workspace.loads.get(id);
+  if (!waitMs) {
+    await pending;
+    return current;
+  }
+  await Promise.race([
+    pending,
+    new Promise((resolve) => setTimeout(resolve, waitMs)),
+  ]);
   return current;
 }
 
 async function consolePayload(workspace, current, memberId, kind = "company") {
   const open = kind === "personal" ? "personal" : "company";
   const doors = doorReport(workspace.env, workspace.linearReady === true);
-  const slack = workspace.env.SLACK_SIGNING_SECRET ? "ready" : "not-set-up";
+  const slack = doors.slack ? "ready" : "not-set-up";
   if (!workspace.companyLoaded) {
     return {
       companyLoaded: false,
@@ -664,9 +835,29 @@ async function consolePayload(workspace, current, memberId, kind = "company") {
       waiting: [],
       access: [],
       counts: { kept: 0, waiting: 0, sent: 0, failed: 0 },
+      hearing: normalizeHearing(null),
     };
   }
-  const report = current.readReport ?? { ok: true, empty: true };
+  if (!current.readReport) {
+    return {
+      companyLoaded: true,
+      reading: true,
+      workspace: open,
+      read: "reading",
+      message: "",
+      doors,
+      preferences: { linear: "ask", calendar: "ask" },
+      slack,
+      decisions: [],
+      rooms: [],
+      people: [],
+      waiting: [],
+      access: [],
+      counts: { kept: 0, waiting: 0, sent: 0, failed: 0 },
+      hearing: normalizeHearing(current.hearing),
+    };
+  }
+  const report = current.readReport;
   const board = open === "personal" ? personalBoard(current, memberId) : companyBoard(current, memberId);
   if (!report.ok) {
     return {
@@ -683,6 +874,7 @@ async function consolePayload(workspace, current, memberId, kind = "company") {
       waiting: [],
       access: [],
       counts: { kept: 0, waiting: 0, sent: 0, failed: 0 },
+      hearing: normalizeHearing(current.hearing),
     };
   }
   const empty = report.empty && board.decisions.length === 0;
@@ -699,9 +891,50 @@ async function consolePayload(workspace, current, memberId, kind = "company") {
     rooms: board.rooms,
     people: board.people,
     waiting: board.waiting,
+    tickets: board.tickets ?? [],
     access: board.access,
     counts: board.counts,
+    hearing: normalizeHearing(current.hearing),
   };
+}
+
+function bindMember(env, supplied) {
+  const bound = bindToolMember(
+    { method: "tools/call", params: { arguments: { memberId: supplied } } },
+    env.SEDERUNT_MEMBER,
+  );
+  if (bound.refusal) return { ok: false, reason: bound.refusal };
+  return { ok: true, memberId: bound.message.params.arguments.memberId };
+}
+
+async function slackPeople(env, deps, channel) {
+  if (env.SLACK_BOT_TOKEN) {
+    return slackChannelMembers({ token: env.SLACK_BOT_TOKEN, channel, fetchImpl: deps.slack?.fetch });
+  }
+  if (typeof deps.slack?.members === "function") {
+    const people = await deps.slack.members(channel);
+    return Array.isArray(people) ? people.map(String).filter(Boolean) : [];
+  }
+  return [];
+}
+
+async function slackBytes(env, deps, file) {
+  if (env.SLACK_BOT_TOKEN) return slackFileBytes({ token: env.SLACK_BOT_TOKEN, file, fetchImpl: deps.slack?.fetch });
+  if (typeof deps.slack?.downloadFile === "function") return deps.slack.downloadFile(file);
+  return null;
+}
+
+async function consoleFileBytes(session, name, deps) {
+  const decision = (session?.decisions ?? []).find((item) =>
+    !item.deleted && item.fileNames?.some((file) => file?.name === name));
+  const file = decision?.fileNames?.find((item) => item?.name === name);
+  if (!file || typeof deps.console?.download !== "function") return null;
+  try {
+    const bytes = await deps.console.download({ id: file.consoleFileId, name: file.name });
+    return bytes == null || bytes === "" ? null : String(bytes);
+  } catch {
+    return null;
+  }
 }
 
 function headerValue(value) {

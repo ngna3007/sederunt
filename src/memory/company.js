@@ -14,14 +14,14 @@ const DECISION_MARK = "sederunt-decision";
  * An epoch on the job is recorded. This process does not extend the blob.
  * Pass `client` to use a fake relayer. Without one, the live client is used.
  */
-export async function rememberCompany({ text, kind, knowableAtCheckpoint, decision, preference, roomSetting, expiry, room, access, account, client, env = process.env, idempotencyKey }) {
+export async function rememberCompany({ text, kind, knowableAtCheckpoint, decision, preference, roomSetting, expiry, room, access, hearing, account, client, env = process.env, idempotencyKey }) {
   const key = env.COMPANY_MEMWAL_KEY;
   const accountId = env.COMPANY_MEMWAL_ACCOUNT_ID;
   if (!key || !accountId) {
     throw new Error("Company MemWal credentials are not set");
   }
   const memwal = client ?? liveClient(env);
-  const saved = await memwal.rememberAndWait(decisionPayload({ text, kind, decision, preference, roomSetting, expiry, room, access, account }), NAMESPACE, {
+  const saved = await memwal.rememberAndWait(decisionPayload({ text, kind, decision, preference, roomSetting, expiry, room, access, hearing, account }), NAMESPACE, {
     timeoutMs: 90000,
     idempotencyKey: typeof idempotencyKey === "string" ? idempotencyKey : undefined,
   });
@@ -38,6 +38,13 @@ export async function rememberCompany({ text, kind, knowableAtCheckpoint, decisi
  * Decisions previously stored by rememberCompany. Each row carries the document.
  * A fake client stays in the test. The live client is used only when none is passed.
  */
+export async function recallHitCount({ client, env = process.env } = {}) {
+  if (!env.COMPANY_MEMWAL_KEY || !env.COMPANY_MEMWAL_ACCOUNT_ID) return 0;
+  const memwal = client ?? liveClient(env);
+  const result = await memwal.recall({ query: "sederunt", topK: 5, namespace: NAMESPACE });
+  return Array.isArray(result?.results) ? result.results.length : 0;
+}
+
 export async function indexCompany({ client, env = process.env } = {}) {
   const key = env.COMPANY_MEMWAL_KEY;
   const accountId = env.COMPANY_MEMWAL_ACCOUNT_ID;
@@ -59,6 +66,7 @@ export async function indexCompany({ client, env = process.env } = {}) {
       expiry: parsed.expiry ?? null,
       room: parsed.room ?? null,
       access: parsed.access ?? null,
+      hearing: parsed.hearing ?? null,
     });
   }
   return rows;
@@ -76,6 +84,7 @@ function decisionPayload(input) {
     expiry: input?.expiry ?? null,
     room: input?.room ?? null,
     access: input?.access ?? null,
+    hearing: input?.hearing ?? null,
   });
 }
 
@@ -84,7 +93,7 @@ function readDecisionPayload(text) {
   try {
     const parsed = JSON.parse(text);
     if (!parsed || parsed.mark !== DECISION_MARK) return null;
-    if (!parsed.decision && !parsed.preference && !parsed.roomSetting && !parsed.expiry && !parsed.room && !parsed.access) return null;
+    if (!parsed.decision && !parsed.preference && !parsed.roomSetting && !parsed.expiry && !parsed.room && !parsed.access && !parsed.hearing) return null;
     return parsed;
   } catch {
     return null;

@@ -83,6 +83,13 @@ export function createLinearClient(token, fetchImpl = globalThis.fetch) {
       }
       return { id: identifier, identifier };
     },
+    async assignIssue({ id, assignee }) {
+      const result = await callTool("save_issue", { id, assignee });
+      const parsed = parseToolJson(result);
+      const identifier = findIdentifier(parsed) || findIdentifier(result) || rowId(id);
+      if (!identifier) throw new Error("Linear assign returned no issue id.");
+      return { id: identifier, identifier };
+    },
     async findIssuesByTitle(title) {
       const found = issuesFrom(await callTool("list_issues", { team: "ROW", query: title, limit: 20 }));
       return found.filter((issue) => (issue.title || "") === title);

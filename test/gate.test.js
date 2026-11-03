@@ -4,7 +4,7 @@ import test from "node:test";
 import { STATUS_WORDS } from "../src/domain/status.js";
 import { act, handleMcpRequest, mcpTools, recall } from "../src/mcp.js";
 import { createSession } from "../src/session.js";
-import { handleUtterance } from "../src/typed-path.js";
+import { handleUtterance, rebuildCompanyIndex, saveHearing } from "../src/typed-path.js";
 
 globalThis.fetch = async () => {
   throw new Error("gate tests must not call the network");
@@ -497,6 +497,101 @@ test("both contradictions stay clashing and a replacement stays visible", async 
   assertWord(next);
 });
 
+test("a deleted decision stays deleted when an older copy is read later", async () => {
+  const original = {
+    decision: {
+      id: "decision-1",
+      roomId: "C1",
+      text: "The floor plan is floor-plan.txt",
+      inviteMemberIds: ["U_MINA"],
+      kind: "decision",
+      account: "company",
+      contradicts: [],
+      fileNames: [{ name: "floor-plan.txt", consoleFileId: "file-1", folderId: "folder" }],
+      deleted: false,
+    },
+  };
+  const tombstone = { decision: { ...original.decision, deleted: true, fileNames: [] } };
+  const memory = {
+    async index() { return [tombstone, original]; },
+    async recall() { return [tombstone, original]; },
+  };
+  const session = createSession();
+  await rebuildCompanyIndex(session, { memory });
+  assert.equal(session.decisions.length, 1);
+  assert.equal(session.decisions[0].deleted, true);
+});
+
+test("a saved trigger keeps the words that follow it", async () => {
+  const session = createSession();
+  const remembered = [];
+  await saveHearing(session, { memory: { async remember(input) { remembered.push(input); return { blobId: null }; } } }, {
+    name: "Piper",
+    triggers: ["keep this", "Piper"],
+  });
+  assert.equal(session.hearing.name, "Piper");
+  assert.deepEqual(session.hearing.triggers, ["keep this"]);
+  assert.equal(remembered[0].hearing.name, "Piper");
+  const kept = await handleUtterance({
+    door: "meeting",
+    text: "Please keep this the booth opens at nine",
+    session,
+    memberId: "rowan",
+    room: room({ memberIds: ["rowan"] }),
+    participants: ["rowan"],
+  }, { memory: countingMemory() });
+  assert.equal(kept.entered, true);
+  assert.match(kept.body, /the booth opens at nine/);
+  const missed = await handleUtterance({
+    door: "meeting",
+    text: "the weather is fine today",
+    session,
+    memberId: "rowan",
+    room: room(),
+    participants: ["rowan"],
+  }, { memory: countingMemory() });
+  assert.equal(missed.entered, false);
+});
+
+test("a deleted floor-plan sentence can be posted again with its file", async () => {
+  const session = createSession();
+  const channel = { id: "C1", kind: "channel", source: "slack", botPresent: true, memberIds: ["rowan"] };
+  const first = await handleUtterance({
+    text: "The floor plan is floor-plan.txt",
+    session,
+    memberId: "rowan",
+    door: "channel",
+    room: channel,
+    participants: ["rowan"],
+  }, { memory: countingMemory() });
+  assert.match(first.body, /floor plan/);
+  session.decisions[0].deleted = true;
+  let uploads = 0;
+  const second = await handleUtterance({
+    text: "The floor plan is floor-plan.txt",
+    session,
+    memberId: "rowan",
+    door: "channel",
+    room: channel,
+    participants: ["rowan"],
+    file: { name: "floor-plan.txt", bytes: "PLAN" },
+  }, {
+    memory: countingMemory(),
+    console: {
+      async upload(input) {
+        uploads += 1;
+        assert.equal(input.bytes, "PLAN");
+        return { id: "file-2", folderId: "folder" };
+      },
+    },
+  });
+  assert.equal(uploads, 1);
+  const kept = session.decisions.filter((item) => !item.deleted);
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0].fileNames[0].name, "floor-plan.txt");
+  assert.match(second.body, /floor plan/);
+});
+
 test("recall returns the sentence and not the file bytes", async () => {
   let reads = 0;
   let uploads = 0;
@@ -504,7 +599,8 @@ test("recall returns the sentence and not the file bytes", async () => {
     async upload(input) {
       uploads += 1;
       assert.equal(input.name, "brief.pdf");
-      return { id: "file-1", folderId: "private", bytes: "PDFBYTES" };
+      assert.equal(input.bytes, "PDFBYTES");
+      return { id: "file-1", folderId: "private" };
     },
     async read() {
       reads += 1;
@@ -513,7 +609,7 @@ test("recall returns the sentence and not the file bytes", async () => {
   };
   const session = createSession();
   const stored = await handleUtterance(
-    utterance(session, "The brief is brief.pdf"),
+    utterance(session, "The brief is brief.pdf", { file: { name: "brief.pdf", bytes: "PDFBYTES" } }),
     { console: consoleAdapter, memory: countingMemory() },
   );
   assert.match(stored.body, /brief\.pdf/);
@@ -682,6 +778,78 @@ test("MCP recall applies no write preference, and act under ask does not call", 
   assert.doesNotMatch(JSON.stringify(throughDoor), /0x[0-9a-fA-F]{6,}/);
 });
 
+test("a restarted meeting still waits for one confirm", async () => {
+  const docs = [
+    { room: { id: "bot-live", kind: "meeting", platform: "Google Meet" } },
+    {
+      decision: {
+        id: "decision-1",
+        roomId: "bot-live",
+        text: "the booth opens at nine",
+        speakerMemberId: "U_MINA",
+        inviteMemberIds: ["U_MINA"],
+        kind: "decision",
+        account: "company",
+        contradicts: [],
+        fileNames: [],
+      },
+    },
+    {
+      decision: {
+        id: "decision-2",
+        roomId: "C1",
+        text: "The floor plan is floor-plan.txt",
+        speakerMemberId: "U_MINA",
+        inviteMemberIds: ["U_MINA"],
+        kind: "decision",
+        account: "company",
+        contradicts: [],
+        fileNames: [],
+      },
+    },
+  ];
+  const memory = { async index() { return docs; }, async recall() { return docs; } };
+  const session = createSession();
+  await rebuildCompanyIndex(session, { memory });
+  const waiting = session.actions.filter((action) => action.state === "waiting");
+  assert.equal(waiting.length, 1);
+  assert.equal(waiting[0].statement, "the booth opens at nine");
+  assert.equal(waiting[0].decisionId, "decision-1");
+});
+
+test("Maple keeps the words that follow the name, and a misheard Sederunt does not", async () => {
+  const memory = countingMemory();
+  const session = createSession();
+  const missed = await handleUtterance(
+    {
+      door: "meeting",
+      text: "federrant hey sedarant the booth opens at nine",
+      session,
+      memberId: "rowan",
+      room: room(),
+      participants: ["rowan"],
+    },
+    { memory },
+  );
+  assert.equal(missed.entered, false);
+  assert.equal(session.decisions.length, 0);
+
+  const heard = await handleUtterance(
+    {
+      door: "meeting",
+      text: "Hey Maple the booth opens at nine",
+      session,
+      memberId: "rowan",
+      room: room({ memberIds: ["rowan"] }),
+      participants: ["rowan"],
+    },
+    { memory },
+  );
+  assert.equal(heard.entered, true);
+  assert.match(heard.body, /the booth opens at nine/);
+  assert.equal(JSON.stringify(session.decisions).includes("Maple"), false);
+});
+
 test("an unaddressed meeting line stays outside, and an addressed line stores the participants", async () => {
   const memory = countingMemory();
   const linear = countingLinear();
@@ -706,7 +874,7 @@ test("an unaddressed meeting line stays outside, and an addressed line stores th
   const heard = await handleUtterance(
     {
       door: "meeting",
-      text: "Hey @Sederunt the offsite is in Lisbon",
+      text: "Hey @Maple the offsite is in Lisbon",
       session,
       memberId: "rowan",
       room: room({ memberIds: ["sam"] }),
@@ -744,7 +912,7 @@ test("a Slack huddle stores no decision", async () => {
   const result = await handleUtterance(
     {
       door: "meeting",
-      text: "Hey @Sederunt the offsite is in Lisbon",
+      text: "Hey @Maple the offsite is in Lisbon",
       session,
       memberId: "rowan",
       room: room({ source: "slack-huddle" }),

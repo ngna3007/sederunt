@@ -24,7 +24,7 @@ The bot stores the invite set when it hears the decision. People who join the ch
 
 ### Meeting
 
-Recall sends the participant id on the transcript event. That id is the member id. The bot's name is Sederunt. It stays quiet until someone addresses it, including the form "Hey @Sederunt". Platforms are Zoom, Google Meet, Teams, and Webex.
+Recall sends the participant id on the transcript event. That id is the member id. The operator sets the meeting guest's name and any extra trigger words or sentences. The guest stays quiet until someone says that name or one of those triggers. The product name remains Sederunt. The default guest name is Maple. Platforms are Zoom, Google Meet, Teams, and Webex.
 
 The bot joins with camera and microphone through Recall Output Media. The page is a public URL. Audio for the transcript is the meeting audio Recall grants, so the bot does not hear its own speech. A spoken action uses the write preference of the tool. If the call fails, a delivery can still arrive through the MCP door.
 

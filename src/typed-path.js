@@ -7,6 +7,7 @@ import { redact } from "./domain/redact.js";
 import { acceptCheckpoint } from "./domain/stamp.js";
 import { itemStatus } from "./domain/status.js";
 import { splitPassage } from "./memory/analyze.js";
+import { addressesHearing, normalizeHearing, stripHearing } from "./hearing.js";
 import { looksLikeOpenQuestion, parseUtterance } from "./parse.js";
 
 const KEY_NAMES = [
@@ -93,7 +94,7 @@ export async function handleUtterance(input, deps = {}) {
     return answerRecall(input, session, deps);
   }
 
-  const parsed = parseUtterance(withoutAddress(input.text));
+  const parsed = parseUtterance(withoutAddress(input.text, input.session?.hearing));
   session.trace.tool = parsed.tool || parsed.type || "";
   session.trace.private = parsed.private === true;
   if (parsed.type === "confirm") return confirmAction(input, session, deps, parsed.actionId);
@@ -178,11 +179,11 @@ function ensureSession(session) {
 function enters(input) {
   if (input.door !== "meeting") return true;
   if (input.addressed === true) return true;
-  return /\bsederunt\b/i.test(input.text ?? "");
+  return addressesHearing(input.text, input.session?.hearing);
 }
 
-function withoutAddress(text) {
-  return String(text ?? "").trim().replace(/^(?:hey[, ]+)?@?sederunt\b[,:\s-]*/i, "").trim();
+function withoutAddress(text, hearing) {
+  return stripHearing(text, hearing);
 }
 
 function silence() {
@@ -267,6 +268,7 @@ async function requestWrite(input, session, deps, parsed) {
     missingFact: parsed.missingFact || "",
     connectorId: null,
     edit: parsed.edit,
+    inviteMemberIds: snapshot(input, invited.room),
     state: "waiting",
   };
   session.actions.push(action);
@@ -306,7 +308,7 @@ async function requestWrite(input, session, deps, parsed) {
 
 async function confirmAction(input, session, deps, actionId) {
   const action = session.actions.find((item) => item.id === actionId);
-  if (!action || action.state === "dismissed" || action.state === "closed" || action.connectorId || action.missingFact) {
+  if (!action || action.state === "dismissed" || action.state === "closed" || action.state === "sending" || action.connectorId || action.missingFact) {
     return finish(session, {
       status: "recorded",
       kind: "ticket",
@@ -346,6 +348,7 @@ async function confirmAction(input, session, deps, actionId) {
       actionId: action.id,
     });
   }
+  action.state = "sending";
   return callConnector(session, deps, action, auth);
 }
 
@@ -372,7 +375,8 @@ async function callConnector(session, deps, action, auth) {
     return didNotHappen(session, action, auth);
   }
   const issueId = connectorId(created);
-  const status = itemStatus({ kind: "ticket", edit: action.edit }, issueId);
+  const assigning = action.edit === "assign";
+  const status = itemStatus({ kind: "ticket", edit: assigning ? "update" : action.edit }, issueId);
   if (status !== "filed" && status !== "updated") {
     action.state = "available";
     action.connectorId = null;
@@ -380,9 +384,12 @@ async function callConnector(session, deps, action, auth) {
   }
   action.state = "closed";
   action.connectorId = issueId;
-  const linked = action.decisionId
-    ? session.decisions.find((decision) => decision.id === action.decisionId && !decision.deleted)
-    : session.decisions.find((decision) => decision.roomId === action.roomId && !decision.replacedBy && !decision.deleted);
+  // An assignment edits an existing ticket; it never becomes another decision's ticket.
+  const linked = assigning
+    ? null
+    : action.decisionId
+      ? session.decisions.find((decision) => decision.id === action.decisionId && !decision.deleted)
+      : session.decisions.find((decision) => decision.roomId === action.roomId && !decision.replacedBy && !decision.deleted);
   if (linked) {
     linked.connectorId = issueId;
     await remember(deps, {
@@ -393,7 +400,8 @@ async function callConnector(session, deps, action, auth) {
       decision: decisionDocument(linked),
     });
   }
-  if (deps.memory?.attachConnector) {
+  if (assigning) await keepAssignment(session, deps, action, issueId);
+  if (!assigning && !action.decisionId && deps.memory?.attachConnector) {
     try {
       await deps.memory.attachConnector(action.roomId, issueId);
     } catch {
@@ -418,6 +426,48 @@ async function callConnector(session, deps, action, auth) {
   });
 }
 
+/**
+ * A confirmed assignment is kept as one company record in the action's room,
+ * so recall in every door, and a reloaded ledger, can say who owns the ticket.
+ */
+async function keepAssignment(session, deps, action, issueId) {
+  const assignee = String(action.params?.assignee || "").trim();
+  if (!assignee) return;
+  const decision = {
+    id: nextId(session, "decision"),
+    roomId: action.roomId,
+    text: `${issueId} was assigned to ${assignee}.`,
+    speakerMemberId: action.memberId,
+    inviteMemberIds: [...(action.inviteMemberIds?.length ? action.inviteMemberIds : [action.memberId])],
+    area: "",
+    contradicts: [],
+    predecessorId: null,
+    replaces: null,
+    replacedBy: null,
+    blobId: null,
+    objectId: null,
+    connectorId: issueId,
+    kind: "decision",
+    facts: [],
+    checkpoint: null,
+    spokenAt: new Date().toISOString(),
+    fileNames: [],
+    expiryEpoch: null,
+    account: "company",
+    sourceDeliveryId: action.deliveryId || "",
+    deleted: false,
+  };
+  const saved = await remember(deps, {
+    account: "company",
+    kind: "decision",
+    text: decision.text,
+    idempotencyKey: `${action.id}:assigned`,
+    decision: decisionDocument(decision),
+  });
+  if (saved?.blobId) decision.blobId = saved.blobId;
+  session.decisions.push(decision);
+}
+
 async function runConnector(deps, action) {
   if (action.tool === "calendar") {
     const tools = await deps.calendar.listTools();
@@ -425,7 +475,10 @@ async function runConnector(deps, action) {
     if (!writeTool) return { id: "" };
     return deps.calendar.call(writeTool.name, action.params);
   }
-  return deps.linear.createIssue({ title: action.params.title });
+  if (action.edit === "assign") {
+    return deps.linear.assignIssue({ id: action.params.id, assignee: action.params.assignee });
+  }
+  return deps.linear.createIssue({ title: action.params.title, idempotencyKey: action.id });
 }
 
 function didNotHappen(session, action, auth) {
@@ -591,8 +644,9 @@ async function openMeetingRoom(session, deps, opened) {
       allow: "read",
     });
   }
+  const supplied = typeof opened?.id === "string" ? opened.id.trim() : "";
   const room = {
-    id: nextId(session, "room"),
+    id: /^[A-Za-z0-9_-]{1,64}$/.test(supplied) ? supplied : nextId(session, "room"),
     kind: "meeting",
     platform,
     botPresent: true,
@@ -639,7 +693,9 @@ async function storeDecision(input, session, deps, parsed) {
       preference: "ask",
     });
   }
-  if (input.memberId === "sederunt") {
+  const guest = normalizeHearing(input.session?.hearing).name;
+  const speaker = typeof input.memberId === "string" ? input.memberId : "";
+  if (speaker === "sederunt" || speaker.toLowerCase() === guest.toLowerCase()) {
     return finish(session, {
       status: "recorded",
       kind: "note",
@@ -690,7 +746,7 @@ async function storeDecision(input, session, deps, parsed) {
     });
   }
   const duplicate = session.decisions.some((item) =>
-    item.roomId === room.id && item.account !== "personal" && item.text === sentence && !item.replacedBy);
+    !item.deleted && item.roomId === room.id && item.account !== "personal" && item.text === sentence && !item.replacedBy);
   if (duplicate) {
     return finish(session, {
       status: "recorded",
@@ -794,12 +850,16 @@ async function keepDecision(input, session, deps, draft) {
 
 async function forgetDelivery(input, session, deps) {
   await loadIndex(session, deps);
-  const forgetId = byteTrim(String(input.forgetId || input.deliveryId || "").trim(), 255);
+  const forgetIds = new Set(
+    [input.forgetId, ...(Array.isArray(input.forgetIds) ? input.forgetIds : []), input.deliveryId]
+      .map((value) => byteTrim(String(value ?? "").trim(), 255))
+      .filter((value) => value && !value.startsWith("delete:")),
+  );
   const roomId = input.room?.id || "";
   const text = String(input.text || "").trim();
   const decision = (session.decisions ?? []).find((item) => {
     if (item.deleted) return false;
-    if (forgetId && item.sourceDeliveryId === forgetId) return true;
+    if (forgetIds.has(item.sourceDeliveryId)) return true;
     return Boolean(roomId && text && item.roomId === roomId && item.text === text);
   });
   if (!decision) {
@@ -811,7 +871,7 @@ async function forgetDelivery(input, session, deps) {
       preference: "ask",
     });
   }
-  const actionId = forgetId || decision.id;
+  const actionId = [...forgetIds][0] || decision.id;
   const auth = authorize({
     action: "delete",
     tool: "memory",
@@ -848,18 +908,19 @@ async function forgetDelivery(input, session, deps) {
 }
 
 async function nameFile(deps, name, bytes) {
-  const file = { name, consoleFileId: null, folderId: null };
-  if (!deps.console?.upload) return file;
+  if (bytes == null || bytes === "" || !deps.console?.upload) return null;
   try {
-    const payload = { name };
-    if (bytes != null) payload.bytes = bytes;
-    const uploaded = await deps.console.upload(payload);
-    file.consoleFileId = typeof uploaded?.id === "string" ? uploaded.id : null;
-    file.folderId = typeof uploaded?.folderId === "string" ? uploaded.folderId : null;
+    const uploaded = await deps.console.upload({ name, bytes });
+    const id = typeof uploaded?.id === "string" ? uploaded.id.trim() : "";
+    if (!id) return null;
+    return {
+      name,
+      consoleFileId: id,
+      folderId: typeof uploaded?.folderId === "string" ? uploaded.folderId : null,
+    };
   } catch {
-    file.consoleFileId = null;
+    return null;
   }
-  return file;
 }
 
 function stampOf(input) {
@@ -901,7 +962,10 @@ async function loadSentences(session, deps) {
   const byId = new Map();
   for (const doc of docs ?? []) {
     const decision = copyDecision(doc);
-    if (decision) byId.set(decision.id, decision);
+    if (!decision) continue;
+    const previous = byId.get(decision.id);
+    if (previous) foldDecision(previous, decision, false);
+    else byId.set(decision.id, decision);
   }
   if (session.decisions.length === 0) {
     for (const decision of byId.values()) session.decisions.push(decision);
@@ -991,13 +1055,19 @@ function applyIndexedDocuments(session, docs, blankText) {
     absorbRoomSetting(session, copyRoomSetting(doc));
     absorbOpenedRoom(session, copyOpenedRoom(doc));
     absorbAccess(session, copyAccess(doc));
+    absorbHearing(session, copyHearing(doc));
     const observedId = typeof doc?.expiry?.decisionId === "string" ? doc.expiry.decisionId : "";
     const observed = epochOf(doc?.expiry?.expiryEpoch);
     if (observedId && observed != null && !epochs.has(observedId)) epochs.set(observedId, observed);
     const kind = doc?.decision?.kind || doc?.kind;
     if (kind !== "decision" && kind !== "note") continue;
     const decision = copyDecision(doc?.decision ? doc : { decision: doc });
-    if (!decision || seen.has(decision.id)) continue;
+    if (!decision) continue;
+    if (seen.has(decision.id)) {
+      const existing = session.decisions.find((item) => item.id === decision.id);
+      if (existing) foldDecision(existing, decision, blankText);
+      continue;
+    }
     seen.add(decision.id);
     if (blankText) decision.text = "";
     noteIssuedId(session, decision.id);
@@ -1007,6 +1077,57 @@ function applyIndexedDocuments(session, docs, blankText) {
     const observed = epochs.get(decision.id);
     if (decision.expiryEpoch == null && observed != null) decision.expiryEpoch = observed;
   }
+}
+
+function foldDecision(existing, decision, blankText) {
+  const wasDeleted = existing.deleted === true;
+  existing.deleted = wasDeleted || decision.deleted === true;
+  if (wasDeleted) return;
+  if (!blankText && decision.text) existing.text = decision.text;
+  if (typeof decision.connectorId === "string" && decision.connectorId) existing.connectorId = decision.connectorId;
+  if (decision.sourceDeliveryId) existing.sourceDeliveryId = decision.sourceDeliveryId;
+  if (Array.isArray(decision.fileNames) && decision.fileNames.length) {
+    existing.fileNames = decision.fileNames.map((file) => ({ ...file }));
+  }
+  if (Array.isArray(decision.inviteMemberIds) && decision.inviteMemberIds.length) {
+    existing.inviteMemberIds = decision.inviteMemberIds.map(String);
+  }
+}
+
+function copyHearing(doc) {
+  const hearing = doc?.hearing;
+  if (!hearing || typeof hearing !== "object") return null;
+  const savedAt = typeof hearing.savedAt === "string" ? hearing.savedAt : "";
+  return { ...normalizeHearing(hearing), savedAt };
+}
+
+function absorbHearing(session, hearing) {
+  if (!hearing) return;
+  const current = session.hearing;
+  if (current?.savedAt && hearing.savedAt && current.savedAt > hearing.savedAt) return;
+  session.hearing = hearing;
+}
+
+/**
+ * Remember the meeting guest name and the extra words or sentences that address it.
+ * The name is what the meeting shows. A trigger is a word or a sentence.
+ *
+ * @param {ReturnType<import("./session.js").createSession>} session
+ * @param {{ memory?: { remember?: (input: object) => Promise<unknown> } }} deps
+ * @param {{ name?: string, triggers?: string[] }} input
+ */
+export async function saveHearing(session, deps, input) {
+  const current = ensureSession(session);
+  const hearing = { ...normalizeHearing(input), savedAt: new Date().toISOString() };
+  current.hearing = hearing;
+  await remember(deps, {
+    account: "company",
+    kind: "hearing",
+    text: `${hearing.name} ${hearing.triggers.join(" ")}`.trim(),
+    idempotencyKey: `hearing:${hearing.savedAt}`,
+    hearing,
+  });
+  return hearing;
 }
 
 function copyPreference(doc) {
@@ -1334,6 +1455,7 @@ async function remember(deps, document) {
       expiry: document.expiry,
       room: document.room,
       access: document.access,
+      hearing: document.hearing,
     });
     const blobId = saved && typeof saved.blobId === "string" ? saved.blobId : null;
     return { blobId, expiryEpoch: epochOf(saved?.expiryEpoch) };
@@ -1450,7 +1572,43 @@ export async function rebuildCompanyIndex(session, deps = {}) {
   }
   if (!Array.isArray(docs)) return { ok: false, empty: false };
   applyIndexedDocuments(current, docs, false);
+  if (deps.memory.index && deps.memory.recall) {
+    try {
+      const full = await deps.memory.recall();
+      if (Array.isArray(full)) applyIndexedDocuments(current, full, false);
+    } catch {
+      // The index still names who was invited. The sentence waits until recall can be read.
+    }
+  }
+  restoreMeetingConfirms(current);
   return { ok: true, empty: current.decisions.length === 0 };
+}
+
+function restoreMeetingConfirms(session) {
+  const meetings = new Set((session.rooms ?? []).filter((room) => room.kind === "meeting").map((room) => room.id));
+  session.actions ??= [];
+  for (const decision of session.decisions ?? []) {
+    if (decision.deleted || decision.account === "personal" || decision.kind === "note") continue;
+    if (typeof decision.connectorId === "string" && decision.connectorId) continue;
+    if (!meetings.has(decision.roomId)) continue;
+    if (session.actions.some((action) => action.decisionId === decision.id)) continue;
+    session.actions.push({
+      id: nextId(session, "action"),
+      deliveryId: decision.sourceDeliveryId || "",
+      decisionId: decision.id,
+      roomId: decision.roomId,
+      memberId: decision.speakerMemberId || "",
+      tool: "linear",
+      preference: "ask",
+      statement: decision.text,
+      params: { title: decision.text },
+      missingFact: "",
+      connectorId: null,
+      edit: "create",
+      state: "waiting",
+      inviteMemberIds: [...(decision.inviteMemberIds ?? [])],
+    });
+  }
 }
 
 /**
@@ -1466,23 +1624,39 @@ export async function rebuildCompanyIndex(session, deps = {}) {
 export async function readProofs(session, board, tatum) {
   const rows = Array.isArray(board?.decisions) ? board.decisions : [];
   const byId = new Map((session?.decisions ?? []).map((item) => [item.id, item]));
-  for (const row of rows) {
+  await Promise.all(rows.map(async (row) => {
     const source = byId.get(row.id);
     const blobId = typeof source?.blobId === "string" ? source.blobId : "";
     if (!blobId || typeof tatum?.getObject !== "function") {
       row.checkpoint = null;
-      continue;
+      return;
     }
     try {
-      const object = await tatum.getObject(blobId);
+      const object = await readObjectWithin(tatum, blobId, 1200);
       const text = typeof object?.text === "string" ? object.text.trim() : "";
       if (text) row.text = redact(text);
       row.checkpoint = Number.isInteger(object?.checkpoint) ? object.checkpoint : null;
     } catch {
       row.checkpoint = null;
     }
-  }
+  }));
   return board;
+}
+
+function readObjectWithin(tatum, blobId, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Tatum read failed")), ms);
+    tatum.getObject(blobId).then(
+      (object) => {
+        clearTimeout(timer);
+        resolve(object);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 /**
@@ -1571,6 +1745,18 @@ export function companyBoard(session, memberId) {
       statement: redact(action.statement || ""),
     });
   }
+  const tickets = [];
+  for (const action of session?.actions ?? []) {
+    if (action.state !== "closed" || action.tool !== "linear" || typeof action.connectorId !== "string" || !action.connectorId) continue;
+    const invite = action.inviteMemberIds?.length ? action.inviteMemberIds : [action.memberId];
+    if (!member || !checkInvite(member, invite).ok) continue;
+    tickets.push({
+      actionId: action.id,
+      connectorId: action.connectorId,
+      edit: action.edit === "assign" ? "assign" : "create",
+      statement: redact(action.statement || ""),
+    });
+  }
   const people = [];
   for (const decision of decisions) {
     if (decision.speaker && !people.includes(decision.speaker)) people.push(decision.speaker);
@@ -1580,6 +1766,7 @@ export function companyBoard(session, memberId) {
     rooms,
     people,
     waiting,
+    tickets,
     counts: {
       kept: decisions.length,
       waiting: waiting.length,

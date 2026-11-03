@@ -12,6 +12,8 @@ const CALENDAR_READ = new RegExp(`what is on (${DAY})`, "i");
 const CALENDAR_EDIT = new RegExp(`move the review(?:\\s+to\\s+(${DAY}))?`, "i");
 const RECALL = /what was decided|what happened/i;
 const ASSIGN = /^assign\s+(.+)$/i;
+const CREATE_TICKET = /^create\s+(?:(?:a|one)\s+)?(?:test\s+)?ticket\s+titled\s+["\u201c]?(.+?)["\u201d]?[.!]?$/i;
+const ISSUE_ID = /^[A-Z][A-Z0-9]*-\d+$/;
 
 /**
  * @param {string} text
@@ -76,10 +78,34 @@ export function parseUtterance(text) {
     };
   }
   if (RECALL.test(trimmed)) return { type: "recall" };
+  const create = CREATE_TICKET.exec(trimmed);
+  if (create) {
+    return {
+      type: "write",
+      tool: "linear",
+      edit: "create",
+      statement: trimmed,
+      title: create[1],
+      missingFact: "",
+      params: { title: create[1] },
+    };
+  }
   const assignment = ASSIGN.exec(trimmed);
   if (assignment) {
     const owned = /^(.*?)\s+to\s+(\S+)$/i.exec(assignment[1]);
-    const owner = owned ? owned[2] : "";
+    const owner = owned ? owned[2].replace(/[.!?]+$/, "") : "";
+    const target = owned ? owned[1].trim() : "";
+    if (owner && ISSUE_ID.test(target)) {
+      return {
+        type: "write",
+        tool: "linear",
+        edit: "assign",
+        statement: trimmed,
+        title: trimmed,
+        missingFact: "",
+        params: { id: target, assignee: owner },
+      };
+    }
     return {
       type: "write",
       tool: "linear",

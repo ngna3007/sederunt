@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { addressesHearing, normalizeHearing } from "../hearing.js";
 
 /**
  * Recall signs the raw body as id.timestamp.payload with the workspace secret.
@@ -45,7 +46,7 @@ const BOT_URL = "https://ap-northeast-1.recall.ai/api/v1/bot/";
 /** True only when the Recall key and a public https camera page are both present. */
 export function meetingDoorReady(env = process.env) {
   const key = typeof env.RECALL_API_KEY === "string" && env.RECALL_API_KEY;
-  return Boolean(key && cameraPage(env.SEDERUNT_PUBLIC_ORIGIN));
+  return Boolean(key && env.RECALL_WEBHOOK_SECRET && cameraPage(env.SEDERUNT_PUBLIC_ORIGIN));
 }
 
 export function createMeetingAdapter(env = process.env, options = {}) {
@@ -57,8 +58,9 @@ export function createMeetingAdapter(env = process.env, options = {}) {
       calls.push("join");
       const key = typeof env.RECALL_API_KEY === "string" ? env.RECALL_API_KEY : "";
       const meetingUrl = httpsUrl(input?.url);
-      const cameraUrl = cameraPage(env.SEDERUNT_PUBLIC_ORIGIN);
-      if (!key || !meetingUrl || !cameraUrl) throw new Error("Meeting join is not configured");
+      const guest = normalizeHearing({ name: input?.name }).name;
+      const cameraUrl = cameraPage(env.SEDERUNT_PUBLIC_ORIGIN, guest);
+      if (!key || !env.RECALL_WEBHOOK_SECRET || !meetingUrl || !cameraUrl) throw new Error("Meeting join is not configured");
       let response;
       try {
         response = await fetchImpl(BOT_URL, {
@@ -70,9 +72,20 @@ export function createMeetingAdapter(env = process.env, options = {}) {
           },
           body: JSON.stringify({
             meeting_url: meetingUrl,
-            bot_name: "Sederunt",
+            bot_name: guest,
             output_media: {
               camera: { kind: "webpage", config: { url: cameraUrl } },
+            },
+            recording_config: {
+              transcript: {
+                provider: { recallai_streaming: { mode: "prioritize_low_latency", language_code: "en" } },
+                diarization: { use_separate_streams_when_available: true },
+              },
+              realtime_endpoints: [{
+                type: "webhook",
+                url: `${new URL(cameraUrl).origin}/api/recall`,
+                events: ["transcript.data"],
+              }],
             },
           }),
         });
@@ -96,7 +109,7 @@ export function createMeetingAdapter(env = process.env, options = {}) {
 
 /**
  * A Recall transcript event becomes one meeting delivery.
- * Talk that does not address Sederunt is still returned, so the gate can drop it.
+ * Talk that does not address the guest is still returned, so the gate can drop it.
  * A payload with no words is not a delivery.
  *
  * @param {unknown} payload
@@ -125,7 +138,7 @@ export function recallTranscriptDelivery(payload) {
     text,
     memberId,
     door: "meeting",
-    addressed: /\bsederunt\b/i.test(text),
+    addressed: addressesHearing(text),
     deliveryId,
     participants: memberId ? [memberId] : [],
     room: {
@@ -149,10 +162,11 @@ function httpsUrl(value) {
   }
 }
 
-function cameraPage(origin) {
+function cameraPage(origin, name) {
   const url = httpsUrl(origin);
   if (!url) return "";
   const host = new URL(url).hostname;
   if (host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host.endsWith(".local")) return "";
-  return `${new URL(url).origin}/meeting`;
+  const guest = normalizeHearing({ name }).name;
+  return `${new URL(url).origin}/meeting?name=${encodeURIComponent(guest)}`;
 }
