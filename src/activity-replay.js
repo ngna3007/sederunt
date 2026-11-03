@@ -3,7 +3,7 @@
  * is refused. Nothing here falls through to creating an issue.
  */
 
-import { CALENDAR_TIME_ZONE } from "./calendar/mcp.js";
+import { calendarTimeZone } from "./calendar/mcp.js";
 
 const TABLE = {
   "linear:move": { replay: "updateIssue", undo: "updateIssue" },
@@ -61,12 +61,23 @@ export function methodsReferenced() {
  * @param {string} clock
  * @param {string} [timeZone]
  */
-export function clockOnDate(iso, clock, timeZone = CALENDAR_TIME_ZONE) {
+/**
+ * A stored instant, as UTC ISO. Offset forms such as `+07:00` become `Z`.
+ * A clock that is not an instant is returned unchanged.
+ *
+ * @param {string} value
+ */
+export function toUtcIso(value) {
+  const text = String(value || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(text)) return text;
+  const parsed = Date.parse(text);
+  if (Number.isNaN(parsed)) return text;
+  return new Date(parsed).toISOString();
+}
+
+export function clockOnDate(iso, clock, timeZone = calendarTimeZone()) {
   const text = String(clock || "").trim();
-  if (/^\d{4}-\d{2}-\d{2}T/.test(text)) {
-    const parsed = new Date(text);
-    return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString();
-  }
+  if (/^\d{4}-\d{2}-\d{2}T/.test(text)) return toUtcIso(text);
   const base = new Date(iso);
   if (Number.isNaN(base.getTime())) return "";
   const match = /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i.exec(text);
@@ -159,7 +170,7 @@ export function replayPlan(event, direction, observed = null) {
     return { ok: true, system, method, args: { title, idempotencyKey } };
   }
   if (system === "calendar") {
-    const timeZone = observed?.timeZone || CALENDAR_TIME_ZONE;
+    const timeZone = observed?.timeZone || calendarTimeZone();
     const liveStart = observed?.start || "";
     const liveEnd = observed?.end || "";
     const duration = Date.parse(liveEnd) - Date.parse(liveStart);
@@ -173,12 +184,18 @@ export function replayPlan(event, direction, observed = null) {
       system,
       method,
       args: { id, title: event.target?.title || "", start, end, timeZone },
-      from: liveStart,
-      to: start,
+      from: toUtcIso(liveStart),
+      to: toUtcIso(start),
     };
   }
   if (system === "slack" && verb === "post" && direction === "replay") {
-    return { ok: true, system, method, args: { channel: event.origin?.roomName || "", text: event.target?.title || "" } };
+    const body = (event.changes || []).find((change) => change?.field === "body")?.to || "";
+    return {
+      ok: true,
+      system,
+      method,
+      args: { channel: event.origin?.roomName || "", text: body || event.target?.title || "" },
+    };
   }
   return { ok: false, reason: "unsupported" };
 }

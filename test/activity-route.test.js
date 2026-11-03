@@ -5,6 +5,7 @@ import { logAction, logFailure, logRequest } from "../src/activity.js";
 import { sealSession, sessionCookie } from "../src/console-auth.js";
 import { createApp } from "../src/server.js";
 import { createSession } from "../src/session.js";
+import { companyBoard } from "../src/typed-path.js";
 
 const SECRET = "activity-route-secret";
 
@@ -259,6 +260,86 @@ test("an unknown console path is a not-found page", async () => {
   }
 });
 
+test("a contradicting pair is clashing on the decisions board", () => {
+  const session = createSession();
+  session.decisions.push(
+    {
+      id: "off-1",
+      account: "company",
+      kind: "decision",
+      text: "The offsite is in Da Lat for three nights.",
+      speakerMemberId: "rowan",
+      inviteMemberIds: ["rowan"],
+      roomId: "offsite",
+      contradicts: ["off-2"],
+      fileNames: [],
+    },
+    {
+      id: "off-2",
+      account: "company",
+      kind: "decision",
+      text: "The offsite is in Hoi An for two nights.",
+      speakerMemberId: "tomas",
+      inviteMemberIds: ["rowan"],
+      roomId: "offsite",
+      contradicts: ["off-1"],
+      fileNames: [],
+    },
+  );
+  const board = companyBoard(session, "rowan");
+  assert.equal(board.decisions.length, 2);
+  assert.equal(board.decisions.every((row) => row.status === "clashing"), true);
+});
+
+test("Booth planning wins over a room that only shares planning", async () => {
+  const session = createSession();
+  session.rooms.push(
+    { id: "booth", name: "Booth planning", platform: "Google Meet" },
+    { id: "quarterly-planning-offsite", name: "Quarterly planning offsite: venue", platform: "Zoom" },
+  );
+  for (let index = 0; index < 4; index += 1) {
+    session.decisions.push({
+      id: `booth-${index}`,
+      account: "company",
+      kind: "decision",
+      text: `Booth line ${index}.`,
+      speakerMemberId: "rowan",
+      inviteMemberIds: ["rowan"],
+      roomId: "booth",
+      contradicts: [],
+      fileNames: [],
+    });
+  }
+  for (let index = 0; index < 3; index += 1) {
+    session.decisions.push({
+      id: `off-${index}`,
+      account: "company",
+      kind: "decision",
+      text: `Offsite line ${index}.`,
+      speakerMemberId: "rowan",
+      inviteMemberIds: ["rowan"],
+      roomId: "quarterly-planning-offsite",
+      contradicts: [],
+      fileNames: [],
+    });
+  }
+  const app = appFor(session, []);
+  const port = await listen(app);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "What did Booth planning decide?", memberId: "rowan" }),
+    });
+    const body = await response.json();
+    assert.equal(body.decisions, 4);
+    assert.match(body.body, /Booth line/);
+    assert.doesNotMatch(body.body, /Offsite line/);
+  } finally {
+    app.close();
+  }
+});
+
 test("chat matches a room on a word boundary and counts only that room", async () => {
   const app = appFor(seeded(), []);
   const port = await listen(app);
@@ -279,6 +360,16 @@ test("chat matches a room on a word boundary and counts only that room", async (
     });
     const wideBody = await wide.json();
     assert.equal(wideBody.decisions, 3);
+    const booth = await fetch(`http://127.0.0.1:${port}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "What did Booth planning decide?", memberId: "rowan" }),
+    });
+    const boothBody = await booth.json();
+    assert.equal(boothBody.decisions, 1);
+    assert.match(boothBody.body, /booth kept/);
+    assert.doesNotMatch(boothBody.body, /offsite kept/);
+    assert.doesNotMatch(boothBody.body, /design-crit kept/);
     const design = await fetch(`http://127.0.0.1:${port}/api/chat`, {
       method: "POST",
       headers: { "content-type": "application/json" },

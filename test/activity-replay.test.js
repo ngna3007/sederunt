@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { replayPlan, replaySupported, runReplay } from "../src/activity-replay.js";
+import { activityEvent } from "../src/activity.js";
+import { replayPlan, replaySupported, runReplay, toUtcIso } from "../src/activity-replay.js";
 import { formatActivitySentence, groupActivity } from "../src/activity-feed.js";
+import { replayFailure } from "../src/typed-path.js";
 import { rebuildCompanyIndex } from "../src/typed-path.js";
 import { createSession } from "../src/session.js";
 
@@ -120,6 +122,91 @@ test("viewer times drop the raw instant and markers are not feed rows", () => {
     { id: "u", requestId: "r", kind: "supersede" },
   ]);
   assert.deepEqual(groups[0].rows.map((row) => row.id), ["a"]);
+});
+
+test("an offset instant is stored as UTC and rendered in the calendar zone", () => {
+  assert.equal(toUtcIso("2026-11-03T14:00:00+07:00"), "2026-11-03T07:00:00.000Z");
+  const stored = activityEvent({
+    verb: "move",
+    actor: { name: "Sederunt", type: "sederunt" },
+    target: { system: "calendar", title: "Design crit" },
+    changes: [{ field: "start", from: "2026-11-03T14:00:00+07:00", to: "4:00 PM" }],
+  });
+  assert.equal(stored.changes[0].from, "2026-11-03T07:00:00.000Z");
+  assert.equal(stored.changes[0].to, "4:00 PM");
+  const shown = formatActivitySentence(
+    "Sederunt moved Design crit from 2026-11-03T14:00:00+07:00 to 2026-11-03T09:00:00.000Z on Google Calendar",
+    "Asia/Ho_Chi_Minh",
+    "UTC",
+  );
+  assert.match(shown, /2:00 PM → 4:00 PM/);
+  assert.doesNotMatch(shown, /\+07:00/);
+  assert.match(shown, /GMT\+7|ICT/);
+});
+
+test("a retried create keeps the issue id and a stale retry is refused", async () => {
+  const previous = process.env.SEDERUNT_PUBLIC_ORIGIN;
+  process.env.SEDERUNT_PUBLIC_ORIGIN = "https://sederunt.example";
+  const session = createSession();
+  const { logFailure, logAction } = await import("../src/activity.js");
+  logFailure(session, {
+    id: "fail-create",
+    requestId: "req-create",
+    actor: { type: "person", name: "Mina" },
+    verb: "create",
+    target: { system: "linear", type: "issue", title: "Reserve booth power" },
+    origin: { roomId: "booth", roomName: "Booth planning", at: 22 },
+    tool: { name: "act", server: "sederunt-mcp" },
+  });
+  const created = await replayFailure(session, {
+    linear: {
+      async createIssue(input) {
+        assert.match(input.description, /From Booth planning/);
+        assert.match(input.description, /Mina/);
+        assert.match(input.description, /https:\/\/sederunt\.example\/console\/rooms\/booth#t=22/);
+        return { id: "ROW-146", identifier: "ROW-146", url: "https://linear.app/issue/ROW-146" };
+      },
+    },
+    memory: { async remember() { return { blobId: null }; } },
+  }, "fail-create");
+  assert.equal(created.ok, true);
+  const filed = session.activity.find((row) => row.kind === "action" && row.verb === "create");
+  assert.equal(filed.target.id, "ROW-146");
+  assert.equal(filed.target.url, "https://linear.app/issue/ROW-146");
+  const calls = [];
+  logFailure(session, {
+    id: "fail-old",
+    requestId: "req-old",
+    ts: "2026-11-03T08:00:00.000Z",
+    actor: { type: "sederunt", name: "Sederunt" },
+    verb: "move",
+    target: { system: "calendar", type: "event", id: "evt-1", title: "Design crit" },
+    changes: [{ field: "start", from: "2:00 PM", to: "4:00 PM" }],
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    tool: { name: "act", server: "sederunt-mcp" },
+  });
+  logAction(session, {
+    id: "act-new",
+    requestId: "req-new",
+    ts: "2026-11-03T11:00:00.000Z",
+    actor: { type: "person", name: "Mina" },
+    verb: "move",
+    target: { system: "calendar", type: "event", id: "evt-1", title: "Design crit" },
+    changes: [{ field: "start", from: "4:00 PM", to: "2:00 PM" }],
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    undo: { available: true, until: "2099-01-01T00:00:00.000Z" },
+    tool: { name: "act", server: "sederunt-mcp" },
+  });
+  const stale = await replayFailure(session, {
+    calendar: { async call(...args) { calls.push(args); return { id: "evt-1" }; }, async readEvent() { return null; } },
+    memory: { async remember() { return { blobId: null }; } },
+  }, "fail-old");
+  assert.equal(stale.ok, false);
+  assert.equal(stale.reason, "stale");
+  assert.equal(calls.length, 0);
+  assert.equal(session.activity.find((row) => row.id === "act-new").undo.available, true);
+  if (previous === undefined) delete process.env.SEDERUNT_PUBLIC_ORIGIN;
+  else process.env.SEDERUNT_PUBLIC_ORIGIN = previous;
 });
 
 test("a restart keeps a retried failure and an undone action", async () => {

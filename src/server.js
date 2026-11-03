@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { redact } from "./domain/redact.js";
-import { createCalendarAdapter } from "./calendar/mcp.js";
+import { calendarTimeZone, createCalendarAdapter } from "./calendar/mcp.js";
 import { createConsoleAdapter } from "./console/upload.js";
 import { createLinearClient } from "./linear/mcp.js";
 import { loadLinearToken } from "./linear/token.js";
@@ -543,6 +543,7 @@ export function createApp(options = {}) {
         accountName: gate.session?.name?.trim() || String(env.SEDERUNT_MEMBER || "").trim(),
         accountLine: gate.session ? "Owner" : "Sign-in is not set up",
         accountExpiry: gate.session?.exp || 0,
+        calendarTimeZone: calendarTimeZone(env),
       }));
       return;
     }
@@ -1096,24 +1097,36 @@ function wordHit(question, token) {
   return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, "i").test(question);
 }
 
-const ROOM_STOP = new Set(["the", "a", "an", "of", "to", "in", "on", "for", "and", "at", "about", "what", "was", "were", "decided", "did", "we", "do"]);
+const ROOM_WEAK = new Set(["planning", "review", "sync", "meeting", "room", "crit", "weekly", "daily"]);
+const ROOM_STOP = new Set(["the", "a", "an", "of", "to", "in", "on", "for", "and", "at", "about", "what", "was", "were", "decided", "decide", "did", "we", "do"]);
 
-function roomWords(value) {
-  return String(value || "").toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 3 && !ROOM_STOP.has(word));
+function roomTokens(value) {
+  return String(value || "").toLowerCase().replace(/^#/, "").split(/[^a-z0-9]+/).filter((word) => word.length > 2 && !ROOM_STOP.has(word));
+}
+
+function scoreRoom(question, room) {
+  const full = typeof room?.name === "string" ? room.name.trim() : "";
+  const leading = full.split(":")[0].trim();
+  const asked = String(question || "").toLowerCase();
+  if (leading && wordHit(asked, leading)) return 100 + leading.length;
+  if (full && wordHit(asked, full)) return 100 + full.length;
+  if (wordHit(asked, room?.id) || wordHit(asked, room?.channel)) return 80 + String(room?.id || room?.channel || "").length;
+  const words = new Set(roomTokens(asked));
+  let score = 0;
+  for (const word of roomTokens(`${room?.id || ""} ${room?.channel || ""} ${leading}`)) {
+    if (words.has(word)) score += ROOM_WEAK.has(word) ? 1 : 5;
+  }
+  return score;
 }
 
 function roomsMatching(text, rooms) {
-  const question = String(text || "").toLowerCase();
-  const words = new Set(roomWords(question));
-  const hits = [];
-  for (const room of rooms || []) {
-    const full = typeof room?.name === "string" ? room.name.trim() : "";
-    const leading = full.split(":")[0].trim();
-    const named = wordHit(question, room?.id) || wordHit(question, room?.channel) || wordHit(question, full) || wordHit(question, leading);
-    const shared = roomWords(`${room?.id || ""} ${room?.channel || ""} ${leading}`).some((word) => words.has(word));
-    if (named || shared) hits.push(room.id);
-  }
-  return [...new Set(hits)];
+  const ranked = (rooms || []).map((room) => ({ id: room?.id, score: scoreRoom(text, room) })).filter((room) => room.id && room.score > 0);
+  if (!ranked.length) return [];
+  ranked.sort((left, right) => right.score - left.score);
+  const best = ranked[0];
+  const second = ranked[1];
+  if (!second || best.score >= second.score + 5) return [best.id];
+  return ranked.filter((room) => room.score === best.score).map((room) => room.id);
 }
 
 function activitySameOrigin(req) {

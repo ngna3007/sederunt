@@ -84,12 +84,12 @@ export function createLinearClient(token, fetchImpl = globalThis.fetch) {
       const open = issuesFrom(await callTool("list_issues", { team: "ROW", limit: 25 }));
       return { team: "ROW", trip, open };
     },
-    async createIssue({ title, idempotencyKey }) {
+    async createIssue({ title, idempotencyKey, description }) {
       const args = {
         title,
         team: "ROW",
         project: "Sederunt",
-        description: "Filed from Sederunt after that tool preference allowed this one action.",
+        description: typeof description === "string" && description.trim() ? description.trim() : "Filed from a room.",
       };
       if (idempotencyKey) args.idempotencyKey = idempotencyKey;
       const result = await callTool("save_issue", args);
@@ -99,7 +99,7 @@ export function createLinearClient(token, fetchImpl = globalThis.fetch) {
         const snippet = toolText(result).replace(/\s+/g, " ").slice(0, 500);
         throw new Error(`Linear create returned no issue id. ${snippet}`);
       }
-      return { id: identifier, identifier };
+      return { id: identifier, identifier, url: findUrl(parsed) || findUrl(result) || `https://linear.app/issue/${identifier}` };
     },
     async assignIssue({ id, assignee }) {
       const saved = await saveIdentified("save_issue", { id, assignee }, id);
@@ -185,7 +185,17 @@ function issuesFrom(result) {
 }
 
 function rowId(value) {
-  return typeof value === "string" && /^ROW-\d+$/.test(value) ? value : "";
+  if (typeof value !== "string") return "";
+  const text = value.trim().toUpperCase();
+  return /^[A-Z][A-Z0-9]+-\d+$/.test(text) ? text : "";
+}
+
+function findUrl(value) {
+  if (!value || typeof value !== "object") return "";
+  if (typeof value.url === "string" && value.url.startsWith("https://")) return value.url.split("?")[0];
+  const nested = value.issue || value.data;
+  if (nested && nested !== value) return findUrl(nested);
+  return "";
 }
 
 function findIdentifier(value) {

@@ -17,30 +17,41 @@ export function relativeTime(ts, now = Date.now()) {
   return `${Math.floor(day / 7)}w ago`;
 }
 
-const ISO_INSTANT = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z/g;
+const ISO_INSTANT = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})/g;
 
 /**
- * Turn ISO instants in a sentence into the viewer's clocks. A pair on the
- * same local date is `2:00 PM → 3:00 PM`. The date is included only when the
- * two instants fall on different local dates.
+ * Turn ISO instants in a sentence into clocks in `timeZone`. A pair on the
+ * same date in that zone is `2:00 PM → 4:00 PM`. The date is included only
+ * when the two instants fall on different dates. A zone abbreviation is
+ * added when `viewerZone` is set and differs from `timeZone`.
  *
  * @param {string} sentence
- * @param {string} [timeZone] viewer zone; omitted means the runtime zone
+ * @param {string} [timeZone] calendar or viewer zone; omitted means the runtime zone
+ * @param {string} [viewerZone]
  */
-export function formatActivitySentence(sentence, timeZone) {
+export function formatActivitySentence(sentence, timeZone, viewerZone) {
   const text = String(sentence || "");
   const found = text.match(ISO_INSTANT);
   if (!found || !found.length) return text;
+  const zoneNote = zoneAbbreviation(found[0], timeZone, viewerZone);
   if (found.length >= 2) {
     const [left, right] = found;
     const differ = !sameLocalDay(left, right, timeZone);
     const formattedLeft = formatClock(left, timeZone, differ);
     const formattedRight = formatClock(right, timeZone, differ);
+    const range = `${formattedLeft} → ${formattedRight}${zoneNote}`;
     const fromTo = `from ${left} to ${right}`;
-    if (text.includes(fromTo)) return text.replace(fromTo, `${formattedLeft} → ${formattedRight}`);
-    return text.replace(left, formattedLeft).replace(right, formattedRight);
+    if (text.includes(fromTo)) return text.replace(fromTo, range);
+    return text.replace(left, formattedLeft).replace(right, `${formattedRight}${zoneNote}`);
   }
-  return text.replace(found[0], formatClock(found[0], timeZone, false));
+  return text.replace(found[0], `${formatClock(found[0], timeZone, false)}${zoneNote}`);
+}
+
+function zoneAbbreviation(iso, timeZone, viewerZone) {
+  if (!timeZone || !viewerZone || timeZone === viewerZone) return "";
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "short" }).formatToParts(new Date(iso));
+  const name = parts.find((part) => part.type === "timeZoneName")?.value || "";
+  return name ? ` ${name}` : "";
 }
 
 function sameLocalDay(left, right, timeZone) {

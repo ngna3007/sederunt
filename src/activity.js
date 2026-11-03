@@ -1,4 +1,4 @@
-import { replaySupported } from "./activity-replay.js";
+import { replaySupported, toUtcIso } from "./activity-replay.js";
 import { redact } from "./domain/redact.js";
 
 export { groupActivity, relativeTime, selectActivity } from "./activity-feed.js";
@@ -246,8 +246,8 @@ export function activityEvent(input, now = new Date()) {
     changes: Array.isArray(input.changes)
       ? input.changes.map((change) => ({
         field: clean(change?.field),
-        from: clean(change?.from),
-        to: clean(change?.to),
+        from: toUtcIso(clean(change?.from)),
+        to: toUtcIso(clean(change?.to)),
       })).filter((change) => change.field)
       : [],
     tool: { name: clean(tool.name), server: clean(tool.server) },

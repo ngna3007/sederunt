@@ -502,7 +502,14 @@ async function runConnector(deps, action) {
   if (action.edit === "assign") {
     return deps.linear.assignIssue({ id: action.params.id, assignee: action.params.assignee });
   }
-  return deps.linear.createIssue({ title: action.params.title, idempotencyKey: action.id });
+  return deps.linear.createIssue({
+    title: action.params.title,
+    idempotencyKey: action.id,
+    description: issueDescription({
+      origin: { roomId: action.roomId, roomName: action.roomName, at: action.offset },
+      actor: { type: "person", name: action.speaker || action.memberName || "" },
+    }),
+  });
 }
 
 async function didNotHappen(session, deps, action, auth, message) {
@@ -657,11 +664,18 @@ export async function replayFailure(session, deps, failureId) {
   if (!named) return { ok: false, reason: "missing" };
   if (named.kind !== "failure") return { ok: false, reason: "already" };
   if (named.resolved) return { ok: false, reason: "already" };
+  if (newerSuccess(session, named)) return { ok: false, reason: "stale" };
   const request = (session.activity || []).find((row) => row.requestId === named.requestId && row.kind === "request");
   const observed = await readCalendarEvent(deps, named);
   const planned = { ...named, changes: request?.changes?.length ? request.changes : named.changes };
   const plan = replayPlan(planned, "replay", observed);
   if (!plan.ok) return plan;
+  if (plan.method === "createIssue") {
+    const speaker = request?.actor?.type === "person"
+      ? request.actor
+      : (named.actor?.type === "person" ? named.actor : { type: "person", name: "" });
+    plan.args.description = issueDescription({ ...named, actor: speaker });
+  }
   let created;
   try {
     created = await runReplay(deps, plan);
@@ -674,8 +688,12 @@ export async function replayFailure(session, deps, failureId) {
   }
   if (!connectorId(created)) return { ok: false, reason: "failed" };
   const changes = plan.from ? [{ field: "start", from: plan.from, to: plan.to }] : (planned.changes || []);
+  const createdId = String(created?.identifier || created?.id || "").trim();
+  const target = named.verb === "create" && createdId
+    ? { ...named.target, id: createdId, url: created?.url || `https://linear.app/issue/${createdId}` }
+    : named.target;
   const event = logAction(session, {
-    ...effectOf(named, { changes }),
+    ...effectOf(named, { changes, target }),
     undo: replaySupported(named, "undo")
       ? { available: true, until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() }
       : { available: false, until: "" },
@@ -725,13 +743,42 @@ export async function undoRecorded(session, deps, id, actorName) {
   return { ok: true, id: undo.id };
 }
 
+function newerSuccess(session, failure) {
+  const target = failure?.target || {};
+  const at = Date.parse(failure?.ts || "") || 0;
+  return (session.activity || []).some((row) => {
+    if (!row || row.id === failure.id) return false;
+    if (row.kind !== "action" && row.kind !== "result") return false;
+    if (row.outcome === "undone" || row.superseded) return false;
+    if ((row.target?.system || "") !== (target.system || "")) return false;
+    const sameId = target.id && row.target?.id === target.id;
+    const sameTitle = !target.id && target.title && row.target?.title === target.title;
+    if (!sameId && !sameTitle) return false;
+    return (Date.parse(row.ts || "") || 0) > at;
+  });
+}
+
+function issueDescription(event) {
+  const room = event?.origin?.roomName || "";
+  const roomId = event?.origin?.roomId || "";
+  const speaker = event?.actor?.type === "person" ? event.actor.name : "";
+  const at = Number.isFinite(event?.origin?.at) ? event.origin.at : null;
+  const clock = at == null ? "" : `${Math.floor(at / 60)}:${String(at % 60).padStart(2, "0")}`;
+  const origin = String(process.env.SEDERUNT_PUBLIC_ORIGIN || "").replace(/\/$/, "");
+  const link = roomId && origin
+    ? `${origin}/console/rooms/${encodeURIComponent(roomId)}${at == null ? "" : `#t=${at}`}`
+    : "";
+  const who = [speaker, clock && `at ${clock}`].filter(Boolean).join(" ");
+  return [room && `From ${room}.`, who && `${who}.`, link].filter(Boolean).join(" ") || "Filed from a room.";
+}
+
 function effectOf(source, extra) {
   return {
     id: activityIdentity(),
     requestId: source.requestId || source.id,
     actor: { type: "sederunt", name: "Sederunt", via: source.actor?.via || "MCP" },
     verb: source.verb,
-    target: source.target,
+    target: extra.target || source.target,
     changes: extra.changes || source.changes,
     tool: source.tool,
     origin: source.origin,
@@ -793,13 +840,21 @@ async function supersedeTarget(session, deps, source, keepId) {
   for (const row of fresh) await storeActivity(session, deps, row);
 }
 
+function clipTitle(text) {
+  const value = String(text || "").trim().replace(/\s+/g, " ");
+  if (value.length <= 60) return value;
+  const cut = value.slice(0, 60);
+  const space = cut.lastIndexOf(" ");
+  return (space > 30 ? cut.slice(0, space) : cut).trim();
+}
+
 function createTitle(action) {
   const titled = typeof action.params?.title === "string" ? action.params.title.trim() : "";
-  if (titled) return titled.slice(0, 80);
-  const name = typeof action.params?.name === "string" ? action.params.name.trim() : "";
-  if (name) return name.slice(0, 80);
   const spoken = typeof action.statement === "string" ? action.statement.trim() : "";
-  return spoken.slice(0, 80);
+  if (titled && titled !== spoken) return titled.slice(0, 80);
+  const name = typeof action.params?.name === "string" ? action.params.name.trim() : "";
+  if (name && name !== spoken) return name.slice(0, 80);
+  return clipTitle(titled || name || spoken);
 }
 
 function activityChanges(action) {
@@ -808,6 +863,10 @@ function activityChanges(action) {
   }
   if (action.tool === "calendar" && action.params?.day) {
     return [{ field: "start", from: "", to: String(action.params.day) }];
+  }
+  if (action.tool === "slack") {
+    const body = action.params?.text || action.params?.body || action.statement || "";
+    if (body) return [{ field: "body", to: String(body) }];
   }
   return [];
 }
@@ -2081,7 +2140,8 @@ function publicActivity(session, rooms) {
       outcome: row.outcome,
       error: row.error,
       undo: publishedUndo(row),
-      retryable: row.kind === "failure" && !row.resolved && replaySupported(row, "replay"),
+      retryable: row.kind === "failure" && !row.resolved && !newerSuccess(session, row) && replaySupported(row, "replay"),
+      stale: row.kind === "failure" && !row.resolved && newerSuccess(session, row),
       resolved: row.resolved === true,
       superseded: row.superseded === true,
       refersTo: row.refersTo || "",

@@ -14,20 +14,41 @@ export function rankDecisions(question, decisions, rooms) {
     about: 1, the: 1, a: 1, an: 1, of: 1, to: 1, in: 1, on: 1, for: 1, and: 1,
     or: 1, is: 1, this: 1, that: 1, with: 1, from: 1, did: 1, does: 1, we: 1, do: 1,
   };
+  const phraseHit = (hay, token) => {
+    const text = String(token || "").trim().toLowerCase().replace(/^#/, "");
+    if (text.length < 3) return false;
+    const escaped = text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, "i").test(String(hay || "").toLowerCase());
+  };
+  const namedRoomIds = (asked, list) => {
+    const scored = [];
+    for (const room of list || []) {
+      const full = String(room?.name || "").trim();
+      const leading = full.split(":")[0].trim();
+      let best = 0;
+      for (const phrase of [full, leading, room?.id, room?.channel]) {
+        if (phraseHit(asked, phrase)) best = Math.max(best, String(phrase).trim().length);
+      }
+      if (best && room?.id) scored.push({ id: room.id, best });
+    }
+    if (!scored.length) return [];
+    const longest = Math.max(...scored.map((item) => item.best));
+    return [...new Set(scored.filter((item) => item.best === longest).map((item) => item.id))];
+  };
   const words = String(question || "").toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 2 && !stop[word]);
   const rows = (decisions || []).filter((decision) => String(decision.text || "").trim());
-  const roomText = (roomId) => {
-    const room = (rooms || []).find((item) => item.id === roomId);
-    const named = room ? ((room.platform || "") + " " + (room.id || "")) : "";
-    return (named + " " + rows.filter((decision) => decision.roomId === roomId).map((decision) => decision.text).join(" ")).toLowerCase();
-  };
   if (!rows.length) return { answer: "Nothing is stored that you can read.", detail: "", cites: [] };
+  const named = namedRoomIds(question, rooms);
   let picked = rows;
-  if (words.length) {
+  if (named.length) {
+    const ids = new Set(named);
+    picked = rows.filter((decision) => ids.has(decision.roomId || ""));
+    if (!picked.length) return { answer: "Nothing stored matches that question.", detail: "", cites: [] };
+  } else if (words.length) {
     const roomsHit = {};
     rows.forEach((decision) => {
-      const blob = (String(decision.text || "") + " " + roomText(decision.roomId)).toLowerCase();
-      if (words.some((word) => blob.includes(word))) roomsHit[decision.roomId || ""] = true;
+      const blob = String(decision.text || "").toLowerCase();
+      if (words.some((word) => phraseHit(blob, word))) roomsHit[decision.roomId || ""] = true;
     });
     picked = rows.filter((decision) => roomsHit[decision.roomId || ""]);
     if (!picked.length) return { answer: "Nothing stored matches that question.", detail: "", cites: [] };
@@ -102,7 +123,7 @@ export function renderConsolePage(state = {}) {
 <title>Sederunt</title>
 <link rel="stylesheet" href="/console.css">
 </head>
-<body>
+<body${state.calendarTimeZone ? ` data-calendar-zone="${escapeHtml(state.calendarTimeZone)}"` : ""}>
 ${brandSprite()}
 <div class="nav-scrim" id="nav-scrim"></div>
 <div id="rail-tip" class="rail-tip" hidden></div>
@@ -231,7 +252,7 @@ ${slack}
     </div>
     </div>
     <p id="status"></p>
-    <div id="loading" class="skeletons table-skel" aria-busy="true">
+    <div id="loading" class="skeletons table-skel" aria-busy="true" hidden>
       <span class="sk sk-tile"></span>
       <span class="sk sk-tile"></span>
       <span class="sk sk-tile"></span>
@@ -1354,7 +1375,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (spec.title && spec.title === spec.roomId) title.classList.add("mono");
     var count = document.createElement("span");
     count.className = "ex-count";
-    count.textContent = spec.meta || spec.countLine || "";
+    if (spec.where) {
+      var inlinePlat = document.createElement("span");
+      inlinePlat.className = "ex-plat-inline";
+      inlinePlat.textContent = (spec.where === "Google Meet" ? "Meet" : spec.where) + " · ";
+      count.append(inlinePlat);
+    }
+    count.append(document.createTextNode(spec.meta || spec.countLine || ""));
     roomCol.append(title, count);
     var where = document.createElement("span");
     where.className = "where ex-plat";
@@ -1595,7 +1622,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     return {
       title: title,
       full: title,
-      meta: [platform, stamp].filter(Boolean).join(" · "),
+      meta: stamp,
       when: when,
       platform: platform
     };
@@ -1977,7 +2004,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     text("status", "");
     if (next.workspace === "personal" || next.workspace === "company") workspaceKind = next.workspace;
     paintChip();
-    document.getElementById("loading").hidden = !next.reading;
+    showHomeSkeleton(next.reading === true);
     document.body.classList.toggle("read-failed", next.read === "failed");
     document.body.classList.toggle("is-reading", next.reading === true);
     if (next.reading) {
@@ -2193,6 +2220,15 @@ if (sessionWhen && sessionWhen.dataset.at) {
     toastTimer = setTimeout(function () { node.hidden = true; }, 5200);
   }
 
+  function homeListRoute() {
+    return sectionName === "home" || sectionName === "rooms";
+  }
+
+  function showHomeSkeleton(on) {
+    var node = document.getElementById("loading");
+    if (node) node.hidden = !(on && homeListRoute());
+  }
+
   function syncSkeleton(reading) {
     var sk = document.getElementById("onboard-skeleton");
     if (sk) sk.hidden = !reading;
@@ -2272,6 +2308,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       }
     }
     sectionName = name;
+    if (name !== "home" && name !== "rooms") showHomeSkeleton(false);
     var homeTitle = document.getElementById("home-title");
     if (homeTitle) homeTitle.hidden = name !== "home";
     var panels = ["rooms", "history", "chat", "record", "people", "account-page", "page-missing"];
@@ -2630,8 +2667,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ op: op, id: id })
     }).then(function (response) { return response.json(); }).then(function (result) {
-      if (!result || !result.ok) {
-        toast(op === "undo" ? "That action cannot be undone." : "Retry did not run.");
+        if (!result || !result.ok) {
+        toast(result && result.reason === "stale"
+          ? "Superseded by a newer change."
+          : op === "undo" ? "That action cannot be undone." : "Retry did not run.");
         if (button) button.disabled = false;
         return;
       }
@@ -2671,7 +2710,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
         var who = document.createElement("strong");
         who.textContent = (row.actor && row.actor.name) || "Someone";
         text.append(who);
-        var sentence = formatActivitySentence(row.sentence || "");
+        var calendarZone = document.body.getAttribute("data-calendar-zone") || "";
+        var viewerZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        var sentence = formatActivitySentence(
+          row.sentence || "",
+          row.target && row.target.system === "calendar" ? calendarZone : viewerZone,
+          viewerZone
+        );
         var rest = sentence.indexOf(who.textContent) === 0 ? sentence.slice(who.textContent.length) : (" " + sentence);
         text.append(document.createTextNode(" "));
         paintRich(text, rest.trim(), row);
@@ -2736,6 +2781,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
           done.className = "retried";
           done.textContent = "Retried";
           line.append(done);
+        } else if (row.kind === "failure" && row.stale) {
+          var stale = document.createElement("span");
+          stale.className = "retried";
+          stale.textContent = "Superseded by a newer change";
+          line.append(stale);
         } else if (row.kind === "failure" && row.retryable !== false) {
           var retry = document.createElement("button");
           retry.type = "button";
@@ -3581,7 +3631,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     document.querySelectorAll("#chat-log .chat-turn").forEach(function (node) { node.remove(); });
     var emptyChat = document.getElementById("chat-empty");
     if (emptyChat) emptyChat.hidden = false;
-    document.getElementById("loading").hidden = false;
+    showHomeSkeleton(true);
     load();
   }
 
@@ -3846,7 +3896,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       button.textContent = "Retrying...";
     }
     text("read-error-copy", "Retrying the read.");
-    document.getElementById("loading").hidden = false;
+    showHomeSkeleton(true);
     fetch("/api/console/read" + consoleQuery(), { method: "POST" }).then(function () {
       if (button) {
         button.disabled = false;
@@ -3939,22 +3989,37 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
   });
   function appendCites(body, cites) {
+    var all = (cites || []).filter(function (cite) { return cite && cite.label; });
+    if (!all.length) return;
     var row = document.createElement("span");
     row.className = "cite-row";
-    (cites || []).forEach(function (cite) {
-      if (!cite || !cite.label) return;
+    var limit = 2;
+    function addChip(cite) {
       var chip = document.createElement("button");
       chip.type = "button";
       chip.className = "cite-chip";
       chip.textContent = cite.label;
+      chip.title = cite.label;
       chip.addEventListener("click", function () {
         if (!cite.roomId) return;
         leaveOnboard();
         openFile(cite.roomId);
       });
       row.append(chip);
-    });
-    if (row.childElementCount) body.append(row);
+    }
+    all.slice(0, limit).forEach(addChip);
+    if (all.length > limit) {
+      var more = document.createElement("button");
+      more.type = "button";
+      more.className = "cite-chip cite-more";
+      more.textContent = "+" + (all.length - limit) + " more";
+      more.addEventListener("click", function () {
+        more.remove();
+        all.slice(limit).forEach(addChip);
+      });
+      row.append(more);
+    }
+    body.append(row);
   }
 
   function addChatTurn(who, value, detail, cites) {
@@ -4328,7 +4393,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     items.forEach(function (item, i) {
       item.setAttribute("aria-selected", i === paletteIndex ? "true" : "false");
     });
-    if (items[paletteIndex].scrollIntoView) items[paletteIndex].scrollIntoView({ block: "nearest" });
+    if (items[paletteIndex].scrollIntoView) items[paletteIndex].scrollIntoView({ block: "nearest", inline: "nearest" });
   }
   function paintPalette(query) {
     var list = document.getElementById("palette-list");

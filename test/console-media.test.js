@@ -58,6 +58,24 @@ test("a question about a room returns every decision in that room", () => {
   assert.equal(result.cites.some((cite) => cite.roomId === "booth"), false);
 });
 
+test("a question that names a room returns only that room", () => {
+  const decisions = [
+    { roomId: "offsite", text: "The offsite is in Da Lat for three nights.", spokenAt: "2026-11-03T01:00:00.000Z" },
+    { roomId: "offsite", text: "Catering is vegetarian by default.", spokenAt: "2026-11-03T02:00:00.000Z" },
+    { roomId: "booth", text: "The booth opens at nine.", spokenAt: "2026-11-03T04:00:00.000Z" },
+    { roomId: "booth", text: "Badge pickup is at the north entrance.", spokenAt: "2026-11-03T05:00:00.000Z" },
+  ];
+  const rooms = [
+    { id: "offsite", name: "Quarterly planning offsite: venue, catering, travel and budget sync in Da Lat", platform: "Zoom" },
+    { id: "booth", name: "Booth planning", platform: "Google Meet" },
+  ];
+  const result = rankDecisions("What did Booth planning decide?", decisions, rooms);
+  assert.equal(result.cites.length, 2);
+  assert.equal(result.cites.every((cite) => cite.roomId === "booth"), true);
+  assert.equal(result.answer.includes("Da Lat"), false);
+  assert.equal(result.answer.includes("Catering"), false);
+});
+
 test("bot media keeps the download urls and names processing, expiry, and a missing recording", () => {
   const ready = mediaFromBot(botPayload(), Date.parse("2026-11-03T00:00:00.000Z"));
   assert.equal(ready.state, "ready");

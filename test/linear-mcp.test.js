@@ -13,7 +13,8 @@ test("the linear client updates state, labels, and assignee through save_issue",
     if (body.params.name === "get_issue") {
       return rpc({ result: { content: [{ type: "text", text: JSON.stringify({ id: "ROW-1", labels: [{ name: "design" }, { name: "bug" }] }) }] } });
     }
-    return rpc({ result: { content: [{ type: "text", text: JSON.stringify({ identifier: "ROW-1" }) }] } });
+    const issueId = body.params.arguments.id === "ENG-12" ? "ENG-12" : "ROW-1";
+    return rpc({ result: { content: [{ type: "text", text: JSON.stringify({ identifier: issueId }) }] } });
   };
   const linear = createLinearClient("token", fetchImpl);
   const updated = await linear.updateIssue({ id: "ROW-1", state: "Todo" });
@@ -31,6 +32,8 @@ test("the linear client updates state, labels, and assignee through save_issue",
   assert.equal(tools[6][0], "save_issue");
   assert.equal(tools[6][1].idempotencyKey, "req-1");
   assert.equal(tools[6][1].title, "Banner");
+  const other = await linear.updateIssue({ id: "ENG-12", state: "Done" });
+  assert.equal(other.id, "ENG-12");
 });
 
 function rpc(body) {
