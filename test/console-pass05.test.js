@@ -36,7 +36,13 @@ test("meeting words separate live, ended, channel, and silence", () => {
   assert.match(page, /placeRoomChrome/);
   assert.match(css, /--dock-pad/);
   assert.match(css, /\.spk-0 \{ background: #3b6fd8/);
-  assert.doesNotMatch(css.slice(css.indexOf(".spk-0")), /#b42318|#9d174d|#146c34|#0f6e56|#3b6d11/);
+  assert.doesNotMatch(css.slice(css.indexOf(".spk-0"), css.indexOf("History: stable retry")), /#b42318|#9d174d|#146c34|#0f6e56|#3b6d11/);
+  assert.match(page, /function dayHeading/);
+  assert.match(page, /function clockOnly/);
+  assert.match(page, /is-retry/);
+  assert.match(page, /history-open/);
+  const feed = readFileSync(new URL("../src/activity-feed.js", import.meta.url), "utf8");
+  assert.match(feed, /b\.opened - a\.opened/);
 });
 
 function seeded() {
@@ -80,6 +86,28 @@ function seeded() {
     origin: { roomId: "booth", roomName: "Booth planning" },
     tool,
     undo: { available: true, until: "2099-01-01T00:00:00.000Z" },
+  });
+  logAction(session, {
+    id: "act-slack",
+    requestId: "act-slack",
+    ts: new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString(),
+    actor: { type: "sederunt", name: "Sederunt" },
+    verb: "post",
+    target: { system: "slack", type: "message", url: "https://sederunt.slack.com/archives/C0DEMO/p1", title: "Booth notes" },
+    changes: [{ field: "channel", to: "ops" }],
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    tool,
+  });
+  logAction(session, {
+    id: "act-newer",
+    requestId: "act-newer",
+    ts: new Date(Date.now() + 60 * 1000).toISOString(),
+    actor: { type: "person", name: "Mina" },
+    verb: "label",
+    target: { system: "linear", type: "issue", id: "ROW-200", title: "Newer banner" },
+    changes: [{ field: "label", to: "later" }],
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    tool,
   });
   logFailure(session, {
     id: "fail-booth",
@@ -140,6 +168,7 @@ test("list columns share a gap and history rows stay compact", async (t) => {
     deps: {
       memory: { async remember() { return { blobId: null }; } },
       tatum: { async getObject() { return { text: "" }; } },
+      linear: { async addLabel() { return { id: "ROW-175" }; } },
     },
     env: {
       SEDERUNT_CONSOLE_SECRET: SECRET,
@@ -507,5 +536,43 @@ test("list columns share a gap and history rows stay compact", async (t) => {
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
     assert.equal(overflow, false, `room ${width} overflows`);
   }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`http://127.0.0.1:${port}/console/history`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector("#history-list .activity-retry", { timeout: 45000 });
+  const historyBefore = await page.evaluate(() => ({
+    headings: [...document.querySelectorAll("#history-list .day-heading")].map((node) => node.textContent),
+    times: [...document.querySelectorAll("#history-list time")].map((node) => node.textContent),
+    openInAction: !!document.querySelector("#history-list .activity-action .history-open"),
+    first: document.querySelector("#history-list .activity-row")?.textContent || "",
+  }));
+  assert.ok(historyBefore.headings.includes("Today"), JSON.stringify(historyBefore.headings));
+  assert.ok(historyBefore.headings.includes("Yesterday"), JSON.stringify(historyBefore.headings));
+  assert.ok(historyBefore.times.length > 0);
+  assert.ok(historyBefore.times.every((value) => !/Today|Yesterday|\d{4}/.test(value)), JSON.stringify(historyBefore.times));
+  assert.equal(historyBefore.openInAction, true);
+  assert.match(historyBefore.first, /ROW-200/);
+  await page.click("#history-list .activity-retry");
+  await page.waitForSelector("#history-list .retried", { timeout: 20000 });
+  const historyAfter = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll("#history-list .activity-row")];
+    const fail = document.querySelector("#history-list .retried")?.closest(".activity-row");
+    const group = fail && fail.closest(".activity-group");
+    const nested = group && group.querySelector(".is-retry");
+    const members = group ? [...group.querySelectorAll(".activity-row")] : [];
+    return {
+      first: rows[0] ? rows[0].textContent : "",
+      faded: !!(fail && fail.classList.contains("muted")),
+      opacity: fail ? getComputedStyle(fail).opacity : "",
+      noteInCopy: !!(fail && fail.querySelector(".activity-copy .retried")),
+      noteInAction: !!(fail && fail.querySelector(".activity-action .retried")),
+      nestedAfter: !!(nested && fail && members.indexOf(nested) > members.indexOf(fail)),
+    };
+  });
+  assert.match(historyAfter.first, /ROW-200/);
+  assert.equal(historyAfter.faded, false);
+  assert.equal(historyAfter.opacity, "1");
+  assert.equal(historyAfter.noteInCopy, true);
+  assert.equal(historyAfter.noteInAction, false);
+  assert.equal(historyAfter.nestedAfter, true, JSON.stringify(historyAfter));
   assert.deepEqual(errors, []);
 });

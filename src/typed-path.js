@@ -2425,6 +2425,7 @@ function publicActivity(session, rooms, options = {}) {
       superseded: row.superseded === true,
       refersTo: row.refersTo || "",
       undoOf: row.undoOf || "",
+      retryOf: row.retryOf || "",
       sentence: timeZone && row.target?.system === "calendar"
         ? formatActivitySentence(renderActivity(row), timeZone)
         : renderActivity(row),

@@ -159,12 +159,30 @@ export function groupActivity(events) {
     const parsed = Date.parse(row?.ts || "");
     return Number.isNaN(parsed) ? 0 : parsed;
   };
+  const byId = new Map();
   for (const group of groups) {
+    for (const row of group.rows) if (row?.id) byId.set(row.id, group);
+  }
+  for (const group of [...groups]) {
+    const stay = [];
+    for (const row of group.rows) {
+      const home = row?.retryOf ? byId.get(row.retryOf) : null;
+      if (home && home !== group) {
+        home.rows.push(row);
+        if (row.id) byId.set(row.id, home);
+      } else stay.push(row);
+    }
+    group.rows = stay;
+  }
+  const kept = groups.filter((group) => group.rows.length);
+  for (const group of kept) {
     group.rows.sort((a, b) => at(a) - at(b) || (a.kind === "request" ? -1 : 1));
     group.latest = group.rows.reduce((max, row) => Math.max(max, at(row)), 0);
+    const request = group.rows.find((row) => row.kind === "request");
+    group.opened = request ? at(request) : group.rows.reduce((min, row) => Math.min(min, at(row)), group.latest);
   }
-  groups.sort((a, b) => b.latest - a.latest);
-  return groups;
+  kept.sort((a, b) => b.opened - a.opened || b.latest - a.latest);
+  return kept;
 }
 
 export function selectActivity(events, query = {}) {

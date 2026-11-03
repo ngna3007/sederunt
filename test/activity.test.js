@@ -354,6 +354,19 @@ test("groups are newest first and a request stays with its result across rooms",
   assert.equal(selectActivity(events, { roomId: "booth" })[0].requestId, "new");
 });
 
+test("a later retry stays with the original request", () => {
+  const events = [
+    { id: "old-req", requestId: "old", kind: "request", ts: "2026-11-03T08:00:00.000Z" },
+    { id: "old-fail", requestId: "old", kind: "failure", ts: "2026-11-03T08:00:01.000Z" },
+    { id: "new-act", requestId: "new", kind: "action", ts: "2026-11-03T09:00:00.000Z" },
+    { id: "old-retry", requestId: "other", kind: "action", ts: "2026-11-03T10:00:00.000Z", retryOf: "old-fail" },
+  ];
+  const groups = groupActivity(events);
+  assert.equal(groups[0].requestId, "new");
+  assert.equal(groups[1].requestId, "old");
+  assert.deepEqual(groups[1].rows.map((row) => row.id), ["old-req", "old-fail", "old-retry"]);
+});
+
 test("a label request names the label from the changes slot", () => {
   const sentence = renderActivity({
     kind: "request",

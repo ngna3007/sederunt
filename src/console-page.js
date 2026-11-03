@@ -1646,6 +1646,41 @@ if (sessionWhen && sessionWhen.dataset.at) {
     return whenLabel(iso);
   }
 
+  function clockOnly(iso) {
+    var bag = zoneParts(iso);
+    if (!bag) return "";
+    return bag.hour + ":" + bag.minute + " " + bag.dayPeriod;
+  }
+
+  function dayHeading(ms) {
+    if (ms == null || isNaN(ms)) return "";
+    var bag = zoneParts(new Date(ms).toISOString());
+    var today = zoneParts(new Date().toISOString());
+    if (!bag || !today) return "";
+    var key = bag.year + "-" + bag.month + "-" + bag.day;
+    if (key === today.year + "-" + today.month + "-" + today.day) return "Today";
+    var prior = new Date();
+    prior.setDate(prior.getDate() - 1);
+    var yesterday = zoneParts(prior.toISOString());
+    if (yesterday && key === yesterday.year + "-" + yesterday.month + "-" + yesterday.day) return "Yesterday";
+    var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    var label = Number(bag.day) + " " + months[Number(bag.month) - 1];
+    if (bag.year !== today.year) label += " " + bag.year;
+    return label;
+  }
+
+  function groupOpened(group) {
+    var requestAt = null;
+    var earliest = null;
+    (group.rows || []).forEach(function (row) {
+      var t = Date.parse(row && row.ts || "");
+      if (isNaN(t)) return;
+      if (earliest == null || t < earliest) earliest = t;
+      if (row.kind === "request") requestAt = t;
+    });
+    return requestAt != null ? requestAt : earliest;
+  }
+
   function roomLabel(room, lead) {
     var rows = lead ? [lead] : [];
     return roomIdentity(room || {}, rows).title;
@@ -2886,7 +2921,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
       wrap.className = "activity-group";
       group.rows.forEach(function (row) {
         var line = document.createElement("div");
-        line.className = "activity-row" + (row.kind === "failure" ? " is-failure" : "") + (row.kind === "request" ? "" : " activity-child") + (row.superseded || row.outcome === "undone" || row.resolved ? " muted" : "");
+        var faded = (row.superseded || row.outcome === "undone") && !(row.kind === "failure" && row.resolved);
+        line.className = "activity-row" + (row.kind === "failure" ? " is-failure" : "") + (row.kind === "request" ? "" : " activity-child") + (row.retryOf ? " is-retry" : "") + (faded ? " muted" : "");
         line.id = "activity-" + row.id;
         var icon = document.createElement("span");
         icon.className = "activity-icon" + (row.kind === "failure" && !row.resolved ? " bad" : "");
@@ -2945,7 +2981,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         if (row.ts) {
           time.dateTime = row.ts;
           time.title = new Date(row.ts).toLocaleString();
-          time.textContent = relativeWhen(row.ts) || relativeTime(row.ts);
+          time.textContent = opts.showRoom ? (clockOnly(row.ts) || relativeTime(row.ts)) : (relativeWhen(row.ts) || relativeTime(row.ts));
         }
         meta.append(time);
         var origin = row.origin || {};
@@ -2953,14 +2989,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
         suffix.className = "room-suffix";
         suffix.textContent = opts.showRoom ? (origin.roomName || "") : "";
         meta.append(suffix);
+        var openLink = null;
         if (row.target && row.target.url && row.target.system === "slack" && (row.kind === "action" || row.kind === "result")) {
-          var open = document.createElement("a");
-          open.className = "entity-id";
-          open.href = row.target.url;
-          open.rel = "noreferrer";
-          open.textContent = "Open";
-          text.append(document.createTextNode(" "));
-          text.append(open);
+          openLink = document.createElement("a");
+          openLink.className = "history-open";
+          openLink.href = row.target.url;
+          openLink.rel = "noreferrer";
+          openLink.textContent = "Open";
         }
         var undoUntil = row.undo && row.undo.until ? Date.parse(row.undo.until) : 0;
         var action = document.createElement("span");
@@ -2983,7 +3018,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
           var done = document.createElement("span");
           done.className = "retried";
           done.textContent = "Retried";
-          action.append(done);
+          copy.append(done);
         } else if (row.kind === "failure" && row.stale) {
           var stale = document.createElement("span");
           stale.className = "activity-stale";
@@ -2997,6 +3032,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
           retry.addEventListener("click", function () { postActivity("retry", row.id, retry); });
           action.append(retry);
         }
+        if (openLink) action.append(openLink);
         if (opts.showRoom) {
           icon.dataset.col = "mark";
           text.dataset.col = "event";
@@ -3013,6 +3049,33 @@ if (sessionWhen && sessionWhen.dataset.at) {
       });
       feed.append(wrap);
     });
+    if (opts.showRoom) {
+      var buckets = [];
+      var cursor = 0;
+      groups.forEach(function (group) {
+        var heading = dayHeading(groupOpened(group)) || "Earlier";
+        var last = buckets[buckets.length - 1];
+        if (!last || last.heading !== heading) {
+          last = { heading: heading, nodes: [] };
+          buckets.push(last);
+        }
+        last.nodes.push(feed.children[cursor]);
+        cursor += 1;
+      });
+      feed.replaceChildren();
+      buckets.forEach(function (bucket) {
+        var day = document.createElement("section");
+        day.className = "history-day";
+        var title = document.createElement("h3");
+        title.className = "day-heading";
+        title.textContent = bucket.heading;
+        var dayFeed = document.createElement("div");
+        dayFeed.className = "activity-feed";
+        bucket.nodes.forEach(function (node) { if (node) dayFeed.append(node); });
+        day.append(title, dayFeed);
+        feed.append(day);
+      });
+    }
     box.append(feed);
   }
 

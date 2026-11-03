@@ -4645,3 +4645,50 @@ body.room-open .timeline.is-scrub .timeline-bar {
   padding-bottom: 0;
 }
 body.room-open .timeline.is-scrub .tl-track { display: none !important; }
+
+/* History: stable retry rows, day headings, Open in the action column. */
+#history-list .history-day,
+#history-list .history-day > .activity-feed {
+  display: contents !important;
+}
+#history-list .day-heading {
+  display: block !important;
+  grid-column: 1 / -1 !important;
+  margin: 8px 0 0;
+  padding: 8px 0 4px;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 16px;
+  color: var(--muted-foreground);
+}
+#history-list .activity-copy .retried {
+  flex: 0 0 auto;
+  margin-left: 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+#history-list .activity-action {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  justify-self: stretch !important;
+  width: 100%;
+  gap: 8px;
+}
+#history-list .history-open {
+  color: var(--primary);
+  font-size: 13px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+#history-list .activity-row.is-retry > p { padding-left: 12px; }
+@keyframes retry-flash {
+  from { background: color-mix(in srgb, #3b6fd8 18%, transparent); }
+  to { background: transparent; }
+}
+#history-list .activity-row.is-retry { animation: retry-flash 1.8s ease; }
+@media (max-width: 1023px) {
+  #history-list .day-heading { margin: 0; padding: 12px 16px 4px; }
+}
