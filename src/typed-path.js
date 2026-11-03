@@ -1860,8 +1860,13 @@ export function companyBoard(session, memberId) {
 
 function publicActivity(session, rooms) {
   const visible = new Set((rooms || []).map((room) => room.id));
-  return (session?.activity ?? [])
-    .filter((row) => row && (!row.origin?.roomId || visible.has(row.origin.roomId)))
+  const rows = session?.activity ?? [];
+  const kept = new Set();
+  for (const row of rows) {
+    if (!row?.origin?.roomId || visible.has(row.origin.roomId)) kept.add(row.requestId || row.id);
+  }
+  return rows
+    .filter((row) => row && kept.has(row.requestId || row.id))
     .map((row) => ({
       id: row.id,
       requestId: row.requestId,

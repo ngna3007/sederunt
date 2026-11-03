@@ -31,6 +31,7 @@ import { looksLikeOpenQuestion } from "./parse.js";
 import { createSession } from "./session.js";
 import { postSlackReply, slackAnswer, slackChannelMembers, slackFileBytes, slackQuestion } from "./slack/reply.js";
 import { slackDelivery, verifySlackRequest } from "./slack/sign.js";
+import { appendRetry, logUndo } from "./activity.js";
 import { companyBoard, downloadFile, handleUtterance, personalBoard, readProofs, rebuildCompanyIndex, roomLedger, saveHearing } from "./typed-path.js";
 
 const port = Number(process.env.PORT || 8787);
@@ -422,6 +423,31 @@ export function createApp(options = {}) {
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({ id, name }));
       return;
     }
+    if (req.method === "POST" && url.pathname === "/api/activity") {
+      const body = await readJson(req);
+      const current = await prepareWorkspace(workspace, "", false, 2000);
+      const id = typeof body.id === "string" ? body.id : "";
+      const actor = displayActor(env);
+      if (body.op === "undo") {
+        const event = logUndo(current, {
+          id: `${id}:undo:${(current.activity || []).length + 1}`,
+          requestId: (current.activity || []).find((row) => row.id === id)?.requestId || id,
+          undoOf: id,
+          actor: { type: "person", name: actor, via: "Console" },
+          verb: (current.activity || []).find((row) => row.id === id)?.verb || "update",
+          target: (current.activity || []).find((row) => row.id === id)?.target || {},
+        });
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify({ ok: true, id: event.id }));
+        return;
+      }
+      const event = appendRetry(current, id);
+      if (!event) {
+        send(res, 404, "application/json; charset=utf-8", JSON.stringify({ ok: false }));
+        return;
+      }
+      send(res, 200, "application/json; charset=utf-8", JSON.stringify({ ok: true, id: event.id }));
+      return;
+    }
     if (req.method === "GET" && (url.pathname === "/console" || url.pathname.startsWith("/console/"))) {
       const gate = guardConsole(req, env);
       if (gate.required && !gate.session) {
@@ -431,7 +457,17 @@ export function createApp(options = {}) {
         return;
       }
       const doors = doorReport(env, false);
-      send(res, 200, "text/html; charset=utf-8", renderConsolePage({
+      const roomPath = /^\/console\/rooms\/([^/]+)$/.exec(url.pathname);
+      let status = 200;
+      if (roomPath) {
+        const current = await prepareWorkspace(workspace, "", false, 2000);
+        const id = decodeURIComponent(roomPath[1]);
+        const known = (current.rooms || []).some((room) => room.id === id)
+          || (current.decisions || []).some((decision) => decision.roomId === id)
+          || (current.activity || []).some((row) => row.origin?.roomId === id);
+        if (!known) status = 404;
+      }
+      send(res, status, "text/html; charset=utf-8", renderConsolePage({
         meeting: doors.meeting,
         meetingSetup: !env.SEDERUNT_PUBLIC_ORIGIN
           ? "Set SEDERUNT_PUBLIC_ORIGIN to a public https address, then restart."
@@ -628,12 +664,14 @@ export function createApp(options = {}) {
         }));
         return;
       }
+      const namedRoom = roomNamedIn(text, current.rooms || []);
       const result = await handleUtterance({
         text,
         intent: "recall",
         door: "mcp",
         memberId: bound.memberId,
         workspace: scope,
+        room: namedRoom ? { id: namedRoom } : undefined,
         session: current,
       }, depsFor(workspace, companyId));
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({
@@ -958,6 +996,29 @@ function loadedCompany(options, deps, env, companies) {
   return Boolean(env.COMPANY_MEMWAL_KEY);
 }
 
+function displayActor(env) {
+  const name = typeof env.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
+  return name || "Someone";
+}
+
+function roomNamedIn(text, rooms) {
+  const question = String(text || "").toLowerCase();
+  let best = "";
+  let bestLength = 0;
+  for (const room of rooms || []) {
+    const names = [room?.id, room?.name, room?.channel].filter((value) => typeof value === "string" && value.trim());
+    for (const name of names) {
+      const token = name.trim().toLowerCase();
+      if (token.length < 3 || !question.includes(token)) continue;
+      if (token.length > bestLength) {
+        best = room.id;
+        bestLength = token.length;
+      }
+    }
+  }
+  return best;
+}
+
 function companyKey(workspace, companyId) {
   if (!workspace.companies) return "company";
   if (companyId && workspace.companies[companyId]) return companyId;
@@ -1119,7 +1180,11 @@ async function roomMedia(workspace, id) {
   }
   const room = (current.rooms || []).find((item) => item.id === id);
   const platform = typeof room?.platform === "string" ? room.platform : "";
-  if (/slack/i.test(platform)) return { ...empty, state: "channel", title: room?.name || room?.channel || "" };
+  if (/slack/i.test(platform)) {
+    const raw = String(room?.channel || room?.name || "").trim();
+    const title = !raw ? "" : raw.startsWith("#") ? raw : `#${raw}`;
+    return { ...empty, state: "channel", title };
+  }
   workspace.mediaCache ??= new Map();
   workspace.mediaFlight ??= new Map();
   const hit = workspace.mediaCache.get(id);

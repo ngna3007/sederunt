@@ -57,6 +57,20 @@ const PHRASES = {
     failure: "{actor} couldn't post {title}: {error}",
     undo: "{actor} undid posting {title}",
   },
+  label: {
+    request: "{actor} asked to add label {to} to {id} {title}",
+    action: "{actor} labelled {id} {title} {to} via {via}",
+    result: "{actor} labelled {id} {title} {to} via {via}",
+    failure: "{actor} couldn't add label {to}: {error}",
+    undo: "{actor} undid labelling {id}",
+  },
+  create: {
+    request: "{actor} asked to create a ticket \"{title}\"",
+    action: "{actor} created {id} {title} via {via}",
+    result: "{actor} created {id} {title} via {via}",
+    failure: "{actor} couldn't create {title}: {error}",
+    undo: "{actor} undid creating {title}",
+  },
 };
 
 const GENERIC = {
@@ -136,11 +150,7 @@ export function renderActivity(event, now = Date.now()) {
   const kind = KINDS.has(event?.kind) ? event.kind : "action";
   const verb = VERBS.includes(event?.verb) ? event.verb : "create";
   const template = PHRASES[verb]?.[kind] || GENERIC[kind];
-  const sentence = collapse(fill(template, event, verb));
-  if (kind === "failure") return `${sentence} · Retry`;
-  const when = event?.ts ? relativeTime(event.ts, now) : "";
-  const origin = kind === "request" ? originPhrase(event) : "";
-  return [sentence, origin, when].filter(Boolean).join(" · ");
+  return collapse(fill(template, event, verb));
 }
 
 /**
@@ -176,9 +186,64 @@ export function groupActivity(events) {
     group.rows.push(event);
   }
   for (const group of groups) {
-    group.rows.sort((a, b) => (a.kind === "request" ? -1 : 0) - (b.kind === "request" ? -1 : 0));
+    group.rows.sort((a, b) => stamp(a) - stamp(b) || (a.kind === "request" ? -1 : 1));
+    group.latest = group.rows.reduce((max, row) => Math.max(max, stamp(row)), 0);
   }
+  groups.sort((a, b) => b.latest - a.latest);
   return groups;
+}
+
+/**
+ * Keep a whole request together. A room match keeps every row in the group.
+ * Search, kind, and actor match rows.
+ *
+ * @param {Array<ReturnType<typeof activityEvent>>} events
+ * @param {{ kind?: string, query?: string, roomId?: string, actor?: string }} [query]
+ */
+export function selectActivity(events, query = {}) {
+  let groups = groupActivity(events);
+  const room = String(query.roomId || "");
+  if (room) {
+    groups = groups.filter((group) => group.rows.some((row) => touches(row, room)));
+  }
+  const kind = query.kind && query.kind !== "all" ? query.kind : "";
+  const actor = String(query.actor || "").trim().toLowerCase();
+  const text = String(query.query || "").trim().toLowerCase();
+  if (!kind && !actor && !text) return groups;
+  return groups.map((group) => ({
+    ...group,
+    rows: group.rows.filter((row) => {
+      if (kind && row.kind !== kind && !(kind === "action" && row.kind === "result")) return false;
+      if (actor && String(row.actor?.name || "").toLowerCase() !== actor) return false;
+      if (text) {
+        const blob = `${renderActivity(row)} ${row.target?.id || ""} ${row.target?.title || ""} ${row.origin?.roomName || ""}`.toLowerCase();
+        if (!blob.includes(text)) return false;
+      }
+      return true;
+    }),
+  })).filter((group) => group.rows.length);
+}
+
+/**
+ * Append a new action for a failed event. The failed row stays.
+ *
+ * @param {{ activity?: unknown[] }} session
+ * @param {string} failureId
+ */
+export function appendRetry(session, failureId) {
+  const failed = (session.activity || []).find((row) => row.id === failureId && row.kind === "failure");
+  if (!failed) return null;
+  return logAction(session, {
+    id: `${failureId}:retry:${(session.activity || []).length + 1}`,
+    requestId: failed.requestId || failed.id,
+    actor: { type: "sederunt", name: "Sederunt", via: failed.actor?.via || "MCP" },
+    verb: failed.verb,
+    target: failed.target,
+    changes: failed.changes,
+    tool: failed.tool,
+    origin: failed.origin,
+    undo: { available: true, until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() },
+  });
 }
 
 /**
@@ -330,6 +395,16 @@ function fill(template, event, verb) {
 
 function collapse(text) {
   return text.replace(/\s+/g, " ").replace(" :", ":").trim();
+}
+
+function stamp(event) {
+  const at = Date.parse(event?.ts || "");
+  return Number.isNaN(at) ? 0 : at;
+}
+
+function touches(row, room) {
+  const origin = row?.origin || {};
+  return origin.roomId === room || origin.roomName === room;
 }
 
 function originPhrase(event) {

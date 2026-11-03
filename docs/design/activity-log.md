@@ -63,7 +63,7 @@ Examples, all from that table:
 - Sederunt assigned ABC-123 to Rowan via MCP · 2m ago
 - Mina asked to move Design crit to 3 PM tomorrow · #sederunt-demo · 1h ago
 - Sederunt moved Design crit from 2:00 PM to 3:00 PM on Google Calendar via MCP · 1h ago
-- Sederunt couldn't move Design crit: the calendar is read-only · Retry
+- Sederunt couldn't move Design crit: the calendar is read-only
 - Rowan undid moving Design crit · just now
 - Sederunt posted a summary in #sederunt-demo via Slack
 

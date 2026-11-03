@@ -213,7 +213,7 @@ ${slack}
     <div class="page-head" id="home-head">
     <div>
     <p id="home-title" class="page-title">Home</p>
-    <p class="page-lede">What is waiting, and which rooms heard a decision.</p>
+    <p class="page-lede">Decisions this workspace kept, and the actions that followed.</p>
     </div>
     <div class="page-actions"></div>
     </div>
@@ -232,6 +232,9 @@ ${slack}
     </div>
     <p id="status"></p>
     <div id="loading" class="skeletons table-skel" aria-busy="true">
+      <span class="sk sk-tile"></span>
+      <span class="sk sk-tile"></span>
+      <span class="sk sk-tile"></span>
       <span class="sr">Reading the account.</span>
       <span class="sk sk-row"></span>
       <span class="sk sk-row"></span>
@@ -319,7 +322,6 @@ ${slack}
       <div class="toolbar" id="room-toolbar" hidden>
         <div class="chips" role="group" aria-label="Filter rooms">
           <button type="button" class="chip-filter" data-room-filter="all" aria-pressed="true">All</button>
-          <button type="button" class="chip-filter" data-room-filter="waiting">Waiting</button>
           <button type="button" class="chip-filter" data-room-filter="kept">Kept a decision</button>
         </div>
         <label class="search">${searchIcon}<span class="sr">Search rooms</span><input id="room-search" type="search" placeholder="Search" autocomplete="off"></label>
@@ -354,12 +356,12 @@ ${slack}
           <button type="button" class="chip-filter" data-kind="action">Actions</button>
           <button type="button" class="chip-filter" data-kind="failure">Failed</button>
         </div>
+        <label class="search">${searchIcon}<span class="sr">Filter by room</span><select id="history-room"><option value="">All rooms</option></select></label>
         <label class="search">${searchIcon}<span class="sr">Search history</span><input id="history-search" type="search" placeholder="Search" autocomplete="off"></label>
       </div>
       <div id="history-empty" class="empty-state" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="4.6"/><path d="M8 5.6V8l1.7 1.1"/></svg></span><p class="empty-title" id="history-line">No history yet.</p><p>Questions and decisions from a room show up here.</p></div>
       <p class="section-next"><button id="history-next" class="primary" type="button" hidden>New room</button></p>
       <div class="explorer" id="history-table">
-        <div class="explorer-head hist-head"><span>What</span><span>Kind</span><span>When</span><span></span></div>
         <div id="history-list"></div>
         <div id="history-foot" class="explorer-foot" hidden><span id="history-count"></span><span class="pager"><button id="history-prev" type="button" aria-label="Previous page">‹</button><button id="history-next-page" type="button" aria-label="Next page">›</button></span></div>
       </div>
@@ -373,7 +375,7 @@ ${slack}
             <p>Nothing has been asked yet.</p>
             <div class="suggests">
               <button type="button" data-suggest="What was decided?">What was decided?</button>
-              <button type="button" data-suggest="What is waiting?">What is waiting?</button>
+              <button type="button" data-suggest="What was decided about the offsite?">What was decided about the offsite?</button>
               <button type="button" data-suggest="Who kept the last sentence?">Who kept the last sentence?</button>
             </div>
           </div>
@@ -485,8 +487,9 @@ ${slack}
             <div class="player-frame">
               <div class="player" id="player">
                 <video id="player-video" controls playsinline preload="metadata"></video>
-                <div id="player-fallback" class="player-fallback">
-                  <p id="player-name"></p>
+                <div id="player-fallback" class="player-fallback empty-state">
+                  <span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.2" y="3.2" width="11.6" height="9.6" rx="1.2"/><path d="M6.4 6.2v3.6L10 8z"/></svg></span>
+                  <p id="player-name" class="empty-title">No recording for this room</p>
                   <p id="player-note"></p>
                 </div>
               </div>
@@ -537,14 +540,14 @@ ${slack}
                 <div id="file-overview-people" class="faces"></div>
               </div>
               <div id="file-callout" class="callout" hidden></div>
-              <div class="outcome-card" id="file-outcome" hidden></div>
               <div class="overview-facts" id="overview-facts"></div>
+              <div class="outcome-card" id="file-outcome" hidden></div>
+              <dl class="kv" id="file-facts"></dl>
               <section id="participants" class="participants"></section>
               <section class="artifacts" id="artifacts">
                 <h2 class="artifact-title">Meeting artifacts</h2>
                 <div id="artifact-list"></div>
               </section>
-              <dl class="kv" id="file-facts"></dl>
             </div>
             <div id="right-decisions" class="tab-pane" hidden>
               <div id="file-decisions"></div>
@@ -1624,6 +1627,7 @@ ${slack}
     if (decisionRoom.platform) roomCell.append(platformBadge(decisionRoom.platform));
     var roomText = document.createElement("span");
     roomText.textContent = roomName(decisionRoom) || decisionRoom.id || "Room";
+    roomText.title = roomText.textContent;
     roomCell.append(roomText);
     var status = decision.status || "recorded";
     var badge = document.createElement("span");
@@ -1760,7 +1764,6 @@ ${slack}
     addCount(box, "Actions today", counts.actionsToday || 0, "Changes that ran today.", null, false);
     if (counts.failed) addCount(box, "Failed", counts.failed, "A change did not go through.", null, true);
     if (counts.sent) addCount(box, "Sent", counts.sent, "The tool accepted the change.", null, false);
-    if (counts.failed) addCount(box, "Failed", counts.failed, "A change did not go through.", null, false);
   }
 
   function syncHistoryKinds() {
@@ -1780,19 +1783,38 @@ ${slack}
   function paintHistory() {
     setHistoryPressed();
     clear("history-list");
-    var feed = activityRows("");
-    if (historyKind !== "all") feed = feed.filter(function (row) { return row.kind === historyKind || (historyKind === "action" && row.kind === "result"); });
+    var roomPick = document.getElementById("history-room");
+    if (roomPick && roomPick.options.length < 2) {
+      ((state && state.rooms) || []).forEach(function (room) {
+        var option = document.createElement("option");
+        option.value = room.id;
+        option.textContent = room.name || room.channel || room.id;
+        roomPick.append(option);
+      });
+    }
     var query = ((document.getElementById("history-search") || {}).value || "").trim().toLowerCase();
-    if (query) feed = feed.filter(function (row) { return (row.sentence || "").toLowerCase().indexOf(query) !== -1; });
-    paintActivity(document.getElementById("history-list"), feed);
+    var roomId = roomPick ? roomPick.value : "";
+    var groups = selectFeed((state && state.activity) || [], {
+      kind: historyKind,
+      query: query,
+      roomId: roomId,
+      actor: historyScope === "you" ? member() : ""
+    });
+    var filtered = !!(query || roomId || (historyKind && historyKind !== "all") || historyScope === "you");
+    paintActivity(document.getElementById("history-list"), [], { groups: groups, showRoom: true, filtered: filtered });
+    var countRows = groups.reduce(function (sum, group) { return sum + group.rows.length; }, 0);
     var empty = document.getElementById("history-empty");
-    if (empty) empty.hidden = feed.length > 0;
+    if (empty) empty.hidden = countRows > 0;
+    if (empty && filtered && !countRows) {
+      var historyLine = document.getElementById("history-line");
+      if (historyLine) historyLine.textContent = "No activity matches.";
+    }
     var table = document.getElementById("history-table");
-    if (table) table.hidden = feed.length === 0;
+    if (table) table.hidden = countRows === 0;
     var historyCount = document.getElementById("history-count");
     var historyFoot = document.getElementById("history-foot");
-    if (historyFoot) historyFoot.hidden = feed.length === 0;
-    if (historyCount && feed.length) historyCount.textContent = "1\u2013" + feed.length + " of " + feed.length;
+    if (historyFoot) historyFoot.hidden = countRows === 0;
+    if (historyCount && countRows) historyCount.textContent = "1\u2013" + countRows + " of " + countRows;
     return;
     var rows = [];
     var decisions = (state && state.decisions) || [];
@@ -2240,7 +2262,8 @@ ${slack}
     var roomsHead = document.getElementById("rooms-head");
     var roomTools = document.getElementById("room-toolbar");
     if (roomsHead) roomsHead.hidden = name !== "rooms";
-    if (roomTools) roomTools.hidden = name !== "rooms" && name !== "home";
+    var quietHome = !state || state.read === "failed" || state.read === "empty" || state.read === "reading" || state.reading || (!((state && state.rooms) || []).length && !((state && state.decisions) || []).length);
+    if (roomTools) roomTools.hidden = quietHome || (name !== "rooms" && name !== "home");
     var homeHead = document.getElementById("home-head");
     if (homeHead) homeHead.hidden = name !== "home";
     var homeTools = document.querySelector(".home-tools");
@@ -2491,57 +2514,217 @@ ${slack}
     });
   }
 
-  function paintActivity(box, rows) {
+  function activityStamp(row) {
+    var at = Date.parse((row && row.ts) || "");
+    return isNaN(at) ? 0 : at;
+  }
+
+  function activityGroups(rows) {
+    var groups = [];
+    var seen = {};
+    (rows || []).forEach(function (row) {
+      var key = row.requestId || row.id;
+      var group = seen[key];
+      if (!group) {
+        group = { requestId: key, rows: [], latest: 0 };
+        seen[key] = group;
+        groups.push(group);
+      }
+      group.rows.push(row);
+      group.latest = Math.max(group.latest, activityStamp(row));
+    });
+    groups.forEach(function (group) {
+      group.rows.sort(function (a, b) { return activityStamp(a) - activityStamp(b); });
+    });
+    groups.sort(function (a, b) { return b.latest - a.latest; });
+    return groups;
+  }
+
+  function selectFeed(rows, query) {
+    var groups = activityGroups(rows);
+    var room = query && query.roomId;
+    if (room) groups = groups.filter(function (group) {
+      return group.rows.some(function (row) {
+        var origin = row.origin || {};
+        return origin.roomId === room || origin.roomName === room;
+      });
+    });
+    var kind = query && query.kind && query.kind !== "all" ? query.kind : "";
+    var actor = query && query.actor ? String(query.actor).toLowerCase() : "";
+    var text = query && query.query ? String(query.query).toLowerCase() : "";
+    if (!kind && !actor && !text) return groups;
+    return groups.map(function (group) {
+      return {
+        requestId: group.requestId,
+        latest: group.latest,
+        rows: group.rows.filter(function (row) {
+          if (kind && row.kind !== kind && !(kind === "action" && row.kind === "result")) return false;
+          if (actor && String((row.actor && row.actor.name) || "").toLowerCase() !== actor) return false;
+          if (text) {
+            var blob = ((row.sentence || "") + " " + ((row.target && row.target.id) || "") + " " + ((row.target && row.target.title) || "") + " " + ((row.origin && row.origin.roomName) || "")).toLowerCase();
+            if (blob.indexOf(text) === -1) return false;
+          }
+          return true;
+        })
+      };
+    }).filter(function (group) { return group.rows.length; });
+  }
+
+  function activityGlyph(kind, verb) {
+    var name = kind === "failure" ? "fail" : (kind === "undo" ? "undo" : (kind === "request" ? "request" : (verb || "create")));
+    var paths = {
+      assign: '<path d="M8 3.2v3.2M6.4 4.8h3.2"/><circle cx="8" cy="11" r="2.1"/>',
+      move: '<path d="M2.8 8h9.2M9.2 5.2 12.2 8 9.2 10.8"/>',
+      reschedule: '<path d="M2.8 8h9.2M9.2 5.2 12.2 8 9.2 10.8"/>',
+      label: '<path d="M2.8 8.4 8 3.2h3.4v3.4L6.2 12z"/><circle cx="9.5" cy="5.1" r=".6" fill="currentColor"/>',
+      post: '<path d="M3 4.2h10v5.6H6.4L3 12z"/>',
+      create: '<path d="M8 3.4v9.2M3.4 8h9.2"/>',
+      fail: '<circle cx="8" cy="8" r="4.6"/><path d="M8 5.2v3.2M8 10.4v.4"/>',
+      undo: '<path d="M6.2 4.8H3.2V7.6"/><path d="M3.6 5.4a4.8 4.8 0 1 1-.8 3.4"/>',
+      request: '<circle cx="8" cy="8" r="2.2"/>',
+      join: '<circle cx="6" cy="6.2" r="1.5"/><circle cx="10.6" cy="6.2" r="1.5"/>'
+    };
+    var body = paths[name] || paths.create;
+    return '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + body + '</svg>';
+  }
+
+  function relFeed(ts) {
+    var at = Date.parse(ts || "");
+    if (isNaN(at)) return "";
+    var sec = Math.max(0, Math.floor((Date.now() - at) / 1000));
+    if (sec < 45) return "just now";
+    var min = Math.floor(sec / 60);
+    if (min < 60) return min + "m ago";
+    var hour = Math.floor(min / 60);
+    if (hour < 24) return hour + "h ago";
+    var day = Math.floor(hour / 24);
+    if (day < 14) return day + "d ago";
+    return Math.floor(day / 7) + "w ago";
+  }
+
+  function paintRich(parent, text, row) {
+    var title = (row.target && row.target.title) || "";
+    var id = (row.target && row.target.id) || "";
+    var marks = [];
+    if (title && text.indexOf(title) >= 0) marks.push({ at: text.indexOf(title), len: title.length, kind: "title" });
+    if (id && text.indexOf(id) >= 0) marks.push({ at: text.indexOf(id), len: id.length, kind: "id" });
+    marks.sort(function (a, b) { return a.at - b.at; });
+    var cursor = 0;
+    marks.forEach(function (mark) {
+      if (mark.at < cursor) return;
+      if (mark.at > cursor) parent.append(document.createTextNode(text.slice(cursor, mark.at)));
+      if (mark.kind === "title") {
+        var strong = document.createElement("strong");
+        strong.textContent = title;
+        parent.append(strong);
+      } else {
+        var link = document.createElement("a");
+        link.className = "entity-id";
+        var url = (row.target && row.target.url) || "";
+        if (!url && row.target && row.target.system === "linear") url = "https://linear.app/issue/" + id;
+        if (url) link.href = url;
+        link.textContent = id;
+        parent.append(link);
+      }
+      cursor = mark.at + mark.len;
+    });
+    if (cursor < text.length) parent.append(document.createTextNode(text.slice(cursor)));
+  }
+
+  function postActivity(op, id, button) {
+    if (button) button.disabled = true;
+    fetch("/api/activity", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: op, id: id })
+    }).then(function (response) { return response.json(); }).then(function (result) {
+      if (!result || !result.ok) {
+        toast(op === "undo" ? "That action cannot be undone." : "Retry did not run.");
+        if (button) button.disabled = false;
+        return;
+      }
+      toast(op === "undo" ? "Undone." : "Retried.");
+      return load();
+    }).catch(function () {
+      toast("The account could not be read. Read the account again.");
+      if (button) button.disabled = false;
+    });
+  }
+
+  function paintActivity(box, rows, options) {
     if (!box) return;
+    var opts = options || {};
     box.replaceChildren();
-    if (!rows.length) {
+    var groups = opts.groups || activityGroups(rows);
+    if (!groups.length) {
       var empty = document.createElement("p");
-      empty.className = "meta";
-      empty.textContent = "No activity yet.";
+      empty.className = "empty-title";
+      empty.textContent = opts.filtered ? "No activity matches." : "No activity yet.";
       box.append(empty);
       return;
     }
     var feed = document.createElement("div");
     feed.className = "activity-feed";
-    var seen = {};
-    rows.forEach(function (row) {
-      var key = row.requestId || row.id;
-      var group = seen[key];
-      if (!group) {
-        group = document.createElement("div");
-        group.className = "activity-group";
-        seen[key] = group;
-        feed.append(group);
-      }
-      var line = document.createElement("div");
-      line.className = "activity-row" + (row.kind === "request" ? "" : " activity-child");
-      line.id = "activity-" + row.id;
-      var icon = document.createElement("span");
-      icon.className = "activity-icon" + (row.kind === "failure" ? " bad" : "");
-      icon.textContent = row.kind === "failure" ? "!" : "•";
-      var text = document.createElement("p");
-      var who = document.createElement("strong");
-      who.textContent = (row.actor && row.actor.name) || "Someone";
-      text.append(who);
-      var sentence = row.sentence || "";
-      var rest = sentence.indexOf(who.textContent) === 0 ? sentence.slice(who.textContent.length) : (" " + sentence);
-      text.append(document.createTextNode(rest));
-      var roomName = row.origin && row.origin.roomName;
-      if (roomName) {
-        var chip = document.createElement("span");
-        chip.className = "mini-chip";
-        chip.textContent = roomName;
-        text.append(chip);
-      }
-      if (row.kind === "failure") {
-        var retry = document.createElement("button");
-        retry.type = "button";
-        retry.className = "linkish";
-        retry.textContent = "Retry";
-        text.append(retry);
-      }
-      line.append(icon, text);
-      group.append(line);
+    groups.forEach(function (group) {
+      var wrap = document.createElement("div");
+      wrap.className = "activity-group";
+      group.rows.forEach(function (row) {
+        var line = document.createElement("div");
+        line.className = "activity-row" + (row.kind === "request" ? "" : " activity-child");
+        line.id = "activity-" + row.id;
+        var icon = document.createElement("span");
+        icon.className = "activity-icon" + (row.kind === "failure" ? " bad" : "");
+        icon.innerHTML = activityGlyph(row.kind, row.verb);
+        var text = document.createElement("p");
+        var who = document.createElement("strong");
+        who.textContent = (row.actor && row.actor.name) || "Someone";
+        text.append(who);
+        var sentence = row.sentence || "";
+        var rest = sentence.indexOf(who.textContent) === 0 ? sentence.slice(who.textContent.length) : (" " + sentence);
+        text.append(document.createTextNode(" "));
+        paintRich(text, rest.trim(), row);
+        if (row.ts) {
+          var time = document.createElement("time");
+          time.dateTime = row.ts;
+          time.title = new Date(row.ts).toLocaleString();
+          time.textContent = "· " + relFeed(row.ts);
+          text.append(document.createTextNode(" "));
+          text.append(time);
+        }
+        var origin = row.origin || {};
+        var roomName = origin.roomName || "";
+        if (opts.showRoom && roomName && sentence.indexOf(roomName) === -1) {
+          var chip = document.createElement("span");
+          chip.className = "mini-chip";
+          chip.textContent = roomName;
+          text.append(chip);
+        }
+        if (opts.viewRoom && row.kind === "request" && origin.roomId && origin.roomId !== opts.viewRoom) {
+          var from = document.createElement("span");
+          from.className = "from-room";
+          from.textContent = "from " + (roomName || origin.roomId);
+          text.append(from);
+        }
+        line.append(icon, text);
+        if (row.undo && row.undo.available && row.outcome !== "undone") {
+          var undo = document.createElement("button");
+          undo.type = "button";
+          undo.className = "activity-undo";
+          undo.textContent = "Undo";
+          undo.addEventListener("click", function () { postActivity("undo", row.id, undo); });
+          line.append(undo);
+        }
+        if (row.kind === "failure") {
+          var retry = document.createElement("button");
+          retry.type = "button";
+          retry.className = "activity-retry";
+          retry.textContent = "Retry";
+          retry.addEventListener("click", function () { postActivity("retry", row.id, retry); });
+          line.append(retry);
+        }
+        wrap.append(line);
+      });
+      feed.append(wrap);
     });
     box.append(feed);
   }
@@ -2550,7 +2733,7 @@ ${slack}
     var box = document.getElementById("file-waiting");
     var waitingRow = document.getElementById("waiting-row");
     if (waitingRow) waitingRow.hidden = false;
-    paintActivity(box, activityRows(fileRoom));
+    paintActivity(box, [], { groups: selectFeed((state && state.activity) || [], { roomId: fileRoom }), viewRoom: fileRoom });
   }
 
   function openDecision(decision) {
@@ -2609,8 +2792,9 @@ ${slack}
     var waitingOn = (fileRoom && waitingFor(fileRoom).length > 0) || !!(fileWait && fileWait.wait);
     var statusBadge = document.getElementById("file-status-badge");
     if (statusBadge) {
-      statusBadge.className = waitingOn ? "badge warn" : "badge ok";
-      statusBadge.textContent = knownRoom ? (waitingOn ? "Waiting" : "Done") : "";
+      var failedRoom = activityRows(fileRoom).some(function (row) { return row.kind === "failure" && row.outcome === "failed"; });
+      statusBadge.className = failedRoom ? "badge bad" : "badge ok";
+      statusBadge.textContent = knownRoom ? (failedRoom ? "Failed" : "Done") : "";
     }
     var pill = document.getElementById("file-platform-pill");
     if (pill) {
@@ -2729,8 +2913,8 @@ ${slack}
     if (!box) return;
     box.replaceChildren();
     var facts = [
-      ["Platform", (room && room.platform) || "Unknown"],
       ["Started", relativeWhen(named.when) || whenLabel(named.when) || "Unknown"],
+      ["Room", fileRoom || ""],
       ["Decisions", String(rows.length)],
       ["Voice", voiceWord(voiceFor())],
       ["Run automatically", room && room.ask === true ? "Off" : "On"]
@@ -2739,6 +2923,7 @@ ${slack}
       var term = document.createElement("dt");
       term.textContent = pair[0];
       var value = document.createElement("dd");
+      if (pair[0] === "Room") value.className = "mono";
       value.textContent = pair[1];
       box.append(term, value);
     });
@@ -2811,6 +2996,8 @@ ${slack}
     });
     var search = document.querySelector(".dock-search");
     if (search) search.hidden = leftTab !== "transcript";
+    var settings = document.querySelector(".room-settings");
+    if (settings) settings.hidden = rightTab !== "overview";
   }
 
   var roomMediaState = null;
@@ -2857,7 +3044,7 @@ ${slack}
     var name = document.getElementById("player-name");
     var people = fileRoom ? peopleFor(fileRoom) : [];
     var named = media && (media.state === "ready" || media.state === "novideo");
-    if (name) name.textContent = named && people.length ? (personLabel(people[0]) || people[0]) : "";
+    if (name) name.textContent = named && people.length ? (personLabel(people[0]) || people[0]) : "No recording for this room";
     var copy = "No recording was made";
     if (media && media.state === "processing") copy = "Recording is still processing.";
     else if (media && media.state === "expired") copy = "Recording expired";
@@ -3072,7 +3259,7 @@ ${slack}
     var badge = document.createElement("span");
     var waitingOn = fileRoom && waitingFor(fileRoom).length > 0;
     badge.className = waitingOn ? "badge warn" : (media && media.state === "processing" ? "badge warn" : "badge ok");
-    badge.textContent = waitingOn ? "Waiting" : (media && media.state === "processing" ? "Processing" : "Done");
+    badge.textContent = media && media.state === "processing" ? "Processing" : "Done";
     status.append(statusLabelNode, badge);
     row.append(platform, status);
     if (media && media.duration) {
@@ -3562,6 +3749,10 @@ ${slack}
       paintHistory();
     });
   });
+  var historySearch = document.getElementById("history-search");
+  if (historySearch) historySearch.addEventListener("input", function () { paintHistory(); });
+  var historyRoom = document.getElementById("history-room");
+  if (historyRoom) historyRoom.addEventListener("change", function () { paintHistory(); });
   document.getElementById("raise-clash").addEventListener("change", function () {
     var box = document.getElementById("raise-clash");
     if (!fileRoom) {
