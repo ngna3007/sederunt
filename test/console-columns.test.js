@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { once } from "node:events";
 import test from "node:test";
@@ -227,4 +228,29 @@ test("table headers and cells share an x at 1920, 1024, 768, and 640", async (t)
         assert.ok(rooms.when.right <= rooms.when.cardRight + 1, `${width} time ${rooms.when.right} past card ${rooms.when.cardRight}`);
       }
     }
+});
+
+test("pass 02 keeps room, status, and list layout inside the viewport", () => {
+  const css = readFileSync(new URL("../src/console.css", import.meta.url), "utf8");
+  const page = readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
+  const block = css.slice(css.lastIndexOf("Fix pass 02"));
+  assert.ok(block.length > 200, "fix pass 02 block is present");
+  assert.match(block, /#home, #onboard \{ scrollbar-gutter: auto; \}/);
+  assert.match(block, /#file-meta \.meta-item \{[\s\S]*white-space: nowrap;/);
+  assert.match(block, /\.room-actions \{[\s\S]*margin-left: auto;/);
+  assert.match(block, /#right-overview\.tab-pane \{[\s\S]*overflow: auto !important;/);
+  assert.match(block, /#ask-block \.conn\.ask-quiet \{[\s\S]*display: flex !important;/);
+  assert.match(block, /#ask-block \.conn\.ask-quiet \.set-copy \{[\s\S]*flex: 1 1 auto;/);
+  assert.match(block, /\.settings-card \.connectors \{[\s\S]*border: 0 !important;/);
+  assert.match(block, /#read-error\.still-loading \{[\s\S]*height: 32px !important;/);
+  assert.match(block, /\.room-chips \.mini-chip:not\(\.more-narrow\):not\(\.more-wide\) \{[\s\S]*width: auto;/);
+  assert.match(block, /#record-list \.decision-row \{[\s\S]*row-gap: 8px !important;/);
+  assert.match(block, /#record-list \.decision-row \.plat-badge \{[\s\S]*height: 20px;/);
+  assert.match(block, /#history-list \.room-suffix,[\s\S]*max-width: none;/);
+  assert.match(block, /#history-list \.activity-feed,[\s\S]*gap: 16px;/);
+  assert.match(page, /loading\.insertBefore\(slowBox, loading\.firstChild\)/);
+  const zone = page.slice(page.indexOf("function zoneParts"), page.indexOf("function relativeWhen"));
+  assert.doesNotMatch(zone, /calendar-zone/);
+  assert.match(page, /relativeWhen\(item\.spokenAt\) \|\| whenLabel\(item\.spokenAt\)/);
+  assert.match(page, /relativeWhen\(cite\.spokenAt\) \|\| whenLabel\(cite\.spokenAt\)/);
 });

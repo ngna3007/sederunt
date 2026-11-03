@@ -1606,9 +1606,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function zoneParts(iso) {
     var date = new Date(iso);
     if (isNaN(date.getTime())) return null;
-    var zone = document.body.getAttribute("data-calendar-zone") || undefined;
+    // Same zone as whenLabel (the viewer). A calendar day must not mix
+    // "Today at …" with an absolute date from a different zone.
     var parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: zone,
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
@@ -3718,7 +3718,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (slowBox) {
         slowBox.classList.add("state-info", "still-loading");
         if (homeBox && homeBox.hidden && onboardBox) onboardBox.append(slowBox);
-        else if (loading && loading.parentNode) loading.parentNode.insertBefore(slowBox, loading);
+        else if (loading) loading.insertBefore(slowBox, loading.firstChild);
       }
       showRetry(true, "Still loading…");
       var quiet = document.querySelector("#loading .sr");
@@ -4024,7 +4024,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         note.append(clashTitle);
         parts.clash.forEach(function (item) {
           var line = document.createElement("p");
-          var when = relativeWhen(item.spokenAt) || "";
+          var when = relativeWhen(item.spokenAt) || whenLabel(item.spokenAt);
           line.textContent = item.text + (when ? " · " + when : "");
           note.append(line);
         });
@@ -4130,7 +4130,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var chip = document.createElement("button");
       chip.type = "button";
       chip.className = "cite-chip";
-      var citeWhen = relativeWhen(cite.spokenAt);
+      var citeWhen = relativeWhen(cite.spokenAt) || whenLabel(cite.spokenAt);
       var citeRoom = String(cite.label || "").split(" · ")[0];
       chip.textContent = citeWhen ? (citeRoom + " · " + citeWhen) : cite.label;
       chip.title = cite.label;
