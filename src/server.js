@@ -751,18 +751,21 @@ function isDirectRun() {
   return import.meta.url === pathToFileURL(resolve(entry)).href;
 }
 
-if (isDirectRun()) {
+let publicServer;
+if (isDirectRun() || process.env.VERCEL) {
   loadLocalEnv();
   loadCompanyEnv();
-  const server = createApp({ liveLinear: true, calendar: createCalendarAdapter(process.env, { save: saveCalendarEnv }) });
-  const onListen = () => {
+  publicServer = createApp({ liveLinear: true, calendar: createCalendarAdapter(process.env, { save: saveCalendarEnv }) });
+}
+if (isDirectRun() && !process.env.VERCEL && publicServer) {
+  publicServer.listen(port, "127.0.0.1", () => {
     console.log(`Sederunt typed path http://127.0.0.1:${port}`);
     console.log('POST /api/typed {"text":"..."}');
     console.log("A Linear create waits until that tool's preference allows it.");
-  };
-  if (process.env.VERCEL) server.listen(port, onListen);
-  else server.listen(port, "127.0.0.1", onListen);
+  });
 }
+
+export default publicServer;
 
 function loadedCompany(options, deps, env, companies) {
   if (typeof options.companyLoaded === "boolean") return options.companyLoaded;
