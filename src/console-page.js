@@ -56,7 +56,6 @@ export function renderConsolePage(state = {}) {
   const linearIcon = brandLogo("linear-icon");
   const channelIcon = brandLogo("slack-icon");
   const searchIcon = glyph('<circle cx="7" cy="7" r="3.2"/><path d="M9.4 9.4 12.5 12.5"/>');
-  const kebabIcon = glyph('<circle cx="8" cy="3.4" r="0.8" fill="currentColor"/><circle cx="8" cy="8" r="0.8" fill="currentColor"/><circle cx="8" cy="12.6" r="0.8" fill="currentColor"/>');
   const editIcon = glyph('<path d="M9.6 2.7 13.3 6.4 6.4 13.3H2.7V9.6z"/>');
   const outIcon = glyph('<path d="M6.2 2.8H3.4v10.4h2.8"/><path d="M6.6 8h6.2"/><path d="M10.6 5.4 13.2 8l-2.6 2.6"/>');
   const accountMenu = signedIn
@@ -436,14 +435,6 @@ ${slack}
             <span class="meta-item header-only" hidden><span class="meta-label">Platform</span><span id="file-platform-pill"></span></span>
             <span class="meta-item"><span class="meta-label">Started</span><span id="file-started" class="meta"></span></span>
             <span class="meta-item header-only" id="file-usage-item" hidden><span class="meta-label">Usage</span><span id="file-usage" class="usage-chip"></span></span>
-            <div class="room-actions">
-              <button type="button" id="room-menu-btn" class="close" aria-haspopup="menu" aria-expanded="false" aria-controls="room-menu" aria-label="Room actions">${kebabIcon}</button>
-              <div id="room-menu" class="menu room-menu" role="menu" hidden>
-                <button type="button" id="copy-room" role="menuitem">Copy id</button>
-                <button type="button" id="copy-link" role="menuitem">Copy link</button>
-                <button type="button" id="open-meeting" role="menuitem">Open meeting</button>
-              </div>
-            </div>
             <p id="file-lead" class="page-lede" hidden></p>
             <p id="file-lead-status" class="meta"></p>
             <p id="file-proof" class="meta" hidden></p>
@@ -2912,8 +2903,6 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var overviewCard = document.getElementById("file-overview");
     if (overviewCard) overviewCard.hidden = true;
     text("file-id", fileRoom || "");
-    var copy = document.getElementById("copy-room");
-    if (copy) copy.hidden = !fileRoom;
     var waitingOn = (fileRoom && waitingFor(fileRoom).length > 0) || !!(fileWait && fileWait.wait);
     var statusBadge = document.getElementById("file-status-badge");
     if (statusBadge) {
@@ -4283,14 +4272,6 @@ if (sessionWhen && sessionWhen.dataset.at) {
   });
   var railClose = document.getElementById("rail-close");
   if (railClose) railClose.addEventListener("click", closeNav);
-  var copyRoom = document.getElementById("copy-room");
-  if (copyRoom) copyRoom.addEventListener("click", function () {
-    var id = (document.getElementById("file-id") || {}).textContent || "";
-    if (!id) return;
-    var done = function () { toast("Copied the room id."); };
-    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(id).then(done).catch(done);
-    else done();
-  });
   document.querySelectorAll("[data-left-tab]").forEach(function (button) {
     button.addEventListener("click", function () {
       leftTab = button.getAttribute("data-left-tab") || "transcript";

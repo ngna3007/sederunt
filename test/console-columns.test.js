@@ -254,3 +254,14 @@ test("pass 02 keeps room, status, and list layout inside the viewport", () => {
   assert.match(page, /relativeWhen\(item\.spokenAt\) \|\| whenLabel\(item\.spokenAt\)/);
   assert.match(page, /relativeWhen\(cite\.spokenAt\) \|\| whenLabel\(cite\.spokenAt\)/);
 });
+
+test("pass 03 lays out ask rows that have no tool icon", () => {
+  const css = readFileSync(new URL("../src/console.css", import.meta.url), "utf8");
+  const block = css.slice(css.lastIndexOf("Fix pass 03"));
+  assert.ok(block.length > 80, "fix pass 03 block is present");
+  assert.match(block, /#ask-block \.conn \{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*auto;/);
+  assert.match(block, /#ask-block \.conn \{[\s\S]*min-height:\s*56px;/);
+  assert.match(block, /#ask-block \.conn \.conn-ask \{[\s\S]*justify-self:\s*end;[\s\S]*align-self:\s*center;/);
+  assert.match(block, /#ask-block \.conn \.set-copy \{[\s\S]*white-space:\s*nowrap;/);
+  assert.match(block, /@media \(max-width: 639px\) \{[\s\S]*#ask-block \.conn \.set-copy,[\s\S]*white-space:\s*normal;/);
+});

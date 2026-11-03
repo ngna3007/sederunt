@@ -1856,7 +1856,6 @@ body.room-open #file-dialog .room-screen-panel {
 .room-left > .underline-tabs { margin: 12px 12px 0; }
 .meta-strip { flex-wrap: nowrap; overflow-x: auto; }
 .room-actions { margin-left: auto; position: relative; }
-.room-menu { right: 0; left: auto; top: calc(100% + 4px); min-width: 10rem; }
 .left-scroll .pane-label, .left-scroll #file-heard, .left-scroll #file-present { display: none; }
 body.room-missing .room-body, body.room-missing #file-head { display: none !important; }
 body.room-missing #room-missing { margin: 64px auto; max-width: 28rem; }
@@ -3534,9 +3533,6 @@ body.room-open .room-actions {
   flex: 0 0 auto;
   align-self: center;
 }
-body.room-open #room-menu-btn {
-  position: static;
-}
 
 @media (min-width: 901px) {
   body.room-open .stage,
@@ -3773,5 +3769,57 @@ body.room-open #room-menu-btn {
   #file-history .activity-row {
     margin: 0;
     padding: 0;
+  }
+}
+
+/* Fix pass 03: ask rows have no tool icon. Later rules win. */
+#ask-block .conn {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  height: auto;
+  box-sizing: border-box;
+  padding: 12px 16px;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none;
+}
+#ask-block .conn.ask-quiet {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+}
+#ask-block .conn + .conn {
+  box-shadow: inset 0 1px 0 var(--border);
+}
+#ask-block .conn .set-copy {
+  grid-column: 1;
+  min-width: 0;
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+}
+#ask-block .conn .conn-ask {
+  grid-column: 2;
+  justify-self: end;
+  align-self: center;
+  margin-left: 0;
+}
+#ask-block .conn .ask-name,
+#ask-block .conn .ask-tool,
+#ask-block .conn.ask-quiet .ask-name,
+#ask-block .conn.ask-quiet .ask-tool {
+  white-space: nowrap;
+}
+@media (max-width: 639px) {
+  #ask-block .conn .set-copy,
+  #ask-block .conn .ask-name,
+  #ask-block .conn .ask-tool,
+  #ask-block .conn.ask-quiet .ask-name,
+  #ask-block .conn.ask-quiet .ask-tool {
+    white-space: normal;
+    overflow: visible;
   }
 }
