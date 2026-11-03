@@ -100,6 +100,52 @@ function citeWhen(iso) {
   }).format(date).replace(/\u202f|\u00a0/g, " ");
 }
 
+function clashClock(iso) {
+  const date = new Date(iso || "");
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(date).replace(/\u202f|\u00a0/g, " ");
+}
+
+function tidySentence(text) {
+  return String(text || "").trim().replace(/[.!?]+$/g, "").trim();
+}
+
+function countWord(count) {
+  const words = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"];
+  return words[count] || String(count);
+}
+
+/** One plain sentence from clashing lines. The first side keeps the shared prefix. */
+export function clashLead(items) {
+  if (!items || items.length < 2) return "";
+  const bodies = items.map((item) => tidySentence(item.text));
+  const words = bodies.map((body) => body.split(/\s+/).filter(Boolean));
+  let shared = 0;
+  const limit = Math.min(...words.map((row) => row.length));
+  while (shared < limit && words.every((row) => row[shared].toLowerCase() === words[0][shared].toLowerCase())) shared += 1;
+  const tails = words.map((row) => row.slice(shared).join(" "));
+  const usable = shared >= 3 && tails.every((tail) => tail.length > 0);
+  const phrases = items.map((item, index) => {
+    let phrase = bodies[index];
+    if (usable) {
+      phrase = index === 0
+        ? `${words[0].slice(0, shared).join(" ")} ${tails[0]}`.replace(/\s+/g, " ").trim()
+        : tails[index];
+    }
+    if (index === 0 && phrase) phrase = phrase.charAt(0).toLowerCase() + phrase.slice(1);
+    const who = String(item.speaker || "someone").trim().toLowerCase() || "someone";
+    const clock = item.clock || "";
+    return clock ? `${phrase} (${who}, ${clock})` : `${phrase} (${who})`;
+  });
+  const head = `${countWord(items.length)} decisions disagree`;
+  if (phrases.length === 2) return `${head}: ${phrases[0]} vs ${phrases[1]}.`;
+  return `${head}: ${phrases.slice(0, -1).join("; ")} vs ${phrases[phrases.length - 1]}.`;
+}
+
 /**
  * Decisions that answer a question. Sentences stay separate. A room whose
  * kept lines contradict each other says so. A cite names the room and the time.
@@ -136,15 +182,34 @@ export function rankDecisions(question, decisions, rooms) {
   const cites = picked.map((decision) => {
     const room = (rooms || []).find((item) => item?.id === decision.roomId);
     const label = [roomTitle(room), citeWhen(decision.spokenAt)].filter(Boolean).join(" · ");
-    return { roomId: decision.roomId, label, text: decision.text || "", spokenAt: decision.spokenAt || "" };
+    const speaker = String(decision.speaker || decision.speakerMemberId || "").trim();
+    return {
+      roomId: decision.roomId,
+      label,
+      text: decision.text || "",
+      spokenAt: decision.spokenAt || "",
+      speaker,
+      clock: clashClock(decision.spokenAt),
+    };
+  });
+  const clashItems = clash.map((decision) => {
+    const room = (rooms || []).find((item) => item?.id === decision.roomId);
+    const speaker = String(decision.speaker || decision.speakerMemberId || "").trim();
+    return {
+      text: sentenceOf(decision.text),
+      when: citeWhen(decision.spokenAt),
+      spokenAt: decision.spokenAt || "",
+      room: roomTitle(room),
+      roomId: decision.roomId || "",
+      speaker,
+      clock: clashClock(decision.spokenAt),
+    };
   });
   return {
     answer: lines.join("\n"),
     detail: "",
     cites,
-    clash: clash.map((decision) => {
-      const room = (rooms || []).find((item) => item?.id === decision.roomId);
-      return { text: sentenceOf(decision.text), when: citeWhen(decision.spokenAt), spokenAt: decision.spokenAt || "", room: roomTitle(room) };
-    }),
+    clash: clashItems,
+    lead: clashLead(clashItems),
   };
 }
