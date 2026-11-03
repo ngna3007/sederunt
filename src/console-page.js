@@ -200,6 +200,7 @@ ${slack}
     </div>
     <p id="status"></p>
     <div id="loading" class="skeletons table-skel" aria-busy="true" hidden>
+      <p id="loading-label">Reading the account.</p>
       <span class="sk sk-tile"></span>
       <span class="sk sk-tile"></span>
       <span class="sk sk-tile"></span>
@@ -310,7 +311,8 @@ ${slack}
     </section>
     <section id="history" hidden>
       <div class="page-head"><div><p class="page-title">History</p><p class="page-lede">What a room heard.</p></div></div>
-      <div class="history-tools">
+        <div class="history-tools page-toolbar">
+        <label class="search">${searchIcon}<span class="sr">Search history</span><input id="history-search" type="search" placeholder="Search" autocomplete="off"></label>
         <div class="chips" role="group" aria-label="Whose record">
           <button type="button" class="chip-filter" data-scope="group" aria-pressed="true">Company</button>
           <button type="button" class="chip-filter" data-scope="you" aria-pressed="false">You</button>
@@ -321,10 +323,7 @@ ${slack}
           <button type="button" class="chip-filter" data-kind="action">Actions</button>
           <button type="button" class="chip-filter" data-kind="failure">Failed</button>
         </div>
-        <div class="history-filters">
-          <label class="room-filter"><span class="sr">Filter by room</span><select id="history-room"><option value="">All rooms</option></select></label>
-          <label class="search">${searchIcon}<span class="sr">Search history</span><input id="history-search" type="search" placeholder="Search" autocomplete="off"></label>
-        </div>
+        <label class="room-filter"><span class="sr">Filter by room</span><select id="history-room"><option value="">All rooms</option></select></label>
       </div>
       <div id="history-empty" class="empty-state" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="4.6"/><path d="M8 5.6V8l1.7 1.1"/></svg></span><p class="empty-title" id="history-line">No history yet.</p><p>Questions and decisions from a room show up here.</p></div>
       <p class="section-next"><button id="history-next" class="primary" type="button" hidden>New room</button></p>
@@ -354,13 +353,13 @@ ${slack}
     </section>
     <section id="record" hidden>
       <div class="page-head"><div><p class="page-title">Decisions</p><p class="page-lede">Sentences a room kept, with who kept each one and when.</p></div><div class="page-actions"></div></div>
-      <div class="toolbar" id="record-toolbar">
+      <div class="toolbar page-toolbar" id="record-toolbar">
+        <label class="search">${searchIcon}<span class="sr">Search decisions</span><input id="record-search" type="search" placeholder="Search" autocomplete="off"></label>
         <div class="chips" role="group" aria-label="Filter decisions">
           <button type="button" class="chip-filter" data-decision-filter="all" aria-pressed="true">All</button>
           <button type="button" class="chip-filter" data-decision-filter="current">Current</button>
           <button type="button" class="chip-filter" data-decision-filter="clashing">Clashing</button>
         </div>
-        <label class="search">${searchIcon}<span class="sr">Search decisions</span><input id="record-search" type="search" placeholder="Search" autocomplete="off"></label>
       </div>
       <div class="empty-state" id="record-empty"><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.8h10v10.4H3z"/><path d="M5 6h6M5 8.4h6M5 10.8h3.5"/></svg></span><p class="empty-title ledger">No decision yet.</p><p>A sentence kept in a room shows up here.</p></div>
       <p class="section-next"><button id="record-next" class="primary" type="button" hidden>New room</button></p>
@@ -407,7 +406,7 @@ ${slack}
     </section>
     <section id="people" hidden>
       <div class="page-head"><div><p class="page-title">People</p><p class="page-lede">Names heard in a room.</p></div></div>
-      <div class="toolbar" id="people-toolbar">
+      <div class="toolbar page-toolbar" id="people-toolbar">
         <label class="search">${searchIcon}<span class="sr">Search people</span><input id="people-search" type="search" placeholder="Search" autocomplete="off"></label>
       </div>
       <div id="people-empty" class="empty-state" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="5.2" r="2.2"/><path d="M3.4 12.6c.7-2 2.4-3 4.6-3s3.9 1 4.6 3"/></svg></span><p class="empty-title">No one is listed yet.</p><p>People from a meeting or a channel show up here.</p></div>
@@ -2630,7 +2629,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
 
-  function activityGlyph() {
+  function activityGlyph(kind) {
+    if (kind === "failure") {
+      return '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="8" r="5.2"/><path d="M8 5.1v3.2M8 10.6v.4"/></svg>';
+    }
     return '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="3.2"/></svg>';
   }
 
@@ -2711,9 +2713,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
         icon.className = "activity-icon" + (row.kind === "failure" && !row.resolved ? " bad" : "");
         icon.innerHTML = activityGlyph(row.resolved ? "action" : row.kind, row.verb);
         var text = document.createElement("p");
+        var copy = document.createElement("span");
+        copy.className = "activity-copy";
         var who = document.createElement("strong");
         who.textContent = (row.actor && row.actor.name) || "Someone";
-        text.append(who);
+        copy.append(who);
         var calendarZone = document.body.getAttribute("data-calendar-zone") || "";
         var viewerZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
         var sample = row.changes && row.changes[0] ? (row.changes[0].from || row.changes[0].to || "") : "";
@@ -2724,8 +2728,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
           sample
         );
         var rest = sentence.indexOf(who.textContent) === 0 ? sentence.slice(who.textContent.length) : (" " + sentence);
-        text.append(document.createTextNode(" "));
-        paintRich(text, rest.trim(), row);
+        copy.append(document.createTextNode(" "));
+        paintRich(copy, rest.trim(), row);
         var outcomeKind = group.rows.some(function (item) { return item.kind === "result"; }) ? "result" : "action";
         if (row.verb === "label" && row.kind === outcomeKind && row.changes && row.changes[0] && row.changes[0].to) {
           var labelWord = String(row.changes[0].to);
@@ -2734,13 +2738,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
           if (labelAt >= 0) {
             var before = source.slice(0, labelAt).trim();
             var after = source.slice(labelAt + labelWord.length).trim();
-            text.replaceChildren(who);
-            paintRich(text, before ? " " + before + " " : " ", row);
+            copy.replaceChildren(who);
+            paintRich(copy, before ? " " + before + " " : " ", row);
             var pill = document.createElement("span");
             pill.className = "label-pill";
             pill.textContent = labelWord;
-            text.append(pill);
-            if (after) paintRich(text, " " + after, row);
+            copy.append(pill);
+            if (after) paintRich(copy, " " + after, row);
           }
         }
         if (opts.viewRoom && row.origin && Number.isFinite(row.origin.at)) {
@@ -2753,14 +2757,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
           if (secs.length < 2) secs = "0" + secs;
           seek.textContent = "at " + mins + ":" + secs;
           seek.addEventListener("click", function () { seekTo(seconds); });
-          text.append(seek);
+          copy.append(seek);
         }
+        text.append(copy);
         if (row.ts) {
           var time = document.createElement("time");
           time.dateTime = row.ts;
           time.title = new Date(row.ts).toLocaleString();
-          time.textContent = "· " + relativeTime(row.ts);
-          text.append(document.createTextNode(" "));
+          time.textContent = "· " + (relativeWhen(row.ts) || relativeTime(row.ts));
           text.append(time);
         }
         var origin = row.origin || {};
@@ -2768,7 +2772,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         if (opts.showRoom && heardRoom) {
           var suffix = document.createElement("span");
           suffix.className = "room-suffix";
-          suffix.textContent = " · " + heardRoom;
+          suffix.textContent = "· " + heardRoom;
           text.append(suffix);
         }
         if (row.target && row.target.url && row.target.system === "slack" && (row.kind === "action" || row.kind === "result")) {
@@ -3001,7 +3005,6 @@ if (sessionWhen && sessionWhen.dataset.at) {
     box.replaceChildren();
     var facts = [
       ["Started", relativeWhen(named.when) || whenLabel(named.when) || "Unknown"],
-      ["Room", roomName(room) || fileRoom || ""],
       ["Decisions", String(rows.length)]
     ];
     facts.forEach(function (pair) {
@@ -4016,7 +4019,6 @@ if (sessionWhen && sessionWhen.dataset.at) {
         });
         reading.parentNode.append(note);
       }
-      if (pending && pending.scrollIntoView) pending.scrollIntoView({ block: "start", inline: "nearest" });
       if (reading && parts.detail) {
         var extra = document.createElement("span");
         extra.className = "chat-detail";
@@ -4026,8 +4028,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (reading && parts.cites) appendCites(reading.parentNode, parts.cites);
       document.getElementById("chat-text").value = "";
       growChat();
-      var log = document.getElementById("chat-log");
-      log.scrollTop = log.scrollHeight;
+      placeChatAnswer((pending && pending.querySelector(".cite-row")) || pending);
       return load();
     }).catch(function () {
       var pending = document.querySelector("#chat-log .chat-turn.chat-pending");
@@ -4075,6 +4076,29 @@ if (sessionWhen && sessionWhen.dataset.at) {
       text("join-status", "Sederunt could not join that meeting.");
     });
   });
+  function placeChatAnswer(node) {
+    var log = document.getElementById("chat-log");
+    var form = document.getElementById("chat-form");
+    if (!log || !node) return;
+    var composer = form ? form.getBoundingClientRect().height : 72;
+    var gap = 12;
+    log.style.paddingBottom = (composer + gap) + "px";
+    if (!form) return;
+    var scroller = log;
+    var parent = log.parentElement;
+    while (parent && parent !== document.documentElement) {
+      var style = getComputedStyle(parent);
+      if (/(auto|scroll)/.test(style.overflowY) && parent.scrollHeight > parent.clientHeight + 1) {
+        scroller = parent;
+        break;
+      }
+      parent = parent.parentElement;
+    }
+    var bottom = node.getBoundingClientRect().bottom;
+    var limit = form.getBoundingClientRect().top - gap;
+    scroller.scrollTop += bottom - limit;
+  }
+
   function appendCites(body, cites) {
     var all = (cites || []).filter(function (cite) { return cite && cite.label; });
     if (!all.length) return;
@@ -4579,6 +4603,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   var startRoom = roomFromPath(location.pathname);
   if (startRoom) fileRoom = startRoom;
   showSection(startRoom ? "file" : sectionFromPath(location.pathname));
+  if (!startRoom && (sectionName === "home" || sectionName === "rooms")) showHomeSkeleton(true);
   routed = true;
   load();
   syncRail();

@@ -2392,7 +2392,7 @@ label.search.dock-search { background: var(--card); z-index: 2; }
   .people-row .heard { display: none; }
   #people-table .people-head,
   #people-table .people-row {
-    grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.6fr) 6.5rem 4.5rem;
+    grid-template-columns: minmax(8rem, 0.9fr) minmax(0, 1fr) 6.5rem 4.5rem;
   }
   .chip-second, .chip-rest, .more-wide { display: none !important; }
   .more-narrow { display: inline-flex; }
@@ -2431,7 +2431,7 @@ label.search.dock-search { background: var(--card); z-index: 2; }
 }
 #record-table > .decision-head,
 #record-list .decision-row {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 14rem) 7.5rem 4.5rem;
+  grid-template-columns: minmax(0, 1fr) 220px 7.5rem 4.5rem;
   grid-template-areas: none;
 }
 #record-list .decision-row {
@@ -2443,18 +2443,20 @@ label.search.dock-search { background: var(--card); z-index: 2; }
 }
 #record-list .decision-row > * { min-width: 0; }
 #record-list .decision-row .ex-room,
-#record-list .decision-row .ex-plat,
+#record-list .decision-row .ex-plat { justify-self: stretch; width: 100%; max-width: 100%; }
 #record-list .decision-row .badge,
 #record-list .decision-row .row-view { grid-area: auto; width: auto; max-width: 100%; }
 #record-list .decision-row .badge,
 #record-list .decision-row .row-view { justify-self: start; }
 #record-list .decision-row .room-name,
 #record-list .ex-plat span.room-name {
-  display: block;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
   white-space: normal;
-  overflow: visible;
-  text-overflow: unset;
-  -webkit-line-clamp: unset;
+  line-height: 1.35;
+  max-height: 2.7em;
 }
 .mini-chip { max-width: 100%; }
 .activity-row {
@@ -2503,18 +2505,7 @@ label.search.dock-search { background: var(--card); z-index: 2; }
 .table-skel { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 @media (max-width: 700px) {
   .table-skel { grid-template-columns: 1fr 1fr; }
-  body.room-open #file-head.bot-head,
-  .room-screen .room-left,
-  #file-dialog.room-screen .detail-side.room-right,
-  .room-screen .room-left > .underline-tabs,
-  #file-transcript,
-  #file-callout,
-  label.search.dock-search {
-    padding-left: 16px;
-    padding-right: 16px;
-  }
 }
-#chat { padding-top: 12px; }
 #chat-form.composer { margin-top: 12px; }
 .suggests, #chat-suggests { margin-bottom: 12px; }
 #new-room.primary:not(:disabled) {
@@ -2534,7 +2525,6 @@ label.search.dock-search { background: var(--card); z-index: 2; }
     bottom: 16px;
     box-sizing: border-box;
   }
-  #chat { padding-top: 12px; }
 }
 @media (max-width: 1200px) {
   .chip-second, .chip-rest, .more-wide { display: none !important; }
@@ -2553,8 +2543,111 @@ label.search.dock-search { background: var(--card); z-index: 2; }
     grid-template-columns: minmax(0, 1fr) 4.5rem;
     grid-template-areas: "sentence view" "room view";
   }
-  #record-list .decision-row .ex-room { grid-area: sentence; width: auto; max-width: none; }
+  #record-list .decision-row .ex-room { grid-area: sentence; justify-self: stretch; width: 100%; max-width: none; }
   #record-list .decision-row .ex-room strong { white-space: normal; }
-  #record-list .decision-row .ex-plat { grid-area: room; width: auto; max-width: 100%; }
+  #record-list .decision-row .ex-plat { grid-area: room; justify-self: stretch; width: 100%; max-width: 100%; }
   #record-list .decision-row .row-view { grid-area: view; align-self: start; }
 }
+
+#people-table .people-head,
+#people-table .people-row {
+  grid-template-columns: minmax(8rem, 1.1fr) minmax(0, 2fr) 8.5rem 10rem 4.75rem;
+  height: 60px;
+  min-height: 60px;
+  max-height: 60px;
+  overflow: hidden;
+}
+.people-row .person,
+.people-row .person span {
+  overflow: visible;
+  text-overflow: unset;
+  white-space: nowrap;
+}
+.room-chips { flex-wrap: nowrap; align-items: center; }
+.room-chips .mini-chip { width: max-content; flex: 0 0 auto; max-width: 12rem; }
+.activity-row p {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: clip;
+}
+.activity-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-row time,
+.room-suffix { flex: none; white-space: nowrap; }
+.activity-icon.bad { color: var(--destructive); }
+.page-toolbar,
+.toolbar,
+.history-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  overflow: visible;
+}
+.page-toolbar > .search,
+.toolbar > .search,
+.history-tools > .search {
+  flex: 1 1 16rem;
+  order: 0;
+  height: 32px;
+  min-height: 32px;
+  margin: 0;
+}
+.chip-filter,
+.page-toolbar select,
+.history-tools select,
+.toolbar select,
+.search input {
+  height: 32px;
+  min-height: 32px;
+  border-radius: var(--radius);
+  box-sizing: border-box;
+}
+#account-page { display: flex; flex-direction: column; gap: 16px; }
+#loading-label { grid-column: 1 / -1; margin: 0; font-weight: 550; color: var(--foreground); }
+body.is-reading #loading { display: grid; }
+@media (min-width: 901px) {
+  #crumb-current { display: none; }
+  body:not(.room-open) #crumb-sep { display: none; }
+}
+@media (max-width: 700px) {
+  .history-tools > .search { flex: 1 1 100%; width: 100%; }
+  .history-tools .room-filter { flex: 1 1 10rem; min-width: 0; max-width: 100%; }
+  .history-tools select { width: 100%; max-width: 100%; }
+  #rooms .explorer-head,
+  #rooms a.room,
+  #rooms button.room:not(.decision-row) {
+    grid-template-columns: minmax(0, 1fr) 5.5rem 6.75rem;
+  }
+  #rooms .avatar-stack { justify-self: stretch; width: 100%; justify-content: flex-start; }
+  #rooms .status-cell { justify-self: stretch; width: 6.75rem; justify-content: flex-start; }
+  #rooms .status-cell .badge { margin-left: 0; }
+}
+body.room-open #file-dialog.room-screen .room-left,
+body.room-open #file-dialog.room-screen .room-right { padding: 16px; }
+body.room-open .player-frame { padding: 0; }
+body.room-open .room-left > .underline-tabs { margin: 12px 0 0; }
+body.room-open .left-scroll,
+body.room-open #left-config,
+body.room-open #left-raw,
+body.room-open #file-transcript,
+body.room-open label.dock-search { padding: 8px 0; margin: 0; }
+body.room-open .utter { padding: 4px 0 12px; }
+body.room-open #file-callout,
+body.room-open #file-facts,
+body.room-open .outcome-card,
+body.room-open .overview-facts,
+body.room-open .room-settings,
+body.room-open .artifacts { margin-left: 0; margin-right: 0; }
+body.room-open .room-settings,
+body.room-open #file-facts,
+body.room-open #file-callout .callout { padding: 16px; }
