@@ -7,12 +7,12 @@ import { replayFailure } from "../src/typed-path.js";
 import { rebuildCompanyIndex } from "../src/typed-path.js";
 import { createSession } from "../src/session.js";
 
-const observed = { start: "2026-11-03T15:00:00.000Z", end: "2026-11-03T16:00:00.000Z" };
+const observed = { start: "2026-11-03T15:00:00.000Z", end: "2026-11-03T16:00:00.000Z", timeZone: "Asia/Ho_Chi_Minh" };
 
 function event(system, verb, changes, id = "T-1") {
   return {
     verb,
-    target: { system, id, title: "Order booth banner" },
+    target: { system, id, title: "Order booth banner", channel: system === "slack" ? "C0123DEMO1" : "" },
     changes,
     origin: { roomName: "#sederunt-demo" },
   };
@@ -228,9 +228,9 @@ test("a slack retry records the timestamp and a second click does not post again
     requestId: "req-slack",
     actor: { type: "person", name: "Mina" },
     verb: "post",
-    target: { system: "slack", type: "message", title: "Booth notes" },
+    target: { system: "slack", type: "message", title: "Booth notes", channel: "C0123" },
     changes: [{ field: "body", to: "The booth opens at nine." }],
-    origin: { roomId: "booth", roomName: "C0123" },
+    origin: { roomId: "booth", roomName: "Booth planning" },
     tool: { name: "act", server: "sederunt-mcp" },
   });
   const posts = [];
@@ -253,6 +253,7 @@ test("a slack retry records the timestamp and a second click does not post again
   assert.equal(second.ok, false);
   assert.equal(second.reason, "already");
   assert.equal(posts.length, 1);
+  assert.equal(posts[0].channel, "C0123");
 });
 
 test("a slack refusal is recorded so the row changes", async () => {
@@ -263,9 +264,9 @@ test("a slack refusal is recorded so the row changes", async () => {
     requestId: "req-slack",
     actor: { type: "person", name: "Mina" },
     verb: "post",
-    target: { system: "slack", type: "message", title: "Booth notes" },
+    target: { system: "slack", type: "message", title: "Booth notes", channel: "C0123" },
     changes: [{ field: "body", to: "The booth opens at nine." }],
-    origin: { roomId: "booth", roomName: "C0123" },
+    origin: { roomId: "booth", roomName: "Booth planning" },
     tool: { name: "act", server: "sederunt-mcp" },
   });
   const result = await replayFailure(session, {
@@ -312,6 +313,7 @@ test("a newer comment or status move does not stale a failed assign", async () =
     verb: "move",
     target: { system: "linear", type: "issue", id: "ROW-127", title: "Booth power" },
     changes: [{ field: "state", from: "Todo", to: "Done" }],
+    undo: { available: true, until: "2099-01-01T00:00:00.000Z" },
     origin: { roomId: "booth", roomName: "Booth planning" },
     tool: { name: "act", server: "sederunt-mcp" },
   });
@@ -322,6 +324,7 @@ test("a newer comment or status move does not stale a failed assign", async () =
   }, "fail-assign");
   assert.equal(open.ok, true);
   assert.equal(calls.length, 1);
+  assert.equal(session.activity.find((row) => row.id === "act-status").undo.available, true);
   logFailure(session, {
     id: "fail-assign-2",
     requestId: "req-assign-2",
@@ -365,4 +368,50 @@ test("a restart keeps a retried failure and an undone action", async () => {
   assert.equal(session.activity.find((row) => row.id === "fail-1").resolved, true);
   assert.equal(session.activity.find((row) => row.id === "act-1").outcome, "undone");
   assert.equal(session.activity.find((row) => row.id === "act-1").undo.available, false);
+});
+
+test("a zone label is added only after a rendered time", () => {
+  const error = formatActivitySentence(
+    "Sederunt couldn't move Launch review: Google Calendar timed out",
+    "Asia/Ho_Chi_Minh",
+    "UTC",
+    "2026-11-03T09:00:00.000Z",
+  );
+  assert.equal(error, "Sederunt couldn't move Launch review: Google Calendar timed out");
+  const undone = formatActivitySentence(
+    "Mina undid rescheduling Launch review on Google Calendar via MCP",
+    "Asia/Ho_Chi_Minh",
+    "UTC",
+  );
+  assert.doesNotMatch(undone, /GMT\+7|ICT/);
+  const timed = formatActivitySentence(
+    "Sederunt moved Launch review from 2:00 PM to 4:00 PM on Google Calendar via MCP",
+    "Asia/Ho_Chi_Minh",
+    "UTC",
+    "2026-11-03T09:00:00.000Z",
+  );
+  assert.match(timed, /4:00 PM GMT\+7|4:00 PM ICT/);
+  assert.doesNotMatch(timed, /MCP GMT\+7|MCP ICT/);
+});
+
+test("a create replaces the previous target url instead of keeping it", async () => {
+  const session = createSession();
+  const { logFailure } = await import("../src/activity.js");
+  logFailure(session, {
+    id: "fail-create",
+    requestId: "req-create",
+    actor: { type: "person", name: "Mina" },
+    verb: "create",
+    target: { system: "linear", type: "issue", title: "Reserve booth power", url: "https://linear.app/old/issue/ROW-1" },
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    tool: { name: "act", server: "sederunt-mcp" },
+  });
+  await replayFailure(session, {
+    app: { linearWorkspace: "" },
+    linear: { async createIssue() { return { id: "ROW-200", identifier: "ROW-200" }; } },
+    memory: { async remember() { return { blobId: null }; } },
+  }, "fail-create");
+  const filed = session.activity.find((row) => row.kind === "action" && row.verb === "create");
+  assert.equal(filed.target.id, "ROW-200");
+  assert.equal(filed.target.url, "");
 });

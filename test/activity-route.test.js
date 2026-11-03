@@ -360,7 +360,8 @@ test("chat matches a room on a word boundary and counts only that room", async (
       body: JSON.stringify({ text: "what did we decide about boothwide?", memberId: "rowan" }),
     });
     const wideBody = await wide.json();
-    assert.equal(wideBody.decisions, 3);
+    assert.equal(wideBody.body, "Nothing stored matches that.");
+    assert.equal(wideBody.decisions, 0);
     const booth = await fetch(`http://127.0.0.1:${port}/api/chat`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -380,6 +381,23 @@ test("chat matches a room on a word boundary and counts only that room", async (
     const designBody = await design.json();
     assert.equal(designBody.decisions, 1);
     assert.match(designBody.body, /design-crit kept/);
+  } finally {
+    app.close();
+  }
+});
+
+test("a question that matches nothing does not list every decision", async () => {
+  const app = appFor(seeded(), []);
+  const port = await listen(app);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "what about xyzzy?", memberId: "rowan" }),
+    });
+    const body = await response.json();
+    assert.equal(body.body, "Nothing stored matches that.");
+    assert.equal(body.decisions, 0);
   } finally {
     app.close();
   }

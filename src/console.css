@@ -1219,7 +1219,7 @@ button.secondary {
   font-size: 12px; font-weight: 500;
 }
 .plat-badge svg { display: block; }
-.row-view { color: var(--muted-foreground); font-size: 13px; font-weight: 500; justify-self: end; }
+.row-view, .row-open { color: var(--muted-foreground); font-size: 13px; font-weight: 500; justify-self: start; }
 .status-cell { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .status-cell .when { color: var(--muted-foreground); font-size: 12px; white-space: nowrap; }
 .pager { display: inline-flex; gap: 8px; }
@@ -1524,9 +1524,9 @@ button.tile {
 #record-list .decision-row { align-items: center; }
 .decision-line { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 10px 0; border-bottom: 1px solid var(--border); }
 .decision-line .meta { display: block; }
-.room-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.room-chips { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; overflow: hidden; }
 .mini-chip {
-  display: inline-flex; align-items: center; max-width: 12rem;
+  display: inline-flex; align-items: center; width: max-content; max-width: min(12rem, 100%); flex: none;
   min-height: 22px; padding: 0 8px;
   border: 1px solid var(--border); border-radius: var(--radius-pill);
   background: var(--card); font-size: 12px;
@@ -2099,9 +2099,9 @@ body.room-open #home > .main {
 }
 #chat {
   width: 100%;
-  max-width: 760px;
-  margin-left: auto;
-  margin-right: auto;
+  max-width: none;
+  margin-left: 0;
+  margin-right: 0;
 }
 #chat .talk-panel,
 #chat .ai-chat,
@@ -2243,11 +2243,31 @@ label.search.dock-search input { padding-left: 32px; }
 .people-head span {
   text-align: left;
 }
+.people-row > span,
+.people-head > span,
+.people-row > span:nth-child(2),
+.people-head > span:nth-child(2) {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
 .decision-head,
 #record-list .decision-row {
   grid-template-columns: var(--table-decisions);
   justify-items: start;
   text-align: left;
+}
+#record-table.record-board {
+  display: block;
+  gap: 0;
+  overflow: hidden;
+}
+#record-list .decision-row,
+#record-list .decision-row:first-child {
+  margin: 0;
+  border-radius: 0;
+  border-top: 0;
+  border-bottom: 1px solid var(--border);
 }
 #record-table > .decision-head {
   border-bottom: 1px solid var(--border);
@@ -2268,11 +2288,12 @@ label.search.dock-search input { padding-left: 32px; }
   justify-self: start;
 }
 #record-list .decision-row .room-name {
-  display: block;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 .activity-stale {
   color: var(--muted-foreground);
@@ -2298,8 +2319,20 @@ label.search.dock-search input { padding-left: 32px; }
 }
 .account-layout .overview-card,
 .account-layout .settings-card { padding: 16px; }
+.account-layout .settings-card .section-label,
+.account-layout .settings-card .card-help { margin-left: 0; margin-right: 0; }
 .account-layout .settings-card .section-label { margin: 0 0 8px; }
-.account-layout .account-kv { padding: 0; }
+.account-layout .account-kv {
+  padding: 0;
+  gap: 0;
+  grid-template-columns: 140px minmax(0, 1fr);
+}
+.account-layout .account-kv dt,
+.account-layout .account-kv dd {
+  border-bottom: 1px solid var(--border);
+  padding: 12px 0;
+}
+.account-layout .account-kv dd { padding-left: 16px; }
 .from-room { margin-left: 6px; }
 .timeline { max-height: none; }
 .tl-lane-label {
@@ -2321,12 +2354,66 @@ label.search.dock-search input { padding-left: 32px; }
 }
 .chip-rest,
 .more-narrow { display: none; }
+.callout-stack { display: flex; flex-direction: column; gap: 8px; }
+.callout-bad {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid #f3b4b4;
+  border-radius: var(--radius-xl);
+  background: #fde8e8;
+  color: #7a271a;
+}
+.callout-bad p { margin: 0; }
+.chat-clash p { margin: 0; }
+#chat .composer, #chat-form { max-width: none; }
+#chat-log .chat-turn { scroll-margin-bottom: 24px; }
+.topbar { position: sticky; top: 0; z-index: 30; background: var(--background); }
+label.search.dock-search { background: var(--card); z-index: 2; }
+.room-settings { margin-top: 16px; }
+@media (max-width: 900px) {
+  .tl-hints { display: none; }
+}
+@media (max-width: 700px) {
+  body.room-open #file-title { display: none; }
+  .topbar, body.room-open #file-head.bot-head { padding-left: 16px; padding-right: 16px; }
+  #chat-log .chat-turn { scroll-margin-bottom: 112px; }
+  .history-tools {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    justify-content: flex-start;
+  }
+  .room-settings { margin-top: 24px; }
+}
 @media (max-width: 900px) {
   #rooms .explorer-head,
   #rooms a.room,
   #rooms button.room:not(.decision-row) {
     grid-template-columns: var(--table-rooms-narrow);
   }
+  .decision-head,
+  #record-list .decision-row {
+    grid-template-columns: minmax(0, 1fr) 6.5rem 4.5rem;
+  }
+  .decision-head > span:nth-child(2) { display: none; }
+  #record-list .decision-row {
+    grid-template-areas: "sentence status view" "room room view";
+  }
+  #record-list .decision-row .ex-room { grid-area: sentence; min-width: 0; width: auto; }
+  #record-list .decision-row .ex-room strong { white-space: normal; overflow-wrap: anywhere; }
+  #record-list .decision-row .ex-plat { grid-area: room; width: auto; max-width: 100%; }
+  #record-list .decision-row .badge { grid-area: status; justify-self: start; }
+  #record-list .decision-row .row-view { grid-area: view; justify-self: start; }
+  .people-head > span:nth-child(4),
+  .people-row .heard { display: none; }
+  .people-head,
+  .people-row {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) 6.75rem 4.5rem;
+  }
+  .people-row .room-chips { min-width: 0; overflow: hidden; }
 }
 @media (max-width: 700px) {
   .chip-second,

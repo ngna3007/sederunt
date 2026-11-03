@@ -14,7 +14,8 @@ import { createMeetingAdapter, mediaFromBot, meetingDoorReady, recallBotUrl, rec
 import { createTatumReader } from "./tatum/get-object.js";
 import { bindToolMember, handleMcpRequest, memberRefusal, mcpJsonRpc } from "./mcp.js";
 import { renderConsolePage } from "./console-page.js";
-import { roomsMatching } from "./room-match.js";
+import { contentWords, decisionRoomIds, roomsMatching } from "./room-match.js";
+import { createSlackClient } from "./slack/post.js";
 import { renderSignInPage } from "./console-sign-in.js";
 import {
   CONSOLE_SESSION_MS,
@@ -74,12 +75,15 @@ export function appConfig(env = {}) {
   const origin = String(env.SEDERUNT_PUBLIC_ORIGIN || "").replace(/\/$/, "");
   const linearTeam = String(env.LINEAR_TEAM || "ROW").trim() || "ROW";
   const linearWorkspace = String(env.LINEAR_WORKSPACE || "").trim();
-  return { origin, timeZone: calendarTimeZone(env), linearTeam, linearWorkspace };
+  const slackChannel = String(env.SLACK_DEFAULT_CHANNEL || "").trim();
+  return { origin, timeZone: calendarTimeZone(env), linearTeam, linearWorkspace, slackChannel };
 }
 
 /** Adapters that do not open a socket. A live Linear client is used only after a token load that the caller opts into. */
 export function defaultDeps(options = {}) {
   const env = options.env ?? process.env;
+  const config = appConfig(env);
+  const fetchImpl = options.fetch || globalThis.fetch;
   const linearCalls = [];
   const deps = {
     linear: options.linear ?? {
@@ -114,38 +118,20 @@ export function defaultDeps(options = {}) {
       },
     },
     calendar: options.calendar ?? createCalendarAdapter(env),
-    slack: options.slack ?? {
-      async postMessage({ channel, text, thread } = {}) {
-        const token = typeof env.SLACK_BOT_TOKEN === "string" ? env.SLACK_BOT_TOKEN.trim() : "";
-        if (!token || !channel || !text) {
-          const error = new Error("unsupported");
-          error.reason = "unsupported";
-          throw error;
-        }
-        const response = await fetch("https://slack.com/api/chat.postMessage", {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${token}`,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({ channel, text, thread_ts: thread || undefined }),
-        });
-        return response.json();
-      },
-    },
+    slack: options.slack ?? createSlackClient(env, fetchImpl),
     tatum: options.tatum ?? createTatumReader(),
     console: options.console ?? createConsoleAdapter(),
     meeting: options.meeting ?? createMeetingAdapter(env),
     memory: options.memory === undefined ? memoryAdapter(env, options.memwal) : options.memory,
   };
   if (options.liveLinear === true) {
-    deps.linear = liveLinear(deps.linear, options.loadToken, env);
+    deps.linear = liveLinear(deps.linear, options.loadToken, config);
   }
-  deps.app = appConfig(env);
+  deps.app = config;
   return deps;
 }
 
-function liveLinear(stub, loadToken = loadLinearToken, env = {}) {
+function liveLinear(stub, loadToken = loadLinearToken, config = {}) {
   let pending;
   return {
     calls: stub.calls,
@@ -184,7 +170,6 @@ function liveLinear(stub, loadToken = loadLinearToken, env = {}) {
         try {
           const token = loadToken();
           if (!token) return stub;
-          const config = appConfig(env);
           return createLinearClient(token, globalThis.fetch, { team: config.linearTeam, workspace: config.linearWorkspace });
         } catch {
           return stub;
@@ -287,7 +272,7 @@ export function createApp(options = {}) {
     env,
     memwal: options.memwal,
   });
-  deps.app = appConfig(env);
+  if (!deps.app) deps.app = appConfig(env);
   if (!options.deps && isDirectRun()) {
     deps.log = (event) => {
       process.stdout.write(`${JSON.stringify(event)}\n`);
@@ -762,7 +747,18 @@ export function createApp(options = {}) {
         }));
         return;
       }
-      const namedRooms = roomsMatching(text, current.rooms || []);
+      let namedRooms = roomsMatching(text, current.rooms || []);
+      if (!namedRooms.length && contentWords(text).length) {
+        namedRooms = decisionRoomIds(text, current.decisions || []);
+        if (!namedRooms.length) {
+          send(res, 200, "application/json; charset=utf-8", JSON.stringify({
+            body: "Nothing stored matches that.",
+            decisions: 0,
+            stored: false,
+          }));
+          return;
+        }
+      }
       if (namedRooms.length > 1) {
         const parts = [];
         let matched = 0;
@@ -1131,7 +1127,7 @@ function chatAnswer(body) {
     .split("\n")
     .filter((line) => {
       const trimmed = line.trim();
-      return trimmed && !trimmed.startsWith("preference ") && !trimmed.startsWith("checkpoint ");
+      return trimmed && !/^(?:preference|checkpoint) [a-z0-9-]+$/i.test(trimmed);
     })
     .join("\n");
 }

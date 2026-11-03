@@ -3,7 +3,6 @@
  * is refused. Nothing here falls through to creating an issue.
  */
 
-import { calendarTimeZone } from "./calendar/mcp.js";
 import { toUtcIso } from "./instant.js";
 
 export { toUtcIso } from "./instant.js";
@@ -58,13 +57,13 @@ export function methodsReferenced() {
 /**
  * Place a clock on the calendar date of an ISO instant, in `timeZone`.
  * A value that is already ISO is kept. "4 PM" and "4:00 PM" are the clocks
- * this accepts. The zone defaults to the calendar's zone, not UTC.
+ * this accepts. The caller passes the calendar zone.
  *
  * @param {string} iso
  * @param {string} clock
  * @param {string} [timeZone]
  */
-export function clockOnDate(iso, clock, timeZone = calendarTimeZone({})) {
+export function clockOnDate(iso, clock, timeZone) {
   const text = String(clock || "").trim();
   if (/^\d{4}-\d{2}-\d{2}T/.test(text)) return toUtcIso(text);
   const base = new Date(iso);
@@ -77,6 +76,7 @@ export function clockOnDate(iso, clock, timeZone = calendarTimeZone({})) {
   if (mer === "pm" && hours < 12) hours += 12;
   if (mer === "am" && hours === 12) hours = 0;
   if (hours > 23 || minutes > 59) return "";
+  if (!timeZone) return "";
   const wall = wallParts(base, timeZone);
   return zonedTimeToUtc(wall.year, wall.month, wall.day, hours, minutes, timeZone).toISOString();
 }
@@ -160,7 +160,8 @@ export function replayPlan(event, direction, observed = null, timeZone = "") {
     return { ok: true, system, method, args: { title, idempotencyKey } };
   }
   if (system === "calendar") {
-    const zone = observed?.timeZone || timeZone || calendarTimeZone({});
+    const zone = observed?.timeZone || timeZone || "";
+    if (!zone) return { ok: false, reason: "unsupported" };
     const liveStart = observed?.start || "";
     const liveEnd = observed?.end || "";
     const duration = Date.parse(liveEnd) - Date.parse(liveStart);
@@ -180,14 +181,31 @@ export function replayPlan(event, direction, observed = null, timeZone = "") {
   }
   if (system === "slack" && verb === "post" && direction === "replay") {
     const body = (event.changes || []).find((change) => change?.field === "body")?.to || "";
+    const channel = slackChannel(event);
+    if (!channel) return { ok: false, reason: "unsupported" };
     return {
       ok: true,
       system,
       method,
-      args: { channel: event.origin?.roomName || "", text: body || event.target?.title || "" },
+      args: { channel, text: body || event.target?.title || "" },
     };
   }
   return { ok: false, reason: "unsupported" };
+}
+
+/** A Slack channel id stored on the target. A room name is not a channel. */
+function slackChannel(event) {
+  const direct = channelId(event?.target?.channel);
+  if (direct) return direct;
+  const noted = (event?.changes || []).find((change) => change?.field === "channel");
+  const fromChange = channelId(noted?.to);
+  if (fromChange) return fromChange;
+  return channelId(event?.target?.id);
+}
+
+function channelId(value) {
+  const text = String(value || "").trim();
+  return /^[CDGW][A-Z0-9]{2,}$/.test(text) ? text : "";
 }
 
 /**

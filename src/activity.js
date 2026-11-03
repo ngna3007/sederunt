@@ -242,6 +242,7 @@ export function activityEvent(input, now = new Date()) {
       id: clean(target.id),
       title: clean(target.title).slice(0, 80),
       url: safeUrl(target.url),
+      channel: clean(target.channel),
     },
     changes: Array.isArray(input.changes)
       ? input.changes.map((change) => ({
@@ -262,6 +263,7 @@ export function activityEvent(input, now = new Date()) {
     undo: undoOf(input.undo),
     refersTo: clean(input.refersTo),
     undoOf: clean(input.undoOf),
+    retryOf: clean(input.retryOf),
     resolved: input.resolved === true,
     superseded: input.superseded === true,
   };

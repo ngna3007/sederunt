@@ -264,7 +264,7 @@ ${slack}
         <div class="hearing-field">
           <label for="hearing-name">Name</label>
           <p>Shown on the guest's camera.</p>
-          <input id="hearing-name" name="hearing-name" maxlength="40" value="Maple" autocomplete="off">
+          <input id="hearing-name" name="hearing-name" maxlength="40" value="" placeholder="Maple" autocomplete="off">
         </div>
         <div class="hearing-field">
           <label for="hearing-triggers">Triggers</label>
@@ -296,7 +296,7 @@ ${slack}
       </div>
       <div class="explorer">
         <div class="explorer-head">
-          ${ROOM_COLUMNS.map((label) => `<span>${escapeHtml(label)}</span>`).join("")}
+          ${ROOM_COLUMNS.map((label, index) => `<span data-col="${["room", "platform", "speakers", "status", "action"][index]}">${escapeHtml(label)}</span>`).join("")}
         </div>
         <div id="room-empty" class="empty-state" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.6h10.8v8.8H2.6z"/><path d="M2.6 6.6h10.8"/></svg></span><p class="empty-title" id="room-empty-line">No room yet.</p><p id="room-empty-aside">Bring Sederunt into a meeting or a channel.</p><button type="button" id="clear-filters" hidden>Clear filters</button></div>
         <div id="room-list"></div>
@@ -310,9 +310,9 @@ ${slack}
     <section id="history" hidden>
       <div class="page-head"><div><p class="page-title">History</p><p class="page-lede">What a room heard.</p></div></div>
       <div class="history-tools">
-        <div class="choices" role="group" aria-label="Whose record">
-          <button type="button" data-scope="group" aria-pressed="true">Company</button>
-          <button type="button" data-scope="you" aria-pressed="false">You</button>
+        <div class="chips" role="group" aria-label="Whose record">
+          <button type="button" class="chip-filter" data-scope="group" aria-pressed="true">Company</button>
+          <button type="button" class="chip-filter" data-scope="you" aria-pressed="false">You</button>
         </div>
         <div class="chips" role="group" aria-label="Kind of record">
           <button type="button" class="chip-filter" data-kind="all" aria-pressed="true">All</button>
@@ -364,7 +364,7 @@ ${slack}
       <div class="empty-state" id="record-empty"><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.8h10v10.4H3z"/><path d="M5 6h6M5 8.4h6M5 10.8h3.5"/></svg></span><p class="empty-title ledger">No decision yet.</p><p>A sentence kept in a room shows up here.</p></div>
       <p class="section-next"><button id="record-next" class="primary" type="button" hidden>New room</button></p>
       <div class="record-board explorer" id="record-table">
-        <div class="explorer-head decision-head">${DECISION_COLUMNS.map((label) => `<span>${escapeHtml(label)}</span>`).join("")}</div>
+        <div class="explorer-head decision-head">${DECISION_COLUMNS.map((label, index) => `<span data-col="${["sentence", "room", "status", "action"][index]}">${escapeHtml(label)}</span>`).join("")}</div>
         <div id="record-list"></div>
         <div id="record-foot" class="explorer-foot" hidden><span id="record-count"></span><span class="pager"><button id="record-prev" type="button" aria-label="Previous page">‹</button><button id="record-next-page" type="button" aria-label="Next page">›</button></span></div>
         <p id="record-detail" hidden></p>
@@ -1148,7 +1148,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     lines.forEach(function (line) {
       var trimmed = line.trim();
       if (!trimmed) return;
-      if (isStatusWord(trimmed) || trimmed.indexOf("preference ") === 0 || trimmed.indexOf("checkpoint ") === 0) return;
+      if (isStatusWord(trimmed) || /^(?:preference|checkpoint) [a-z0-9-]+$/i.test(trimmed)) return;
       if (/^ROW-[0-9]+$/.test(trimmed)) {
         flush(trimmed);
         return;
@@ -1215,7 +1215,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var heard = hearing || { name: "Maple", triggers: [] };
     var name = document.getElementById("hearing-name");
     var triggers = document.getElementById("hearing-triggers");
-    if (name && document.activeElement !== name) name.value = heard.name || "Maple";
+    if (name && document.activeElement !== name) name.value = heard.name && heard.name !== "Maple" ? heard.name : "";
     if (triggers && document.activeElement !== triggers) triggers.value = (heard.triggers || []).join("\\n");
   }
 
@@ -1313,6 +1313,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (spec.roomId) card.setAttribute("data-room", spec.roomId);
     var roomCol = document.createElement("span");
     roomCol.className = "ex-room";
+    roomCol.dataset.col = "room";
     var title = document.createElement("strong");
     title.textContent = spec.title || "Room";
     if (spec.title && spec.title === spec.roomId) title.classList.add("mono");
@@ -1329,9 +1330,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
     roomCol.append(title, count);
     var where = document.createElement("span");
     where.className = "where ex-plat";
+    where.dataset.col = "platform";
     if (spec.where) where.append(platformBadge(spec.where));
     var heard = document.createElement("span");
     heard.className = "avatar-stack";
+    heard.dataset.col = "speakers";
     var people = spec.people || [];
     heard.title = people.map(function (person) { return personLabel(person) || person; }).join(", ");
     people.slice(0, 4).forEach(function (person) { heard.append(face(personLabel(person) || person)); });
@@ -1343,6 +1346,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     }
     var status = document.createElement("span");
     status.className = "status-cell";
+    status.dataset.col = "status";
     var badge = document.createElement("span");
     var tone = roomTone(spec.roomId);
     badge.className = tone.badge;
@@ -1353,6 +1357,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     status.append(badge, when);
     var view = document.createElement("span");
     view.className = "row-view";
+    view.dataset.col = "action";
     view.textContent = "View >";
     card.append(roomCol, where, heard, status, view);
     card.addEventListener("click", function (event) {
@@ -1544,7 +1549,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function clipText(text, max) {
     var value = String(text || "").trim();
     if (value.length <= max) return value;
-    return value.slice(0, max - 3).trim() + "...";
+    var cut = value.slice(0, max - 1);
+    var space = cut.lastIndexOf(" ");
+    return (space > 8 ? cut.slice(0, space) : cut).trim() + "…";
   }
 
   function roomName(room) {
@@ -1572,19 +1579,32 @@ if (sessionWhen && sessionWhen.dataset.at) {
     };
   }
 
-  function relativeWhen(iso) {
-    if (!iso) return "";
+  function zoneParts(iso) {
     var date = new Date(iso);
-    if (isNaN(date.getTime())) return "";
-    var now = new Date();
-    var hours = date.getHours();
-    var mins = String(date.getMinutes());
-    if (mins.length < 2) mins = "0" + mins;
-    var clock = (hours % 12 || 12) + ":" + mins + (hours >= 12 ? " PM" : " AM");
-    var start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    var day = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-    if (day === start) return "Today at " + clock;
-    if (day === start - 86400000) return "Yesterday at " + clock;
+    if (isNaN(date.getTime())) return null;
+    var zone = document.body.getAttribute("data-calendar-zone") || undefined;
+    var parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: zone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true
+    }).formatToParts(date);
+    var bag = {};
+    parts.forEach(function (part) { if (part.type !== "literal") bag[part.type] = part.value; });
+    return bag;
+  }
+
+  function relativeWhen(iso) {
+    var bag = zoneParts(iso);
+    var today = zoneParts(new Date().toISOString());
+    if (!bag || !today) return "";
+    var clock = bag.hour + ":" + bag.minute + " " + bag.dayPeriod;
+    var key = bag.year + "-" + bag.month + "-" + bag.day;
+    var nowKey = today.year + "-" + today.month + "-" + today.day;
+    if (key === nowKey) return "Today at " + clock;
     return whenLabel(iso);
   }
 
@@ -1607,6 +1627,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     card.className = "room decision-row";
     var main = document.createElement("span");
     main.className = "ex-room";
+    main.dataset.col = "sentence";
     var heading = document.createElement("strong");
     heading.textContent = decision.text || "No decision yet.";
     var meta = document.createElement("span");
@@ -1618,6 +1639,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var decisionRoom = (((state && state.rooms) || []).filter(function (item) { return item.id === decision.roomId; })[0]) || {};
     var roomCell = document.createElement("span");
     roomCell.className = "ex-plat";
+    roomCell.dataset.col = "room";
     if (decisionRoom.platform) roomCell.append(platformBadge(decisionRoom.platform));
     var roomText = document.createElement("span");
     roomText.className = "room-name";
@@ -1626,10 +1648,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
     roomCell.append(roomText);
     var status = decision.status || "recorded";
     var badge = document.createElement("span");
+    badge.dataset.col = "status";
     badge.className = status === "clashing" ? "badge warn" : "badge";
     badge.textContent = typeof decision.checkpoint === "number" ? ("Checkpoint " + decision.checkpoint) : statusLabel(status);
     var view = document.createElement("span");
     view.className = "row-view";
+    view.dataset.col = "action";
     view.textContent = "View >";
     card.append(main, roomCell, badge, view);
     card.addEventListener("click", function () { openDecision(decision); });
@@ -1658,9 +1682,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
     }
     var head = document.createElement("div");
     head.className = "explorer-head people-head";
-    peopleColumns.forEach(function (label) {
+    ["name", "rooms", "count", "heard", "action"].forEach(function (key, index) {
       var cell = document.createElement("span");
-      cell.textContent = label;
+      cell.dataset.col = key;
+      cell.textContent = peopleColumns[index] || "";
       head.append(cell);
     });
     list.append(head);
@@ -1669,12 +1694,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
       row.className = "people-row";
       var name = document.createElement("span");
       name.className = "person";
+      name.dataset.col = "name";
       name.append(face(person.name));
       var label = document.createElement("span");
       label.textContent = person.name;
       name.append(label);
       var roomsCell = document.createElement("span");
       roomsCell.className = "room-chips";
+      roomsCell.dataset.col = "rooms";
       if (!person.rooms.length) {
         var none = document.createElement("span");
         none.className = "mini-chip";
@@ -1704,12 +1731,15 @@ if (sessionWhen && sessionWhen.dataset.at) {
       }
       var decisions = document.createElement("span");
       decisions.className = "num";
+      decisions.dataset.col = "count";
       decisions.textContent = person.count === 1 ? "1 decision" : (person.count + " decisions");
       var heard = document.createElement("span");
       heard.className = "heard";
+      heard.dataset.col = "heard";
       heard.textContent = relativeWhen(person.last) || whenLabel(person.last) || "";
       var view = document.createElement("span");
       view.className = "row-open";
+      view.dataset.col = "action";
       view.textContent = "View >";
       row.append(name, roomsCell, decisions, heard, view);
       list.append(row);
@@ -2015,7 +2045,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       : "";
     text("cal-line", calendarMode === "Ask" ? "Calendar waits before a change." : "Calendar runs automatically.");
     text("lin-line", linearMode === "Ask" ? "Linear waits before a change." : "Linear runs automatically.");
-    text("prefs", (calendarMode === "Ask" ? "Calendar waits before a change." : "Calendar runs automatically.") + " " + (linearMode === "Ask" ? "Linear waits before a change." : "Linear runs automatically."));
+    text("prefs", "");
     var calAsk = document.getElementById("cal-ask");
     var linAsk = document.getElementById("lin-ask");
     if (calAsk) calAsk.checked = calendarMode !== "Ask";
@@ -2719,6 +2749,15 @@ if (sessionWhen && sessionWhen.dataset.at) {
           from.textContent = " · from " + (roomName || origin.roomId);
           text.append(from);
         }
+        if (row.target && row.target.url && row.target.system === "slack" && (row.kind === "action" || row.kind === "result")) {
+          var open = document.createElement("a");
+          open.className = "entity-id";
+          open.href = row.target.url;
+          open.rel = "noreferrer";
+          open.textContent = "Open";
+          text.append(document.createTextNode(" "));
+          text.append(open);
+        }
         line.append(icon, text);
         var undoUntil = row.undo && row.undo.until ? Date.parse(row.undo.until) : 0;
         if (row.undo && row.undo.available && row.outcome !== "undone" && !row.superseded && undoUntil > Date.now()) {
@@ -3043,21 +3082,39 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function paintCallout(roomId) {
     var callout = document.getElementById("file-callout");
     if (!callout) return;
-    var notes = [];
-    if (decisionsFor(roomId).some(function (decision) { return decision.status === "clashing"; })) {
-      notes.push({ tone: "warn", text: "This sentence clashes with another." });
-    }
-    var failed = activityRows(roomId).filter(function (row) { return row.kind === "failure" && row.outcome === "failed" && !row.resolved; });
-    if (failed.length) notes.push({ tone: "bad", text: failed[0].sentence || "A change did not go through." });
+    callout.className = "callout-stack";
     callout.replaceChildren();
-    callout.hidden = notes.length === 0;
-    callout.classList.toggle("callout-bad", notes.some(function (note) { return note.tone === "bad"; }));
-    callout.classList.toggle("callout-warn", notes.some(function (note) { return note.tone === "warn"; }));
-    notes.forEach(function (note) {
+    var clashing = decisionsFor(roomId).filter(function (decision) { return decision.status === "clashing"; });
+    if (clashing.length) {
+      var warn = document.createElement("div");
+      warn.className = "callout callout-warn";
+      var lead = clashing[clashing.length - 1];
+      var other = clashing.filter(function (decision) { return decision.id !== lead.id; })[0] || lead;
+      warn.append(document.createTextNode("Clashes with "));
+      var link = document.createElement("button");
+      link.type = "button";
+      link.className = "at-link";
+      link.textContent = other.text || "another sentence";
+      link.addEventListener("click", function () { openDecision(other); });
+      warn.append(link);
+      callout.append(warn);
+    }
+    var failed = activityRows(roomId).filter(function (row) { return row.kind === "failure" && row.outcome === "failed" && !row.resolved && row.retryable !== false; });
+    var shown = failed[failed.length - 1];
+    if (shown) {
+      var bad = document.createElement("div");
+      bad.className = "callout callout-bad";
       var line = document.createElement("p");
-      line.textContent = note.text;
-      callout.append(line);
-    });
+      line.textContent = shown.sentence || shown.error || "A change did not go through.";
+      var retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "activity-retry";
+      retry.textContent = "Retry";
+      retry.addEventListener("click", function () { postActivity("retry", shown.id, retry); });
+      bad.append(line, retry);
+      callout.append(bad);
+    }
+    callout.hidden = callout.childElementCount === 0;
   }
 
   function clockText(seconds) {
@@ -3170,10 +3227,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
           timeZone: zone,
           month: "short",
           day: "numeric",
-          hour: "2-digit",
+          hour: "numeric",
           minute: "2-digit",
           second: "2-digit",
-          hourCycle: "h23"
+          hour12: true
         }).format(start).replace(/\u202f|\u00a0/g, " ");
         when.textContent = label ? stamp + " " + label : stamp;
       } else when.textContent = "";
@@ -3281,6 +3338,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
       paintArtifacts(media);
       paintFactsMedia(media);
       paintTimeline();
+      if (media.startedAt) {
+        text("file-started", relativeWhen(media.startedAt));
+        text("file-overview-when", relativeWhen(media.startedAt));
+      }
       renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
     }).catch(function () {
       roomMediaState = { state: "none" };
@@ -3607,7 +3668,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function dropTrail(value) {
     return String(value || "").split("\\n").filter(function (line) {
       var trimmed = line.trim();
-      return trimmed.indexOf("preference ") !== 0 && trimmed.indexOf("checkpoint ") !== 0;
+      return !/^(?:preference|checkpoint) [a-z0-9-]+$/i.test(trimmed);
     }).join("\\n").trim();
   }
 
@@ -3626,8 +3687,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
       showRetry(true, "Still loading…");
       var heading = document.getElementById("onboard-heading");
       var readingLine = document.getElementById("onboard-reading");
-      if (homeBox && homeBox.hidden && heading) heading.textContent = "Still loading…";
-      if (homeBox && homeBox.hidden && readingLine) readingLine.textContent = "Still loading…";
+      if (heading) heading.textContent = "Still loading…";
+      if (readingLine) readingLine.textContent = "Still loading…";
+      var quiet = document.querySelector("#loading .sr");
+      if (quiet) quiet.textContent = "Still loading…";
       var again = document.getElementById("read-again");
       if (again) {
         again.disabled = false;
@@ -3918,7 +3981,18 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var pending = document.querySelector("#chat-log .chat-turn:last-child");
       if (pending) pending.classList.remove("chat-pending");
       if (reading) reading.textContent = dropTrail(parts.answer) || "The room did not answer.";
-      if (pending && pending.scrollIntoView) pending.scrollIntoView({ block: "end", inline: "nearest" });
+      if (reading && parts.clash && parts.clash.length > 1) {
+        var note = document.createElement("div");
+        note.className = "callout callout-warn chat-clash";
+        parts.clash.forEach(function (item) {
+          var line = document.createElement("p");
+          var when = relativeWhen(item.spokenAt) || item.when || "";
+          line.textContent = item.text + (when ? " · " + when : "");
+          note.append(line);
+        });
+        reading.parentNode.append(note);
+      }
+      if (pending && pending.scrollIntoView) pending.scrollIntoView({ block: "start", inline: "nearest" });
       if (reading && parts.detail) {
         var extra = document.createElement("span");
         extra.className = "chat-detail";

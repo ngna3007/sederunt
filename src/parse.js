@@ -1,5 +1,6 @@
 const TRIP_READ = /what tickets are open for the trip\??/i;
 const FILE_TICKET = /file the venue ticket(?:\s+(\S+))?/i;
+const FILE_REQUEST = /^file (?:the |a |an )(.+?)[.!]?$/i;
 const YES = /^yes[.!]?$/i;
 const PRIVATE_NOTE = /^(?:private note|private)\s*:\s*/i;
 const CONFIRM = /^confirm\s+(\S+)$/i;
@@ -63,6 +64,18 @@ export function parseUtterance(text) {
       statement: trimmed,
       missingFact: named ? "" : "day",
       params: { name: "review", day: named || null },
+    };
+  }
+  if (FILE_REQUEST.test(trimmed) && !FILE_TICKET.test(trimmed)) {
+    const title = FILE_REQUEST.exec(trimmed)?.[1]?.trim() || trimmed;
+    return {
+      type: "write",
+      tool: "linear",
+      edit: "create",
+      statement: trimmed,
+      title,
+      missingFact: "",
+      params: { title },
     };
   }
   if (FILE_TICKET.test(trimmed)) {

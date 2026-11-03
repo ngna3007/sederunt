@@ -34,8 +34,7 @@ const ISO_INSTANT = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\
 export function formatActivitySentence(sentence, timeZone, viewerZone, sampleIso) {
   const text = String(sentence || "");
   const found = text.match(ISO_INSTANT);
-  const anchor = found?.[0] || (ISO_INSTANT.test(String(sampleIso || "")) ? String(sampleIso) : "");
-  if (!found || !found.length) return withZone(text, anchor || new Date().toISOString(), timeZone, viewerZone);
+  if (!found || !found.length) return placeZoneAfterClock(text, timeZone, viewerZone, sampleIso);
   const zoneNote = zoneAbbreviation(found[0], timeZone, viewerZone);
   if (found.length >= 2) {
     const [left, right] = found;
@@ -61,12 +60,19 @@ export function zoneShortName(iso, timeZone) {
   }
 }
 
-function withZone(text, iso, timeZone, viewerZone) {
-  if (!text || !timeZone || !viewerZone) return text;
-  if (sameOffset(iso, timeZone, viewerZone)) return text;
+function placeZoneAfterClock(text, timeZone, viewerZone, sampleIso) {
+  if (!text || !timeZone || !viewerZone || !sampleIso) return text;
+  if (!ISO_INSTANT.test(String(sampleIso))) return text;
+  if (sameOffset(sampleIso, timeZone, viewerZone)) return text;
   if (/\b(?:GMT|UTC)[+-]\d|\bICT\b/.test(text)) return text;
-  const name = zoneShortName(iso, timeZone);
-  return name ? `${text} ${name}` : text;
+  const name = zoneShortName(sampleIso, timeZone);
+  if (!name) return text;
+  const clock = /(?:[A-Z][a-z]{2} \d{1,2}, )?\d{1,2}:\d{2} [AP]M/g;
+  let last;
+  for (const match of text.matchAll(clock)) last = match;
+  if (!last) return text;
+  const at = last.index + last[0].length;
+  return `${text.slice(0, at)} ${name}${text.slice(at)}`;
 }
 
 function zoneAbbreviation(iso, timeZone, viewerZone) {

@@ -586,6 +586,7 @@ async function noteActivity(session, deps, action, fields) {
       type: action.tool === "calendar" ? "event" : "issue",
       id: fields.entityId || action.params?.id || "",
       title: createTitle(action),
+      channel: action.tool === "slack" ? slackChannelId(action.params?.channel) : "",
     },
     changes: activityChanges(action),
     tool: { name: "act", server: "sederunt-mcp" },
@@ -653,7 +654,8 @@ async function storeActivity(session, deps, event) {
 
 /**
  * Run the failed action through the connector again. A log row is written
- * only after the connector returns.
+ * only after the connector returns. `replayBusy` is an in-memory lock for
+ * this process only. A second instance does not see it.
  *
  * @param {ReturnType<import("./session.js").createSession>} session
  * @param {{ linear?: object, calendar?: object, memory?: object }} deps
@@ -665,6 +667,7 @@ export async function replayFailure(session, deps, failureId) {
   if (named.kind !== "failure") return { ok: false, reason: "already" };
   if (named.resolved) return { ok: false, reason: "already" };
   if (alreadyRetried(session, named)) return { ok: false, reason: "already" };
+  if (newerFailure(session, named)) return { ok: false, reason: "already" };
   if (newerSuccess(session, named)) return { ok: false, reason: "stale" };
   session.replayBusy ??= new Set();
   if (session.replayBusy.has(named.id)) return { ok: false, reason: "already" };
@@ -673,6 +676,10 @@ export async function replayFailure(session, deps, failureId) {
     const request = (session.activity || []).find((row) => row.requestId === named.requestId && row.kind === "request");
     const observed = await readCalendarEvent(deps, named);
     const planned = { ...named, changes: request?.changes?.length ? request.changes : named.changes };
+    if (planned.target?.system === "slack" && !slackChannelId(planned.target?.channel) && !slackChannelId(channelChange(planned))) {
+      const channel = slackChannelId(request?.target?.channel) || slackChannelId(channelChange(request)) || slackChannelId(deps.app?.slackChannel);
+      planned.target = { ...planned.target, channel };
+    }
     const plan = replayPlan(planned, "replay", observed, deps.app?.timeZone || "");
     if (!plan.ok) return plan;
     if (plan.method === "createIssue") {
@@ -702,6 +709,7 @@ export async function replayFailure(session, deps, failureId) {
     const changes = plan.from ? [{ field: "start", from: plan.from, to: plan.to }] : (planned.changes || []);
     const event = logAction(session, {
       ...effectOf(named, { changes, target: appliedTarget(named, created, deps) }),
+      retryOf: named.id,
       undo: replaySupported(named, "undo")
         ? { available: true, until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() }
         : { available: false, until: "" },
@@ -770,21 +778,32 @@ function newerSuccess(session, failure) {
   });
 }
 
-function sameField(failure, row) {
-  const left = String(failure?.changes?.[0]?.field || "").trim();
-  const right = String(row?.changes?.[0]?.field || "").trim();
-  if (left && right) return left === right;
-  return String(failure?.verb || "") === String(row?.verb || "");
+function fieldSet(row) {
+  return [...new Set((row?.changes || []).map((change) => String(change?.field || "").trim()).filter(Boolean))];
+}
+
+function sameField(left, right) {
+  const fields = fieldSet(left);
+  const other = fieldSet(right);
+  if (fields.length && other.length) return fields.some((field) => other.includes(field));
+  if (!fields.length && !other.length) return String(left?.verb || "") === String(right?.verb || "");
+  return false;
+}
+
+function newerFailure(session, failure) {
+  const at = Date.parse(failure?.ts || "") || 0;
+  return (session.activity || []).some((row) => {
+    if (!row || row.id === failure.id || row.kind !== "failure") return false;
+    if ((row.requestId || "") !== (failure.requestId || "")) return false;
+    return (Date.parse(row.ts || "") || 0) > at;
+  });
 }
 
 function alreadyRetried(session, failure) {
-  const at = Date.parse(failure?.ts || "") || 0;
   return (session.activity || []).some((row) => {
-    if (row.kind !== "action" && row.kind !== "result") return false;
-    if (row.outcome === "undone") return false;
-    if ((row.requestId || "") !== (failure.requestId || "")) return false;
-    if ((row.verb || "") !== (failure.verb || "")) return false;
-    return (Date.parse(row.ts || "") || 0) >= at;
+    if (!row || row.id === failure.id) return false;
+    if (row.retryOf === failure.id && (row.kind === "action" || row.kind === "result") && row.outcome !== "undone") return true;
+    return row.kind === "resolve" && row.refersTo === failure.id;
   });
 }
 
@@ -794,29 +813,56 @@ function connectorSucceeded(system, created) {
 }
 
 function appliedTarget(named, created, deps) {
-  if (named.target?.system === "slack") {
+  const previous = named.target || {};
+  const title = previous.title || "";
+  if (previous.system === "slack") {
     const ts = String(created?.ts || "").trim();
-    const url = slackPermalink(created);
-    const next = { ...named.target };
-    if (ts) next.id = ts;
-    if (url) next.url = url;
-    return next;
+    const permalink = typeof created?.permalink === "string" ? created.permalink : slackPermalink(created);
+    return {
+      system: "slack",
+      type: previous.type || "message",
+      id: ts,
+      title,
+      url: permalink,
+      channel: slackChannelId(created?.channel) || slackChannelId(previous.channel),
+    };
   }
   if (named.verb === "create") {
-    const createdId = String(created?.identifier || created?.id || "").trim();
-    if (!createdId) return named.target;
-    const url = (typeof created?.url === "string" && created.url) || linearIssueUrl(deps, createdId);
-    const next = { ...named.target, id: createdId };
-    if (url) next.url = url;
-    return next;
+    const id = String(created?.identifier || created?.id || "").trim();
+    const url = (typeof created?.url === "string" && created.url) || linearIssueUrl(deps, id);
+    return {
+      system: previous.system || "linear",
+      type: previous.type || "issue",
+      id,
+      title,
+      url,
+      channel: "",
+    };
   }
-  return named.target;
+  const id = connectorId(created);
+  return {
+    system: previous.system || "",
+    type: previous.type || "",
+    id: id || previous.id || "",
+    title,
+    url: typeof created?.url === "string" ? created.url : "",
+    channel: "",
+  };
+}
+
+function slackChannelId(value) {
+  const text = String(value || "").trim();
+  return /^[CDGW][A-Z0-9]{2,}$/.test(text) ? text : "";
+}
+
+function channelChange(event) {
+  return (event?.changes || []).find((change) => change?.field === "channel")?.to || "";
 }
 
 function slackPermalink(created) {
-  const channel = String(created?.channel || "").trim();
+  const channel = slackChannelId(created?.channel);
   const ts = String(created?.ts || "").trim();
-  if (!channel || !ts || !/^[A-Z0-9]+$/i.test(channel)) return "";
+  if (!channel || !ts) return "";
   return `https://slack.com/archives/${channel}/p${ts.replace(".", "")}`;
 }
 
@@ -885,7 +931,7 @@ async function supersedeTarget(session, deps, source, keepId) {
     if (row.kind !== "action" && row.kind !== "result") continue;
     if (row.superseded || row.outcome === "undone") continue;
     const same = row.target?.system === system && ((id && row.target?.id === id) || (!id && title && row.target?.title === title));
-    if (!same) continue;
+    if (!same || !sameField(source, row)) continue;
     const event = {
       id: activityIdentity(),
       requestId: row.requestId || row.id,
@@ -934,7 +980,11 @@ function activityChanges(action) {
   }
   if (action.tool === "slack") {
     const body = action.params?.text || action.params?.body || action.statement || "";
-    if (body) return [{ field: "body", to: String(body) }];
+    const channel = slackChannelId(action.params?.channel);
+    const changes = [];
+    if (channel) changes.push({ field: "channel", to: channel });
+    if (body) changes.push({ field: "body", to: String(body) });
+    return changes;
   }
   return [];
 }
@@ -2209,7 +2259,7 @@ function publicActivity(session, rooms, options = {}) {
       outcome: row.outcome,
       error: row.error,
       undo: publishedUndo(row),
-      retryable: row.kind === "failure" && !row.resolved && !newerSuccess(session, row) && replaySupported(row, "replay"),
+      retryable: row.kind === "failure" && !row.resolved && !newerSuccess(session, row) && !newerFailure(session, row) && replaySupported(row, "replay"),
       stale: row.kind === "failure" && !row.resolved && newerSuccess(session, row),
       resolved: row.resolved === true,
       superseded: row.superseded === true,

@@ -6,6 +6,11 @@ export const ROOM_WEAK = new Set(["planning", "review", "sync", "meeting", "room
 
 const ROOM_STOP = new Set(["the", "a", "an", "of", "to", "in", "on", "for", "and", "at", "about", "what", "was", "were", "decided", "decide", "decision", "decisions", "did", "does", "we", "do", "or", "is", "this", "that", "with", "from"]);
 
+/** Content words in a question. Matching is a whole word, not a prefix. */
+export function contentWords(value) {
+  return String(value || "").toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 2 && !ROOM_STOP.has(word));
+}
+
 function wordHit(question, token) {
   const text = String(token || "").trim().toLowerCase().replace(/^#/, "");
   if (text.length < 3) return false;
@@ -38,6 +43,25 @@ function scoreRoom(question, room) {
  * @param {string} text
  * @param {{ id?: string, name?: string, channel?: string }[]} rooms
  */
+/**
+ * Rooms whose kept text contains a whole word from the question.
+ * A prefix such as "plan" does not hit "planning".
+ *
+ * @param {string} text
+ * @param {{ roomId?: string, text?: string, deleted?: boolean }[]} decisions
+ */
+export function decisionRoomIds(text, decisions) {
+  const words = contentWords(text);
+  if (!words.length) return [];
+  const ids = [];
+  for (const decision of decisions || []) {
+    if (!decision || decision.deleted || !decision.roomId) continue;
+    const blob = String(decision.text || "").toLowerCase();
+    if (words.some((word) => wordHit(blob, word)) && !ids.includes(decision.roomId)) ids.push(decision.roomId);
+  }
+  return ids;
+}
+
 export function roomsMatching(text, rooms) {
   const ranked = (rooms || []).map((room) => ({ id: room?.id, score: scoreRoom(text, room) })).filter((room) => room.id && room.score > 0);
   if (!ranked.length) return [];
@@ -55,7 +79,13 @@ function sentenceOf(text) {
 }
 
 function roomTitle(room) {
-  const full = String(room?.name || room?.channel || room?.id || "").trim();
+  const channel = String(room?.channel || "").trim();
+  if (channel || /slack/i.test(room?.platform || "")) {
+    const raw = channel || String(room?.name || room?.id || "").trim();
+    if (!raw) return "Room";
+    return raw.startsWith("#") ? raw : `#${raw.replace(/^#/, "")}`;
+  }
+  const full = String(room?.name || room?.id || "").trim();
   return full.split(":")[0].trim() || "Room";
 }
 
@@ -79,7 +109,7 @@ function citeWhen(iso) {
  * @param {{ id?: string, name?: string, platform?: string }[]} rooms
  */
 export function rankDecisions(question, decisions, rooms) {
-  const words = String(question || "").toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 2 && !ROOM_STOP.has(word));
+  const words = contentWords(question);
   const rows = (decisions || []).filter((decision) => String(decision.text || "").trim());
   if (!rows.length) return { answer: "Nothing is stored that you can read.", detail: "", cites: [] };
   const named = roomsMatching(question, rooms);
@@ -87,7 +117,7 @@ export function rankDecisions(question, decisions, rooms) {
   if (named.length) {
     const ids = new Set(named);
     picked = rows.filter((decision) => ids.has(decision.roomId || ""));
-    if (!picked.length) return { answer: "Nothing stored matches that question.", detail: "", cites: [] };
+    if (!picked.length) return { answer: "Nothing stored matches that.", detail: "", cites: [] };
   } else if (words.length) {
     const roomsHit = {};
     rows.forEach((decision) => {
@@ -95,17 +125,26 @@ export function rankDecisions(question, decisions, rooms) {
       if (words.some((word) => wordHit(blob, word))) roomsHit[decision.roomId || ""] = true;
     });
     picked = rows.filter((decision) => roomsHit[decision.roomId || ""]);
-    if (!picked.length) return { answer: "Nothing stored matches that question.", detail: "", cites: [] };
+    if (!picked.length) return { answer: "Nothing stored matches that.", detail: "", cites: [] };
   } else {
     picked = rows.slice().sort((a, b) => String(b.spokenAt || "").localeCompare(String(a.spokenAt || ""))).slice(0, 3);
   }
   picked = picked.slice().sort((a, b) => String(b.spokenAt || "").localeCompare(String(a.spokenAt || "")));
   const lines = picked.map((decision) => sentenceOf(decision.text));
-  if (picked.filter((decision) => decision.status === "clashing").length > 1) lines.push("These decisions clash.");
+  const clash = picked.filter((decision) => decision.status === "clashing").slice().sort((a, b) => String(b.spokenAt || "").localeCompare(String(a.spokenAt || "")));
+  if (clash.length > 1) lines.push("These decisions clash.");
   const cites = picked.map((decision) => {
     const room = (rooms || []).find((item) => item?.id === decision.roomId);
     const label = [roomTitle(room), citeWhen(decision.spokenAt)].filter(Boolean).join(" · ");
     return { roomId: decision.roomId, label, text: decision.text || "" };
   });
-  return { answer: lines.join("\n"), detail: "", cites };
+  return {
+    answer: lines.join("\n"),
+    detail: "",
+    cites,
+    clash: clash.map((decision) => {
+      const room = (rooms || []).find((item) => item?.id === decision.roomId);
+      return { text: sentenceOf(decision.text), when: citeWhen(decision.spokenAt), spokenAt: decision.spokenAt || "", room: roomTitle(room) };
+    }),
+  };
 }
