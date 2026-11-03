@@ -1,4 +1,5 @@
-import { displayName, logAction, logFailure, logRequest, renderActivity } from "./activity.js";
+import { randomBytes } from "node:crypto";
+import { displayName, logAction, logFailure, logRequest, logUndo, renderActivity, undoRefusal } from "./activity.js";
 import { authorize } from "./domain/allow.js";
 import { clashStatuses } from "./domain/clash.js";
 import { checkInvite } from "./domain/invite.js";
@@ -569,7 +570,7 @@ async function noteActivity(session, deps, action, fields) {
       system: action.tool === "calendar" ? "calendar" : (action.tool === "slack" ? "slack" : "linear"),
       type: action.tool === "calendar" ? "event" : "issue",
       id: fields.entityId || action.params?.id || "",
-      title: action.params?.title || action.statement || "",
+      title: createTitle(action),
     },
     changes: activityChanges(action),
     tool: { name: "act", server: "sederunt-mcp" },
@@ -596,6 +597,154 @@ async function noteActivity(session, deps, action, fields) {
     activity: event,
   });
   return event;
+}
+
+function activityIdentity() {
+  return `activity-${randomBytes(8).toString("hex")}`;
+}
+
+function actionFromEvent(event, changes) {
+  const change = changes?.[0] || {};
+  const system = event.target?.system || "linear";
+  return {
+    id: event.requestId || event.id,
+    tool: system === "calendar" ? "calendar" : system === "slack" ? "slack" : "linear",
+    edit: event.verb === "assign" ? "assign" : event.verb === "move" || event.verb === "reschedule" ? "update" : "create",
+    params: {
+      id: event.target?.id || "",
+      assignee: change.to || "",
+      title: event.target?.title || "",
+      name: event.target?.title || "",
+      day: change.to || "",
+    },
+    statement: event.target?.title || "",
+    roomId: event.origin?.roomId || "",
+    preference: "do",
+  };
+}
+
+async function storeActivity(session, deps, event) {
+  await remember(deps, {
+    account: "company",
+    kind: "activity",
+    text: renderActivity(event),
+    idempotencyKey: event.id,
+    activity: event,
+  });
+  return event;
+}
+
+/**
+ * Run the failed action through the connector again. A log row is written
+ * only after the connector returns.
+ *
+ * @param {ReturnType<import("./session.js").createSession>} session
+ * @param {{ linear?: object, calendar?: object, memory?: object }} deps
+ * @param {string} failureId
+ */
+export async function replayFailure(session, deps, failureId) {
+  const failed = (session.activity || []).find((row) => row.id === failureId && row.kind === "failure" && !row.resolved);
+  if (!failed) return { ok: false, reason: "missing" };
+  const request = (session.activity || []).find((row) => row.requestId === failed.requestId && row.kind === "request");
+  const changes = request?.changes?.length ? request.changes : (failed.changes || []);
+  const stored = (session.actions || []).find((item) => item.id === failed.requestId);
+  const action = stored || actionFromEvent(failed, changes);
+  let created;
+  try {
+    created = await runConnector(deps, action);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    const event = logFailure(session, {
+      id: activityIdentity(),
+      requestId: failed.requestId || failed.id,
+      actor: { type: "sederunt", name: "Sederunt", via: failed.actor?.via || "MCP" },
+      verb: failed.verb,
+      target: failed.target,
+      changes,
+      tool: failed.tool,
+      origin: failed.origin,
+      error: failureText(message),
+    });
+    await storeActivity(session, deps, event);
+    return { ok: false, reason: "failed", id: event.id };
+  }
+  if (!connectorId(created)) {
+    const event = logFailure(session, {
+      id: activityIdentity(),
+      requestId: failed.requestId || failed.id,
+      actor: { type: "sederunt", name: "Sederunt", via: failed.actor?.via || "MCP" },
+      verb: failed.verb,
+      target: failed.target,
+      changes,
+      tool: failed.tool,
+      origin: failed.origin,
+      error: "The change did not go through.",
+    });
+    await storeActivity(session, deps, event);
+    return { ok: false, reason: "failed", id: event.id };
+  }
+  failed.resolved = true;
+  for (const row of session.activity || []) {
+    if (row.requestId === failed.requestId && row.id !== failed.id && row.kind !== "failure") row.superseded = true;
+  }
+  const event = logAction(session, {
+    id: activityIdentity(),
+    requestId: failed.requestId || failed.id,
+    actor: { type: "sederunt", name: "Sederunt", via: failed.actor?.via || "MCP" },
+    verb: failed.verb,
+    target: { ...failed.target, id: failed.target?.id || connectorId(created) },
+    changes,
+    tool: failed.tool || { name: "act", server: "sederunt-mcp" },
+    origin: failed.origin,
+    undo: { available: true, until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() },
+  });
+  await storeActivity(session, deps, failed);
+  await storeActivity(session, deps, event);
+  return { ok: true, id: event.id };
+}
+
+/**
+ * Reverse one action through the connector, then record the undo.
+ *
+ * @param {ReturnType<import("./session.js").createSession>} session
+ * @param {{ linear?: object, calendar?: object, memory?: object }} deps
+ * @param {string} id
+ * @param {string} actorName
+ */
+export async function undoRecorded(session, deps, id, actorName) {
+  const event = (session.activity || []).find((row) => row.id === id);
+  const reason = undoRefusal(event);
+  if (reason) return { ok: false, reason };
+  const change = event.changes?.[0];
+  const reversed = change ? [{ field: change.field, from: change.to, to: change.from }] : [];
+  try {
+    const created = await runConnector(deps, actionFromEvent(event, reversed));
+    if (!connectorId(created)) return { ok: false, reason: "failed" };
+  } catch {
+    return { ok: false, reason: "failed" };
+  }
+  event.outcome = "undone";
+  if (event.undo) event.undo.available = false;
+  const undo = logUndo(session, {
+    id: activityIdentity(),
+    requestId: event.requestId || event.id,
+    undoOf: event.id,
+    actor: { type: "person", name: displayName(actorName), via: "Console" },
+    verb: event.verb,
+    target: event.target,
+    changes: event.changes,
+    tool: event.tool,
+    origin: event.origin,
+  });
+  await storeActivity(session, deps, event);
+  await storeActivity(session, deps, undo);
+  return { ok: true, id: undo.id };
+}
+
+function createTitle(action) {
+  const raw = String(action.params?.title || action.statement || "").trim();
+  if (action.edit !== "create" && action.verb !== "create") return raw;
+  return raw.replace(/^file the venue ticket\s*/i, "").replace(/^create (?:a |one )?(?:test )?ticket titled\s*/i, "").replace(/^["“]|["”]$/g, "").trim() || "ticket";
 }
 
 function activityChanges(action) {
@@ -1861,12 +2010,8 @@ export function companyBoard(session, memberId) {
 function publicActivity(session, rooms) {
   const visible = new Set((rooms || []).map((room) => room.id));
   const rows = session?.activity ?? [];
-  const kept = new Set();
-  for (const row of rows) {
-    if (!row?.origin?.roomId || visible.has(row.origin.roomId)) kept.add(row.requestId || row.id);
-  }
   return rows
-    .filter((row) => row && kept.has(row.requestId || row.id))
+    .filter((row) => row && (!row.origin?.roomId || visible.has(row.origin.roomId)))
     .map((row) => ({
       id: row.id,
       requestId: row.requestId,

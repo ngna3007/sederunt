@@ -1,3 +1,4 @@
+import { groupActivity, relativeTime, selectActivity } from "./activity.js";
 import { brandLogo, brandSprite } from "./brand-logos.js";
 
 /**
@@ -375,7 +376,6 @@ ${slack}
             <p>Nothing has been asked yet.</p>
             <div class="suggests">
               <button type="button" data-suggest="What was decided?">What was decided?</button>
-              <button type="button" data-suggest="What was decided about the offsite?">What was decided about the offsite?</button>
               <button type="button" data-suggest="Who kept the last sentence?">Who kept the last sentence?</button>
             </div>
           </div>
@@ -424,7 +424,7 @@ ${slack}
             <dt class="account-name-row">Name</dt><dd id="account-detail-name" class="account-name-row"></dd>
             <dt>Role</dt><dd id="account-detail-role"></dd>
             <dt>Workspace</dt><dd id="account-detail-workspace">Company</dd>
-            <dt>Session</dt><dd id="account-detail-expiry">${escapeHtml(state.accountExpiry ? new Date(state.accountExpiry).toUTCString() : (signedIn ? "This sign-in does not list an expiry." : "Sign-in is not set up."))}</dd>
+            <dt>Session</dt><dd id="account-detail-expiry">${escapeHtml(state.accountExpiry ? new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC", timeZoneName: "short" }).format(new Date(state.accountExpiry)) : (signedIn ? "This sign-in does not list an expiry." : "Sign-in is not set up."))}</dd>
           </dl>
         </div>
         <div class="settings-card">
@@ -456,17 +456,15 @@ ${slack}
         <div id="room-missing" class="empty-state" hidden>
           <p class="empty-title">Room not found</p>
           <p>That room is not in this workspace.</p>
-          <a class="primary" href="/console/rooms" id="room-missing-link">Back to Rooms</a>
+          <a class="primary" href="/console/rooms" id="room-missing-link"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10 3.5 5.5 8 10 12.5"/></svg>Back to Rooms</a>
         </div>
         <div class="bot-head" id="file-head">
           <p id="file-kind" class="page-kicker sr"></p>
           <p id="file-title" class="page-title sr"></p>
           <div class="meta-strip" id="file-meta">
             <button type="button" id="file-id-chip" class="id-chip"><span id="file-id" class="mono"></span></button>
-            <span class="meta-item"><span class="meta-label">Status</span><span id="file-status-badge" class="badge"></span></span>
-            <span class="meta-rule" aria-hidden="true"></span>
-            <span class="meta-item"><span class="meta-label">Platform</span><span id="file-platform-pill"></span></span>
-            <span class="meta-rule" aria-hidden="true"></span>
+            <span class="meta-item header-only" hidden><span class="meta-label">Status</span><span id="file-status-badge" class="badge"></span></span>
+            <span class="meta-item header-only" hidden><span class="meta-label">Platform</span><span id="file-platform-pill"></span></span>
             <span class="meta-item"><span class="meta-label">Started</span><span id="file-started" class="meta"></span></span>
             <div class="room-actions">
               <button type="button" id="room-menu-btn" class="close" aria-haspopup="menu" aria-expanded="false" aria-controls="room-menu" aria-label="Room actions">${kebabIcon}</button>
@@ -1349,9 +1347,9 @@ ${slack}
     var status = document.createElement("span");
     status.className = "status-cell";
     var badge = document.createElement("span");
-    var waitingOn = (spec.waitingCount || 0) > 0 || spec.wait;
-    badge.className = waitingOn ? "badge warn" : "badge ok";
-    badge.textContent = waitingOn ? "Waiting" : "Done";
+    var tone = roomTone(spec.roomId);
+    badge.className = tone.badge;
+    badge.textContent = tone.word;
     var when = document.createElement("span");
     when.className = "when";
     when.textContent = spec.whenText || "";
@@ -1520,7 +1518,7 @@ ${slack}
     }
     var aside = document.getElementById("room-empty-aside");
     if (aside) aside.textContent = failed
-      ? "The account could not be read. Try again."
+      ? "Home could not be loaded. Try again."
       : filteredOut
         ? "Clear the filters to see every room."
         : "Bring Sederunt into a meeting or a channel.";
@@ -1599,8 +1597,7 @@ ${slack}
   }
 
   function roomVisible(spec) {
-    var waitingOn = (spec.waitingCount || 0) > 0 || !!spec.wait;
-    if (roomFilter === "waiting" && !waitingOn) return false;
+    if (roomFilter === "waiting") roomFilter = "all";
     if (roomFilter === "kept" && !spec.kept) return false;
     if (!roomQuery) return true;
     var hay = String(spec.fullTitle || "") + " " + String(spec.title || "") + " " + String(spec.where || "");
@@ -1784,17 +1781,24 @@ ${slack}
     setHistoryPressed();
     clear("history-list");
     var roomPick = document.getElementById("history-room");
-    if (roomPick && roomPick.options.length < 2) {
+    if (roomPick) {
+      var chosen = roomPick.value;
+      roomPick.replaceChildren();
+      var any = document.createElement("option");
+      any.value = "";
+      any.textContent = "All rooms";
+      roomPick.append(any);
       ((state && state.rooms) || []).forEach(function (room) {
         var option = document.createElement("option");
         option.value = room.id;
         option.textContent = room.name || room.channel || room.id;
         roomPick.append(option);
       });
+      if (chosen) roomPick.value = chosen;
     }
     var query = ((document.getElementById("history-search") || {}).value || "").trim().toLowerCase();
     var roomId = roomPick ? roomPick.value : "";
-    var groups = selectFeed((state && state.activity) || [], {
+    var groups = selectActivity((state && state.activity) || [], {
       kind: historyKind,
       query: query,
       roomId: roomId,
@@ -1814,7 +1818,7 @@ ${slack}
     var historyCount = document.getElementById("history-count");
     var historyFoot = document.getElementById("history-foot");
     if (historyFoot) historyFoot.hidden = countRows === 0;
-    if (historyCount && countRows) historyCount.textContent = "1\u2013" + countRows + " of " + countRows;
+    if (historyCount && groups.length) historyCount.textContent = "1\u2013" + groups.length + " of " + groups.length;
     return;
     var rows = [];
     var decisions = (state && state.decisions) || [];
@@ -1956,7 +1960,7 @@ ${slack}
     slowTimer = null;
     var errorBox = document.getElementById("read-error");
     if (errorBox && next.read === "failed") errorBox.classList.remove("state-info");
-    showRetry(next.read === "failed", "The account could not be read. Try again.");
+    showRetry(next.read === "failed", "Home could not be loaded. Try again.");
     fillHearing(next.hearing);
     var loaded = next.companyLoaded === true;
     document.getElementById("onboard-missing").hidden = loaded;
@@ -2043,7 +2047,7 @@ ${slack}
       var emptyTitle = recordEmpty.querySelector(".empty-title");
       var emptyLine = recordEmpty.querySelector("p:last-child");
       if (next.read === "failed" && emptyTitle) emptyTitle.textContent = "Decisions are unavailable.";
-      if (next.read === "failed" && emptyLine) emptyLine.textContent = "The account could not be read. Try again.";
+      if (next.read === "failed" && emptyLine) emptyLine.textContent = "Home could not be loaded. Try again.";
     }
     if (recordBoard) recordBoard.hidden = noKept;
     var recordFoot = document.getElementById("record-foot");
@@ -2505,6 +2509,14 @@ ${slack}
     });
   }
 
+  function roomTone(roomId) {
+    var failed = ((state && state.activity) || []).some(function (row) {
+      return row && row.kind === "failure" && row.outcome === "failed" && !row.resolved && (row.origin || {}).roomId === roomId;
+    });
+    if (failed) return { word: "Failed", badge: "badge bad" };
+    return { word: "Done", badge: "badge ok" };
+  }
+
   function activityRows(roomId) {
     return ((state && state.activity) || []).filter(function (row) {
       if (!row) return false;
@@ -2514,61 +2526,9 @@ ${slack}
     });
   }
 
-  function activityStamp(row) {
-    var at = Date.parse((row && row.ts) || "");
-    return isNaN(at) ? 0 : at;
-  }
-
-  function activityGroups(rows) {
-    var groups = [];
-    var seen = {};
-    (rows || []).forEach(function (row) {
-      var key = row.requestId || row.id;
-      var group = seen[key];
-      if (!group) {
-        group = { requestId: key, rows: [], latest: 0 };
-        seen[key] = group;
-        groups.push(group);
-      }
-      group.rows.push(row);
-      group.latest = Math.max(group.latest, activityStamp(row));
-    });
-    groups.forEach(function (group) {
-      group.rows.sort(function (a, b) { return activityStamp(a) - activityStamp(b); });
-    });
-    groups.sort(function (a, b) { return b.latest - a.latest; });
-    return groups;
-  }
-
-  function selectFeed(rows, query) {
-    var groups = activityGroups(rows);
-    var room = query && query.roomId;
-    if (room) groups = groups.filter(function (group) {
-      return group.rows.some(function (row) {
-        var origin = row.origin || {};
-        return origin.roomId === room || origin.roomName === room;
-      });
-    });
-    var kind = query && query.kind && query.kind !== "all" ? query.kind : "";
-    var actor = query && query.actor ? String(query.actor).toLowerCase() : "";
-    var text = query && query.query ? String(query.query).toLowerCase() : "";
-    if (!kind && !actor && !text) return groups;
-    return groups.map(function (group) {
-      return {
-        requestId: group.requestId,
-        latest: group.latest,
-        rows: group.rows.filter(function (row) {
-          if (kind && row.kind !== kind && !(kind === "action" && row.kind === "result")) return false;
-          if (actor && String((row.actor && row.actor.name) || "").toLowerCase() !== actor) return false;
-          if (text) {
-            var blob = ((row.sentence || "") + " " + ((row.target && row.target.id) || "") + " " + ((row.target && row.target.title) || "") + " " + ((row.origin && row.origin.roomName) || "")).toLowerCase();
-            if (blob.indexOf(text) === -1) return false;
-          }
-          return true;
-        })
-      };
-    }).filter(function (group) { return group.rows.length; });
-  }
+  ${groupActivity.toString()}
+  ${selectActivity.toString()}
+  ${relativeTime.toString()}
 
   function activityGlyph(kind, verb) {
     var name = kind === "failure" ? "fail" : (kind === "undo" ? "undo" : (kind === "request" ? "request" : (verb || "create")));
@@ -2588,20 +2548,6 @@ ${slack}
     return '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + body + '</svg>';
   }
 
-  function relFeed(ts) {
-    var at = Date.parse(ts || "");
-    if (isNaN(at)) return "";
-    var sec = Math.max(0, Math.floor((Date.now() - at) / 1000));
-    if (sec < 45) return "just now";
-    var min = Math.floor(sec / 60);
-    if (min < 60) return min + "m ago";
-    var hour = Math.floor(min / 60);
-    if (hour < 24) return hour + "h ago";
-    var day = Math.floor(hour / 24);
-    if (day < 14) return day + "d ago";
-    return Math.floor(day / 7) + "w ago";
-  }
-
   function paintRich(parent, text, row) {
     var title = (row.target && row.target.title) || "";
     var id = (row.target && row.target.id) || "";
@@ -2614,17 +2560,18 @@ ${slack}
       if (mark.at < cursor) return;
       if (mark.at > cursor) parent.append(document.createTextNode(text.slice(cursor, mark.at)));
       if (mark.kind === "title") {
-        var strong = document.createElement("strong");
-        strong.textContent = title;
-        parent.append(strong);
-      } else {
+        parent.append(document.createTextNode(title));
+      } else if (row.target && row.target.url) {
         var link = document.createElement("a");
         link.className = "entity-id";
-        var url = (row.target && row.target.url) || "";
-        if (!url && row.target && row.target.system === "linear") url = "https://linear.app/issue/" + id;
-        if (url) link.href = url;
+        link.href = row.target.url;
         link.textContent = id;
         parent.append(link);
+      } else {
+        var plain = document.createElement("span");
+        plain.className = "entity-id";
+        plain.textContent = id;
+        parent.append(plain);
       }
       cursor = mark.at + mark.len;
     });
@@ -2655,7 +2602,7 @@ ${slack}
     if (!box) return;
     var opts = options || {};
     box.replaceChildren();
-    var groups = opts.groups || activityGroups(rows);
+    var groups = opts.groups || groupActivity(rows);
     if (!groups.length) {
       var empty = document.createElement("p");
       empty.className = "empty-title";
@@ -2670,7 +2617,7 @@ ${slack}
       wrap.className = "activity-group";
       group.rows.forEach(function (row) {
         var line = document.createElement("div");
-        line.className = "activity-row" + (row.kind === "request" ? "" : " activity-child");
+        line.className = "activity-row" + (row.kind === "request" ? "" : " activity-child") + (row.superseded || row.outcome === "undone" ? " muted" : "");
         line.id = "activity-" + row.id;
         var icon = document.createElement("span");
         icon.className = "activity-icon" + (row.kind === "failure" ? " bad" : "");
@@ -2683,30 +2630,43 @@ ${slack}
         var rest = sentence.indexOf(who.textContent) === 0 ? sentence.slice(who.textContent.length) : (" " + sentence);
         text.append(document.createTextNode(" "));
         paintRich(text, rest.trim(), row);
+        if (row.verb === "label" && row.changes && row.changes[0] && row.changes[0].to) {
+          var pill = document.createElement("span");
+          pill.className = "label-pill";
+          pill.textContent = row.changes[0].to;
+          text.append(pill);
+        }
+        if (opts.viewRoom && row.origin && Number.isFinite(row.origin.at)) {
+          var seek = document.createElement("button");
+          seek.type = "button";
+          seek.className = "at-link";
+          var seconds = row.origin.at;
+          var mins = Math.floor(seconds / 60);
+          var secs = String(seconds % 60);
+          if (secs.length < 2) secs = "0" + secs;
+          seek.textContent = "at " + mins + ":" + secs;
+          seek.addEventListener("click", function () { seekTo(seconds); });
+          text.append(seek);
+        }
         if (row.ts) {
           var time = document.createElement("time");
           time.dateTime = row.ts;
           time.title = new Date(row.ts).toLocaleString();
-          time.textContent = "· " + relFeed(row.ts);
+          time.textContent = "· " + relativeTime(row.ts);
           text.append(document.createTextNode(" "));
           text.append(time);
         }
         var origin = row.origin || {};
         var roomName = origin.roomName || "";
-        if (opts.showRoom && roomName && sentence.indexOf(roomName) === -1) {
-          var chip = document.createElement("span");
-          chip.className = "mini-chip";
-          chip.textContent = roomName;
-          text.append(chip);
-        }
-        if (opts.viewRoom && row.kind === "request" && origin.roomId && origin.roomId !== opts.viewRoom) {
+        var home = group.rows.map(function (item) { return (item.origin || {}).roomId; }).filter(Boolean).pop();
+        if (row.kind === "request" && origin.roomId && home && origin.roomId !== home) {
           var from = document.createElement("span");
           from.className = "from-room";
           from.textContent = "from " + (roomName || origin.roomId);
           text.append(from);
         }
         line.append(icon, text);
-        if (row.undo && row.undo.available && row.outcome !== "undone") {
+        if (row.undo && row.undo.available && row.outcome !== "undone" && !row.superseded) {
           var undo = document.createElement("button");
           undo.type = "button";
           undo.className = "activity-undo";
@@ -2714,7 +2674,12 @@ ${slack}
           undo.addEventListener("click", function () { postActivity("undo", row.id, undo); });
           line.append(undo);
         }
-        if (row.kind === "failure") {
+        if (row.kind === "failure" && row.resolved) {
+          var done = document.createElement("span");
+          done.className = "retried";
+          done.textContent = "Retried";
+          line.append(done);
+        } else if (row.kind === "failure") {
           var retry = document.createElement("button");
           retry.type = "button";
           retry.className = "activity-retry";
@@ -2724,6 +2689,19 @@ ${slack}
         }
         wrap.append(line);
       });
+      if (opts.showRoom) {
+        var chipName = "";
+        group.rows.forEach(function (row) {
+          var name = (row.origin || {}).roomName || "";
+          if (name) chipName = name;
+        });
+        if (chipName) {
+          var chip = document.createElement("span");
+          chip.className = "mini-chip group-chip";
+          chip.textContent = chipName;
+          wrap.append(chip);
+        }
+      }
       feed.append(wrap);
     });
     box.append(feed);
@@ -2733,7 +2711,7 @@ ${slack}
     var box = document.getElementById("file-waiting");
     var waitingRow = document.getElementById("waiting-row");
     if (waitingRow) waitingRow.hidden = false;
-    paintActivity(box, [], { groups: selectFeed((state && state.activity) || [], { roomId: fileRoom }), viewRoom: fileRoom });
+    paintActivity(box, [], { groups: selectActivity((state && state.activity) || [], { roomId: fileRoom }), viewRoom: fileRoom });
   }
 
   function openDecision(decision) {
@@ -2792,9 +2770,9 @@ ${slack}
     var waitingOn = (fileRoom && waitingFor(fileRoom).length > 0) || !!(fileWait && fileWait.wait);
     var statusBadge = document.getElementById("file-status-badge");
     if (statusBadge) {
-      var failedRoom = activityRows(fileRoom).some(function (row) { return row.kind === "failure" && row.outcome === "failed"; });
-      statusBadge.className = failedRoom ? "badge bad" : "badge ok";
-      statusBadge.textContent = knownRoom ? (failedRoom ? "Failed" : "Done") : "";
+      var tone = roomTone(fileRoom);
+      statusBadge.className = knownRoom ? tone.badge : "badge";
+      statusBadge.textContent = knownRoom ? tone.word : "";
     }
     var pill = document.getElementById("file-platform-pill");
     if (pill) {
@@ -2915,9 +2893,7 @@ ${slack}
     var facts = [
       ["Started", relativeWhen(named.when) || whenLabel(named.when) || "Unknown"],
       ["Room", fileRoom || ""],
-      ["Decisions", String(rows.length)],
-      ["Voice", voiceWord(voiceFor())],
-      ["Run automatically", room && room.ask === true ? "Off" : "On"]
+      ["Decisions", String(rows.length)]
     ];
     facts.forEach(function (pair) {
       var term = document.createElement("dt");
@@ -3257,9 +3233,9 @@ ${slack}
     statusLabelNode.className = "meta-label";
     statusLabelNode.textContent = "Status";
     var badge = document.createElement("span");
-    var waitingOn = fileRoom && waitingFor(fileRoom).length > 0;
-    badge.className = waitingOn ? "badge warn" : (media && media.state === "processing" ? "badge warn" : "badge ok");
-    badge.textContent = media && media.state === "processing" ? "Processing" : "Done";
+    var tone = roomTone(fileRoom);
+    badge.className = media && media.state === "processing" ? "badge warn" : tone.badge;
+    badge.textContent = media && media.state === "processing" ? "Processing" : tone.word;
     status.append(statusLabelNode, badge);
     row.append(platform, status);
     if (media && media.duration) {
@@ -4326,7 +4302,7 @@ ${slack}
       list.append(button);
       count += 1;
     }
-    [["home", "Home"], ["rooms", "Rooms"], ["history", "History"], ["record", "Decisions"], ["chat", "Chat"], ["people", "People"], ["connectors", "Status"]].forEach(function (page) {
+    [["home", "Home"], ["rooms", "Rooms"], ["history", "History"], ["record", "Decisions"], ["chat", "Chat"], ["connectors", "Status"], ["people", "People"]].forEach(function (page) {
       add("Navigate", page[1], function () {
         leaveOnboard();
         showSection(page[0]);

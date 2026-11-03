@@ -31,8 +31,7 @@ import { looksLikeOpenQuestion } from "./parse.js";
 import { createSession } from "./session.js";
 import { postSlackReply, slackAnswer, slackChannelMembers, slackFileBytes, slackQuestion } from "./slack/reply.js";
 import { slackDelivery, verifySlackRequest } from "./slack/sign.js";
-import { appendRetry, logUndo } from "./activity.js";
-import { companyBoard, downloadFile, handleUtterance, personalBoard, readProofs, rebuildCompanyIndex, roomLedger, saveHearing } from "./typed-path.js";
+import { companyBoard, downloadFile, handleUtterance, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, undoRecorded } from "./typed-path.js";
 
 const port = Number(process.env.PORT || 8787);
 
@@ -424,28 +423,25 @@ export function createApp(options = {}) {
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/activity") {
+      const gate = guardConsole(req, env);
+      if (gate.required && !gate.session) {
+        send(res, 401, "application/json; charset=utf-8", JSON.stringify({ ok: false, reason: "sign-in" }));
+        return;
+      }
+      if (!activitySameOrigin(req)) {
+        send(res, 403, "application/json; charset=utf-8", JSON.stringify({ ok: false, reason: "origin" }));
+        return;
+      }
       const body = await readJson(req);
       const current = await prepareWorkspace(workspace, "", false, 2000);
       const id = typeof body.id === "string" ? body.id : "";
-      const actor = displayActor(env);
-      if (body.op === "undo") {
-        const event = logUndo(current, {
-          id: `${id}:undo:${(current.activity || []).length + 1}`,
-          requestId: (current.activity || []).find((row) => row.id === id)?.requestId || id,
-          undoOf: id,
-          actor: { type: "person", name: actor, via: "Console" },
-          verb: (current.activity || []).find((row) => row.id === id)?.verb || "update",
-          target: (current.activity || []).find((row) => row.id === id)?.target || {},
-        });
-        send(res, 200, "application/json; charset=utf-8", JSON.stringify({ ok: true, id: event.id }));
-        return;
-      }
-      const event = appendRetry(current, id);
-      if (!event) {
-        send(res, 404, "application/json; charset=utf-8", JSON.stringify({ ok: false }));
-        return;
-      }
-      send(res, 200, "application/json; charset=utf-8", JSON.stringify({ ok: true, id: event.id }));
+      const actor = gate.session?.name?.trim() || "Someone";
+      const deps = depsFor(workspace, "");
+      const result = body.op === "undo"
+        ? await undoRecorded(current, deps, id, actor)
+        : await replayFailure(current, deps, id);
+      const status = result.ok ? 200 : result.reason === "missing" || result.reason === "not-action" ? 404 : 409;
+      send(res, status, "application/json; charset=utf-8", JSON.stringify(result));
       return;
     }
     if (req.method === "GET" && (url.pathname === "/console" || url.pathname.startsWith("/console/"))) {
@@ -461,11 +457,12 @@ export function createApp(options = {}) {
       let status = 200;
       if (roomPath) {
         const current = await prepareWorkspace(workspace, "", false, 2000);
+        const readable = current.readReport?.ok === true;
         const id = decodeURIComponent(roomPath[1]);
         const known = (current.rooms || []).some((room) => room.id === id)
           || (current.decisions || []).some((decision) => decision.roomId === id)
           || (current.activity || []).some((row) => row.origin?.roomId === id);
-        if (!known) status = 404;
+        if (readable && !known) status = 404;
       }
       send(res, status, "text/html; charset=utf-8", renderConsolePage({
         meeting: doors.meeting,
@@ -674,9 +671,12 @@ export function createApp(options = {}) {
         room: namedRoom ? { id: namedRoom } : undefined,
         session: current,
       }, depsFor(workspace, companyId));
+      const matched = namedRoom
+        ? current.decisions.filter((decision) => decision.roomId === namedRoom && !decision.deleted).length
+        : current.decisions.filter((decision) => !decision.deleted).length;
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({
         body: result.body,
-        decisions: current.decisions.length,
+        decisions: matched,
         stored: false,
       }));
       return;
@@ -1001,22 +1001,45 @@ function displayActor(env) {
   return name || "Someone";
 }
 
+function wordHit(question, token) {
+  const text = String(token || "").trim().toLowerCase().replace(/^#/, "");
+  if (text.length < 3) return false;
+  const escaped = text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, "i").test(question);
+}
+
 function roomNamedIn(text, rooms) {
   const question = String(text || "").toLowerCase();
   let best = "";
   let bestLength = 0;
   for (const room of rooms || []) {
-    const names = [room?.id, room?.name, room?.channel].filter((value) => typeof value === "string" && value.trim());
+    const full = typeof room?.name === "string" ? room.name.trim() : "";
+    const leading = full.split(":")[0].trim();
+    const names = [room?.id, room?.channel, full, leading].filter((value) => typeof value === "string" && value.trim());
     for (const name of names) {
-      const token = name.trim().toLowerCase();
-      if (token.length < 3 || !question.includes(token)) continue;
-      if (token.length > bestLength) {
+      if (!wordHit(question, name)) continue;
+      if (name.length > bestLength) {
         best = room.id;
-        bestLength = token.length;
+        bestLength = name.length;
       }
     }
   }
   return best;
+}
+
+function activitySameOrigin(req) {
+  const type = headerValue(req.headers["content-type"]).toLowerCase();
+  if (!type.includes("application/json")) return false;
+  const site = headerValue(req.headers["sec-fetch-site"]).toLowerCase();
+  if (site === "cross-site") return false;
+  const origin = headerValue(req.headers.origin);
+  if (!origin) return true;
+  const host = headerValue(req.headers["x-forwarded-host"]) || headerValue(req.headers.host);
+  try {
+    return new URL(origin).host === host;
+  } catch {
+    return false;
+  }
 }
 
 function companyKey(workspace, companyId) {

@@ -265,5 +265,7 @@ test("a request from another room stays with the action the member can see", () 
     tool: { name: "act", server: "sederunt-mcp" },
   });
   const board = companyBoard(session, "Mina");
-  assert.equal(board.activity.filter((row) => row.requestId === "pair").length, 2);
+  const pair = board.activity.filter((row) => row.requestId === "pair");
+  assert.equal(pair.length, 1);
+  assert.equal(pair[0].origin.roomId, "design");
 });

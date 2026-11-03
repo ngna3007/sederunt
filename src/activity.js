@@ -59,9 +59,9 @@ const PHRASES = {
   },
   label: {
     request: "{actor} asked to add label {to} to {id} {title}",
-    action: "{actor} labelled {id} {title} {to} via {via}",
-    result: "{actor} labelled {id} {title} {to} via {via}",
-    failure: "{actor} couldn't add label {to}: {error}",
+    action: "{actor} added label {to} to {id} {title} via {via}",
+    result: "{actor} added label {to} to {id} {title} via {via}",
+    failure: "{actor} couldn't add label {to} to {id} {title}: {error}",
     undo: "{actor} undid labelling {id}",
   },
   create: {
@@ -129,8 +129,8 @@ export function relativeTime(ts, now = Date.now()) {
   const at = Date.parse(ts || "");
   if (Number.isNaN(at)) return "";
   const sec = Math.max(0, Math.floor((now - at) / 1000));
-  if (sec < 45) return "just now";
   const min = Math.floor(sec / 60);
+  if (min < 1) return "just now";
   if (min < 60) return `${min}m ago`;
   const hour = Math.floor(min / 60);
   if (hour < 24) return `${hour}h ago`;
@@ -186,8 +186,12 @@ export function groupActivity(events) {
     group.rows.push(event);
   }
   for (const group of groups) {
-    group.rows.sort((a, b) => stamp(a) - stamp(b) || (a.kind === "request" ? -1 : 1));
-    group.latest = group.rows.reduce((max, row) => Math.max(max, stamp(row)), 0);
+    const at = (row) => {
+      const parsed = Date.parse(row?.ts || "");
+      return Number.isNaN(parsed) ? 0 : parsed;
+    };
+    group.rows.sort((a, b) => at(a) - at(b) || (a.kind === "request" ? -1 : 1));
+    group.latest = group.rows.reduce((max, row) => Math.max(max, at(row)), 0);
   }
   groups.sort((a, b) => b.latest - a.latest);
   return groups;
@@ -204,7 +208,10 @@ export function selectActivity(events, query = {}) {
   let groups = groupActivity(events);
   const room = String(query.roomId || "");
   if (room) {
-    groups = groups.filter((group) => group.rows.some((row) => touches(row, room)));
+    groups = groups.filter((group) => group.rows.some((row) => {
+      const origin = row?.origin || {};
+      return origin.roomId === room || origin.roomName === room;
+    }));
   }
   const kind = query.kind && query.kind !== "all" ? query.kind : "";
   const actor = String(query.actor || "").trim().toLowerCase();
@@ -216,7 +223,8 @@ export function selectActivity(events, query = {}) {
       if (kind && row.kind !== kind && !(kind === "action" && row.kind === "result")) return false;
       if (actor && String(row.actor?.name || "").toLowerCase() !== actor) return false;
       if (text) {
-        const blob = `${renderActivity(row)} ${row.target?.id || ""} ${row.target?.title || ""} ${row.origin?.roomName || ""}`.toLowerCase();
+        const sentence = typeof row.sentence === "string" ? row.sentence : "";
+        const blob = `${sentence} ${row.target?.id || ""} ${row.target?.title || ""} ${row.origin?.roomName || ""}`.toLowerCase();
         if (!blob.includes(text)) return false;
       }
       return true;
@@ -230,6 +238,22 @@ export function selectActivity(events, query = {}) {
  * @param {{ activity?: unknown[] }} session
  * @param {string} failureId
  */
+/**
+ * Why an undo must be refused. Empty means the action can be undone.
+ *
+ * @param {{ kind?: string, outcome?: string, undo?: { available?: boolean, until?: string } } | null | undefined} event
+ * @param {number} [now]
+ */
+export function undoRefusal(event, now = Date.now()) {
+  if (!event) return "missing";
+  if (event.kind !== "action" && event.kind !== "result") return "not-action";
+  if (event.outcome === "undone") return "already";
+  if (!event.undo?.available) return "unavailable";
+  const until = Date.parse(event.undo.until || "");
+  if (Number.isNaN(until) || until < now) return "expired";
+  return "";
+}
+
 export function appendRetry(session, failureId) {
   const failed = (session.activity || []).find((row) => row.id === failureId && row.kind === "failure");
   if (!failed) return null;
