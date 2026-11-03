@@ -3,7 +3,7 @@ import { brandLogo, brandSprite } from "./brand-logos.js";
 export { rankDecisions } from "./room-match.js";
 
 /** Header cells, one per row cell, including the empty action column. */
-export const ROOM_COLUMNS = ["Room", "Platform", "Speakers", "Status", ""];
+export const ROOM_COLUMNS = ["Room", "Platform", "Speakers", "Status", "Started", ""];
 export const PEOPLE_COLUMNS = ["Name", "Rooms", "Decisions", "Last heard", ""];
 export const DECISION_COLUMNS = ["Decision", "Room", "Status", ""];
 
@@ -61,6 +61,13 @@ export function renderConsolePage(state = {}) {
   const accountMenu = signedIn
     ? `<button type="button" role="menuitem" id="edit-profile">${editIcon}Edit profile</button><div class="menu-rule" role="separator"></div><form id="sign-out-form" method="post" action="/console/sign-out"><button id="sign-out" type="submit" role="menuitem">${outIcon}Sign out</button></form>`
     : `<p class="account-note" role="note">Sign-in is not set up.</p>`;
+  const signInOff = state.signInOff === true;
+  const signInBanner = signInOff
+    ? `<div class="sign-in-off" role="status"><p>Sign-in is off. Anyone with this link can act as you. <a href="/console/status#console-secret" id="set-console-secret">Set a console secret</a></p></div>`
+    : "";
+  const secretCard = signInOff
+    ? `<div class="settings-card" id="console-secret"><p class="section-label">Console sign-in</p><p class="card-help">Sign-in is off. Anyone with this link can act as you. Set SEDERUNT_CONSOLE_SECRET outside this page, then restart. This page never shows the secret.</p></div>`
+    : "";
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -70,6 +77,7 @@ export function renderConsolePage(state = {}) {
 <link rel="stylesheet" href="/console.css">
 </head>
 <body class="is-reading"${state.calendarTimeZone ? ` data-calendar-zone="${escapeHtml(state.calendarTimeZone)}"` : ""}>
+<a class="skip-link" href="#main">Skip to content</a>
 ${brandSprite()}
 <div class="nav-scrim" id="nav-scrim"></div>
 <div id="rail-tip" class="rail-tip" hidden></div>
@@ -129,7 +137,8 @@ ${brandSprite()}
       </div>
     </div>
   </div>
-  <div class="stage">
+  <div class="stage" id="main" tabindex="-1">
+    ${signInBanner}
     <div class="topbar">
       <button id="rail-toggle" class="panel-btn" type="button" aria-pressed="false" aria-label="Hide the sidebar">${panelIcon}</button>
       <span class="topbar-rule" aria-hidden="true"></span>
@@ -212,6 +221,7 @@ ${slack}
     </div>
     <div id="overview" hidden>
       <div class="page-head"><div><p class="page-title">Status</p><p class="page-lede">Which tools Sederunt can use, and how the meeting guest listens.</p></div><div class="page-actions"></div></div>
+      ${secretCard}
       <p id="connector-split"></p>
       <div class="settings-card" id="meeting-card"${state.meeting ? " hidden" : ""}>
         <p class="section-label">Meeting</p>
@@ -221,6 +231,11 @@ ${slack}
       <p class="section-label">Tools</p>
       <p class="card-help">A tool that is not connected cannot be used from this page.</p>
       <div class="connectors">
+        <div class="explorer-head status-head">
+          <span data-col="mark"></span>
+          <span data-col="tool">Tool</span>
+          <span data-col="action"></span>
+        </div>
         <div class="conn" id="cal-status-row">
           ${calendarIcon}
           <div class="set-copy">
@@ -301,7 +316,7 @@ ${slack}
       </div>
       <div class="explorer">
         <div class="explorer-head">
-          ${ROOM_COLUMNS.map((label, index) => `<span data-col="${["room", "platform", "speakers", "status", "action"][index]}">${escapeHtml(label)}</span>`).join("")}
+          ${ROOM_COLUMNS.map((label, index) => `<span data-col="${["room", "platform", "speakers", "status", "started", "action"][index]}">${escapeHtml(label)}</span>`).join("")}
         </div>
         <div id="room-empty" class="empty-state" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.6h10.8v8.8H2.6z"/><path d="M2.6 6.6h10.8"/></svg></span><p class="empty-title" id="room-empty-line">No room yet.</p><p id="room-empty-aside">Bring Sederunt into a meeting or a channel.</p><button type="button" id="clear-filters" hidden>Clear filters</button></div>
         <div id="room-list"></div>
@@ -424,7 +439,7 @@ ${slack}
           <span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 13 13"/></svg></span>
           <p class="empty-title">Room not found</p>
           <p>That room is not in this workspace.</p>
-          <a class="secondary" href="/console/rooms" id="room-missing-link"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10 3.5 5.5 8 10 12.5"/></svg>Back to Rooms</a>
+          <a class="secondary" href="/console/rooms" id="room-missing-link"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10 3.5 5.5 8 10 12.5"/></svg>Back to rooms</a>
         </div>
         <div class="bot-head" id="file-head">
           <p id="file-kind" class="page-kicker sr"></p>
@@ -670,7 +685,7 @@ ${slack}
   </div>
 </div>
 <script type="module">
-import { formatActivitySentence, groupActivity, relativeTime, selectActivity, zoneShortName } from "/console/activity.js";
+import { formatActivitySentence, groupActivity, relativeTime, selectActivity, undoPrompt, zoneShortName } from "/console/activity.js";
 import { rankDecisions } from "/console/room-match.js";
 var sessionWhen = document.getElementById("account-detail-expiry");
 if (sessionWhen && sessionWhen.dataset.at) {
@@ -1328,11 +1343,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
     heard.dataset.col = "speakers";
     var people = spec.people || [];
     heard.title = people.map(function (person) { return personLabel(person) || person; }).join(", ");
-    people.slice(0, 4).forEach(function (person) { heard.append(face(personLabel(person) || person)); });
-    if (people.length > 4) {
+    people.slice(0, 2).forEach(function (person) { heard.append(face(personLabel(person) || person)); });
+    if (people.length > 2) {
       var more = document.createElement("span");
       more.className = "face more";
-      more.textContent = "+" + (people.length - 4);
+      more.textContent = "+" + (people.length - 2);
       heard.append(more);
     }
     var status = document.createElement("span");
@@ -1342,16 +1357,24 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var tone = roomTone(spec.roomId);
     badge.className = tone.badge;
     badge.textContent = tone.word;
+    var fails = failedActions(spec.roomId);
+    status.append(badge);
+    if (fails > 0) {
+      var chip = document.createElement("span");
+      chip.className = "fail-chip";
+      chip.textContent = fails === 1 ? "1 failed action" : (fails + " failed actions");
+      status.append(chip);
+    }
     var when = document.createElement("span");
     when.className = "when";
+    when.dataset.col = "started";
     when.textContent = spec.whenText || "";
-    status.append(badge, when);
     var view = document.createElement("span");
     view.className = "row-view";
     view.dataset.col = "action";
     view.setAttribute("aria-label", "View");
     view.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>';
-    card.append(roomCol, where, heard, status, view);
+    card.append(roomCol, where, heard, status, when, view);
     card.addEventListener("click", function (event) {
       if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
       event.preventDefault();
@@ -1473,7 +1496,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         fullTitle: ident.full,
         meta: ident.meta,
         where: room.platform || "",
-        whenText: ident.when ? (relativeWhen(ident.when) || blankMark()) : blankMark(),
+        whenText: ident.when ? (relativeWhen(ident.when) || "") : "",
         countLine: rows.length ? roomCount(rows) : "",
         people: peopleFor(room.id),
         waitingCount: waitingFor(room.id).length,
@@ -1662,10 +1685,17 @@ if (sessionWhen && sessionWhen.dataset.at) {
     roomText.title = roomText.textContent;
     roomCell.append(roomText);
     var status = decision.status || "recorded";
+    var clashing = status === "clashing";
+    if (clashing) {
+      var inline = document.createElement("span");
+      inline.className = "badge warn badge-inline";
+      inline.textContent = "Clashing";
+      meta.append(inline);
+    }
     var badge = document.createElement("span");
     badge.dataset.col = "status";
-    badge.className = status === "clashing" ? "badge warn" : "badge";
-    badge.textContent = typeof decision.checkpoint === "number" ? ("Checkpoint " + decision.checkpoint) : statusLabel(status);
+    badge.className = clashing ? "badge warn" : "badge";
+    badge.textContent = clashing ? "Clashing" : "";
     var view = document.createElement("span");
     view.className = "row-view";
     view.dataset.col = "action";
@@ -2634,12 +2664,22 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
   }
 
-  function roomTone(roomId) {
-    var failed = ((state && state.activity) || []).some(function (row) {
+  function meetingWord(room) {
+    if (!room) return { word: "No recording", badge: "badge" };
+    if (room.channel || /slack/i.test(String(room.platform || ""))) return { word: "No recording", badge: "badge" };
+    if (room.live === true) return { word: "Live", badge: "badge live" };
+    if (room.startedAt || room.recordingStart) return { word: "Done", badge: "badge ok" };
+    return { word: "No recording", badge: "badge" };
+  }
+
+  function failedActions(roomId) {
+    return ((state && state.activity) || []).filter(function (row) {
       return row && row.kind === "failure" && row.outcome === "failed" && !row.resolved && (row.origin || {}).roomId === roomId;
-    });
-    if (failed) return { word: "Failed", badge: "badge bad" };
-    return { word: "Done", badge: "badge ok" };
+    }).length;
+  }
+
+  function roomTone(roomId) {
+    return meetingWord(roomOf(roomId));
   }
 
   function activityRows(roomId) {
@@ -2713,6 +2753,89 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
   }
 
+  function undoReason(result) {
+    var reason = result && result.reason;
+    if (reason === "stale") return "Superseded by a newer change.";
+    if (reason === "unsupported") return "That action cannot be undone.";
+    if (reason === "partial") return "Part of the undo went through.";
+    if (reason === "already") return "That action was already undone.";
+    if (reason === "missing" || reason === "not-action") return "That action is no longer here.";
+    if (reason === "origin") return "That undo was refused.";
+    if (reason === "failed") return "The change did not go through.";
+    return "That action cannot be undone.";
+  }
+
+  function confirmUndo(row, line, undo) {
+    var calendarZone = document.body.getAttribute("data-calendar-zone") || "";
+    var viewerZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    var prompt = undoPrompt(row, calendarZone, viewerZone);
+    var saved = [];
+    var index;
+    for (index = 0; index < line.childNodes.length; index += 1) saved.push(line.childNodes[index]);
+    var ask = document.createElement("div");
+    ask.className = "undo-confirm";
+    var question = document.createElement("p");
+    question.textContent = prompt.ask;
+    var actions = document.createElement("div");
+    actions.className = "undo-actions";
+    var go = document.createElement("button");
+    go.type = "button";
+    go.className = "primary";
+    go.textContent = "Undo change";
+    var cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    actions.append(go, cancel);
+    ask.append(question, actions);
+    function onKey(event) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      restore();
+    }
+    function restore() {
+      document.removeEventListener("keydown", onKey, true);
+      line.classList.remove("is-confirming");
+      line.replaceChildren.apply(line, saved);
+      if (undo && undo.focus) undo.focus();
+    }
+    function showReason(message) {
+      go.disabled = false;
+      cancel.disabled = false;
+      var note = ask.querySelector(".undo-reason");
+      if (!note) {
+        note = document.createElement("p");
+        note.className = "undo-reason";
+        ask.append(note);
+      }
+      note.textContent = message;
+    }
+    document.addEventListener("keydown", onKey, true);
+    cancel.addEventListener("click", restore);
+    go.addEventListener("click", function () {
+      go.disabled = true;
+      cancel.disabled = true;
+      fetch("/api/activity", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ op: "undo", id: row.id })
+      }).then(function (response) { return response.json(); }).then(function (result) {
+        if (!result || !result.ok) {
+          showReason(undoReason(result));
+          return;
+        }
+        document.removeEventListener("keydown", onKey, true);
+        toast(prompt.done);
+        return load();
+      }).catch(function () {
+        showReason("The account could not be read. Read the account again.");
+      });
+    });
+    line.classList.add("is-confirming");
+    line.replaceChildren(ask);
+    setTimeout(function () { go.focus(); }, 0);
+  }
+
   function paintActivity(box, rows, options) {
     if (!box) return;
     var opts = options || {};
@@ -2724,6 +2847,17 @@ if (sessionWhen && sessionWhen.dataset.at) {
       empty.textContent = opts.filtered ? "No activity matches." : "No activity yet.";
       box.append(empty);
       return;
+    }
+    if (opts.showRoom) {
+      var head = document.createElement("div");
+      head.className = "explorer-head history-head";
+      [["mark", ""], ["event", "Event"], ["when", "When"], ["room", "Room"], ["action", ""]].forEach(function (pair) {
+        var cell = document.createElement("span");
+        cell.dataset.col = pair[0];
+        cell.textContent = pair[1];
+        head.append(cell);
+      });
+      box.append(head);
     }
     var feed = document.createElement("div");
     feed.className = "activity-feed";
@@ -2810,32 +2944,47 @@ if (sessionWhen && sessionWhen.dataset.at) {
           text.append(open);
         }
         var undoUntil = row.undo && row.undo.until ? Date.parse(row.undo.until) : 0;
-        if (row.undo && row.undo.available && row.outcome !== "undone" && !row.superseded && undoUntil > Date.now()) {
+        var action = document.createElement("span");
+        action.className = "activity-action";
+        action.dataset.col = "action";
+        if (row.outcome === "undone") {
+          var undone = document.createElement("span");
+          undone.className = "undone-mark";
+          undone.textContent = "Undone";
+          action.append(undone);
+        } else if (row.undo && row.undo.available && !row.superseded && undoUntil > Date.now()) {
           var undo = document.createElement("button");
           undo.type = "button";
           undo.className = "activity-undo";
           undo.textContent = "Undo";
-          undo.addEventListener("click", function () { postActivity("undo", row.id, undo); });
-          meta.append(undo);
+          undo.addEventListener("click", function () { confirmUndo(row, line, undo); });
+          action.append(undo);
         }
         if (row.kind === "failure" && row.resolved) {
           var done = document.createElement("span");
           done.className = "retried";
           done.textContent = "Retried";
-          meta.append(done);
+          action.append(done);
         } else if (row.kind === "failure" && row.stale) {
           var stale = document.createElement("span");
           stale.className = "activity-stale";
           stale.textContent = "Superseded by a newer change";
-          meta.append(stale);
+          action.append(stale);
         } else if (row.kind === "failure" && row.retryable === true) {
           var retry = document.createElement("button");
           retry.type = "button";
           retry.className = "activity-retry";
           retry.textContent = "Retry";
           retry.addEventListener("click", function () { postActivity("retry", row.id, retry); });
-          meta.append(retry);
+          action.append(retry);
         }
+        if (opts.showRoom) {
+          icon.dataset.col = "mark";
+          text.dataset.col = "event";
+          time.dataset.col = "when";
+          suffix.dataset.col = "room";
+          meta.append(action);
+        } else if (action.childNodes.length) meta.append(action);
         line.append(icon, text);
         if (meta.childNodes.length) line.append(meta);
         wrap.append(line);
@@ -3425,9 +3574,18 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var box = document.getElementById("overview-facts");
     if (box) box.replaceChildren();
     var statusBadge = document.getElementById("file-status-badge");
-    if (statusBadge && media && media.state === "processing") {
-      statusBadge.className = "badge warn";
-      statusBadge.textContent = "Processing";
+    if (statusBadge && media && media.state && !document.body.classList.contains("room-missing")) {
+      var mediaWord = media.state === "processing"
+        ? { word: "Live", badge: "badge live" }
+        : (media.state === "ready" || media.state === "novideo" || media.state === "expired")
+          ? { word: "Done", badge: "badge ok" }
+          : (media.state === "channel" || media.state === "none")
+            ? { word: "No recording", badge: "badge" }
+            : null;
+      if (mediaWord) {
+        statusBadge.className = mediaWord.badge;
+        statusBadge.textContent = mediaWord.word;
+      }
     }
     var usageItem = document.getElementById("file-usage-item");
     var usage = document.getElementById("file-usage");
@@ -3853,6 +4011,22 @@ if (sessionWhen && sessionWhen.dataset.at) {
       syncRail();
     }
   });
+  var skipLink = document.querySelector(".skip-link");
+  if (skipLink) skipLink.addEventListener("click", function (event) {
+    var main = document.getElementById("main");
+    if (!main) return;
+    event.preventDefault();
+    main.focus();
+  });
+  var secretLink = document.getElementById("set-console-secret");
+  if (secretLink) secretLink.addEventListener("click", function (event) {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    event.preventDefault();
+    leaveOnboard();
+    showSection("connectors");
+    var secretCard = document.getElementById("console-secret");
+    if (secretCard && secretCard.scrollIntoView) secretCard.scrollIntoView({ block: "start" });
+  });
   document.querySelectorAll(".rail [data-show], #show-connectors").forEach(function (button) {
     button.addEventListener("click", function (event) {
       if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
@@ -4004,19 +4178,90 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var pending = document.querySelector("#chat-log .chat-turn:last-child");
       if (pending) pending.classList.remove("chat-pending");
       if (reading && parts.clash && parts.clash.length > 1) {
-        reading.textContent = "";
+        reading.textContent = parts.lead || dropTrail(parts.answer) || "These decisions clash.";
+        reading.classList.add("chat-answer");
         var note = document.createElement("div");
         note.className = "callout callout-warn chat-clash";
-        var clashTitle = document.createElement("p");
-        clashTitle.className = "callout-title";
-        clashTitle.textContent = "These decisions clash";
-        note.append(clashTitle);
         parts.clash.forEach(function (item) {
           var line = document.createElement("p");
           var when = relativeWhen(item.spokenAt) || whenLabel(item.spokenAt);
           line.textContent = item.text + (when ? " · " + when : "");
           note.append(line);
         });
+        var chips = document.createElement("span");
+        chips.className = "cite-row";
+        parts.clash.forEach(function (item) {
+          var chip = document.createElement("span");
+          chip.className = "cite-chip";
+          var who = String(item.speaker || "someone").trim().toLowerCase() || "someone";
+          chip.textContent = item.clock ? (who + " · " + item.clock) : who;
+          chips.append(chip);
+        });
+        var clashKeys = {};
+        parts.clash.forEach(function (item) {
+          clashKeys[(item.roomId || "") + "|" + (item.spokenAt || "")] = true;
+        });
+        var extras = (parts.cites || []).filter(function (cite) {
+          return cite && !clashKeys[(cite.roomId || "") + "|" + (cite.spokenAt || "")];
+        });
+        function extraLabel(cite) {
+          var who = String(cite.speaker || "").trim().toLowerCase();
+          var clock = cite.clock || "";
+          if (who && clock) return who + " · " + clock;
+          return cite.label || "";
+        }
+        function addExtra(cite) {
+          var chip = document.createElement("button");
+          chip.type = "button";
+          chip.className = "cite-chip";
+          chip.textContent = extraLabel(cite);
+          chip.addEventListener("click", function () {
+            if (!cite.roomId) return;
+            leaveOnboard();
+            openFile(cite.roomId);
+          });
+          chips.append(chip);
+        }
+        if (extras.length && extras.length <= 2) extras.forEach(addExtra);
+        else if (extras.length > 2) {
+          var moreDecisions = document.createElement("button");
+          moreDecisions.type = "button";
+          moreDecisions.className = "cite-chip";
+          moreDecisions.textContent = extras.length + " more decisions";
+          moreDecisions.addEventListener("click", function () {
+            moreDecisions.remove();
+            extras.forEach(addExtra);
+          });
+          chips.append(moreDecisions);
+        }
+        note.append(chips);
+        var clashActions = document.createElement("div");
+        clashActions.className = "clash-actions";
+        var roomId = parts.clash[0] && parts.clash[0].roomId;
+        if (roomId) {
+          var openRoom = document.createElement("a");
+          openRoom.href = "/console/rooms/" + encodeURIComponent(roomId);
+          openRoom.textContent = "Open room";
+          openRoom.addEventListener("click", function (event) {
+            if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+            event.preventDefault();
+            leaveOnboard();
+            openFile(roomId);
+          });
+          clashActions.append(openRoom);
+        }
+        var copyClash = document.createElement("button");
+        copyClash.type = "button";
+        copyClash.textContent = "Copy";
+        copyClash.addEventListener("click", function () {
+          var copied = parts.lead || reading.textContent || "";
+          var done = function () { toast("Copied."); };
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(copied).then(done, function () { toast("Copy did not work."); });
+          } else toast("Copy did not work.");
+        });
+        clashActions.append(copyClash);
+        note.append(clashActions);
         reading.parentNode.append(note);
       } else if (reading) reading.textContent = dropTrail(parts.answer) || "The room did not answer.";
       if (reading && parts.detail) {
@@ -4025,7 +4270,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         extra.textContent = parts.detail;
         reading.parentNode.append(extra);
       }
-      if (reading && parts.cites) appendCites(reading.parentNode, parts.cites);
+      if (reading && parts.cites && !(parts.clash && parts.clash.length > 1)) appendCites(reading.parentNode, parts.cites);
       document.getElementById("chat-text").value = "";
       growChat();
       placeChatAnswer((pending && pending.querySelector(".cite-row")) || pending);
@@ -4602,6 +4847,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
   var startRoom = roomFromPath(location.pathname);
   if (startRoom) fileRoom = startRoom;
   showSection(startRoom ? "file" : sectionFromPath(location.pathname));
+  if (location.hash === "#console-secret") {
+    var secretAt = document.getElementById("console-secret");
+    if (secretAt && secretAt.scrollIntoView) secretAt.scrollIntoView({ block: "start" });
+  }
   if (!startRoom && (sectionName === "home" || sectionName === "rooms")) showHomeSkeleton(true);
   routed = true;
   reserveComposer();

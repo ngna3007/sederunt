@@ -560,6 +560,7 @@ export function createApp(options = {}) {
               : "Check that SEDERUNT_PUBLIC_ORIGIN is a public https address, then restart.",
         slackReady: Boolean(env.SLACK_SIGNING_SECRET && env.SLACK_BOT_TOKEN),
         signedIn: Boolean(gate.session),
+        signInOff: !consoleSecret(env),
         accountMember: String(env.SEDERUNT_MEMBER || "").trim(),
         accountName: gate.session?.name?.trim() || String(env.SEDERUNT_MEMBER || "").trim(),
         accountLine: gate.session ? "Owner" : "Sign-in is not set up",

@@ -3823,3 +3823,503 @@ body.room-open .room-actions {
     overflow: visible;
   }
 }
+
+/* Fix pass 04: missing room is only the not-found card. Later rules win. */
+body.room-missing #file-head,
+body.room-missing .room-body,
+body.room-missing #room-split,
+body.room-missing #timeline,
+body.room-missing .timeline,
+body.room-missing .underline-tabs,
+body.room-missing .room-settings,
+#room-split[hidden],
+#timeline[hidden] {
+  display: none !important;
+}
+body.room-missing .room-screen-panel {
+  display: block !important;
+  height: auto !important;
+  overflow: visible !important;
+  grid-template-rows: none !important;
+}
+body.room-missing #room-missing {
+  display: flex !important;
+}
+body.room-missing #room-missing .empty-title {
+  color: var(--foreground);
+}
+
+/* Fix pass 04: focus, banner, meeting status, shared list grid. */
+.skip-link {
+  position: absolute;
+  left: 12px;
+  top: 8px;
+  z-index: 80;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  background: var(--card);
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  text-decoration: none;
+  transform: translateY(-150%);
+}
+.skip-link:focus,
+.skip-link:focus-visible {
+  transform: none;
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.rail a:focus-visible,
+.rail button:focus-visible,
+#room-list > a.room:focus-visible,
+#room-list > button.room:focus-visible,
+a.room:focus-visible,
+button.room:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring) !important;
+}
+.underline-tabs button:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+.underline-tabs button[aria-selected="true"]:focus-visible {
+  box-shadow: inset 0 -2px 0 var(--primary);
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.sign-in-off {
+  flex: none;
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  padding: 8px 16px;
+  background: #fff6e0;
+  color: #6b4500;
+  border-bottom: 1px solid #f0d090;
+}
+.sign-in-off p { margin: 0; font-size: 13px; line-height: 1.45; color: #6b4500; }
+.sign-in-off a { color: #6b4500; font-weight: 600; }
+.count.danger {
+  background: var(--card);
+  border-color: var(--border);
+}
+.count.danger strong { color: #b42318; }
+.count.danger > span,
+.count.danger .count-note { color: var(--muted-foreground); }
+.badge.live {
+  background: color-mix(in srgb, var(--primary) 12%, white);
+  color: var(--primary);
+}
+.fail-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  background: #fff6e0;
+  color: #6b4500;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.badge-inline { display: none; }
+.avatar-stack { width: 72px; min-width: 72px; max-width: 72px; }
+.avatar-stack .face {
+  margin-left: -6px;
+  box-shadow: 0 0 0 2px #fff;
+}
+.avatar-stack .face:first-child { margin-left: 0; }
+.undo-confirm {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  width: 100%;
+}
+.undo-confirm p { margin: 0; flex: 1 1 16rem; }
+.undo-actions { display: inline-flex; gap: 8px; flex: none; }
+.undo-reason { flex: 1 1 100%; color: #6b4500; }
+.undone-mark { color: var(--muted-foreground); font-size: 12px; white-space: nowrap; }
+.clash-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.clash-actions a,
+.clash-actions button {
+  height: var(--control-h);
+  min-height: var(--control-h);
+}
+.chat-answer { display: block; margin: 0 0 8px; }
+
+:root {
+  --list-gap: 16px;
+  --cols-rooms: minmax(0, 1fr) max-content 72px max-content max-content 32px;
+  --cols-decisions: minmax(0, 1.6fr) minmax(10rem, 14rem) max-content 32px;
+  --cols-people: minmax(8rem, 1.1fr) minmax(0, 1.6fr) 8.5rem 9rem 32px;
+  --cols-history: 24px minmax(0, 1fr) 9rem 12rem 6.5rem;
+  --cols-status: 28px minmax(0, 1fr) auto;
+}
+@media (min-width: 1024px) { :root { --list-gap: 20px; } }
+@media (min-width: 1440px) { :root { --list-gap: 24px; } }
+@media (min-width: 1920px) { :root { --list-gap: 28px; } }
+
+#rooms .explorer {
+  display: grid !important;
+  grid-template-columns: var(--cols-rooms) !important;
+  column-gap: var(--list-gap) !important;
+  padding: 0 16px !important;
+  box-sizing: border-box;
+  overflow: visible;
+}
+body.is-reading #rooms .explorer { display: none !important; }
+#rooms .explorer-head,
+#rooms #room-list,
+#rooms #room-list > a.room,
+#rooms #room-list > button.room:not(.decision-row) {
+  display: grid !important;
+  grid-template-columns: subgrid !important;
+  grid-column: 1 / -1 !important;
+  row-gap: 0 !important;
+  column-gap: var(--list-gap) !important;
+  padding: 0 !important;
+  width: auto !important;
+  min-width: 0;
+  justify-items: stretch;
+  align-items: center;
+  box-sizing: border-box;
+}
+#rooms #room-empty,
+#rooms #room-foot,
+#home-all-rooms { grid-column: 1 / -1; }
+#rooms #room-list > a.room,
+#rooms #room-list > button.room:not(.decision-row) {
+  height: 64px;
+  min-height: 64px;
+  max-height: 64px;
+}
+#rooms .explorer-head { height: 40px; min-height: 40px; max-height: 40px; }
+#rooms .explorer-head > span,
+#rooms #room-list [data-col] {
+  min-width: 0;
+  text-align: left;
+  justify-self: stretch;
+}
+#rooms .status-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: auto;
+  min-width: 0;
+  overflow: visible;
+}
+#rooms .when {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+#record-table.record-board {
+  display: grid !important;
+  grid-template-columns: var(--cols-decisions) !important;
+  column-gap: var(--list-gap) !important;
+  padding: 0 16px !important;
+  box-sizing: border-box;
+}
+#record-table > .decision-head,
+#record-list,
+#record-list .decision-row {
+  display: grid !important;
+  grid-template-columns: subgrid !important;
+  grid-template-areas: none !important;
+  grid-column: 1 / -1 !important;
+  row-gap: 0 !important;
+  column-gap: var(--list-gap) !important;
+  padding: 0 !important;
+  width: auto !important;
+  justify-items: stretch;
+  align-items: center;
+}
+#record-list .decision-row > .ex-room,
+#record-list .decision-row > .ex-plat,
+#record-list .decision-row > .badge,
+#record-list .decision-row > .row-view {
+  grid-area: auto !important;
+}
+#record-foot,
+#record-detail { grid-column: 1 / -1; }
+#record-list .decision-row {
+  height: 80px;
+  min-height: 80px;
+  max-height: 80px;
+  box-sizing: border-box;
+}
+#record-list .decision-row .ex-plat {
+  width: auto !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+}
+#record-list .decision-row > .badge:empty {
+  visibility: hidden;
+  padding: 0;
+  min-height: 0;
+}
+
+#people-table {
+  display: grid !important;
+  grid-template-columns: var(--cols-people) !important;
+  column-gap: var(--list-gap) !important;
+  padding: 0 16px !important;
+  box-sizing: border-box;
+}
+#people-list,
+#people-table .people-head,
+#people-table .people-row {
+  display: grid !important;
+  grid-template-columns: subgrid !important;
+  grid-column: 1 / -1 !important;
+  row-gap: 0 !important;
+  column-gap: var(--list-gap) !important;
+  padding: 0 !important;
+  width: auto !important;
+  justify-items: stretch;
+  align-items: center;
+}
+#people-table .people-row {
+  height: 60px !important;
+  min-height: 60px !important;
+  max-height: 60px !important;
+}
+#people-foot { grid-column: 1 / -1; }
+
+#history-table {
+  display: grid;
+  grid-template-columns: var(--cols-history);
+  column-gap: var(--list-gap);
+  padding: 0 16px;
+  box-sizing: border-box;
+}
+#history-list,
+#history-list .history-head,
+#history-list .activity-feed,
+#history-list .activity-group,
+#history-list .activity-row {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  align-items: center;
+  width: auto;
+  min-width: 0;
+}
+#history-list .activity-meta { display: contents; }
+#history-list .room-suffix,
+#history-list .room-suffix:empty { display: block !important; }
+#history-list .activity-row {
+  height: 64px;
+  min-height: 64px;
+  max-height: 64px;
+  margin: 0;
+  padding: 0;
+}
+#history-list .activity-row.is-confirming {
+  height: auto;
+  max-height: none;
+  min-height: 64px;
+}
+#history-list .history-head { height: 40px; min-height: 40px; }
+#history-list .activity-copy {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+  -webkit-line-clamp: unset;
+}
+#history-list .activity-row { overflow: hidden; }
+#history-list .activity-row.is-confirming { overflow: visible; }
+#history-list .activity-row.is-failure .activity-copy,
+#history-list .activity-row.is-failure p {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#history-foot { grid-column: 1 / -1; }
+
+.settings-card .connectors {
+  display: grid !important;
+  grid-template-columns: var(--cols-status) !important;
+  column-gap: var(--list-gap) !important;
+  padding: 0 16px !important;
+  box-sizing: border-box;
+}
+.settings-card .connectors > .status-head,
+.settings-card .connectors > .conn {
+  display: grid !important;
+  grid-template-columns: subgrid !important;
+  grid-column: 1 / -1 !important;
+  align-items: center;
+  row-gap: 0 !important;
+  column-gap: var(--list-gap) !important;
+  padding: 0 !important;
+  width: auto !important;
+  min-height: 64px;
+  height: 64px;
+  box-sizing: border-box;
+}
+.settings-card .connectors > .status-head { height: 40px; min-height: 40px; }
+
+@media (min-width: 701px) {
+  #rooms .row-view,
+  #rooms .explorer-head [data-col="action"],
+  #rooms .explorer-head > [data-col="platform"],
+  #rooms .explorer-head > [data-col="started"],
+  #rooms .explorer-head > [data-col="speakers"],
+  #rooms .explorer-head > [data-col="status"],
+  #rooms a.room > .where,
+  #rooms button.room > .where,
+  #rooms .when,
+  #rooms .avatar-stack,
+  #rooms .status-cell,
+  #record-list .row-view,
+  .decision-head [data-col="action"],
+  .decision-head [data-col="room"],
+  .decision-head [data-col="status"],
+  #record-list .decision-row > .badge,
+  #record-list .decision-row .ex-plat {
+    display: flex !important;
+  }
+  #record-list .decision-row > .badge:empty { visibility: hidden; }
+}
+
+@media (max-width: 1200px) and (min-width: 701px) {
+  :root { --cols-people: minmax(0, 1.1fr) minmax(0, 1.6fr) 8.5rem 32px; }
+  #people-table .people-head > [data-col="heard"],
+  #people-table .people-row .heard { display: none !important; }
+}
+
+@media (max-width: 700px) {
+  #rooms .explorer,
+  #people-table,
+  #history-table,
+  #record-table.record-board {
+    display: block !important;
+    padding: 0 !important;
+    overflow: visible;
+  }
+  #rooms #room-list,
+  #people-list,
+  #history-list,
+  #history-list .activity-feed,
+  #history-list .activity-group,
+  #record-list {
+    display: block !important;
+    padding: 0 !important;
+  }
+  #rooms .explorer-head,
+  #people-table .people-head { display: none !important; }
+  #rooms #room-list > a.room,
+  #rooms #room-list > button.room:not(.decision-row) {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) max-content !important;
+    grid-template-areas: "title status" "speakers started" !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    padding: 12px 16px !important;
+    column-gap: 12px !important;
+    row-gap: 8px !important;
+  }
+  #rooms a.room > .ex-room,
+  #rooms button.room > .ex-room { grid-area: title; min-width: 0; }
+  #rooms a.room > .where,
+  #rooms button.room > .where,
+  #rooms a.room > .row-view,
+  #rooms button.room > .row-view { display: none !important; }
+  #rooms a.room > .avatar-stack,
+  #rooms button.room > .avatar-stack {
+    grid-area: speakers;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    justify-self: start;
+  }
+  #rooms a.room > .status-cell,
+  #rooms button.room > .status-cell {
+    grid-area: status;
+    justify-self: end;
+    width: max-content;
+    max-width: 100%;
+  }
+  #rooms a.room > .when,
+  #rooms button.room > .when {
+    grid-area: started;
+    justify-self: end;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    white-space: nowrap !important;
+    width: max-content;
+    max-width: none;
+  }
+  #people-table .people-row,
+  #history-list .activity-row {
+    display: flex !important;
+    flex-direction: column;
+    align-items: stretch;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    padding: 12px 16px !important;
+    gap: 8px;
+  }
+  #history-list .activity-meta { display: flex !important; flex-wrap: wrap; gap: 8px; }
+  #history-list .room-suffix:empty { display: none !important; }
+}
+
+@media (max-width: 1100px) {
+  #record-list .decision-row {
+    padding-top: 12px !important;
+    padding-bottom: 12px !important;
+  }
+}
+
+@media (max-width: 640px) {
+  #record-table.record-board,
+  #record-list { display: block !important; padding: 0 !important; }
+  #record-table > .decision-head { display: none !important; }
+  #record-list .decision-row {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    padding: 12px 16px !important;
+    gap: 8px !important;
+    grid-template-columns: none !important;
+  }
+  #record-list .decision-row .ex-room,
+  #record-list .decision-row .ex-room strong {
+    width: 100% !important;
+    max-width: none !important;
+  }
+  #record-list .decision-row .ex-room strong {
+    -webkit-line-clamp: 3 !important;
+    line-clamp: 3 !important;
+  }
+  #record-list .decision-row .meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    white-space: normal;
+  }
+  #record-list .decision-row .meta .badge-inline {
+    display: inline-flex !important;
+  }
+  #record-list .decision-row > .badge { display: none !important; }
+  #record-list .decision-row .ex-plat {
+    width: auto !important;
+    max-width: 100% !important;
+  }
+}
