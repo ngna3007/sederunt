@@ -2732,50 +2732,104 @@ if (sessionWhen && sessionWhen.dataset.at) {
     return '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="3.2"/></svg>';
   }
 
-  function proseSpan(value) {
-    var trimmed = String(value || "").replace(/\s+/g, " ").trim();
-    if (!trimmed) return null;
-    var span = document.createElement("span");
-    span.className = "activity-prose";
-    span.textContent = trimmed;
-    return span;
+  function isSpaceCode(code) {
+    return code === 32 || code === 9 || code === 10 || code === 13 || code === 12 || code === 11 || code === 160;
+  }
+
+  function collapseSpaces(value) {
+    var text = String(value || "");
+    var out = "";
+    var pending = false;
+    var i;
+    for (i = 0; i < text.length; i += 1) {
+      if (isSpaceCode(text.charCodeAt(i))) {
+        if (out) pending = true;
+      } else {
+        if (pending) {
+          out += " ";
+          pending = false;
+        }
+        out += text.charAt(i);
+      }
+    }
+    return out;
+  }
+
+  function proseEdges(value) {
+    var text = String(value || "");
+    var start = false;
+    var end = false;
+    var i;
+    for (i = 0; i < text.length; i += 1) {
+      if (!isSpaceCode(text.charCodeAt(i))) break;
+      start = true;
+    }
+    for (i = text.length - 1; i >= 0; i -= 1) {
+      if (!isSpaceCode(text.charCodeAt(i))) break;
+      end = true;
+    }
+    return { start: start, end: end, text: collapseSpaces(text) };
+  }
+
+  function ensureWordSpace(parent) {
+    if (!parent.childNodes.length) return;
+    var last = parent.lastChild;
+    var value = last && last.nodeType === 3 ? String(last.nodeValue || "") : "";
+    if (value && isSpaceCode(value.charCodeAt(value.length - 1))) return;
+    parent.append(document.createTextNode(" "));
   }
 
   function paintRich(parent, text, row) {
     var title = (row.target && row.target.title) || "";
     var id = (row.target && row.target.id) || "";
     var marks = [];
+    var gap = false;
     if (title && text.indexOf(title) >= 0) marks.push({ at: text.indexOf(title), len: title.length, kind: "title" });
     if (id && text.indexOf(id) >= 0) marks.push({ at: text.indexOf(id), len: id.length, kind: "id" });
     marks.sort(function (a, b) { return a.at - b.at; });
+    function place(node, leadingGap) {
+      if (!node) return;
+      if (gap || leadingGap) ensureWordSpace(parent);
+      gap = false;
+      parent.append(node);
+    }
+    function placeText(raw) {
+      var piece = proseEdges(raw);
+      if (!piece.text) {
+        if (piece.start || piece.end) gap = true;
+        return;
+      }
+      var span = document.createElement("span");
+      span.className = "activity-prose";
+      span.textContent = piece.text;
+      place(span, piece.start);
+      if (piece.end) gap = true;
+    }
     var cursor = 0;
     marks.forEach(function (mark) {
       if (mark.at < cursor) return;
-      if (mark.at > cursor) {
-        var lead = proseSpan(text.slice(cursor, mark.at));
-        if (lead) parent.append(lead);
-      }
+      if (mark.at > cursor) placeText(text.slice(cursor, mark.at));
       if (mark.kind === "title") {
-        var named = proseSpan(title);
-        if (named) parent.append(named);
+        var named = document.createElement("span");
+        named.className = "activity-prose";
+        named.textContent = collapseSpaces(title);
+        if (named.textContent) place(named, false);
       } else if (row.target && row.target.url) {
         var link = document.createElement("a");
         link.className = "entity-id";
         link.href = row.target.url;
         link.textContent = id;
-        parent.append(link);
+        place(link, false);
       } else if (id) {
         var plain = document.createElement("span");
         plain.className = "entity-id";
         plain.textContent = id;
-        parent.append(plain);
+        place(plain, false);
       }
       cursor = mark.at + mark.len;
     });
-    if (cursor < text.length) {
-      var tail = proseSpan(text.slice(cursor));
-      if (tail) parent.append(tail);
-    }
+    if (cursor < text.length) placeText(text.slice(cursor));
+    return gap;
   }
 
   function postActivity(op, id, button) {
@@ -2935,22 +2989,23 @@ if (sessionWhen && sessionWhen.dataset.at) {
           sample
         );
         var rest = sentence.indexOf(who.textContent) === 0 ? sentence.slice(who.textContent.length) : (" " + sentence);
-        paintRich(copy, rest.trim(), row);
+        paintRich(copy, rest, row);
         var outcomeKind = group.rows.some(function (item) { return item.kind === "result"; }) ? "result" : "action";
         if (row.verb === "label" && row.kind === outcomeKind && row.changes && row.changes[0] && row.changes[0].to) {
           var labelWord = String(row.changes[0].to);
-          var source = rest.trim();
+          var source = rest;
           var labelAt = source.indexOf(labelWord);
           if (labelAt >= 0) {
-            var before = source.slice(0, labelAt).trim();
-            var after = source.slice(labelAt + labelWord.length).trim();
+            var before = source.slice(0, labelAt);
+            var after = source.slice(labelAt + labelWord.length);
             copy.replaceChildren(who);
-            paintRich(copy, before, row);
+            var pending = paintRich(copy, before, row);
             var pill = document.createElement("span");
             pill.className = "label-pill";
             pill.textContent = labelWord;
+            if (pending) ensureWordSpace(copy);
             copy.append(pill);
-            if (after) paintRich(copy, after, row);
+            paintRich(copy, after, row);
           }
         }
         if (opts.viewRoom && row.origin && Number.isFinite(row.origin.at)) {
@@ -2963,7 +3018,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
           if (secs.length < 2) secs = "0" + secs;
           seek.textContent = "at " + mins + ":" + secs;
           seek.addEventListener("click", function () { seekTo(seconds); });
-          copy.append(document.createTextNode(" "));
+          ensureWordSpace(copy);
           copy.append(seek);
         }
         text.append(copy);
@@ -3010,6 +3065,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
           var done = document.createElement("span");
           done.className = "retried";
           done.textContent = "Retried";
+          ensureWordSpace(copy);
           copy.append(done);
         } else if (row.kind === "failure" && row.stale) {
           var stale = document.createElement("span");
@@ -3624,7 +3680,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function httpUrl(value) {
-    return /^https?:\/\//i.test(String(value || "")) ? String(value) : "";
+    var text = String(value || "");
+    var head = text.slice(0, 8).toLowerCase();
+    if (head.slice(0, 8) === "https://" || head.slice(0, 7) === "http://") return text;
+    return "";
   }
 
   function loadSpeakerLanes() {

@@ -4500,7 +4500,7 @@ body.is-reading #rooms .explorer { display: none !important; }
   #history-list .activity-copy {
     display: flex !important;
     align-items: center;
-    gap: 0.35em;
+    gap: 0;
     min-width: 0;
     overflow: hidden;
     white-space: nowrap !important;
