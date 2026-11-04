@@ -5850,3 +5850,61 @@ body.ob-page {
   }
 }
 
+/* Menu item: a plain full-width row inside a menu, popover, or palette.
+   No border, no button box, no shadow. Hover and keyboard focus fill the row;
+   danger items use red text. */
+.menu-item,
+.menu button,
+.account-menu button,
+#account-menu #sign-out,
+#palette-list button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--control-h);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  box-shadow: none;
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-weight: var(--weight-regular);
+  text-align: left;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.menu-item:hover,
+.menu button:hover,
+.account-menu button:hover,
+#account-menu #sign-out:hover,
+#palette-list button:hover,
+.menu-item:focus-visible,
+.menu button:focus-visible,
+.account-menu button:focus-visible,
+#account-menu #sign-out:focus-visible,
+#palette-list button:focus-visible,
+#palette-list button[aria-selected="true"] {
+  outline: none;
+  background: var(--muted);
+  box-shadow: none;
+  border-radius: var(--radius);
+}
+.menu-item:active,
+.menu button:active,
+.account-menu button:active,
+#palette-list button:active { transform: none; }
+.menu button[aria-checked="true"],
+.menu-item[aria-checked="true"] { background: var(--primary-subtle); color: var(--primary); }
+.menu-item.danger,
+#account-menu #sign-out { color: var(--danger-text); }
+.menu-item.danger:hover,
+.menu-item.danger:focus-visible,
+#account-menu #sign-out:hover,
+#account-menu #sign-out:focus-visible { background: var(--danger-subtle); color: var(--danger-text); }
+/* A checked row that also has keyboard focus keeps its tint and gains the inset ring,
+   so focus never disappears into the selected state. */
+.menu-item[aria-checked="true"]:focus-visible,
+.menu button[aria-checked="true"]:focus-visible { box-shadow: var(--focus-ring-inset); }

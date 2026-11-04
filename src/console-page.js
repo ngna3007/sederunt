@@ -63,7 +63,7 @@ export function renderConsolePage(state = {}) {
   const editIcon = glyph('<path d="M9.6 2.7 13.3 6.4 6.4 13.3H2.7V9.6z"/>');
   const outIcon = glyph('<path d="M6.2 2.8H3.4v10.4h2.8"/><path d="M6.6 8h6.2"/><path d="M10.6 5.4 13.2 8l-2.6 2.6"/>');
   const accountMenu = signedIn
-    ? `<button type="button" role="menuitem" id="edit-profile">${editIcon}Edit profile</button><div class="menu-rule" role="separator"></div><form id="sign-out-form" method="post" action="/console/sign-out"><button id="sign-out" type="submit" role="menuitem">${outIcon}Sign out</button></form>`
+    ? `<button type="button" class="menu-item" role="menuitem" id="edit-profile">${editIcon}Edit profile</button><div class="menu-rule" role="separator"></div><form id="sign-out-form" method="post" action="/console/sign-out"><button id="sign-out" class="menu-item danger" type="submit" role="menuitem">${outIcon}Sign out</button></form>`
     : `<p class="account-note" role="note">Sign-in is not set up.</p>`;
   const signInOff = state.signInOff === true;
   const signInBanner = signInOff
@@ -6327,6 +6327,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         list.append(head);
       }
       var button = document.createElement("button");
+      button.className = "menu-item";
       button.type = "button";
       button.textContent = label;
       button.setAttribute("aria-selected", count === 0 ? "true" : "false");
@@ -7157,10 +7158,10 @@ function renderWorkspaceSwitcher(spaces, switchIcon) {
           ${switchIcon}
         </button>
         <div id="workspace-menu" class="menu" role="menu" aria-labelledby="workspace-chip" hidden>
-          <button type="button" role="menuitemradio" data-workspace="company" aria-checked="true"><span class="tile-mark co" aria-hidden="true">C</span><span class="ws-copy"><span>Company</span><span class="menu-hint"></span></span></button>
-          <button type="button" role="menuitemradio" data-workspace="personal" aria-checked="false"><span class="tile-mark pe" aria-hidden="true">P</span><span class="ws-copy"><span>Personal</span><span class="menu-hint">A separate workspace</span></span></button>
+          <button class="menu-item" type="button" role="menuitemradio" data-workspace="company" aria-checked="true"><span class="tile-mark co" aria-hidden="true">C</span><span class="ws-copy"><span>Company</span><span class="menu-hint"></span></span></button>
+          <button class="menu-item" type="button" role="menuitemradio" data-workspace="personal" aria-checked="false"><span class="tile-mark pe" aria-hidden="true">P</span><span class="ws-copy"><span>Personal</span><span class="menu-hint">A separate workspace</span></span></button>
           <div class="menu-rule" role="separator"></div>
-          <button id="create-workspace" type="button" role="menuitem"><span class="ws-copy"><span>About Company</span><span class="menu-hint">What Company is</span></span></button>
+          <button class="menu-item" id="create-workspace" type="button" role="menuitem"><span class="ws-copy"><span>About Company</span><span class="menu-hint">What Company is</span></span></button>
         </div>`;
   }
   const items = Array.isArray(spaces.items) ? spaces.items : [];
@@ -7174,7 +7175,7 @@ function renderWorkspaceSwitcher(spaces, switchIcon) {
     const itemPersonal = item.kind === "personal";
     return `<form class="space-form" method="post" action="/console/space">
           <input type="hidden" name="tenant" value="${escapeHtml(item.id)}">
-          <button type="submit" role="menuitemradio" data-tenant="${escapeHtml(item.id)}" data-kind="${escapeHtml(item.kind)}" aria-checked="${on ? "true" : "false"}" tabindex="${on ? "0" : "-1"}">
+          <button class="menu-item" type="submit" role="menuitemradio" data-tenant="${escapeHtml(item.id)}" data-kind="${escapeHtml(item.kind)}" aria-checked="${on ? "true" : "false"}" tabindex="${on ? "0" : "-1"}">
             <span class="${itemPersonal ? "tile-mark pe" : "tile-mark"}" aria-hidden="true">${escapeHtml(item.mark || "S")}</span>
             <span class="ws-copy"><span>${escapeHtml(item.name)}</span><span class="menu-hint">${escapeHtml(item.hint || "")}</span></span>
           </button>
@@ -7192,7 +7193,7 @@ function renderWorkspaceSwitcher(spaces, switchIcon) {
           ${error}
           ${rows}
           <div class="menu-rule" role="separator"></div>
-          <button id="create-workspace" type="button" role="menuitem" tabindex="${items.length ? "-1" : "0"}"><span class="ws-copy"><span>Create workspace</span><span class="menu-hint">For another company or team</span></span></button>
+          <button class="menu-item" id="create-workspace" type="button" role="menuitem" tabindex="${items.length ? "-1" : "0"}"><span class="ws-copy"><span>Create workspace</span><span class="menu-hint">For another company or team</span></span></button>
         </div>`;
 }
 
