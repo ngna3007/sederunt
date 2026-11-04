@@ -4,7 +4,8 @@ import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { redact } from "./domain/redact.js";
-import { calendarTimeZone, createCalendarAdapter } from "./calendar/mcp.js";
+import { handleCalendarEvent } from "./calendar/route.js";
+import { calendarPresentedConnected, calendarTimeZone, createCalendarAdapter } from "./calendar/mcp.js";
 import { createConsoleAdapter } from "./console/upload.js";
 import { createLinearClient } from "./linear/mcp.js";
 import { loadLinearToken } from "./linear/token.js";
@@ -198,7 +199,7 @@ export function doorReport(env = process.env, linearReady = false) {
   const linear = linearReady === true;
   return {
     meeting,
-    calendar: Boolean(env.CALENDAR_MCP_TOKEN || env.CALENDAR_OAUTH_REFRESH_TOKEN),
+    calendar: calendarPresentedConnected(env),
     linear,
     slack,
     member,
@@ -554,6 +555,22 @@ export function createApp(options = {}) {
     }
     if (req.method === "POST" && url.pathname === "/console/tool-prefs") {
       await handleToolPref({ req, res, url, env, identity, send, readPosted });
+      return;
+    }
+    const eventPath = /^\/console\/calendar\/events\/([^/]+)$/.exec(url.pathname);
+    if (eventPath && (req.method === "GET" || req.method === "POST")) {
+      let eventId = eventPath[1];
+      try { eventId = decodeURIComponent(eventId); } catch { eventId = eventPath[1]; }
+      await handleCalendarEvent({
+        req,
+        res,
+        env,
+        send,
+        readJson,
+        calendar: deps.calendar,
+        sameOrigin: activitySameOrigin,
+        id: eventId,
+      });
       return;
     }
     const invitePath = /^\/console\/invite\/([^/]+)$/.exec(url.pathname);
@@ -1337,8 +1354,27 @@ async function consolePayload(workspace, current, memberId, kind = "company") {
     access: board.access,
     counts: board.counts,
     hearing: normalizeHearing(current.hearing),
+    meetings: await calendarMeetings(workspace),
   };
   return payload;
+}
+
+async function calendarMeetings(workspace) {
+  const list = workspace.deps?.calendar?.listUpcoming;
+  if (typeof list !== "function") return [];
+  try {
+    const rows = await list.call(workspace.deps.calendar);
+    if (!Array.isArray(rows)) return [];
+    return rows.slice(0, 20).map((event) => ({
+      id: String(event?.id || "").slice(0, 256),
+      title: String(event?.title || "Meeting").slice(0, 200),
+      start: String(event?.start || ""),
+      end: String(event?.end || ""),
+      readOnly: event?.readOnly === true,
+    })).filter((event) => /^[A-Za-z0-9_.:@-]{1,256}$/.test(event.id));
+  } catch {
+    return [];
+  }
 }
 
 function bindMember(env, supplied) {

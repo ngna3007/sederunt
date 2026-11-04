@@ -5145,3 +5145,156 @@ p.brand .tile-mark.brand-mark {
   font-size: 13px;
   font-weight: 400;
 }
+
+/* Calendar event editor. The ask card sits in Home even when rooms exist. */
+.home-tools > .tool-need { margin: 0 0 16px; }
+.meeting-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.meeting-rows .section-label { margin: 0; }
+.meeting-list {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--card);
+  overflow: hidden;
+}
+.meeting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  min-height: 56px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+}
+.meeting-row:first-child { border-top: 0; }
+.meeting-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.meeting-copy strong,
+.meeting-copy .meta {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.meeting-copy strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meeting-row .secondary { flex: none; max-width: 100%; }
+button.row-edit {
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  min-height: 32px;
+  margin-top: 8px;
+  align-self: flex-start;
+  white-space: normal;
+  text-align: left;
+}
+#file-head .bot-title-row { flex-wrap: wrap; min-width: 0; }
+#file-head .bot-title-row > .page-title { flex: 1 1 12rem; min-width: 0; }
+#file-edit-event { flex: none; }
+#event-dialog .panel { min-height: 0; }
+#event-dialog .panel-body { flex: 1 1 auto; min-height: 0; }
+#event-dialog .panel-body p { margin: 0; }
+#event-dialog .event-title {
+  font-size: 16px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+#event-dialog .event-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+#event-description { width: 100%; min-height: 7.5rem; box-sizing: border-box; }
+#event-dialog textarea:disabled,
+#event-dialog input:disabled {
+  opacity: 0.7;
+  background: var(--muted);
+}
+.event-guests-block,
+.event-add,
+.guest-row,
+.guest-copy { min-width: 0; }
+.event-guests-block { display: flex; flex-direction: column; gap: 8px; }
+.event-label { font-size: 13px; font-weight: 600; }
+#event-guests {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.guest-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.guest-copy { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.guest-name { font-weight: 500; overflow-wrap: anywhere; }
+.guest-mail { color: var(--muted-foreground); font-size: 13px; overflow-wrap: anywhere; }
+.guest-remove { flex: none; width: auto; }
+.event-add { display: flex; gap: 8px; align-items: center; }
+.event-add input { flex: 1 1 auto; min-width: 0; width: auto; }
+#event-add { flex: none; width: auto; }
+.event-notify {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.event-notify .set-copy { min-width: 0; flex: 1 1 auto; }
+.event-notify .field-hint { margin-top: 4px; }
+#event-error.alert { margin: 0; }
+.event-discard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--muted);
+}
+#event-dialog .wait-actions { flex-wrap: wrap; }
+#event-dialog .wait-actions button { width: auto; }
+#event-dialog input[aria-invalid="true"] {
+  border-color: var(--destructive);
+  box-shadow: 0 0 0 1px var(--destructive);
+}
+@media (max-width: 767px) {
+  #event-dialog.dialog {
+    padding: 0;
+    place-items: stretch;
+  }
+  #event-dialog .panel {
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+  }
+}
+@media (max-width: 640px) {
+  .meeting-row { align-items: flex-start; flex-wrap: wrap; }
+  .meeting-row .secondary { align-self: flex-start; }
+  .page-actions { flex-wrap: wrap; min-width: 0; }
+}

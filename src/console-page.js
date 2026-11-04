@@ -212,9 +212,9 @@ ${slack}
       <div class="empty-actions">
         <button type="button" class="primary" id="home-add-meeting">Add Sederunt to a meeting</button>
         <a class="secondary" href="/console/setup" id="home-connect-tools">Connect tools</a>
-        ${calendarAsk}
       </div>
     </div>
+    ${calendarAsk}
     <div id="home-stats">
       <div id="counts" class="counts"></div>
     </div>
@@ -345,6 +345,10 @@ ${slack}
         </div>
         <label class="search">${searchIcon}<span class="sr">Search rooms</span><input id="room-search" type="search" placeholder="Search" autocomplete="off"></label>
       </div>
+      <section id="meeting-rows" class="meeting-rows" hidden>
+        <h2 class="section-label">Meetings</h2>
+        <div id="meeting-list" class="meeting-list"></div>
+      </section>
       <div class="explorer">
         <div class="explorer-head">
           ${ROOM_COLUMNS.map((label, index) => `<span data-col="${["room", "platform", "speakers", "status", "started", "action"][index]}">${escapeHtml(label)}</span>`).join("")}
@@ -476,7 +480,10 @@ ${slack}
         </div>
         <div class="bot-head" id="file-head">
           <p id="file-kind" class="page-kicker sr"></p>
-          <p id="file-title" class="page-title"></p>
+          <div class="bot-title-row">
+            <p id="file-title" class="page-title"></p>
+            <button type="button" class="secondary" id="file-edit-event" hidden aria-haspopup="dialog">Edit details</button>
+          </div>
           <div class="meta-strip" id="file-meta">
             <button type="button" id="file-id-chip" class="id-chip"><span id="file-id" class="mono"></span></button>
             <span class="meta-item header-only" hidden><span class="meta-label">Status</span><span id="file-status-badge" class="badge"></span></span>
@@ -716,6 +723,53 @@ ${spaceDialog}
     </form>
   </div>
 </div>
+<div id="event-dialog" class="dialog" hidden role="dialog" aria-modal="true" aria-labelledby="event-dialog-title">
+  <div class="shade" data-close="event-dialog"></div>
+  <div class="panel">
+    <div class="panel-bar">
+      <h2 id="event-dialog-title">Edit meeting</h2>
+      <button type="button" class="close" data-close="event-dialog" aria-label="Close">${closeIcon}</button>
+    </div>
+    <div class="panel-body">
+      <p id="event-title" class="event-title"></p>
+      <p id="event-when" class="meta"></p>
+      <p id="event-readonly" class="alert info" hidden>This meeting is read-only. Its description and guests cannot be changed.</p>
+      <label class="event-field">Description
+        <textarea id="event-description" name="description" rows="5" maxlength="8000"></textarea>
+      </label>
+      <div class="event-guests-block">
+        <p class="event-label" id="event-guests-label">Guests</p>
+        <ul id="event-guests" aria-labelledby="event-guests-label"></ul>
+        <div class="event-add">
+          <label class="sr" for="event-email">Guest email</label>
+          <input id="event-email" type="email" inputmode="email" autocomplete="off" spellcheck="false" placeholder="name@company.com" aria-describedby="event-email-error">
+          <button type="button" class="secondary" id="event-add">Add</button>
+        </div>
+        <p id="event-email-error" class="field-error" role="alert" hidden></p>
+      </div>
+      <div class="event-notify">
+        <div class="set-copy">
+          <strong>Notify guests</strong>
+          <p id="event-notify-help" class="field-hint">Guests receive an email about this change.</p>
+        </div>
+        <label class="switch"><input id="event-notify" type="checkbox" checked aria-describedby="event-notify-help"><span class="sr">Notify guests</span></label>
+      </div>
+      <p id="event-error" class="alert" role="alert" hidden></p>
+      <div id="event-discard" class="event-discard" hidden>
+        <p>Discard unsaved changes?</p>
+        <div class="wait-actions">
+          <button type="button" class="secondary" id="event-keep">Keep editing</button>
+          <button type="button" class="danger" id="event-discard-confirm">Discard</button>
+        </div>
+      </div>
+      <div class="wait-actions">
+        <button type="button" class="secondary" data-close="event-dialog">Cancel</button>
+        <button type="button" class="secondary" id="event-retry" hidden>Try again</button>
+        <button type="button" class="primary" id="event-save">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
 <div id="palette" class="palette" hidden>
   <div class="shade" data-close="palette"></div>
   <div class="palette-panel" role="dialog" aria-modal="true" aria-labelledby="palette-label">
@@ -776,6 +830,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
   var routeQuiet = false;
   var routed = false;
   var openDecisionRow = null;
+  var eventDraft = null;
+  var eventSnapshot = "";
+  var eventSaving = false;
+  var eventLoaded = false;
+  var eventForceClose = false;
+  var eventLoadToken = 0;
 
   function text(id, value) {
     var node = document.getElementById(id);
@@ -1362,6 +1422,15 @@ if (sessionWhen && sessionWhen.dataset.at) {
     }
     if (subtitle) count.append(document.createTextNode(subtitle));
     roomCol.append(title, count);
+    if (spec.calendarEventId) {
+      var editDetails = document.createElement("button");
+      editDetails.type = "button";
+      editDetails.className = "secondary row-edit";
+      editDetails.textContent = "Edit details";
+      editDetails.setAttribute("data-edit-event", spec.calendarEventId);
+      editDetails.setAttribute("aria-haspopup", "dialog");
+      roomCol.append(editDetails);
+    }
     var where = document.createElement("span");
     where.className = "where ex-plat";
     where.dataset.col = "platform";
@@ -1404,6 +1473,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     view.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>';
     card.append(roomCol, where, heard, status, when, view);
     card.addEventListener("click", function (event) {
+      if (event.target && event.target.closest && event.target.closest("button")) return;
       if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
       event.preventDefault();
       if (spec.wait) openWaiting(spec);
@@ -1553,7 +1623,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
         countLine: rows.length ? roomCount(rows) : "",
         people: peopleFor(room.id),
         waitingCount: waitingFor(room.id).length,
-        kept: rows.length > 0
+        kept: rows.length > 0,
+        calendarEventId: typeof room.calendarEventId === "string" ? room.calendarEventId : ""
       };
       if (!roomVisible(spec)) return;
       var base = spec.title;
@@ -2313,6 +2384,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     text("read-note", note);
     syncHomeChrome();
     paintRooms();
+    paintMeetings();
     paintCounts();
     paintAttention();
     paintHistory();
@@ -2673,7 +2745,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function dialogOpen() {
-    var ids = ["profile-dialog", "decision-dialog", "create-dialog", "workspace-dialog", "space-dialog"];
+    var ids = ["event-dialog", "profile-dialog", "decision-dialog", "create-dialog", "workspace-dialog", "space-dialog"];
     for (var i = 0; i < ids.length; i += 1) {
       var node = document.getElementById(ids[i]);
       if (node && !node.hidden) return true;
@@ -2697,8 +2769,23 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function closeDialog(id) {
+    if (id === "event-dialog" && !eventForceClose) {
+      if (eventSaving) return;
+      if (eventDirty()) {
+        var discardBox = document.getElementById("event-discard");
+        if (discardBox) {
+          discardBox.hidden = false;
+          var keepEditing = document.getElementById("event-keep");
+          if (keepEditing) keepEditing.focus();
+        }
+        return;
+      }
+    }
     var dialog = document.getElementById(id);
-    if (!dialog || dialog.hidden) return;
+    if (!dialog || dialog.hidden) {
+      if (id === "event-dialog") eventForceClose = false;
+      return;
+    }
     if (id === "file-dialog") {
       var decision = document.getElementById("decision-dialog");
       if (decision && !decision.hidden) closeDialog("decision-dialog");
@@ -2708,6 +2795,16 @@ if (sessionWhen && sessionWhen.dataset.at) {
       return;
     }
     dialog.hidden = true;
+    if (id === "event-dialog") {
+      eventForceClose = false;
+      eventLoadToken += 1;
+      eventDraft = null;
+      eventLoaded = false;
+      eventSaving = false;
+      eventSnapshot = "";
+      var discardDone = document.getElementById("event-discard");
+      if (discardDone) discardDone.hidden = true;
+    }
     syncPage();
     if (opener && opener.focus) opener.focus();
   }
@@ -3389,6 +3486,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (!knownRoom && timelineBox) timelineBox.hidden = true;
     document.body.classList.toggle("room-missing", !knownRoom);
     text("file-title", fileWait ? (fileWait.title || "Room") : (knownRoom ? named.title : "Room not found"));
+    var fileEdit = document.getElementById("file-edit-event");
+    if (fileEdit) {
+      var calendarEventId = room && typeof room.calendarEventId === "string" ? room.calendarEventId : "";
+      if (calendarEventId) fileEdit.setAttribute("data-edit-event", calendarEventId);
+      else fileEdit.removeAttribute("data-edit-event");
+      fileEdit.hidden = !calendarEventId || !knownRoom;
+    }
     renderLead();
     if (sectionName === "file") {
       var currentCrumb = document.getElementById("crumb-current");
@@ -4571,6 +4675,548 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
   }
 
+  function calendarConnected() {
+    if (state && state.doors && typeof state.doors.calendar === "boolean") return state.doors.calendar;
+    return !!(toolAsk && toolAsk.connected && toolAsk.connected.calendar);
+  }
+
+  function showCalendarAsk() {
+    showSection("home");
+    var card = document.getElementById("tool-ask-calendar");
+    if (!card) {
+      toast("Calendar is not connected.");
+      return;
+    }
+    card.hidden = false;
+    var connect = card.querySelector("[data-tool-choice='connect']");
+    if (connect) connect.focus();
+  }
+
+  function isGuestBreak(ch) {
+    var code = ch.charCodeAt(0);
+    return ch === " " || ch === "," || ch === ";" || code === 10 || code === 13 || code === 9;
+  }
+
+  function hasGuestBreak(value) {
+    var text = String(value || "");
+    for (var i = 0; i < text.length; i += 1) {
+      if (isGuestBreak(text.charAt(i))) return true;
+    }
+    return false;
+  }
+
+  function guestParts(raw) {
+    var text = String(raw || "").trim();
+    var parts = [];
+    var current = "";
+    for (var i = 0; i < text.length; i += 1) {
+      var ch = text.charAt(i);
+      if (isGuestBreak(ch)) {
+        if (current) parts.push(current);
+        current = "";
+      } else current += ch;
+    }
+    if (current) parts.push(current);
+    return parts;
+  }
+
+  function validGuestEmail(value) {
+    var email = String(value || "").trim();
+    if (!email || email.length > 254) return "";
+    var at = email.indexOf("@");
+    if (at < 1 || at !== email.lastIndexOf("@")) return "";
+    var local = email.slice(0, at);
+    var domain = email.slice(at + 1);
+    if (!local || !domain || domain.indexOf(".") < 1) return "";
+    if (domain.charAt(domain.length - 1) === ".") return "";
+    if (local.indexOf(" ") !== -1 || domain.indexOf(" ") !== -1) return "";
+    return email;
+  }
+
+  function eventWhenText(start, end) {
+    var open = "";
+    var close = "";
+    try {
+      open = start ? formatConsoleWhen(start) : "";
+      close = end ? formatConsoleWhen(end) : "";
+    } catch (error) {
+      open = "";
+      close = "";
+    }
+    if (open && close) return open + " – " + close;
+    return open || close || "";
+  }
+
+  function paintMeetings() {
+    var box = document.getElementById("meeting-rows");
+    var list = document.getElementById("meeting-list");
+    if (!box || !list) return;
+    var meetings = (state && state.meetings) || [];
+    var failed = state && state.read === "failed";
+    box.hidden = failed || meetings.length === 0;
+    list.replaceChildren();
+    if (box.hidden) return;
+    meetings.forEach(function (meeting) {
+      if (!meeting || !meeting.id) return;
+      var row = document.createElement("div");
+      row.className = "meeting-row";
+      var copy = document.createElement("div");
+      copy.className = "meeting-copy";
+      var title = document.createElement("strong");
+      title.textContent = meeting.title || "Meeting";
+      var when = document.createElement("span");
+      when.className = "meta";
+      when.textContent = eventWhenText(meeting.start, meeting.end);
+      copy.append(title, when);
+      var edit = document.createElement("button");
+      edit.type = "button";
+      edit.className = "secondary";
+      edit.textContent = "Edit details";
+      edit.setAttribute("data-edit-event", meeting.id);
+      edit.setAttribute("aria-haspopup", "dialog");
+      if (meeting.readOnly) edit.setAttribute("data-readonly", "true");
+      row.append(copy, edit);
+      list.append(row);
+    });
+  }
+
+  function showEventError(message) {
+    var node = document.getElementById("event-error");
+    var retry = document.getElementById("event-retry");
+    if (node) {
+      node.textContent = message || "";
+      node.hidden = !message;
+    }
+    if (retry) {
+      retry.hidden = !message;
+      if (message) retry.focus();
+    }
+  }
+
+  function showEmailError(message) {
+    var node = document.getElementById("event-email-error");
+    var input = document.getElementById("event-email");
+    if (node) {
+      node.textContent = message || "";
+      node.hidden = !message;
+    }
+    if (input) {
+      if (message) input.setAttribute("aria-invalid", "true");
+      else input.removeAttribute("aria-invalid");
+    }
+  }
+
+  function syncEventDraftFromForm() {
+    if (!eventDraft) return;
+    var desc = document.getElementById("event-description");
+    var notify = document.getElementById("event-notify");
+    if (desc) eventDraft.description = desc.value;
+    if (notify) eventDraft.notify = !!notify.checked;
+  }
+
+  function eventStamp() {
+    if (!eventDraft) return "";
+    syncEventDraftFromForm();
+    var emails = [];
+    for (var i = 0; i < eventDraft.attendees.length; i += 1) emails.push(String(eventDraft.attendees[i].email || "").toLowerCase());
+    return JSON.stringify({
+      description: eventDraft.description || "",
+      notify: eventDraft.notify !== false,
+      emails: emails
+    });
+  }
+
+  function eventDirty() {
+    if (!eventDraft || !eventLoaded || eventDraft.readOnly) return false;
+    var pending = document.getElementById("event-email");
+    if (pending && pending.value.trim()) return true;
+    return eventStamp() !== eventSnapshot;
+  }
+
+  function fieldsLocked() {
+    if (!eventDraft) return true;
+    return eventDraft.readOnly === true || eventSaving || !eventLoaded;
+  }
+
+  function applyEventMode() {
+    var readOnly = !!(eventDraft && eventDraft.readOnly);
+    var locked = fieldsLocked();
+    var description = document.getElementById("event-description");
+    var email = document.getElementById("event-email");
+    var add = document.getElementById("event-add");
+    var notify = document.getElementById("event-notify");
+    var save = document.getElementById("event-save");
+    var note = document.getElementById("event-readonly");
+    if (description) description.disabled = locked;
+    if (email) email.disabled = locked;
+    if (add) add.disabled = locked;
+    if (notify) notify.disabled = locked;
+    if (save) {
+      save.hidden = readOnly;
+      save.disabled = locked || readOnly;
+    }
+    if (note) note.hidden = !readOnly;
+  }
+
+  function paintEventGuests() {
+    var list = document.getElementById("event-guests");
+    if (!list || !eventDraft) return;
+    list.replaceChildren();
+    eventDraft.attendees.forEach(function (guest, index) {
+      var item = document.createElement("li");
+      item.className = "guest-row";
+      item.setAttribute("data-email", guest.email);
+      if (guest.organizer) item.setAttribute("data-organizer", "true");
+      var copy = document.createElement("span");
+      copy.className = "guest-copy";
+      var who = document.createElement("span");
+      who.className = "guest-name";
+      who.textContent = guest.name || guest.email;
+      copy.append(who);
+      if (guest.name && guest.name !== guest.email) {
+        var mail = document.createElement("span");
+        mail.className = "guest-mail";
+        mail.textContent = guest.email;
+        copy.append(mail);
+      }
+      if (guest.organizer) {
+        var badge = document.createElement("span");
+        badge.className = "badge";
+        badge.textContent = "Organizer";
+        copy.append(badge);
+      }
+      item.append(copy);
+      if (!guest.organizer && !eventDraft.readOnly) {
+        var remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "secondary guest-remove";
+        remove.textContent = "Remove";
+        remove.setAttribute("aria-label", "Remove " + guest.email);
+        remove.setAttribute("data-guest-index", String(index));
+        item.append(remove);
+      }
+      list.append(item);
+    });
+  }
+
+  function fillEventDialog() {
+    if (!eventDraft) return;
+    text("event-title", eventDraft.title || "Meeting");
+    text("event-when", eventWhenText(eventDraft.start, eventDraft.end));
+    var desc = document.getElementById("event-description");
+    if (desc) desc.value = eventDraft.description || "";
+    var notify = document.getElementById("event-notify");
+    if (notify) notify.checked = eventDraft.notify !== false;
+    paintEventGuests();
+    applyEventMode();
+  }
+
+  function addGuestEmails(raw) {
+    if (!eventDraft || eventDraft.readOnly) return false;
+    var parts = guestParts(raw);
+    if (!parts.length) {
+      showEmailError("Enter a valid email address.");
+      return false;
+    }
+    var next = eventDraft.attendees.slice();
+    for (var i = 0; i < parts.length; i += 1) {
+      var email = validGuestEmail(parts[i]);
+      if (!email) {
+        showEmailError("Enter a valid email address.");
+        return false;
+      }
+      var key = email.toLowerCase();
+      var exists = false;
+      for (var j = 0; j < next.length; j += 1) {
+        if (String(next[j].email || "").toLowerCase() === key) exists = true;
+      }
+      if (exists) {
+        showEmailError(email + " is already invited.");
+        return false;
+      }
+      if (next.length >= 100) {
+        showEmailError("A meeting can have at most 100 guests.");
+        return false;
+      }
+      next.push({ email: email, name: "", organizer: false });
+    }
+    eventDraft.attendees = next;
+    showEmailError("");
+    var input = document.getElementById("event-email");
+    if (input) input.value = "";
+    paintEventGuests();
+    return true;
+  }
+
+  function loadEventDetails(id) {
+    var token = eventLoadToken + 1;
+    eventLoadToken = token;
+    var dialog = document.getElementById("event-dialog");
+    if (dialog) dialog.setAttribute("aria-busy", "true");
+    fetch("/console/calendar/events/" + encodeURIComponent(id), { headers: { accept: "application/json" } })
+      .then(function (response) {
+        return response.json().then(function (body) {
+          return { ok: response.ok, body: body };
+        }, function () {
+          return { ok: false, body: null };
+        });
+      })
+      .then(function (result) {
+        if (token !== eventLoadToken) return;
+        if (dialog) dialog.removeAttribute("aria-busy");
+        var still = document.getElementById("event-dialog");
+        if (!still || still.hidden || !eventDraft || eventDraft.id !== id) return;
+        if (!result.body || result.body.ok === false) {
+          eventLoaded = false;
+          applyEventMode();
+          showEventError((result.body && result.body.message) || "That meeting could not be read.");
+          return;
+        }
+        var event = result.body.event || {};
+        var attendees = [];
+        var list = event.attendees || [];
+        for (var i = 0; i < list.length; i += 1) {
+          var guest = list[i] || {};
+          if (!guest.email) continue;
+          attendees.push({
+            email: String(guest.email),
+            name: guest.name ? String(guest.name) : "",
+            responseStatus: guest.responseStatus ? String(guest.responseStatus) : "",
+            organizer: guest.organizer === true
+          });
+        }
+        eventDraft = {
+          id: event.id || id,
+          title: event.title || "Meeting",
+          start: event.start || "",
+          end: event.end || "",
+          description: typeof event.description === "string" ? event.description : "",
+          attendees: attendees,
+          readOnly: event.readOnly === true,
+          notify: true
+        };
+        eventLoaded = true;
+        showEventError("");
+        fillEventDialog();
+        eventSnapshot = eventStamp();
+        var desc = document.getElementById("event-description");
+        if (desc && !desc.disabled) desc.focus();
+      })
+      .catch(function () {
+        if (token !== eventLoadToken) return;
+        if (dialog) dialog.removeAttribute("aria-busy");
+        if (!eventDraft || eventDraft.id !== id) return;
+        eventLoaded = false;
+        applyEventMode();
+        showEventError("Calendar could not be reached. Try again.");
+      });
+  }
+
+  function saveEventDetails() {
+    if (!eventDraft || eventDraft.readOnly || eventSaving || !eventLoaded) return;
+    var pending = document.getElementById("event-email");
+    if (pending && pending.value.trim()) {
+      if (!addGuestEmails(pending.value)) return;
+    }
+    syncEventDraftFromForm();
+    setSaving(true);
+    showEventError("");
+    var id = eventDraft.id;
+    var token = eventLoadToken;
+    fetch("/console/calendar/events/" + encodeURIComponent(id), {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({
+        description: eventDraft.description || "",
+        attendees: eventDraft.attendees.map(function (guest) { return guest.email; }),
+        notify: eventDraft.notify !== false
+      })
+    }).then(function (response) {
+      return response.json().then(function (body) {
+        return { ok: response.ok, body: body };
+      }, function () {
+        return { ok: false, body: null };
+      });
+    }).then(function (result) {
+      if (!eventDraft || eventDraft.id !== id || token !== eventLoadToken) return;
+      setSaving(false);
+      if (!result.body || result.body.ok === false) {
+        if (result.body && result.body.error === "read-only" && eventDraft) {
+          eventDraft.readOnly = true;
+          fillEventDialog();
+        }
+        showEventError((result.body && result.body.message) || "Calendar could not be reached. Try again.");
+        return;
+      }
+      if (result.body.event && typeof result.body.event.description === "string") {
+        eventDraft.description = result.body.event.description;
+      }
+      eventSnapshot = eventStamp();
+      var notified = result.body.sendUpdates !== "none";
+      eventForceClose = true;
+      closeDialog("event-dialog");
+      toast(notified ? "Saved. Guests were notified." : "Saved without notifying guests.");
+    }).catch(function () {
+      if (!eventDraft || eventDraft.id !== id) return;
+      setSaving(false);
+      showEventError("Calendar could not be reached. Try again.");
+    });
+  }
+
+  function setSaving(on) {
+    eventSaving = on;
+    var dialog = document.getElementById("event-dialog");
+    if (dialog) {
+      if (on) dialog.setAttribute("aria-busy", "true");
+      else dialog.removeAttribute("aria-busy");
+    }
+    var save = document.getElementById("event-save");
+    if (save) {
+      if (on) save.setAttribute("aria-busy", "true");
+      else save.removeAttribute("aria-busy");
+      save.textContent = on ? "Saving…" : "Save";
+    }
+    applyEventMode();
+  }
+
+  function openEventEditor(id, readOnlyHint) {
+    if (!id) return;
+    if (!calendarConnected()) {
+      if (shouldAsk("calendar")) {
+        showCalendarAsk();
+        return;
+      }
+      toast("Calendar is not connected.");
+      return;
+    }
+    eventDraft = {
+      id: id,
+      title: "Meeting",
+      start: "",
+      end: "",
+      description: "",
+      attendees: [],
+      readOnly: readOnlyHint === true,
+      notify: true
+    };
+    eventLoaded = false;
+    eventSaving = false;
+    eventSnapshot = "";
+    showEventError("");
+    showEmailError("");
+    var discard = document.getElementById("event-discard");
+    if (discard) discard.hidden = true;
+    var emailInput = document.getElementById("event-email");
+    if (emailInput) emailInput.value = "";
+    fillEventDialog();
+    openDialog("event-dialog");
+    loadEventDetails(id);
+  }
+
+  function eventFocusable() {
+    var dialog = document.getElementById("event-dialog");
+    if (!dialog || dialog.hidden) return [];
+    var nodes = dialog.querySelectorAll("button, textarea, input, a[href]");
+    var list = [];
+    for (var i = 0; i < nodes.length; i += 1) {
+      var node = nodes[i];
+      if (node.disabled || node.hidden) continue;
+      if (node.closest("[hidden]")) continue;
+      list.push(node);
+    }
+    return list;
+  }
+
+  document.addEventListener("click", function (event) {
+    var button = event.target && event.target.closest ? event.target.closest("[data-edit-event]") : null;
+    if (!button) return;
+    event.preventDefault();
+    event.stopPropagation();
+    openEventEditor(button.getAttribute("data-edit-event"), button.getAttribute("data-readonly") === "true");
+  }, true);
+
+  var eventGuestList = document.getElementById("event-guests");
+  if (eventGuestList) eventGuestList.addEventListener("click", function (event) {
+    var button = event.target && event.target.closest ? event.target.closest("[data-guest-index]") : null;
+    if (!button || !eventDraft || eventDraft.readOnly) return;
+    var index = Number(button.getAttribute("data-guest-index"));
+    var guest = eventDraft.attendees[index];
+    if (!guest || guest.organizer) return;
+    eventDraft.attendees.splice(index, 1);
+    paintEventGuests();
+    var nextFocus = document.querySelector("#event-guests .guest-remove") || document.getElementById("event-email");
+    if (nextFocus && !nextFocus.disabled) nextFocus.focus();
+  });
+
+  var eventEmail = document.getElementById("event-email");
+  if (eventEmail) {
+    eventEmail.addEventListener("keydown", function (event) {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      addGuestEmails(eventEmail.value);
+    });
+    eventEmail.addEventListener("paste", function (event) {
+      var data = event.clipboardData || window.clipboardData;
+      var pasted = data ? data.getData("text") : "";
+      if (!pasted || !hasGuestBreak(pasted)) return;
+      event.preventDefault();
+      addGuestEmails(pasted);
+    });
+    eventEmail.addEventListener("input", function () {
+      if (eventEmail.getAttribute("aria-invalid") === "true") showEmailError("");
+    });
+  }
+  var eventAdd = document.getElementById("event-add");
+  if (eventAdd) eventAdd.addEventListener("click", function () {
+    addGuestEmails(eventEmail ? eventEmail.value : "");
+  });
+  var eventSave = document.getElementById("event-save");
+  if (eventSave) eventSave.addEventListener("click", saveEventDetails);
+  var eventRetry = document.getElementById("event-retry");
+  if (eventRetry) eventRetry.addEventListener("click", function () {
+    if (!eventDraft) return;
+    showEventError("");
+    if (!eventLoaded) loadEventDetails(eventDraft.id);
+    else saveEventDetails();
+  });
+  var eventKeep = document.getElementById("event-keep");
+  if (eventKeep) eventKeep.addEventListener("click", function () {
+    var box = document.getElementById("event-discard");
+    if (box) box.hidden = true;
+    var desc = document.getElementById("event-description");
+    if (desc && !desc.disabled) desc.focus();
+    else if (eventEmail && !eventEmail.disabled) eventEmail.focus();
+  });
+  var eventDiscardConfirm = document.getElementById("event-discard-confirm");
+  if (eventDiscardConfirm) eventDiscardConfirm.addEventListener("click", function () {
+    eventForceClose = true;
+    closeDialog("event-dialog");
+  });
+  document.addEventListener("keydown", function (event) {
+    if (event.key !== "Tab") return;
+    var dialog = document.getElementById("event-dialog");
+    if (!dialog || dialog.hidden) return;
+    var list = eventFocusable();
+    if (!list.length) return;
+    var first = list[0];
+    var last = list[list.length - 1];
+    var active = document.activeElement;
+    var inside = false;
+    for (var i = 0; i < list.length; i += 1) if (list[i] === active) inside = true;
+    if (!inside) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+      return;
+    }
+    if (event.shiftKey && active === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+
   var homeAdd = document.getElementById("home-add-meeting");
   if (homeAdd) homeAdd.addEventListener("click", function () {
     if (shouldAsk("calendar")) {
@@ -4644,6 +5290,16 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (event.key !== "Escape") return;
     if (document.body.classList.contains("nav-open")) {
       closeNav();
+      return;
+    }
+    var eventDialog = document.getElementById("event-dialog");
+    if (eventDialog && !eventDialog.hidden) {
+      var discardOpen = document.getElementById("event-discard");
+      if (discardOpen && !discardOpen.hidden) {
+        discardOpen.hidden = true;
+        return;
+      }
+      closeDialog("event-dialog");
       return;
     }
     if (!document.getElementById("account-menu").hidden) closeAccountMenu();

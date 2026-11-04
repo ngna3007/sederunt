@@ -2338,6 +2338,9 @@ export function companyBoard(session, memberId, options = {}) {
     if (typeof opened.name === "string" && opened.name) room.name = opened.name;
     if (typeof opened.channel === "string" && opened.channel) room.channel = opened.channel;
     if (typeof opened.startedAt === "string" && opened.startedAt) room.startedAt = opened.startedAt;
+    if (typeof opened.calendarEventId === "string" && opened.calendarEventId.trim()) {
+      room.calendarEventId = opened.calendarEventId.trim();
+    }
   }
   const named = session?.roomNames && typeof session.roomNames === "object" ? session.roomNames : {};
   for (const room of rooms) {
