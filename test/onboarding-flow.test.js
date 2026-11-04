@@ -566,7 +566,7 @@ test("onboarding screens fit at desktop and phone widths", { timeout: 180000 }, 
   }
 
   const signSelectors = [".auth-card h1", "#auth-google span", "#auth-github span", ".auth-mark"];
-  const stepSelectors = ["#ob-title", ".ob-sub", ".ob-count", ".ob-row-title", ".ob-row-meta", ".ob-soon", "#ob-continue", "#ob-skip", "#workspace-name"];
+  const stepSelectors = ["#ob-title", ".ob-sub", ".ob-count", ".ob-row-title", ".ob-row-meta", ".ob-soon", "#ob-continue", "#ob-skip", "#workspace-name", "#ob-bot-name", "#ob-bot-hint"];
   const teamSelectors = [...stepSelectors, "#invite-email", "#invite-role", "#invite-add", "#invite-send", ".ob-person-email", "#invite-link", "#copy-invite-link"];
   const homeSelectors = ["#checklist-title", "#checklist-count", ".check-title", ".check-go", "#checklist-dismiss"];
   const menuSelectors = ["#chip-name", "#chip-hint", "#workspace-menu .ws-copy span", "#create-workspace .ws-copy span"];
@@ -579,6 +579,11 @@ test("onboarding screens fit at desktop and phone widths", { timeout: 180000 }, 
     "#account-detail-role",
     "#account-edit",
     "#account-signout",
+    "#bot-card",
+    "#bot-name",
+    "#bot-preview",
+    "#bot-add-phrase",
+    ".bot-phrase-row",
   ];
 
   for (const width of WIDTHS) {

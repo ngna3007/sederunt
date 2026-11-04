@@ -5500,6 +5500,7 @@ body.ob-page {
 .ob-page :is(.ob-primary, .ob-btn, .ob-dark, .ob-link, .ob-x, select, input):focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
 .ob-label { display: block; margin: 0 0 6px; font-size: 13px; font-weight: 500; }
+.ob-optional { font-weight: 400; color: var(--muted-foreground); }
 .ob-field { display: block; }
 .ob-page input[type="text"], .ob-page select.ob-select {
   height: 38px; min-height: 38px; box-sizing: border-box;
@@ -5516,7 +5517,7 @@ body.ob-page {
 }
 .ob-page select.ob-select-sm { height: 30px; min-height: 30px; font-size: 13px; padding: 0 26px 0 8px; border-color: transparent; background-color: transparent; background-position: right 6px center; }
 .ob-page select.ob-select-sm:hover { background-color: var(--muted); }
-.ob-hint { margin: 8px 0 0; font-size: 12px; line-height: 1.45; color: var(--muted-foreground); }
+.ob-hint { margin: 8px 0 0; font-size: 12px; line-height: 1.45; color: var(--muted-foreground); overflow-wrap: anywhere; }
 .ob-field-error { margin: 6px 0 0; font-size: 12px; color: var(--destructive); }
 .ob-field-error[hidden] { display: none; }
 
@@ -5643,4 +5644,27 @@ body.ob-page {
   .match-email { grid-column: 1 / -1; }
   .match-override { grid-column: 1 / -1; }
   .match-list li > button { grid-column: 1 / -1; justify-self: start; }
+}
+
+/* Account bot name and wake phrases */
+#bot-card { min-width: 0; }
+#bot-card .bot-fields { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 0; }
+#bot-card .bot-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: 13px; font-weight: 500; }
+#bot-card .bot-label { font-size: 13px; font-weight: 500; }
+#bot-card .bot-phrase-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+#bot-card .bot-phrase-row { display: flex; gap: 8px; align-items: center; min-width: 0; }
+#bot-card .bot-phrase-row input { flex: 1 1 0; width: auto; min-width: 0; }
+#bot-card .bot-phrase-row .secondary { flex: none; }
+#bot-card .bot-preview,
+#bot-card .bot-note,
+#bot-card .card-help { overflow-wrap: anywhere; min-width: 0; }
+#bot-card .bot-preview,
+#bot-card .bot-note { margin: 0; font-size: 13px; color: var(--muted-foreground); }
+#bot-card .bot-field-error { margin: 0; font-size: 12px; color: var(--destructive); }
+#bot-card .bot-field-error[hidden] { display: none; }
+#bot-card input:disabled { opacity: 1; background: var(--muted); color: var(--foreground); }
+@media (max-width: 480px) {
+  #bot-card .bot-phrase-row { flex-wrap: wrap; }
+  #bot-card .bot-phrase-row input { flex: 1 1 100%; width: 100%; }
+  #bot-card .bot-phrase-row .secondary { width: 100%; }
 }
