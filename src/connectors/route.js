@@ -1,5 +1,6 @@
 import { connectorMessage } from "./errors.js";
 import { testConnection } from "./client.js";
+import { ensureDemoServer } from "./demo.js";
 import { loadSpaceView } from "../console-flow.js";
 import { guardConsole } from "../console-auth.js";
 import { validToolName } from "./tools.js";
@@ -52,7 +53,8 @@ export async function handleConnectorRoutes(ctx) {
   try {
     if (req.method === "GET" && url.pathname === "/console/connectors") {
       const connectors = await store.list(tenantId);
-      sendJson(ctx, 200, { ok: true, connectors, demoUrl: "" });
+      const demo = await ensureDemoServer(ctx.workspace);
+      sendJson(ctx, 200, { ok: true, connectors, demoUrl: demo?.url || "" });
       return true;
     }
     if (req.method === "POST" && url.pathname === "/console/connectors/probe") {

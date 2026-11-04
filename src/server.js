@@ -15,6 +15,8 @@ import { renderCameraPage } from "./meeting/camera.js";
 import { normalizeHearing } from "./hearing.js";
 import { createMeetingAdapter, mediaFromBot, meetingDoorReady, recallBotUrl, recallTranscriptDelivery, verifyRecallRequest } from "./meeting/recall.js";
 import { createTatumReader } from "./tatum/get-object.js";
+import { resolveMcpSpace } from "./connectors/expose.js";
+import { stopDemoServer } from "./connectors/demo.js";
 import { bindToolMember, handleMcpRequest, memberRefusal, mcpJsonRpc } from "./mcp.js";
 import { renderConsolePage } from "./console-page.js";
 import { contentWords, decisionRoomIds, roomsMatching } from "./room-match.js";
@@ -305,7 +307,12 @@ export function createApp(options = {}) {
     recall: options.recall || null,
   };
   const identity = options.identity ?? (identityConfigured(env) ? createIdentity(env) : null);
-  return createServer(async (req, res) => {
+  async function mcpCallContext(req) {
+    const gate = guardConsole(req, env);
+    const tenantId = await resolveMcpSpace(gate, identity, workspace.deps.connectors);
+    return { tenantId, env };
+  }
+  const server = createServer(async (req, res) => {
   try {
     if (identity) rememberRefreshCookie(res, await refreshOAuthSession(req, identity, env));
     const url = new URL(req.url || "/", `http://127.0.0.1:${port}`);
@@ -1106,7 +1113,7 @@ export function createApp(options = {}) {
         send(res, outcome.status, "application/json; charset=utf-8", JSON.stringify(outcome.body));
         return;
       }
-      const outcome = await mcpJsonRpc(bound.message, current, depsFor(workspace, companyId));
+      const outcome = await mcpJsonRpc(bound.message, current, depsFor(workspace, companyId), await mcpCallContext(req));
       if (outcome.status === 202) {
         res.writeHead(202);
         res.end();
@@ -1136,10 +1143,14 @@ export function createApp(options = {}) {
         send(res, 200, "application/json; charset=utf-8", JSON.stringify(memberRefusal(bound.refusal)));
         return;
       }
+      const custom = typeof name === "string" && name.includes("__");
       const result = await handleMcpRequest({
         name,
-        arguments: { ...deliveryFrom(bound.message.params.arguments), session: current },
-      }, depsFor(workspace, companyId));
+        arguments: custom
+          ? { ...args, session: current }
+          : { ...deliveryFrom(bound.message.params.arguments), session: current },
+        _meta: message?._meta || message?.params?._meta,
+      }, depsFor(workspace, companyId), await mcpCallContext(req));
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(result));
       return;
     }
@@ -1149,6 +1160,17 @@ export function createApp(options = {}) {
     send(res, 500, "text/plain; charset=utf-8", redact(message));
   }
   });
+  const closeServer = server.close.bind(server);
+  server.close = function closeWithDemo(callback) {
+    return stopDemoServer(workspace).then(() => new Promise((resolve, reject) => {
+      closeServer((error) => {
+        if (typeof callback === "function") callback(error);
+        if (error) reject(error);
+        else resolve();
+      });
+    }));
+  };
+  return server;
 }
 
 function saveCalendarEnv(env) {

@@ -6,6 +6,7 @@ export { groupActivity, relativeTime, selectActivity } from "./activity-feed.js"
 const VERBS = [
   "create", "update", "assign", "unassign", "move", "label", "unlabel",
   "link", "comment", "post", "schedule", "reschedule", "cancel", "join", "leave",
+  "call", "read",
 ];
 
 const KINDS = new Set(["request", "action", "result", "failure", "undo", "resolve", "supersede"]);
@@ -102,6 +103,8 @@ const PAST = {
   cancel: "cancelled",
   join: "joined",
   leave: "left",
+  call: "called",
+  read: "read",
 };
 
 const ICON = {
@@ -120,6 +123,8 @@ const ICON = {
   cancel: "status",
   join: "join",
   leave: "join",
+  call: "create",
+  read: "create",
   failure: "error",
   undo: "undo",
 };

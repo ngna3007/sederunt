@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { appendConnectorCall, ledgerMemory } from "./memory/ledger.js";
+import { createConnectorStore } from "./connectors/store.js";
 import { bindToolMember, dispatchMcp, memberRefusal } from "./mcp.js";
 import { createSession } from "./session.js";
 import { defaultDeps } from "./server.js";
@@ -31,6 +32,9 @@ export function serveMcpStdio({ input, output, session, deps, memberId }) {
   const configured = typeof memberId === "string" && memberId.trim()
     ? memberId.trim()
     : String(process.env.SEDERUNT_MEMBER || "").trim();
+  if (deps && !deps.connectors) deps.connectors = createConnectorStore(process.env);
+  const tenantId = String(process.env.SEDERUNT_TENANT_ID || "").trim() || deps?.connectors?.soleTenantId?.() || "";
+  const context = { tenantId, env: process.env };
   const take = async (message) => {
     await ready;
     if (message?.id == null) return;
@@ -50,7 +54,7 @@ export function serveMcpStdio({ input, output, session, deps, memberId }) {
         await new Promise((resolve) => output.write(encodeMessage(response), resolve));
         return;
       }
-      const result = await dispatchMcp(bound.message, session, deps);
+      const result = await dispatchMcp(bound.message, session, deps, context);
       response = result
         ? { jsonrpc: "2.0", id: message.id, result }
         : { jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "unknown method" } };

@@ -1,3 +1,4 @@
+import { callCustomTool, listExposedTools } from "./connectors/expose.js";
 import { handleUtterance } from "./typed-path.js";
 
 export const mcpTools = Object.freeze(["recall", "act"]);
@@ -26,7 +27,7 @@ export function mcpToolList() {
  * One JSON-RPC method. Notifications return null. Unknown methods return null.
  * Tools are the same ones the stdio process serves.
  */
-export async function dispatchMcp(message, session, deps) {
+export async function dispatchMcp(message, session, deps, context) {
   const method = message?.method;
   if (method === "initialize") {
     return {
@@ -36,14 +37,18 @@ export async function dispatchMcp(message, session, deps) {
     };
   }
   if (method === "ping") return {};
-  if (method === "tools/list") return { tools: mcpToolList() };
+  if (method === "tools/list") {
+    const extra = await listExposedTools(deps?.connectors, context?.tenantId);
+    return { tools: [...mcpToolList(), ...extra] };
+  }
   if (method === "tools/call") {
     const name = message?.params?.name;
     const args = message?.params?.arguments ?? {};
     const result = await handleMcpRequest({
       name,
       arguments: { ...args, session },
-    }, deps);
+      _meta: message?.params?._meta,
+    }, deps, context);
     return {
       content: [{ type: "text", text: JSON.stringify(result) }],
       structuredContent: result,
@@ -53,13 +58,13 @@ export async function dispatchMcp(message, session, deps) {
 }
 
 /** Streamable HTTP response for one JSON-RPC message. Agents that speak MCP can POST here. */
-export async function mcpJsonRpc(message, session, deps) {
+export async function mcpJsonRpc(message, session, deps, context) {
   if (!message || typeof message !== "object" || typeof message.method !== "string") {
     return { status: 400, body: { jsonrpc: "2.0", id: null, error: { code: -32600, message: "invalid request" } } };
   }
   if (message.id == null) return { status: 202, body: "" };
   try {
-    const result = await dispatchMcp(message, session, deps);
+    const result = await dispatchMcp(message, session, deps, context);
     if (result == null) {
       return {
         status: 200,
@@ -133,11 +138,22 @@ export function act(input, deps) {
   }, deps);
 }
 
-export async function handleMcpRequest(message, deps) {
+export async function handleMcpRequest(message, deps, context) {
   const name = message?.params?.name ?? message?.name;
   const args = message?.params?.arguments ?? message?.arguments ?? {};
   if (name === "recall") return recall(args, deps);
   if (name === "act") return act(args, deps);
+  if (typeof name === "string" && name.includes("__")) {
+    return callCustomTool({
+      store: deps?.connectors,
+      tenantId: context?.tenantId || "",
+      env: context?.env,
+      session: args?.session,
+      name,
+      args,
+      meta: message?._meta || message?.params?._meta || {},
+    });
+  }
   return {
     status: "recorded",
     kind: "note",
