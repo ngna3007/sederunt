@@ -608,8 +608,8 @@ ${slack}
               <div class="outcome-card" id="file-outcome" hidden></div>
               <dl class="kv" id="file-facts"></dl>
               <section id="participants" class="participants"></section>
-              <section class="artifacts" id="artifacts">
-                <h2 class="artifact-title">Meeting artifacts</h2>
+              <section class="artifacts" id="artifacts" hidden>
+                <h2 class="artifact-title">Downloads</h2>
                 <div id="artifact-list"></div>
               </section>
               <div class="settings-card room-settings">
@@ -4455,7 +4455,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
       ["Participants", media && media.participantsUrl],
       ["Participant events", media && media.eventsUrl],
       ["Speaker timeline", media && media.timelineUrl]
-    ];
+    ].filter(function (row) { return row[1]; });
+    var section = document.getElementById("artifacts");
+    if (section) section.hidden = rows.length === 0;
     rows.forEach(function (row) {
       var item = document.createElement("div");
       item.className = row[1] ? "artifact-row" : "artifact-row off";
