@@ -152,6 +152,8 @@ export async function handleMcpRequest(message, deps, context) {
       name,
       args,
       meta: message?._meta || message?.params?._meta || {},
+      personId: context?.personId || "",
+      googleGrants: context?.googleGrants,
     });
   }
   return {

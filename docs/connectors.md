@@ -9,6 +9,14 @@ The exposed name is `<slug>__<tool>`. The description and input schema are the r
 - `delete` always asks. An unconfirmed write or delete is held and the remote server is not called.
 - A tool whose definition changed since approval is disabled and is not listed. A call to it is refused.
 
+## Confirming a held call
+
+A held write or delete includes `actionId`. The remote tool has not run. Call `tools/call` again with the same arguments and `arguments._confirm` set to that `actionId`. The same confirmation is `params._meta` with `confirmed: true` and `confirmActionId`. That id runs once. Using it again does not call the tool and does not open a new hold. A live preference `mcp:<slug>:<tool>` of do lets a write run without this step. A delete still asks.
+
+## Google Forms
+
+The Connectors page adds a Google Forms preset for the current space. The connector URL is this server's `/mcp/forms`. Calls use the signed-in person's Google access token as a bearer header. That token stays on the server. When Forms scopes are missing, the card says Connect Google Forms and starts incremental Google consent. Fake mode (`SEDERUNT_FORMS_FAKE=1`, or `SEDERUNT_AUTH_FAKE=1` unless Forms fake is `0`) connects without a Google grant.
+
 ## Environment
 
 | Name | Purpose |

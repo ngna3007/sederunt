@@ -5328,7 +5328,14 @@ button.row-edit {
   text-align: left;
 }
 .preset-card:disabled { opacity: 0.72; cursor: not-allowed; }
+.preset-name, .preset-detail, .preset-card .badge {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.preset-card .badge { flex-wrap: wrap; }
 .preset-name { font-weight: 600; }
+.preset-detail { color: var(--muted-foreground); font-size: 13px; }
 .mcp-card {
   gap: 10px;
   padding: 16px;

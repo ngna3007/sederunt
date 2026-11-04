@@ -71,7 +71,8 @@ test("connector page is reachable and keeps tokens out of HTML", async (t) => {
   assert.match(page.raw, /Add a connector/);
   assert.match(page.raw, /data-preset="google-forms"/);
   assert.match(page.raw, /Google Forms/);
-  assert.match(page.raw, /Coming soon/);
+  assert.match(page.raw, /Uses this person's Google account/);
+  assert.doesNotMatch(page.raw, /Coming soon/);
   assert.equal(page.raw.includes(TOKEN), false);
 });
 
@@ -222,15 +223,22 @@ test("connector page flow and layout", { timeout: 180000 }, async (t) => {
   const origin = `http://127.0.0.1:${port}`;
   await page.goto(`${origin}/console/connectors`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("body:not(.is-reading) #mcp-add", { timeout: 45000 });
+  await page.waitForFunction(() => {
+    const card = document.querySelector("[data-preset='google-forms']");
+    return card && card.getAttribute("data-state") === "needs_access";
+  });
   const empty = await page.evaluate(() => ({
     cta: document.getElementById("mcp-add").textContent.trim(),
     preset: document.querySelector("[data-preset='google-forms']").disabled,
     presetText: document.querySelector("[data-preset='google-forms']").textContent,
+    state: document.querySelector("[data-preset='google-forms']").getAttribute("data-state"),
   }));
   assert.equal(empty.cta, "Add a connector");
-  assert.equal(empty.preset, true);
+  assert.equal(empty.preset, false);
+  assert.equal(empty.state, "needs_access");
   assert.match(empty.presetText, /Google Forms/);
-  assert.match(empty.presetText, /Coming soon/);
+  assert.match(empty.presetText, /Needs Google access/);
+  assert.match(empty.presetText, /Connect Google Forms/);
 
   await page.click("#mcp-add");
   await page.waitForSelector("#mcp-dialog:not([hidden])");

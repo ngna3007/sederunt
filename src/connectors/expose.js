@@ -3,6 +3,7 @@ import { loadSpaceView } from "../console-flow.js";
 import { authorize } from "../domain/allow.js";
 import { resolvePreference } from "../domain/preference.js";
 import { redact } from "../domain/redact.js";
+import { formsFakeEnabled } from "../mcp-forms/api.js";
 import { callTool } from "./client.js";
 
 const SECRET_FIELD = /token|secret|password|authorization|api[_-]?key|cookie|bearer/i;
@@ -70,15 +71,20 @@ export async function callCustomTool(input) {
     return unavailable(name);
   }
   const preference = preferenceFor(tool, connector.slug, input.session);
-  const confirmActionId = typeof input.meta?.confirmActionId === "string" ? input.meta.confirmActionId : "";
-  const storedId = input.meta?.confirmed === true ? matchingAction(input.session, name, confirmActionId) : "";
+  const confirmId = confirmIdFrom(input);
+  let confirmedId = "";
+  if (confirmId && tool.actionClass !== "read") {
+    const taken = takeConfirmation(input.session, name, confirmId);
+    if (!taken) return failed(name, "That confirmation is no longer available.", "confirm");
+    confirmedId = taken;
+  }
   const decision = authorize({
     action: tool.actionClass === "delete" || tool.actionClass === "read" ? tool.actionClass : "write",
     tool: `mcp:${connector.slug}:${tool.name}`,
     preference,
-    confirmed: Boolean(storedId),
-    actionId: storedId,
-    confirmActionId,
+    confirmed: Boolean(confirmedId),
+    actionId: confirmedId,
+    confirmActionId: confirmedId,
   });
   const summary = argumentSummary(input.args);
   if (!decision.allowed) {
@@ -100,9 +106,21 @@ export async function callCustomTool(input) {
       text: `Needs confirmation before ${name} runs.`,
     };
   }
-  let secret = null;
+  const fakeForms = connector.authType === "google_oauth" && formsFakeEnabled(input.env);
+  let token = "";
+  let headerName = connector.headerName || "Authorization";
   try {
-    if (connector.hasToken && store.openToken) secret = await store.openToken(tenantId, connector.id);
+    if (connector.authType === "google_oauth") {
+      if (!fakeForms) {
+        token = await input.googleGrants?.accessToken(input.personId) || "";
+        if (!token) return failed(name, "unauthorized: Google needs you to sign in again.", "unauthorized");
+      }
+      headerName = "Authorization";
+    } else if (connector.hasToken && store.openToken) {
+      const secret = await store.openToken(tenantId, connector.id);
+      token = secret?.token || "";
+      headerName = secret?.headerName || headerName;
+    }
   } catch (error) {
     safeLog(() => logFailure(input.session, activityInput({
       id: nextId(input.session, "mcp-fail"),
@@ -114,24 +132,38 @@ export async function callCustomTool(input) {
     })));
     return failed(name, error?.message || "Connector secrets are not configured.", error?.code || "secrets-key");
   }
-  const called = await callTool({
+  const invoke = (bearer) => callTool({
     url: connector.url,
-    token: secret?.token || "",
-    headerName: secret?.headerName || connector.headerName || "Authorization",
+    token: bearer,
+    headerName,
     transport: connector.transport,
   }, tool.name, cleanArgs(input.args), { env: input.env, timeoutMs: 10000 });
+  let bearer = token;
+  let called = await invoke(bearer);
+  if (!fakeForms && connector.authType === "google_oauth" && unauthorizedTool(called)) {
+    try {
+      const refreshed = await input.googleGrants?.accessToken(input.personId, { force: true }) || "";
+      if (refreshed) {
+        bearer = refreshed;
+        called = await invoke(bearer);
+      }
+    } catch {
+      // Keep the first unauthorized result. Do not surface a token.
+    }
+  }
   if (!called.ok) {
+    const detail = redactToolText(called.text || called.message || "The tool call failed.", token, bearer);
     safeLog(() => logFailure(input.session, activityInput({
       id: nextId(input.session, "mcp-fail"),
       verb: tool.actionClass === "read" ? "read" : "call",
       connector,
       tool,
       summary,
-      error: called.message || "The tool call failed.",
+      error: detail || "The tool call failed.",
     })));
-    return failed(name, called.message || "The tool call failed.", called.code || "protocol");
+    return failed(name, detail || "The tool call failed.", called.code || "protocol");
   }
-  const text = redact(called.text || "").slice(0, TEXT_CAP);
+  const text = redactToolText(called.text || "", token, bearer).slice(0, TEXT_CAP);
   const verb = tool.actionClass === "read" ? "read" : "call";
   const id = nextId(input.session, "mcp-call");
   safeLog(() => {
@@ -165,10 +197,33 @@ function preferenceFor(tool, slug, session) {
   return resolvePreference(session.preferences, key, null);
 }
 
-function matchingAction(session, toolName, confirmActionId) {
-  if (!confirmActionId) return "";
-  const found = (session?.actions || []).find((action) => action?.id === confirmActionId && action?.tool === toolName);
-  return found ? found.id : "";
+function confirmIdFrom(input) {
+  const fromArgs = typeof input.args?._confirm === "string" ? input.args._confirm.trim() : "";
+  if (fromArgs) return fromArgs;
+  if (input.meta?.confirmed === true && typeof input.meta.confirmActionId === "string") {
+    return input.meta.confirmActionId.trim();
+  }
+  return "";
+}
+
+function takeConfirmation(session, toolName, confirmId) {
+  if (!confirmId) return "";
+  const found = (session?.actions || []).find((action) => action?.id === confirmId && action?.tool === toolName && action.consumed !== true);
+  if (!found) return "";
+  found.consumed = true;
+  return found.id;
+}
+
+function unauthorizedTool(called) {
+  return called?.isError === true && /^unauthorized\b/i.test(String(called.text || ""));
+}
+
+function redactToolText(text, ...tokens) {
+  let out = String(text || "");
+  for (const token of tokens) {
+    if (token) out = out.split(token).join("");
+  }
+  return redact(out);
 }
 
 function hold(session, toolName) {
@@ -212,7 +267,7 @@ function cleanArgs(args) {
   const out = {};
   if (!args || typeof args !== "object") return out;
   for (const [key, value] of Object.entries(args)) {
-    if (key === "session" || key === "memberId" || key === "company" || key === "_meta" || key === "confirmActionId" || key === "confirmed") continue;
+    if (key === "session" || key === "memberId" || key === "company" || key === "_meta" || key === "confirmActionId" || key === "confirmed" || key === "_confirm") continue;
     if (value && typeof value === "object" && (Array.isArray(value.rooms) || Array.isArray(value.decisions) || Array.isArray(value.activity))) continue;
     out[key] = value;
   }

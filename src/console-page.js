@@ -354,9 +354,10 @@ ${slack}
       <div id="mcp-presets">
         <p class="section-label">Presets</p>
         <div class="preset-row">
-          <button type="button" class="preset-card" data-preset="google-forms" disabled>
+          <button type="button" class="preset-card" data-preset="google-forms" data-state="add">
             <span class="preset-name">Google Forms</span>
-            <span class="badge">Coming soon</span>
+            <span class="preset-detail">Uses this person's Google account.</span>
+            <span class="badge" data-preset-badge>Add</span>
           </button>
         </div>
       </div>
@@ -6273,6 +6274,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   reserveComposer();
   var mcpDemoUrl = "";
   var mcpRows = [];
+  var mcpPresets = {};
   var mcpTokenId = "";
   var mcpRemoveId = "";
   var mcpBusy = false;
@@ -6333,7 +6335,32 @@ if (sessionWhen && sessionWhen.dataset.at) {
     return "Write";
   }
 
+  function paintPreset(preset) {
+    var card = document.querySelector("[data-preset='google-forms']");
+    if (!card) return;
+    var state = preset && preset.state ? preset.state : "add";
+    if (card.getAttribute("data-state") === "connecting" && state !== "connected") return;
+    card.setAttribute("data-state", state);
+    card.disabled = state === "connected";
+    var badge = card.querySelector("[data-preset-badge]");
+    var detail = card.querySelector(".preset-detail");
+    if (state === "needs_access") {
+      if (badge) badge.textContent = "Needs Google access";
+      if (detail) detail.textContent = "Connect Google Forms";
+    } else if (state === "connected") {
+      if (badge) badge.textContent = "Connected";
+      if (detail) detail.textContent = "Uses this person's Google account.";
+    } else if (state === "connecting") {
+      if (badge) badge.textContent = "Connecting";
+    } else {
+      if (badge) badge.textContent = "Add";
+      if (detail) detail.textContent = "Uses this person's Google account.";
+    }
+  }
+
   function paintMcp(data) {
+    if (data && data.presets) mcpPresets = data.presets;
+    paintPreset(mcpPresets["google-forms"]);
     var connectors = Array.isArray(data.connectors) ? data.connectors : [];
     mcpRows = connectors;
     mcpDemoUrl = typeof data.demoUrl === "string" ? data.demoUrl : "";
@@ -6391,6 +6418,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
     else tokenButton.textContent = "Add token";
     tokenButton.addEventListener("click", function () { openMcpToken(connector); });
     tokenLine.append(tokenButton);
+    if (connector.authType === "google_oauth") {
+      var account = document.createElement("p");
+      account.className = "meta";
+      account.textContent = "Uses this person's Google account.";
+      card.append(account);
+    } else {
+      card.append(tokenLine);
+    }
     var actions = document.createElement("div");
     actions.className = "wait-actions";
     var again = document.createElement("button");
@@ -6404,7 +6439,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     remove.textContent = "Remove";
     remove.addEventListener("click", function () { openMcpRemove(connector); });
     actions.append(again, remove);
-    card.append(tokenLine, actions);
+    card.append(actions);
     var tools = document.createElement("div");
     tools.className = "mcp-tools";
     (connector.tools || []).forEach(function (tool) {
@@ -6624,6 +6659,42 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
   }
 
+  function addGoogleForms() {
+    var card = document.querySelector("[data-preset='google-forms']");
+    if (!card) return;
+    var state = card.getAttribute("data-state") || "add";
+    if (state === "connecting" || state === "connected") return;
+    var preset = mcpPresets["google-forms"] || {};
+    if (state === "needs_access") {
+      window.location.assign(preset.connectUrl || "/console/auth/google?intent=forms&next=/console/connectors");
+      return;
+    }
+    card.setAttribute("data-state", "connecting");
+    card.disabled = true;
+    var badge = card.querySelector("[data-preset-badge]");
+    if (badge) badge.textContent = "Connecting";
+    mcpPost("/console/connectors/presets/google-forms", {}).then(function (result) {
+      if (result && result.code === "needs_access") {
+        mcpPresets["google-forms"] = { state: "needs_access", connectUrl: result.connectUrl || "" };
+        card.setAttribute("data-state", "add");
+        paintPreset(mcpPresets["google-forms"]);
+        if (result.connectUrl) window.location.assign(result.connectUrl);
+        return;
+      }
+      if (!result || result.ok !== true) {
+        card.disabled = false;
+        card.setAttribute("data-state", "add");
+        if (badge) badge.textContent = "Add";
+        toast((result && result.message) || "That could not be saved.");
+        return;
+      }
+      card.setAttribute("data-state", "add");
+      loadMcp();
+    });
+  }
+
+  var formsPreset = document.querySelector("[data-preset='google-forms']");
+  if (formsPreset) formsPreset.addEventListener("click", addGoogleForms);
   var mcpAdd = document.getElementById("mcp-add");
   var mcpAddHead = document.getElementById("mcp-add-head");
   if (mcpAdd) mcpAdd.addEventListener("click", openMcpDialog);

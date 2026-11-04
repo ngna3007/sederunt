@@ -101,11 +101,20 @@ export function createFakeIdentity(env = {}) {
       store.providers[provider] = Boolean(enabled);
     },
 
-    authorizeUrl({ provider }) {
-      return `/console/auth/fake/${provider}`;
+    authorizeUrl({ provider, scopes, queryParams }) {
+      const base = `/console/auth/fake/${provider}`;
+      const params = new URLSearchParams();
+      if (typeof scopes === "string" && scopes) params.set("scope", scopes);
+      if (queryParams && typeof queryParams === "object") {
+        for (const [key, value] of Object.entries(queryParams)) {
+          if (typeof value === "string" && value) params.set(key, value);
+        }
+      }
+      const query = params.toString();
+      return query ? `${base}?${query}` : base;
     },
 
-    issueConsentCode({ provider, codeChallenge }) {
+    issueConsentCode({ provider, codeChallenge, intent }) {
       if (store.providers[provider] !== true) {
         throw new IdentityError("provider_disabled", "That sign-in provider is not turned on.");
       }
@@ -113,7 +122,7 @@ export function createFakeIdentity(env = {}) {
         throw new IdentityError("invalid_challenge", "Missing code challenge.");
       }
       const code = randomBytes(24).toString("base64url");
-      store.codes.set(code, { provider, challenge: codeChallenge });
+      store.codes.set(code, { provider, challenge: codeChallenge, intent: intent === "forms" ? "forms" : "" });
       return code;
     },
 
@@ -128,7 +137,12 @@ export function createFakeIdentity(env = {}) {
         throw new IdentityError("exchange_failed", "Sign-in code was rejected.");
       }
       const user = ensureUser(pending.provider);
-      return issueTokens(user.id);
+      const tokens = issueTokens(user.id);
+      if (pending.intent === "forms") {
+        tokens.providerAccessToken = `fa.google.${user.id}`;
+        tokens.providerRefreshToken = `fr.google.${user.id}`;
+      }
+      return tokens;
     },
 
     async getUser(accessToken) {

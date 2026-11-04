@@ -8,6 +8,7 @@ import { handleCalendarEvent } from "./calendar/route.js";
 import { handleConnectorRoutes } from "./connectors/route.js";
 import { createFormsApp, handleNodeForms } from "./mcp-forms/http.js";
 import { createConnectorStore } from "./connectors/store.js";
+import { createPersonGoogleStore } from "./connectors/google-person.js";
 import { calendarPresentedConnected, calendarTimeZone, createCalendarAdapter } from "./calendar/mcp.js";
 import { createConsoleAdapter } from "./console/upload.js";
 import { createLinearClient } from "./linear/mcp.js";
@@ -309,10 +310,12 @@ export function createApp(options = {}) {
   };
   const identity = options.identity ?? (identityConfigured(env) ? createIdentity(env) : null);
   workspace.forms = createFormsApp({ env, fetchImpl: options.fetch });
+  workspace.googleGrants = options.googleGrants || createPersonGoogleStore({ env, fetchImpl: options.fetch });
   async function mcpCallContext(req) {
     const gate = guardConsole(req, env);
     const tenantId = await resolveMcpSpace(gate, identity, workspace.deps.connectors);
-    return { tenantId, env };
+    const personId = String(gate.session?.userId || gate.session?.memberId || env.SEDERUNT_MEMBER || "").trim();
+    return { tenantId, env, personId, googleGrants: workspace.googleGrants };
   }
   const server = createServer(async (req, res) => {
   try {
@@ -371,7 +374,7 @@ export function createApp(options = {}) {
       return;
     }
     if (url.pathname === "/console/auth" || url.pathname.startsWith("/console/auth/")) {
-      await handleAuthRoute({ req, res, url, env, identity, send, redirect });
+      await handleAuthRoute({ req, res, url, env, identity, send, redirect, googleGrants: workspace.googleGrants });
       return;
     }
     if (req.method === "GET" && url.pathname === "/console/sign-in") {

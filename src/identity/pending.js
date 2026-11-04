@@ -6,7 +6,7 @@ export const OAUTH_COOKIE = "sederunt_oauth";
 export const OAUTH_PENDING_MS = 10 * 60 * 1000;
 
 /**
- * @param {{ verifier: string, challenge: string, next: string, provider: string }} fields
+ * @param {{ verifier: string, challenge: string, next: string, provider: string, intent?: string }} fields
  * @param {string} secret
  * @param {number} [now]
  */
@@ -16,6 +16,7 @@ export function sealPending(fields, secret, now = Date.now()) {
     challenge: fields.challenge,
     next: fields.next,
     provider: fields.provider,
+    intent: fields.intent === "forms" ? "forms" : "",
     exp: now + OAUTH_PENDING_MS,
   }, secret);
 }
@@ -39,6 +40,7 @@ export function openPending(token, secret, now = Date.now()) {
     challenge: payload.challenge,
     next: typeof payload.next === "string" ? payload.next : "/console",
     provider: typeof payload.provider === "string" ? payload.provider : "",
+    intent: payload.intent === "forms" ? "forms" : "",
     exp: payload.exp,
   };
 }

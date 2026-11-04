@@ -16,6 +16,7 @@ import {
 } from "./pending.js";
 import { codeChallengeFor, createCodeVerifier } from "./pkce.js";
 import { displayNameFromUser, identityConfigured, providerFromUser } from "./shared.js";
+import { FORMS_SCOPES } from "../connectors/google-person.js";
 
 const PROVIDERS = new Set(["google", "github"]);
 
@@ -74,13 +75,23 @@ async function startProvider(ctx, provider) {
   const verifier = createCodeVerifier();
   const challenge = codeChallengeFor(verifier);
   const next = safeConsoleNext(url.searchParams.get("next") || "/console");
-  const sealed = sealPending({ verifier, challenge, next, provider }, sessionSecret(env));
+  const intent = provider === "google" && url.searchParams.get("intent") === "forms" ? "forms" : "";
+  const sealed = sealPending({ verifier, challenge, next, provider, intent }, sessionSecret(env));
   const cookie = oauthPendingCookie(sealed, req, Math.floor(OAUTH_PENDING_MS / 1000));
-  const location = identity.authorizeUrl({
+  const authorizeInput = {
     provider,
     redirectTo: `${requestOrigin(req, env)}/console/auth/callback`,
     codeChallenge: challenge,
-  });
+  };
+  if (intent === "forms") {
+    authorizeInput.scopes = FORMS_SCOPES.join(" ");
+    authorizeInput.queryParams = {
+      access_type: "offline",
+      prompt: "consent",
+      include_granted_scopes: "true",
+    };
+  }
+  const location = identity.authorizeUrl(authorizeInput);
   redirect(res, location, { "set-cookie": cookie });
 }
 
@@ -109,7 +120,7 @@ async function fakeConsent(ctx, provider) {
   }
   let code = "";
   try {
-    code = identity.issueConsentCode({ provider, codeChallenge: pending.challenge });
+    code = identity.issueConsentCode({ provider, codeChallenge: pending.challenge, intent: pending.intent });
   } catch {
     send(res, 200, "text/html; charset=utf-8", page(ctx, {
       notice: "Sign-in didn't complete. Try again.",
@@ -144,6 +155,18 @@ async function finishCallback(ctx) {
     const tokens = await identity.exchangeCode({ code, codeVerifier: pending.verifier });
     const user = await identity.getUser(tokens.accessToken);
     if (!user?.id) throw new Error("unverified");
+    if (pending.intent === "forms" && pending.provider === "google" && tokens.providerRefreshToken && ctx.googleGrants) {
+      try {
+        await ctx.googleGrants.save(user.id, {
+          refreshToken: tokens.providerRefreshToken,
+          accessToken: tokens.providerAccessToken || "",
+          expiresAt: tokens.expiresAt,
+          scopes: FORMS_SCOPES,
+        });
+      } catch {
+        // Sign-in still completes. The Forms card stays on Connect until a grant is stored.
+      }
+    }
     let name = displayNameFromUser(user).slice(0, 80);
     try {
       const profile = await identity.profile(tokens.accessToken);

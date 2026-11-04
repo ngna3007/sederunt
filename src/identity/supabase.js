@@ -82,6 +82,8 @@ export function createSupabaseIdentity(env, options = {}) {
       refreshToken: typeof data?.refresh_token === "string" ? data.refresh_token : "",
       expiresIn: seconds,
       expiresAt: now + seconds * 1000,
+      providerAccessToken: typeof data?.provider_token === "string" ? data.provider_token : "",
+      providerRefreshToken: typeof data?.provider_refresh_token === "string" ? data.provider_refresh_token : "",
     };
   }
 
@@ -96,14 +98,21 @@ export function createSupabaseIdentity(env, options = {}) {
       return external[provider] === true;
     },
 
-    authorizeUrl({ provider, redirectTo, codeChallenge }) {
-      const url = endpoint("/auth/v1/authorize", {
+    authorizeUrl({ provider, redirectTo, codeChallenge, scopes, queryParams }) {
+      const query = {
         provider,
         redirect_to: redirectTo,
         code_challenge: codeChallenge,
         code_challenge_method: "s256",
         apikey: apiKey,
-      });
+      };
+      if (typeof scopes === "string" && scopes) query.scopes = scopes;
+      if (queryParams && typeof queryParams === "object") {
+        for (const [key, value] of Object.entries(queryParams)) {
+          if (typeof value === "string" && value) query[key] = value;
+        }
+      }
+      const url = endpoint("/auth/v1/authorize", query);
       return url.toString();
     },
 

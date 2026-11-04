@@ -12,6 +12,7 @@ import {
   withEnabled,
 } from "./tools.js";
 import { guardConnectorUrl } from "./url-guard.js";
+import { FORMS_SCOPES } from "./google-person.js";
 
 /**
  * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
@@ -85,7 +86,9 @@ export function createMemoryConnectorStore(env = process.env) {
         name,
         url: url.href,
         transport: "streamable_http",
-        authType: input?.token ? "bearer" : "none",
+        authType: storedAuthType(input),
+        preset: storedPreset(input),
+        scopes: storedScopes(input),
         status: "draft",
         enabled: true,
         lastTestedAt: null,
@@ -181,6 +184,22 @@ export function createMemoryConnectorStore(env = process.env) {
   };
 }
 
+function storedPreset(input) {
+  return input?.preset === "google-forms" ? "google-forms" : null;
+}
+
+function storedAuthType(input) {
+  if (storedPreset(input) === "google-forms" && input?.authType === "google_oauth" && !input?.token) return "google_oauth";
+  if (input?.token) return "bearer";
+  return "none";
+}
+
+function storedScopes(input) {
+  if (storedAuthType(input) !== "google_oauth") return [];
+  const given = Array.isArray(input?.scopes) ? input.scopes : [];
+  return FORMS_SCOPES.filter((scope) => given.includes(scope));
+}
+
 function bytea(buffer) {
   return `\\x${Buffer.from(buffer).toString("hex")}`;
 }
@@ -251,6 +270,8 @@ export function createSupabaseConnectorStore({ url, key, fetchImpl, env }) {
       url: row.url,
       transport: row.transport,
       authType: row.auth_type,
+      preset: row.preset || null,
+      scopes: Array.isArray(row.scopes) ? row.scopes : [],
       status: row.status,
       enabled: row.enabled !== false,
       lastTestedAt: row.last_tested_at,
@@ -336,13 +357,13 @@ export function createSupabaseConnectorStore({ url, key, fetchImpl, env }) {
         tenant_id: tenantId,
         slug,
         display_name: name,
-        preset: null,
+        preset: storedPreset(input),
         transport: "streamable_http",
         url: guarded.href,
         command: null,
-        auth_type: input?.token ? "bearer" : "none",
+        auth_type: storedAuthType(input),
         headers_public: input?.token ? { header_name: headerName, token_last4: tokenLast4(input.token) } : {},
-        scopes: [],
+        scopes: storedScopes(input),
         enabled: true,
         status: "draft",
       };

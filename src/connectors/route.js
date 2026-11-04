@@ -1,6 +1,7 @@
 import { connectorMessage } from "./errors.js";
 import { testConnection } from "./client.js";
 import { ensureDemoServer } from "./demo.js";
+import { addGoogleFormsPreset, googleFormsPresetState } from "./forms-preset.js";
 import { loadSpaceView } from "../console-flow.js";
 import { guardConsole } from "../console-auth.js";
 import { validToolName } from "./tools.js";
@@ -54,7 +55,38 @@ export async function handleConnectorRoutes(ctx) {
     if (req.method === "GET" && url.pathname === "/console/connectors") {
       const connectors = await store.list(tenantId);
       const demo = await ensureDemoServer(ctx.workspace);
-      sendJson(ctx, 200, { ok: true, connectors, demoUrl: demo?.url || "" });
+      const personId = personIdFrom(gate, ctx.env);
+      const presets = {
+        "google-forms": await googleFormsPresetState({
+          store,
+          tenantId,
+          env: ctx.env,
+          grants: ctx.workspace?.googleGrants,
+          personId,
+        }),
+      };
+      sendJson(ctx, 200, { ok: true, connectors, demoUrl: demo?.url || "", presets });
+      return true;
+    }
+    if (req.method === "POST" && url.pathname === "/console/connectors/presets/google-forms") {
+      const result = await addGoogleFormsPreset({
+        store,
+        tenantId,
+        env: ctx.env,
+        req,
+        grants: ctx.workspace?.googleGrants,
+        personId: personIdFrom(gate, ctx.env),
+      });
+      if (!result.ok) {
+        sendJson(ctx, result.code === "needs_access" ? 200 : 400, {
+          ok: false,
+          code: result.code || "protocol",
+          connectUrl: result.connectUrl || "",
+          message: result.message || "That could not be saved.",
+        });
+        return true;
+      }
+      sendJson(ctx, 200, { ok: true, connector: result.connector });
       return true;
     }
     if (req.method === "POST" && url.pathname === "/console/connectors/probe") {
@@ -107,6 +139,11 @@ export async function handleConnectorRoutes(ctx) {
         return true;
       }
       if (sub[2] === "token") {
+        const current = await store.get(tenantId, id);
+        if (current?.authType === "google_oauth") {
+          sendJson(ctx, 400, { ok: false, message: "This connector uses the signed-in Google account." });
+          return true;
+        }
         const body = await readBody(ctx);
         const saved = await store.replaceToken(tenantId, id, { token: body.token, headerName: body.headerName });
         if (!saved) {
@@ -138,6 +175,10 @@ export async function handleConnectorRoutes(ctx) {
   }
   sendJson(ctx, 404, { ok: false, message: "Not found." });
   return true;
+}
+
+function personIdFrom(gate, env) {
+  return String(gate.session?.userId || gate.session?.memberId || env.SEDERUNT_MEMBER || "").trim();
 }
 
 async function spaceId(gate, identity) {
