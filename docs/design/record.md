@@ -2,7 +2,7 @@
 
 **Status:** active
 **Owner:** @ngna3007
-**Last updated:** 2026-10-21
+**Last updated:** 2026-11-04
 **Scope:** System-wide
 
 ## Mission
@@ -23,7 +23,7 @@ The public relayer's server wallet pays the WAL storage fee and the SUI gas. Thi
 
 A blob lives for the epochs that write paid. Mainnet epochs are about two weeks. The owner-token API grants `memories.read` only, so this process cannot renew a blob. The decision stores `expiryEpoch` when the relayer provides it. Console does not renew memory blobs. When the epoch passes, the content is gone.
 
-Locate uses public GraphQL to find the certification event and its checkpoint. That checkpoint is a candidate stamp. It is not the proof.
+Locate uses Tatum gRPC. A stored object id is one `GetObject`. Otherwise `ListOwnedObjects` on the owner address from `remember` matches the blob id, then `GetTransaction` reads the certifying checkpoint. There is no public GraphQL query and no whole-chain scan. A miss leaves the proof `unknown`. That locate result is a candidate stamp. The proof is the later `GetObject` check: the blob exists, the blob id matches, it is certified, and the checkpoint and time are known.
 
 ## Files
 

@@ -6,7 +6,7 @@ Checked 20 Oct 2026 against Mysten, Sui, and Walrus docs, the installed packages
 
 Keep one ESM Node process. Walrus Memory is the TypeScript client `@mysten-incubation/memwal` (`MemWal.create`) talking to the public Mainnet relayer. The process holds a company delegate key for one `MemWalAccount`, and a second account is the personal record. A namespace is not that split.
 
-Sui reads stay on `@mysten/sui`. The public GraphQL URL this repo already uses is still an official endpoint. Tatum's Sui gateway is the other documented read, for objects, and it is not Walrus Memory. Do not add a browser-wallet template, a Walrus Site, a Move package, the Python SDK, or Tatum's Data API or Storage API.
+Sui reads stay on `@mysten/sui`. As of 2026-11-04 every Sui mainnet read in this app goes through Tatum native gRPC (`SuiGrpcClient` with a `node:http2` transport). `src/memory/locate.js` no longer posts to public GraphQL. `src/console/upload.js` no longer opens the public fullnode for Seal. Public GraphQL remains a documented Sui endpoint. This app does not call it. A blob with no stored object id and no owner address cannot be found with the gRPC methods used here, because there is no whole-chain blob-id index on `ListOwnedObjects`. That case stays `unknown`. Do not add a browser-wallet template, a Walrus Site, a Move package, the Python SDK, or Tatum's Data API or Storage API.
 
 ## 1. What the first-party SDKs publish
 
@@ -101,7 +101,7 @@ The public URLs are still the ones in [Emitting Events](https://docs.sui.io/deve
 
 Heading "Public endpoints" says both are rate-limited development and public-good endpoints, not production targets. [JSON-RPC Migration Guide](https://docs.sui.io/develop/accessing-data/json-rpc-migration), heading "Public load balancer URLs are not production endpoints", says the same about `https://fullnode.<network>.sui.io` and `https://graphql.<network>.sui.io/graphql`. This note does not name a new host.
 
-The GraphQL URL this repo posts to in `src/memory/locate.js` is that documented Mainnet GraphQL endpoint. The event query shape on the same Sui page, heading "How do I query events with GraphQL?", is `Query.events` with a type filter. Docs do not say GraphQL is the only replacement. They do say Foundation Mainnet JSON-RPC is off. `https://fullnode.mainnet.sui.io:443` is now the documented gRPC URL on that same host. It is not a new RPC, and this note does not move the locate client onto it.
+`src/memory/locate.js` used to post to that documented Mainnet GraphQL endpoint. It does not anymore. The event query shape on the same Sui page, heading "How do I query events with GraphQL?", is `Query.events` with a type filter. Docs do not say GraphQL is the only replacement. They do say Foundation Mainnet JSON-RPC is off. `https://fullnode.mainnet.sui.io:443` is the documented public gRPC URL on that host. This app does not call it. Locate and proof both use Tatum.
 
 The installed SDK agrees, with a preference. `@mysten/sui` README, section "Connecting to Sui Network": `SuiGrpcClient` is the recommended client, and the Mainnet URL is `https://fullnode.mainnet.sui.io:443`. The package docs, [Sui Clients](https://sdk.mystenlabs.com/sui/clients) (the installed file `docs/clients/index.md`), heading "Sui Clients": pick `SuiGrpcClient` by default, or `SuiGraphQLClient` to query the GraphQL schema. The GraphQL example uses `https://graphql.mainnet.sui.io/graphql`. JSON-RPC is marked deprecated. `SuiJsonRpcClient` in the installed `src/jsonRpc/client.ts` carries the same deprecation and points at `@mysten/sui/grpc` or `@mysten/sui/graphql`.
 
@@ -130,8 +130,7 @@ Keep:
 - `@mysten-incubation/memwal` default export `MemWal.create({ key, accountId, serverUrl, namespace })` against `https://relayer.memory.walrus.xyz`.
 - Two `MemWalAccount`s. The company process holds the company delegate key only. The personal account is the other record. A namespace stays an organizing label.
 - `@mysten/sui` for Sui types and, where the relayer's `GET /config` asks for it, the gRPC or JSON-RPC client the installed MemWal code already constructs. Do not substitute a URL.
-- The public GraphQL endpoint already in `src/memory/locate.js`, `https://graphql.mainnet.sui.io/graphql`, for the event and object locate. It is still the documented public GraphQL URL.
-- Tatum only as the Sui gateway: `sui_getObject` on `https://sui-mainnet.gateway.tatum.io`, or `LedgerService/GetObject` on `https://sui-mainnet-grpc.gateway.tatum.io`. Those hosts are Tatum's. They are not a new Foundation RPC.
+- Tatum native gRPC for every Sui mainnet read: `LedgerService/GetObject`, `LedgerService/GetTransaction`, `LedgerService/GetCheckpoint`, `LedgerService/GetServiceInfo`, and `StateService/ListOwnedObjects` on `https://sui-mainnet-grpc.gateway.tatum.io:443`, header `x-api-key`. The default SDK transport is grpc-web. Tatum's gateway rejects that, so the client supplies its own `RpcTransport` over `node:http2`.
 
 Refuse, because it fights the SDK or the product constraints above:
 
@@ -142,7 +141,7 @@ Refuse, because it fights the SDK or the product constraints above:
 - The Python `memwal` package. It is a real SDK and a second runtime. This repo is one Node process. Its default `server_url`, if `env` is omitted, is `http://localhost:8000` ([Python quick start](https://docs.wal.app/walrus-memory/python-sdk/quick-start), heading "Configuration"), which is not the TypeScript default.
 - The cookbook's one-account, many-namespace split, and its Next.js sample. Namespace is not privacy.
 - Walrus Sites and `site-builder`. Static files, no server, no delegate key.
-- JSON-RPC against `https://fullnode.mainnet.sui.io`. Foundation Mainnet JSON-RPC is disabled. Do not add any other RPC host.
+- JSON-RPC against `https://fullnode.mainnet.sui.io`. Foundation Mainnet JSON-RPC is disabled. Do not add any other RPC host. `src/` does not call `graphql.mainnet.sui.io` or `fullnode.mainnet.sui.io`.
 - Tatum v4 Data API chain routes for Sui. Sui was not in the Data API chain table checked above.
 - Tatum Storage API. That is Walrus file blobs, not Walrus Memory.
 - Letting Recall.ai, Linear MCP, or Google Calendar MCP pick the language. They are HTTP. The Sui side is already chosen by the two installed packages.
