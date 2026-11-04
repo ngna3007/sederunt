@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { connectorError, connectorMessage } from "./errors.js";
+import { connectorError, connectorResultMessage } from "./errors.js";
 import { decodeSecret, encodeSecret, openSecret, sealSecret } from "./secrets.js";
 import {
   mergeDiscoveredTools,
@@ -156,7 +156,7 @@ export function createMemoryConnectorStore(env = process.env) {
         tools.set(id, mergeDiscoveredTools(tools.get(id) || [], result.tools || []));
       } else {
         row.status = result?.code === "unauthorized" ? "needs_auth" : "error";
-        row.lastError = connectorMessage(result?.code || "protocol");
+        row.lastError = connectorResultMessage(result);
       }
       return present(row);
     },
@@ -476,7 +476,7 @@ export function createSupabaseConnectorStore({ url, key, fetchImpl, env }) {
         };
       } else {
         body.status = result?.code === "unauthorized" ? "needs_auth" : "error";
-        body.last_error = connectorMessage(result?.code || "protocol");
+        body.last_error = connectorResultMessage(result);
       }
       await call("mcp_connectors", { method: "PATCH", query: { id: `eq.${id}`, tenant_id: `eq.${tenantId}` }, body });
       if (result?.ok) return this.upsertTools(tenantId, id, result.tools || []);

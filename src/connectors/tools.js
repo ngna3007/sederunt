@@ -45,7 +45,7 @@ export function actionClassFromAnnotations(annotations) {
 
 /**
  * Name rules used when a tool sends no read or destructive annotation.
- * list_, get_, and search_ are read. create_, update_, and respond_ are write. delete_ is delete.
+ * list_, get_, search_, and suggest_ are read. create_, update_, and respond_ are write. delete_ is delete.
  *
  * @param {string} name
  * @returns {"read" | "write" | "delete" | ""}
@@ -53,7 +53,7 @@ export function actionClassFromAnnotations(annotations) {
 export function actionClassFromName(name) {
   const text = String(name || "");
   if (text.startsWith("delete_")) return "delete";
-  if (text.startsWith("list_") || text.startsWith("get_") || text.startsWith("search_")) return "read";
+  if (text.startsWith("list_") || text.startsWith("get_") || text.startsWith("search_") || text.startsWith("suggest_")) return "read";
   if (text.startsWith("create_") || text.startsWith("update_") || text.startsWith("respond_")) return "write";
   return "";
 }

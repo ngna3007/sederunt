@@ -4,7 +4,7 @@ import { runWithFormsContext } from "../mcp-forms/context.js";
 import { createFormsMcpServer } from "../mcp-forms/server.js";
 import { isGoogleCalendarPreset } from "./builtin-calendar.js";
 import { isBuiltinGoogleForms } from "./builtin-forms.js";
-import { connectorError, connectorMessage } from "./errors.js";
+import { connectorError, connectorMessage, readableUpstreamMessage } from "./errors.js";
 import { guardConnectorUrl } from "./url-guard.js";
 
 const DEFAULT_TIMEOUT_MS = 10000;
@@ -62,6 +62,7 @@ export async function testConnection(input) {
     let serverInfo = null;
     let protocolVersion = null;
     const preferSse = input?.transport === "sse";
+    let upstream = "";
     const run = async (signal) => {
       if (!preferSse) {
         try {
@@ -75,14 +76,24 @@ export async function testConnection(input) {
             await opened.client.close().catch(() => {});
           }
         } catch (error) {
+          upstream = rememberUpstream(error, upstream);
           if (classify(error) !== "protocol") throw error;
         }
       }
-      const opened = await openClient(url, auth, input, signal, "sse", timeoutMs);
+      let opened;
+      try {
+        opened = await openClient(url, auth, input, signal, "sse", timeoutMs);
+      } catch (error) {
+        upstream = rememberUpstream(error, upstream);
+        throw carryUpstream(error, upstream);
+      }
       try {
         serverInfo = readServerInfo(opened.client);
         protocolVersion = opened.transport.protocolVersion || null;
         tools.push(...await listPages(opened.client, timeoutMs));
+      } catch (error) {
+        upstream = rememberUpstream(error, upstream);
+        throw carryUpstream(error, upstream);
       } finally {
         await opened.client.close().catch(() => {});
       }
@@ -106,7 +117,7 @@ export async function testConnection(input) {
       tools: [],
       latencyMs: Date.now() - started,
       code,
-      message: connectorMessage(code),
+      message: failureMessage(code, error),
     };
   }
 }
@@ -181,6 +192,7 @@ export async function callTool(connector, name, args = {}, options = {}) {
     await withTimeout(timeoutMs, async (signal) => {
       const kinds = options.transport === "sse" ? ["sse"] : ["streamable_http", "sse"];
       let last;
+      let upstream = "";
       for (const kind of kinds) {
         try {
           const opened = await openClient(url, auth, { ...options, env: options.env, preset: target.preset }, signal, kind, timeoutMs);
@@ -192,15 +204,23 @@ export async function callTool(connector, name, args = {}, options = {}) {
           }
         } catch (error) {
           last = error;
-          if (classify(error) !== "protocol" || kind === "sse") throw error;
+          upstream = rememberUpstream(error, upstream);
+          if (classify(error) !== "protocol" || kind === "sse") throw carryUpstream(error, upstream);
         }
       }
-      throw last;
+      throw carryUpstream(last, upstream);
     });
     return describedCall(result);
   } catch (error) {
     const code = classify(error);
-    return { ok: false, text: "", isError: true, code, message: connectorMessage(code) };
+    const message = failureMessage(code, error);
+    return {
+      ok: false,
+      text: message !== connectorMessage(code) ? message : "",
+      isError: true,
+      code,
+      message,
+    };
   }
 }
 
@@ -417,6 +437,59 @@ function guardedFetch(input, timeoutSignal) {
     }
     throw connectorError("blocked-url");
   };
+}
+
+function httpStatus(error) {
+  return Number(error?.status || error?.data?.status || error?.cause?.status || error?.cause?.data?.status || 0);
+}
+
+function httpBody(error) {
+  const direct = error?.data?.text ?? error?.cause?.data?.text;
+  if (typeof direct === "string" && direct.trim()) return direct;
+  const message = typeof error?.message === "string" ? error.message : "";
+  const marker = "Error POSTing to endpoint: ";
+  const index = message.lastIndexOf(marker);
+  if (index < 0) return "";
+  const rest = message.slice(index + marker.length).trim();
+  if (!rest || rest === "null" || rest === "undefined") return "";
+  return rest;
+}
+
+/**
+ * Readable text from an HTTP 4xx MCP failure. 401 and 403 stay unauthorized.
+ * @param {unknown} error
+ */
+function upstreamText(error) {
+  if (typeof error?.exposedMessage === "string" && error.exposedMessage.trim()) {
+    return readableUpstreamMessage(error.exposedMessage);
+  }
+  if (classify(error) !== "protocol") return "";
+  const status = httpStatus(error);
+  if (status === 401 || status === 403) return "";
+  if (status && (status < 400 || status >= 500)) return "";
+  return readableUpstreamMessage(httpBody(error));
+}
+
+function rememberUpstream(error, upstream) {
+  if (upstream) return upstream;
+  return upstreamText(error) || "";
+}
+
+function exposedProtocol(message) {
+  const error = connectorError("protocol", message);
+  error.exposedMessage = message;
+  return error;
+}
+
+function carryUpstream(error, upstream) {
+  if (!error) return error;
+  if (!upstream || classify(error) !== "protocol") return error;
+  return exposedProtocol(upstream);
+}
+
+function failureMessage(code, error) {
+  if (code !== "protocol") return connectorMessage(code);
+  return upstreamText(error) || connectorMessage(code);
 }
 
 function classify(error) {

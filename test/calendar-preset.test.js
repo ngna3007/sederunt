@@ -136,7 +136,9 @@ function assertNoSecrets(raw) {
 test("calendar tool class uses annotations, then name rules", () => {
   assert.equal(actionClassForTool("list_events", {}), "read");
   assert.equal(actionClassForTool("get_event", {}), "read");
+  assert.equal(actionClassForTool("list_calendars", {}), "read");
   assert.equal(actionClassForTool("search_events", {}), "read");
+  assert.equal(actionClassForTool("suggest_time", {}), "read");
   assert.equal(actionClassForTool("create_event", {}), "write");
   assert.equal(actionClassForTool("update_event", {}), "write");
   assert.equal(actionClassForTool("respond_to_event", {}), "write");
@@ -192,7 +194,7 @@ test("existing calendar connection adds the preset with no second consent", asyn
   assertNoSecrets(beforeEvent.raw);
 
   const before = json(await call(port, "GET", "/console/connectors"));
-  assert.equal(before.presets["google-calendar"].state, "add");
+  assert.equal(before.presets["google-calendar"].state, "ready");
   assert.equal(before.presets["google-calendar"].connectUrl, "");
   assert.equal(before.connectors.length, 0);
 
@@ -209,8 +211,12 @@ test("existing calendar connection adds the preset with no second consent", asyn
   const classes = Object.fromEntries(connector.tools.map((tool) => [tool.name, tool.actionClass]));
   assert.equal(classes.list_events, "read");
   assert.equal(classes.get_event, "read");
+  assert.equal(classes.list_calendars, "read");
+  assert.equal(classes.search_events, "read");
+  assert.equal(classes.suggest_time, "read");
   assert.equal(classes.create_event, "write");
   assert.equal(classes.update_event, "write");
+  assert.equal(classes.respond_to_event, "write");
   assert.equal(classes.delete_event, "delete");
   assert.equal(connector.tools.find((tool) => tool.name === "delete_event").enabled, false);
   assert.equal(connector.tools.filter((tool) => tool.name !== "delete_event").every((tool) => tool.enabled === true), true);
@@ -394,7 +400,7 @@ test("calendar preset needs access, then one connect serves calendar-edit and th
   assertNoSecrets(shared.raw);
 
   const ready = json(await call(port, "GET", "/console/connectors", null, { cookie: cookieHeader(granted.jar) }));
-  assert.equal(ready.presets["google-calendar"].state, "add");
+  assert.equal(ready.presets["google-calendar"].state, "ready");
   assert.equal(ready.presets["google-calendar"].connectUrl, "");
   assert.equal(ready.connectors.length, 0);
   const connected = json(await call(port, "POST", "/console/connectors/presets/google-calendar", {}, { cookie: cookieHeader(granted.jar) }));
@@ -530,8 +536,10 @@ test("google calendar preset layout", { timeout: 180000 }, async (t) => {
   await page.waitForFunction(() => {
     const forms = document.querySelector("[data-preset='google-forms']");
     const calendar = document.querySelector("[data-preset='google-calendar']");
-    return forms && calendar && forms.getAttribute("data-state") === "add" && calendar.getAttribute("data-state") === "add";
+    return forms && calendar && forms.getAttribute("data-state") === "add" && calendar.getAttribute("data-state") === "ready";
   });
+  const readyBadge = (await page.locator("[data-preset='google-calendar'] [data-preset-badge]").innerText()).replace(/\s+/g, " ").trim();
+  assert.equal(readyBadge, "Add · already connected");
   await page.click("[data-preset='google-calendar']");
   await page.waitForFunction(() => {
     const card = document.querySelector("[data-preset='google-calendar']");
@@ -545,6 +553,8 @@ test("google calendar preset layout", { timeout: 180000 }, async (t) => {
   assert.match(calendarText, /Uses this person's Google account/);
   const logo = await page.locator("[data-preset='google-calendar'] use").getAttribute("href");
   assert.equal(logo, "#logo-google-calendar");
+  const formsLogo = await page.locator("[data-preset='google-forms'] use").getAttribute("href");
+  assert.equal(formsLogo, "#logo-google-forms");
   await page.waitForSelector("#mcp-list .mcp-card");
   const connectorText = await page.locator("#mcp-list .mcp-card").innerText();
   assert.match(connectorText, /Read/);

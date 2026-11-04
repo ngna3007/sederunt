@@ -12,7 +12,8 @@ export const CALENDAR_PARTIAL_MESSAGE = "Google did not grant Calendar access. C
 
 /**
  * The preset shares the calendar-edit grant. A row is Connected.
- * An existing grant is Add, with no second consent. Otherwise the card needs access.
+ * An existing grant is ready ("Add · already connected"), with no second consent.
+ * Otherwise the card needs access.
  *
  * @param {{
  *   store: { list: Function },
@@ -25,7 +26,7 @@ export async function googleCalendarPresetState(input) {
   if (connectors.some((item) => item.preset === GOOGLE_CALENDAR_PRESET)) {
     return { state: "connected", connectUrl: "" };
   }
-  if (calendarPresentedConnected(input.env)) return { state: "add", connectUrl: "" };
+  if (calendarPresentedConnected(input.env)) return { state: "ready", connectUrl: "" };
   return {
     state: "needs_access",
     connectUrl: CALENDAR_CONNECT_PATH,

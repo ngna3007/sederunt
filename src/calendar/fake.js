@@ -69,8 +69,13 @@ export function createFakeCalendarAdapter(env = {}, options = {}) {
       return [
         { name: "list_events", write: false },
         { name: "get_event", write: false },
+        { name: "list_calendars", write: false },
+        { name: "search_events", write: false },
+        { name: "suggest_time", write: false },
         { name: "create_event", write: false },
         { name: "update_event", write: true },
+        { name: "respond_to_event", write: false },
+        { name: "delete_event", write: false },
       ];
     },
     async readEvent({ id } = {}) {

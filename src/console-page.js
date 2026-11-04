@@ -56,6 +56,7 @@ export function renderConsolePage(state = {}) {
   const panelIcon = glyph('<rect x="2.6" y="3" width="10.8" height="10" rx="1.4"/><path d="M6.4 3v10"/>');
   const plugIcon = glyph('<path d="M6 2.6v3M10 2.6v3M4.2 5.6h7.6v2.4a3.8 3.8 0 0 1-7.6 0V5.6Z"/><path d="M8 11.8V14"/>');
   const calendarIcon = brandLogo("google-calendar");
+  const formsIcon = brandLogo("google-forms");
   const linearIcon = brandLogo("linear-icon");
   const channelIcon = brandLogo("slack-icon");
   const searchIcon = glyph('<circle cx="7" cy="7" r="3.2"/><path d="M9.4 9.4 12.5 12.5"/>');
@@ -364,7 +365,7 @@ ${slack}
         <p class="section-label">Presets</p>
         <div class="preset-row">
           <button type="button" class="preset-card" data-preset="google-forms" data-state="add">
-            <span class="preset-name">Google Forms</span>
+            <span class="preset-head">${formsIcon}<span class="preset-name">Google Forms</span></span>
             <span class="preset-detail">Uses this person's Google account.</span>
             <span class="badge" data-preset-badge>Add</span>
           </button>
@@ -6415,6 +6416,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (detail) detail.textContent = "Uses this person's Google account.";
     } else if (state === "connecting") {
       if (badge) badge.textContent = "Connecting";
+    } else if (state === "ready") {
+      if (badge) badge.textContent = "Add · already connected";
+      if (detail) detail.textContent = "Uses this person's Google account.";
     } else {
       if (badge) badge.textContent = "Add";
       if (detail) detail.textContent = "Uses this person's Google account.";
@@ -6727,6 +6731,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var card = document.querySelector("[data-preset='" + id + "']");
     if (!card) return;
     var state = card.getAttribute("data-state") || "add";
+    var previous = state;
     if (state === "connecting" || state === "connected") return;
     var preset = mcpPresets[id] || {};
     var accessDetail = id === "google-calendar" ? "Connect Google Calendar" : "Connect Google Forms";
@@ -6756,7 +6761,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (!result || result.ok !== true) {
         card.disabled = false;
         card.setAttribute("data-state", "add");
-        if (badge) badge.textContent = "Add";
+        paintPreset(id, { state: previous === "ready" ? "ready" : "add" }, accessDetail);
         toast((result && result.message) || "That could not be saved.");
         return;
       }
