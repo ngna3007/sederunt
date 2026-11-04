@@ -1,4 +1,5 @@
 import { brandLogo, brandSprite } from "./brand-logos.js";
+import { formatLastTested } from "./console/local-time.js";
 import { sederuntMark, FAVICON_LINK } from "./sederunt-mark.js";
 
 export { rankDecisions } from "./room-match.js";
@@ -6307,10 +6308,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
   }
 
+  ${formatLastTested.toString()}
   function mcpWhen(value) {
-    var text = String(value || "");
-    if (!text) return "Not tested yet";
-    return "Last tested " + text.replace("T", " ").replace(/\\..*$/, "").replace("Z", " UTC");
+    return formatLastTested(value);
   }
 
   function mcpStatusLabel(status) {
