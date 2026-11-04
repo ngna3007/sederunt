@@ -482,7 +482,14 @@ test("google forms preset layout", { timeout: 180000 }, async (t) => {
   const tested = await page.locator("#mcp-list .meta").first().innerText();
   assert.match(tested, /Last tested .+\d{1,2}:\d{2} (AM|PM) \S+/);
   assert.doesNotMatch(tested, /\d{4}-\d{2}-\d{2}T/);
-  for (const width of WIDTHS) await assertFits(page, width);
+  for (const width of WIDTHS) {
+    await assertFits(page, width);
+    if ([1920, 1097, 768, 390].includes(width)) {
+      const urlText = (await page.locator("#mcp-list .mcp-url").first().innerText()).trim();
+      assert.equal(urlText, "Built in", String(width));
+      assert.doesNotMatch(urlText, /127\.0\.0\.1|localhost|builtin:google-forms/);
+    }
+  }
 });
 
 test("google forms preset needs-access layout", { timeout: 180000 }, async (t) => {
@@ -506,6 +513,11 @@ test("google forms preset needs-access layout", { timeout: 180000 }, async (t) =
   assert.match(text, /Needs Google access/);
   assert.match(text, /Connect Google Forms/);
   for (const width of WIDTHS) await assertFits(page, width);
+  await page.evaluate(() => {
+    const detail = document.querySelector("[data-preset='google-forms'] .preset-detail");
+    if (detail) detail.textContent = "Google did not grant Forms access. Connect again and allow Forms.";
+  });
+  for (const width of [1920, 1097, 768, 390]) await assertFits(page, width);
   await page.click("[data-preset='google-forms']");
   await page.waitForURL(/\/console\/auth\/google\?intent=forms/);
   assert.match(page.url(), /next=\/console\/connectors/);
