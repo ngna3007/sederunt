@@ -1,5 +1,6 @@
 import { brandLogo, brandSprite } from "./brand-logos.js";
 import { formatLastTested } from "./console/local-time.js";
+import { renderPeopleMatching } from "./console/people-matching.js";
 import { sederuntMark, FAVICON_LINK } from "./sederunt-mark.js";
 
 export { rankDecisions } from "./room-match.js";
@@ -98,6 +99,10 @@ export function renderConsolePage(state = {}) {
             <dt>Sign-in</dt><dd id="account-detail-provider">${escapeHtml(profile.providerLabel || "Signed in")}</dd>
             ${profile.spaceRole ? `<dt>Role</dt><dd id="account-detail-role">${escapeHtml(profile.spaceRole)}</dd>` : ""}`
     : "";
+  const peopleMatching = renderPeopleMatching({
+    matches: Array.isArray(state.peopleMatches) ? state.peopleMatches : [],
+    canOverride: state.canAdmin === true,
+  });
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -492,6 +497,7 @@ ${slack}
             ${signedIn ? `<button type="button" class="danger" id="account-signout">Sign out</button>` : `<p class="meta">Sign-in is not set up.</p>`}
           </div>
         </div>
+        ${peopleMatching}
       </div>
     </section>
     <section id="page-missing" class="empty-state" hidden>
