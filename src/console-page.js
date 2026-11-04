@@ -4080,7 +4080,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var people = fileRoom ? peopleFor(fileRoom) : [];
     var named = media && (media.state === "ready" || media.state === "novideo");
     if (name) name.textContent = named && people.length ? (personLabel(people[0]) || people[0]) : "No recording for this room";
-    var copy = "No recording was made";
+    var copy = "";
     if (media && media.state === "processing") copy = "Recording is still processing.";
     else if (media && media.state === "expired") copy = "Recording expired";
     else if (media && media.state === "channel") copy = "Slack channels aren't recorded";

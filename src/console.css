@@ -5740,3 +5740,15 @@ body.ob-page {
 .ob-soon-line { margin: 12px 0 0; font-size: 12px; line-height: 1.6; color: var(--muted-foreground); }
 .ob-soon-line .ob-soon { margin-right: 4px; }
 
+
+/* pm-roast-2 round 2: failed rows keep their text wide on phones; presets read like connector cards on desktop. */
+@media (max-width: 767px) {
+  .attention-row { flex-basis: 100%; }
+  .attention-actions { margin-left: 0; padding: 0 16px 10px 16px; }
+}
+@media (min-width: 768px) {
+  .preset-card { display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto; column-gap: 16px; align-items: center; }
+  .preset-card .preset-head { grid-column: 1; grid-row: 1; }
+  .preset-card .preset-detail { grid-column: 1; grid-row: 2; }
+  .preset-card .preset-action { grid-column: 2; grid-row: 1 / span 2; }
+}
