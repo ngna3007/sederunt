@@ -44,3 +44,9 @@ We store the decision in Walrus Memory through the public relayer. We store a fi
 - **Decision**: Channel files go to one private Console folder per environment. The service private key signs folder finalize and Seal session keys and holds no SUI. Postgres remains the source of truth for who may see a file. Each row stores the Console space, folder, and file id. Metadata and tags carry the workspace and the channel. A download URL is never given to a user; the server decrypts after the visibility check. `resolveFolder({ tenantId, channelId })` is the seam for a later per-workspace space. The free plan caps a space at 5 GB, 5 folders, and 100 MiB per upload. Console has no API to create a team space or add members, so sharing a folder is a manual step in the Console UI.
 - **Unchanged**: Decisions still go to Walrus Memory through the public relayer. The file-blobs amendment stays as the history of the testnet path this replaces.
 - **Design**: [docs/design/walrus-files.md](../design/walrus-files.md)
+
+## Amendment (2026-11-04): hybrid Console tenancy
+
+- **Status**: Accepted. This adds an optional mode on top of the Console amendment above.
+- **Decision**: The default stays one shared private folder, with metadata, tags, and Postgres visibility. A workspace may instead be mapped to its own folder and a child working key, minted out of band and granted only that folder's Seal group. The runtime holds the `hbr_` key. It does not hold the `hbradm_` management key, and it does not mint keys or create isolated folders. A file keeps the folder id stored on its row.
+- **Design**: [docs/design/walrus-files.md](../design/walrus-files.md), [docs/design/console-mint-plan.md](../design/console-mint-plan.md)
