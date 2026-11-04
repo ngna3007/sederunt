@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { access } from "node:fs/promises";
 import { once } from "node:events";
 import test from "node:test";
+import { logAction, logRequest } from "../src/activity.js";
 import { sealSession, sessionCookie } from "../src/console-auth.js";
 import { createApp } from "../src/server.js";
 import { createSession } from "../src/session.js";
@@ -124,6 +125,33 @@ function visiblePhrases() {
   };
 }
 
+function historySession() {
+  const session = createSession();
+  session.rooms.push({ id: "booth", name: "Booth planning", platform: "Google Meet", startedAt: "2026-11-03T11:00:00.000Z" });
+  const tool = { name: "act", server: "sederunt-mcp" };
+  logAction(session, {
+    id: "act-post",
+    requestId: "act-post",
+    actor: { type: "sederunt", name: "Sederunt" },
+    verb: "post",
+    target: { system: "slack", type: "message", title: "Booth recap", channel: "ops", url: "https://sederunt.slack.com/archives/C012/p123" },
+    changes: [{ field: "channel", to: "ops" }],
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    tool,
+  });
+  logRequest(session, {
+    id: "req-sheet",
+    requestId: "req-sheet",
+    actor: { type: "person", name: "Quang" },
+    verb: "update",
+    target: { system: "linear", type: "issue", id: "ROW-88", title: "Travel budget sheet" },
+    changes: [{ field: "title", to: "Travel budget sheet" }],
+    origin: { roomId: "booth", roomName: "Booth planning" },
+    tool,
+  });
+  return session;
+}
+
 serial("empty home shows one No rooms yet, and Rooms keeps its empty state", async (t) => {
   const opened = await openConsole(t, createSession(), 4720, {
     env: { SLACK_SIGNING_SECRET: "slack-secret", SLACK_BOT_TOKEN: "slack-token" },
@@ -149,5 +177,41 @@ serial("empty home shows one No rooms yet, and Rooms keeps its empty state", asy
     assert.match(rooms.roomText, /Bring Sederunt into a meeting or a channel/);
     assert.equal(rooms.homeEmpty, false, `home card on rooms ${width}`);
   }
+  assert.deepEqual(errors, []);
+});
+
+serial("stacked history meta is a clock, a spaced dot, and the room", async (t) => {
+  const opened = await openConsole(t, historySession(), 4721);
+  if (!opened) return;
+  const { page, errors } = opened;
+  for (const width of [768, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`http://127.0.0.1:${opened.port}/console/history`, { waitUntil: "networkidle" });
+    await page.waitForSelector("#history-list .activity-meta", { timeout: 45000 });
+    const metas = await page.evaluate(() => {
+      return [...document.querySelectorAll("#history-list .activity-meta")].filter((node) => {
+        const style = getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      }).map((node) => node.innerText);
+    });
+    assert.ok(metas.length > 0, `no meta at ${width}`);
+    for (const text of metas) {
+      assert.match(text, /^\d{1,2}:\d{2} [AP]M · \S/, `${width} meta ${JSON.stringify(text)}`);
+    }
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`http://127.0.0.1:${opened.port}/console/history`, { waitUntil: "networkidle" });
+  await page.waitForSelector("#history-list .room-suffix", { timeout: 45000 });
+  const wide = await page.evaluate(() => {
+    const suffix = document.querySelector("#history-list .room-suffix");
+    const sep = document.querySelector("#history-list .meta-sep");
+    return {
+      suffix: suffix ? suffix.innerText : "",
+      sep: sep ? getComputedStyle(sep).display : "missing",
+    };
+  });
+  assert.equal(wide.suffix, "Booth planning");
+  assert.equal(wide.sep, "none");
   assert.deepEqual(errors, []);
 });

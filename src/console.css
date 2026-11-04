@@ -4116,6 +4116,7 @@ body.is-reading #rooms .explorer { display: none !important; }
   min-width: 0;
 }
 #history-list .activity-meta { display: contents; }
+#history-list .meta-sep { display: none !important; }
 #history-list .room-suffix,
 #history-list .room-suffix:empty { display: block !important; }
 #history-list .activity-row {
@@ -4571,13 +4572,26 @@ body.is-reading #rooms .explorer { display: none !important; }
   #history-list .activity-icon { grid-area: mark; align-self: center; }
   #history-list .activity-row > p { grid-area: event; min-width: 0; margin: 0; }
   #history-list .activity-meta {
-    display: flex !important;
+    display: block !important;
     grid-area: meta;
-    align-items: baseline;
-    gap: 0;
     min-width: 0;
     width: auto !important;
-    flex-wrap: wrap;
+    margin: 0;
+    padding: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #history-list .activity-meta > time,
+  #history-list .activity-meta > .room-suffix:not(:empty) {
+    display: inline !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    text-align: left !important;
+    white-space: nowrap;
   }
   #history-list .activity-action {
     grid-area: action;
@@ -4585,7 +4599,8 @@ body.is-reading #rooms .explorer { display: none !important; }
     align-self: center;
   }
   #history-list .room-suffix:empty { display: none !important; }
-  #history-list .room-suffix:not(:empty)::before { content: "· "; }
+  #history-list .activity-meta > .meta-sep { display: inline !important; }
+  #history-list .room-suffix::before { content: none !important; }
   #history-list .activity-row > p,
   #history-list .activity-copy {
     display: block !important;

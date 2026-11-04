@@ -3154,7 +3154,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
         var origin = row.origin || {};
         var suffix = document.createElement("span");
         suffix.className = "room-suffix";
-        suffix.textContent = opts.showRoom ? (origin.roomName || "") : "";
+        var roomName = opts.showRoom ? String(origin.roomName || "").trim() : "";
+        suffix.textContent = roomName;
+        if (roomName) {
+          var sep = document.createElement("span");
+          sep.className = "meta-sep";
+          sep.textContent = " · ";
+          meta.append(sep);
+        }
         meta.append(suffix);
         var openLink = null;
         if (row.target && row.target.url && row.target.system === "slack" && (row.kind === "action" || row.kind === "result")) {
