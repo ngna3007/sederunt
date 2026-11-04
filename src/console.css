@@ -5752,3 +5752,69 @@ body.ob-page {
   .preset-card .preset-detail { grid-column: 1; grid-row: 2; }
   .preset-card .preset-action { grid-column: 2; grid-row: 1 / span 2; }
 }
+
+/* Files. Kept after the last media query so a missing brace cannot restyle the desktop page. */
+#files {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  width: 100%;
+}
+.files-group, #files-requests, #files-unanswered {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.files-channel {
+  margin: 8px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+}
+.file-row, .file-request, .file-unanswered {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--card);
+  box-sizing: border-box;
+}
+.file-copy { min-width: 0; flex: 1; }
+.file-name { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.file-meta, #files-error { margin: 4px 0 0; font-size: 12px; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.file-request p, .file-unanswered p { margin: 0; min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.file-actions { position: relative; flex: none; }
+.file-request-actions, .file-unanswered .file-request-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.files-deleting { margin: 0; color: var(--muted-foreground); font-size: 13px; font-weight: 600; }
+.file-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 12rem;
+  max-width: calc(100vw - 32px);
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--card);
+  box-shadow: var(--shadow-md);
+  box-sizing: border-box;
+}
+.file-menu button { width: 100%; justify-content: flex-start; text-align: left; }
+@media (max-width: 700px) {
+  .file-row, .file-request, .file-unanswered { flex-wrap: wrap; }
+  .file-actions { margin-left: auto; }
+  .file-menu { right: 0; left: auto; }
+  .file-request-actions { width: 100%; }
+  .file-request-actions button { flex: 1; }
+}
+

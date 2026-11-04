@@ -48,6 +48,7 @@ export function renderConsolePage(state = {}) {
   const roomsIcon = glyph('<path d="M2.6 3.6h10.8v8.8H2.6z"/><path d="M2.6 6.6h10.8"/>');
   const historyIcon = glyph('<circle cx="8" cy="8" r="4.6"/><path d="M8 5.6V8l1.7 1.1"/>');
   const chatIcon = glyph('<path d="M2.6 3.4h10.8v6.4H6.2L2.6 12.6V3.4Z"/>');
+  const filesIcon = glyph('<path d="M4 2.6h5.2L12.2 5.6V13H4z"/><path d="M9.1 2.7V5.7H12.2"/>');
   const recordIcon = glyph('<path d="M4 2.8h5.2L12 5.6V13H4z"/><path d="M9.1 2.9V5.7H12"/><path d="M6 8.2h4M6 10.4h2.6"/>');
   const peopleIcon = glyph('<circle cx="6" cy="5.6" r="1.7"/><path d="M3.1 12c.5-1.7 1.7-2.5 2.9-2.5s2.4.8 2.9 2.5"/><circle cx="11.2" cy="6.1" r="1.25"/><path d="M10.2 12c.3-1 .9-1.6 1.6-1.6"/>');
   const plusIcon = glyph('<path d="M8 3.2v9.6M3.2 8h9.6"/>');
@@ -134,6 +135,7 @@ ${brandSprite()}
       <a href="/console/history" data-show="history" data-label="History">${historyIcon}History</a>
       <a href="/console/decisions" data-show="record" data-label="Decisions">${recordIcon}Decisions</a>
       <a href="/console/chat" data-show="chat" data-label="Chat">${chatIcon}Chat</a>
+      <a href="/console/files" data-show="files" data-label="Files">${filesIcon}Files</a>
       <p class="rail-label">Setup</p>
       <a href="/console/setup" id="show-connectors" data-label="Setup">${plugIcon}Setup</a>
       <a href="/console/connectors" id="show-mcp" data-show="mcp" data-label="Connectors">${plugIcon}Connectors</a>
@@ -508,6 +510,18 @@ ${slack}
       <p class="empty-title">Page not found</p>
       <p>That page is not in this workspace.</p>
       <a class="secondary" href="/console"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10 3.5 5.5 8 10 12.5"/></svg>Back to Home</a>
+    </section>
+    <section id="files" hidden>
+      <div class="page-head" id="files-head"><div><p class="page-title">Files</p><p class="page-lede">Files in the channels you can see.</p></div></div>
+      <div id="files-unanswered" hidden></div>
+      <div id="files-requests" hidden></div>
+      <div id="channel-files-empty" class="empty-state" hidden>
+        <span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.6h5.2L12.2 5.6V13H4z"/><path d="M9.1 2.7V5.7H12.2"/></svg></span>
+        <p class="empty-title">No files yet.</p>
+        <p>Files from your channels show up here.</p>
+      </div>
+      <div id="files-list"></div>
+      <p id="files-error" class="meta" hidden></p>
     </section>
     <section id="people" hidden>
       <div class="page-head"><div><p class="page-title">People</p><p class="page-lede">Names heard in a room.</p></div></div>
@@ -2686,6 +2700,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     else if (sectionName === "record") head = document.querySelector("#record .page-head");
     else if (sectionName === "chat") head = document.querySelector("#chat .page-head");
     else if (sectionName === "people") head = document.querySelector("#people .page-head");
+    else if (sectionName === "files") head = document.querySelector("#files .page-head");
     else if (sectionName === "account") head = document.querySelector("#account-page .page-head");
     else if (sectionName === "connectors") head = document.querySelector("#overview .page-head");
     else if (sectionName === "mcp") head = document.getElementById("mcp-head");
@@ -2699,6 +2714,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (name === "chat") return "Chat";
     if (name === "record") return "Decisions";
     if (name === "people") return "People";
+    if (name === "files") return "Files";
     if (name === "account") return "Account";
     if (name === "connectors") return "Setup";
     if (name === "mcp") return "Connectors";
@@ -2816,17 +2832,25 @@ if (sessionWhen && sessionWhen.dataset.at) {
 
   function pathFor(name) {
     var query = roomQueryString();
-    if (name === "file" && fileRoom) return "/console/rooms/" + encodeURIComponent(fileRoom) + query;
-    if (name === "rooms") return "/console/rooms" + query;
-    if (name === "history") return "/console/history";
-    if (name === "record") return "/console/decisions";
-    if (name === "chat") return "/console/chat";
-    if (name === "people") return "/console/people";
-    if (name === "account") return "/console/account";
-    if (name === "connectors") return "/console/setup";
-    if (name === "mcp") return "/console/connectors";
-    if (name === "missing") return location.pathname;
-    return "/console";
+    var path = "/console";
+    if (name === "file" && fileRoom) path = "/console/rooms/" + encodeURIComponent(fileRoom) + query;
+    else if (name === "rooms") path = "/console/rooms" + query;
+    else if (name === "history") path = "/console/history";
+    else if (name === "record") path = "/console/decisions";
+    else if (name === "chat") path = "/console/chat";
+    else if (name === "people") path = "/console/people";
+    else if (name === "files") path = "/console/files";
+    else if (name === "account") path = "/console/account";
+    else if (name === "connectors") path = "/console/setup";
+    else if (name === "mcp") path = "/console/connectors";
+    else if (name === "missing") return location.pathname;
+    return withPersona(path);
+  }
+
+  function withPersona(path) {
+    var as = new URLSearchParams(location.search).get("as");
+    if (!as || path.indexOf("as=") !== -1) return path;
+    return path + (path.indexOf("?") === -1 ? "?" : "&") + "as=" + encodeURIComponent(as);
   }
 
   function roomFromPath(path) {
@@ -2842,6 +2866,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (path === "/console/decisions") return "record";
     if (path === "/console/chat") return "chat";
     if (path === "/console/people") return "people";
+    if (path === "/console/files") return "files";
     if (path === "/console/account") return "account";
     if (path === "/console/status" || path === "/console/setup") return "connectors";
     if (path === "/console/connectors") return "mcp";
@@ -2862,7 +2887,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (name !== "home" && name !== "rooms") showHomeSkeleton(false);
     var homeTitle = document.getElementById("home-title");
     if (homeTitle) homeTitle.hidden = name !== "home";
-    var panels = ["rooms", "history", "chat", "record", "people", "account-page", "page-missing", "mcp-page"];
+    var panels = ["rooms", "history", "chat", "record", "people", "files", "account-page", "page-missing", "mcp-page"];
     var onFile = name === "file";
     document.getElementById("overview").hidden = name !== "connectors";
     var crumbHome = document.getElementById("crumb-home");
@@ -2940,6 +2965,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       else workspaceLabel.textContent = workspaceKind === "personal" ? "Personal" : "Company";
     }
     placeNewRoom();
+    if (name === "files") loadFiles();
     if (!routeQuiet && window.history && window.history.pushState) {
       if (onFile && fileRoom) {
         var listPath = "/console/rooms" + roomQueryString();
@@ -6342,7 +6368,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       list.append(button);
       count += 1;
     }
-    [["home", "Home"], ["rooms", "Rooms"], ["history", "History"], ["record", "Decisions"], ["chat", "Chat"], ["connectors", "Setup"], ["mcp", "Connectors"], ["account", "Account"], ["people", "People"]].forEach(function (page) {
+    [["home", "Home"], ["rooms", "Rooms"], ["history", "History"], ["record", "Decisions"], ["chat", "Chat"], ["files", "Files"], ["connectors", "Setup"], ["mcp", "Connectors"], ["account", "Account"], ["people", "People"]].forEach(function (page) {
       add("Navigate", page[1], function () {
         leaveOnboard();
         showSection(page[0]);
@@ -7049,6 +7075,228 @@ if (sessionWhen && sessionWhen.dataset.at) {
 
   load();
   syncRail();
+
+  function loadFiles() {
+    var list = document.getElementById("files-list");
+    if (!list) return Promise.resolve();
+    var error = document.getElementById("files-error");
+    if (error) error.hidden = true;
+    return fetch("/api/files" + (location.search || ""), { headers: { accept: "application/json" } })
+      .then(function (res) { return res.json(); })
+      .then(function (body) { paintFiles(body || {}); })
+      .catch(function () {
+        if (error) {
+          error.hidden = false;
+          error.textContent = "Files could not be loaded.";
+        }
+      });
+  }
+
+  function paintFiles(body) {
+    var files = body.files || [];
+    var requests = (body.requests || []).filter(function (request) { return request.canAnswer; });
+    var unanswered = body.unanswered || [];
+    paintFileRequests("files-requests", "Delete requests", requests, true);
+    paintFileRequests("files-unanswered", "Unanswered delete requests", unanswered, false);
+    var empty = document.getElementById("channel-files-empty");
+    var list = document.getElementById("files-list");
+    if (empty) empty.hidden = files.length > 0 || requests.length > 0 || unanswered.length > 0;
+    if (!list) return;
+    list.replaceChildren();
+    var names = [];
+    files.forEach(function (file) {
+      if (names.indexOf(file.channelName) === -1) names.push(file.channelName);
+    });
+    names.forEach(function (channel) {
+      var group = document.createElement("section");
+      group.className = "files-group";
+      var heading = document.createElement("h2");
+      heading.className = "files-channel";
+      heading.textContent = channel || "Channel";
+      group.append(heading);
+      files.filter(function (file) { return file.channelName === channel; }).forEach(function (file) {
+        group.append(fileRow(file));
+      });
+      list.append(group);
+    });
+  }
+
+  function paintFileRequests(id, title, rows, answering) {
+    var host = document.getElementById(id);
+    if (!host) return;
+    host.replaceChildren();
+    host.hidden = rows.length === 0;
+    if (!rows.length) return;
+    var heading = document.createElement("h2");
+    heading.className = "files-channel";
+    heading.textContent = title;
+    host.append(heading);
+    rows.forEach(function (request) {
+      var card = document.createElement("article");
+      card.className = answering ? "file-request" : "file-unanswered";
+      var copy = document.createElement("p");
+      var who = request.requestedByName || "Someone";
+      copy.textContent = who + " asked to delete " + (request.fileName || "a file") + (request.reason ? ". " + request.reason : "");
+      var actions = document.createElement("div");
+      actions.className = "file-request-actions";
+      if (answering) {
+        actions.append(fileButton("Approve", "primary", function () { answerFileRequest(request.id, true); }));
+        actions.append(fileButton("Decline", "secondary", function () { answerFileRequest(request.id, false); }));
+      } else {
+        actions.append(fileButton("Delete", "danger", function () { deleteListedFile(request.fileId); }));
+        actions.append(fileButton("Dismiss", "secondary", function () { dismissFileRequest(request.id); }));
+      }
+      card.append(copy, actions);
+      host.append(card);
+    });
+  }
+
+  function fileRow(file) {
+    var row = document.createElement("article");
+    row.className = "file-row";
+    row.setAttribute("data-file", file.id);
+    var copy = document.createElement("div");
+    copy.className = "file-copy";
+    var name = document.createElement("p");
+    name.className = "file-name";
+    name.textContent = file.name;
+    var meta = document.createElement("p");
+    meta.className = "file-meta";
+    meta.textContent = [file.ownerName || "Someone", formatFileSize(file.sizeBytes), formatFileDate(file.createdAt)].filter(Boolean).join(" · ");
+    copy.append(name, meta);
+    var actions = document.createElement("div");
+    actions.className = "file-actions";
+    if (file.deleting) {
+      var pending = document.createElement("p");
+      pending.className = "files-deleting";
+      pending.textContent = "Deleting…";
+      actions.append(pending);
+      row.append(copy, actions);
+      return row;
+    }
+    var trigger = fileButton("Actions", "secondary", function (event) {
+      event.stopPropagation();
+      var menu = actions.querySelector(".file-menu");
+      var open = menu && menu.hidden;
+      closeFileMenus();
+      if (menu && open) menu.hidden = false;
+    });
+    trigger.setAttribute("aria-haspopup", "menu");
+    trigger.setAttribute("aria-label", "Actions for " + file.name);
+    var menu = document.createElement("div");
+    menu.className = "file-menu";
+    menu.hidden = true;
+    menu.setAttribute("role", "menu");
+    menu.append(fileButton("Download", "secondary", function () { downloadListedFile(file); }));
+    if (file.canDelete) menu.append(fileButton("Delete", "danger", function () { deleteListedFile(file.id); }));
+    if (file.canRequest) menu.append(fileButton("Ask owner to delete", "secondary", function () { askFileDelete(file.id); }));
+    actions.append(trigger, menu);
+    row.append(copy, actions);
+    return row;
+  }
+
+  function fileButton(label, kind, run) {
+    var button = document.createElement("button");
+    button.type = "button";
+    button.className = kind;
+    button.textContent = label;
+    button.addEventListener("click", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      run(event);
+    });
+    return button;
+  }
+
+  function closeFileMenus() {
+    document.querySelectorAll("#files .file-menu").forEach(function (menu) { menu.hidden = true; });
+  }
+
+  function filesPost(path, body) {
+    return fetch(path + (location.search || ""), {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify(body || {})
+    }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (payload) {
+        if (!res.ok) throw new Error(payload.error || "The file request failed");
+        return payload;
+      });
+    });
+  }
+
+  function fileNote(message) {
+    var error = document.getElementById("files-error");
+    if (!error) return;
+    error.hidden = !message;
+    error.textContent = message || "";
+  }
+
+  function downloadListedFile(file) {
+    closeFileMenus();
+    var path = "/api/files/" + encodeURIComponent(file.id) + (location.search || "");
+    fetch(path).then(function (res) {
+      if (!res.ok) {
+        fileNote("The file could not be downloaded.");
+        return null;
+      }
+      return res.blob();
+    }).then(function (blob) {
+      if (!blob) return;
+      var url = URL.createObjectURL(blob);
+      var link = document.createElement("a");
+      link.href = url;
+      link.download = file.name || "file";
+      document.body.append(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }).catch(function () { fileNote("The file could not be downloaded."); });
+  }
+
+  function deleteListedFile(id) {
+    closeFileMenus();
+    filesPost("/api/files/" + encodeURIComponent(id) + "/delete").then(loadFiles).catch(function (error) {
+      fileNote(error.message || "The file could not be deleted.");
+    });
+  }
+
+  function askFileDelete(id) {
+    closeFileMenus();
+    filesPost("/api/files/" + encodeURIComponent(id) + "/request-delete", { reason: "Please delete this file." })
+      .then(function () { return loadFiles(); })
+      .then(function () { fileNote("Asked the owner to delete it."); })
+      .catch(function (error) { fileNote(error.message || "The request was not sent."); });
+  }
+
+  function answerFileRequest(id, approve) {
+    filesPost("/api/files/requests/" + encodeURIComponent(id) + "/answer", { approve: approve })
+      .then(loadFiles)
+      .catch(function (error) { fileNote(error.message || "The request was not answered."); });
+  }
+
+  function dismissFileRequest(id) {
+    filesPost("/api/files/requests/" + encodeURIComponent(id) + "/dismiss")
+      .then(loadFiles)
+      .catch(function (error) { fileNote(error.message || "The request was not dismissed."); });
+  }
+
+  function formatFileSize(bytes) {
+    var size = Number(bytes) || 0;
+    if (size < 1024) return size + " B";
+    if (size < 1024 * 1024) return Math.max(1, Math.round(size / 1024)) + " KB";
+    var mb = size / (1024 * 1024);
+    return (mb >= 10 ? Math.round(mb) : Math.round(mb * 10) / 10) + " MB";
+  }
+
+  function formatFileDate(iso) {
+    var date = new Date(iso);
+    if (isNaN(date.getTime())) return "";
+    var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    return months[date.getUTCMonth()] + " " + date.getUTCDate() + ", " + date.getUTCFullYear();
+  }
+
+  document.addEventListener("click", closeFileMenus);
 })();
 </script>
 </body>
