@@ -7134,9 +7134,18 @@ if (sessionWhen && sessionWhen.dataset.at) {
     rows.forEach(function (request) {
       var card = document.createElement("article");
       card.className = answering ? "file-request" : "file-unanswered";
-      var copy = document.createElement("p");
+      var copy = document.createElement("div");
+      copy.className = "file-request-copy";
       var who = request.requestedByName || "Someone";
-      copy.textContent = who + " asked to delete " + (request.fileName || "a file") + (request.reason ? ". " + request.reason : "");
+      var ask = document.createElement("p");
+      ask.textContent = who + " asked to delete " + (request.fileName || "a file");
+      copy.append(ask);
+      if (request.reason) {
+        var reason = document.createElement("p");
+        reason.className = "file-meta";
+        reason.textContent = "\u201c" + request.reason + "\u201d";
+        copy.append(reason);
+      }
       var actions = document.createElement("div");
       actions.className = "file-request-actions";
       if (answering) {

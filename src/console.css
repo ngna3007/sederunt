@@ -5788,7 +5788,9 @@ body.ob-page {
 .file-copy { min-width: 0; flex: 1; }
 .file-name { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
 .file-meta, #files-error { margin: 4px 0 0; font-size: 12px; color: var(--muted-foreground); overflow-wrap: anywhere; }
-.file-request p, .file-unanswered p { margin: 0; min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.file-request-copy { min-width: 0; flex: 1; }
+.file-request p, .file-unanswered p { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.file-request .file-meta, .file-unanswered .file-meta { margin-top: 4px; }
 .file-actions { position: relative; flex: none; }
 .file-request-actions, .file-unanswered .file-request-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .files-deleting { margin: 0; color: var(--muted-foreground); font-size: 13px; font-weight: 600; }
