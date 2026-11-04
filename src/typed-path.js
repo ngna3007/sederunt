@@ -12,7 +12,10 @@ import { acceptCheckpoint } from "./domain/stamp.js";
 import { itemStatus } from "./domain/status.js";
 import { splitPassage } from "./memory/analyze.js";
 import { addressesHearing, normalizeHearing, stripHearing } from "./hearing.js";
+import { learnedKey, memoriesFor, parseLearnedUtterance, shapeAnswer } from "./memory/learn.js";
+import { draftMinutes, rememberMeetingOutcome } from "./memory/outcome.js";
 import { looksLikeOpenQuestion, parseUtterance } from "./parse.js";
+import { publicProof } from "./tatum/proof.js";
 
 const KEY_NAMES = [
   "COMPANY_MEMWAL_KEY",
@@ -171,6 +174,7 @@ function ensureSession(session) {
   session.preferences ??= [];
   session.roomSettings ??= [];
   session.rooms ??= [];
+  session.learned ??= [];
   session.accesses ??= [];
   session.log ??= [];
   session.events ??= [];
@@ -1402,6 +1406,8 @@ async function storeDecision(input, session, deps, parsed) {
       outcome: "duplicate",
     });
   }
+  const learned = parseLearnedUtterance(sentence);
+  if (learned) await keepLearned(session, deps, learned, room.id);
   return keepDecision(input, session, deps, {
     text: sentence,
     facts: passage.facts,
@@ -1409,6 +1415,27 @@ async function storeDecision(input, session, deps, parsed) {
     inviteMemberIds,
     roomId: room.id,
     kind: "decision",
+  });
+}
+
+async function keepLearned(session, deps, learned, roomId) {
+  const key = learnedKey(learned.kind, learned.text);
+  if ((session.learned ?? []).some((item) => item.key === key)) return;
+  const row = {
+    key,
+    kind: learned.kind,
+    text: learned.text,
+    at: new Date().toISOString(),
+    verified: "unknown",
+    roomId,
+  };
+  session.learned.push(row);
+  await remember(deps, {
+    account: "company",
+    kind: learned.kind,
+    text: learned.text,
+    idempotencyKey: key,
+    learned: { kind: learned.kind, text: learned.text, roomId, at: row.at, key },
   });
 }
 
@@ -1454,7 +1481,20 @@ async function keepDecision(input, session, deps, draft) {
     if (!saved) return refusal(session, "No decision is stored.");
     decision.blobId = saved.blobId;
     decision.expiryEpoch = epochOf(saved.expiryEpoch);
+    if (typeof saved.objectId === "string" && saved.objectId) decision.objectId = saved.objectId;
+    if (typeof saved.digest === "string" && saved.digest) decision.digest = saved.digest;
+    if (Number.isInteger(saved.checkpoint)) decision.checkpoint = saved.checkpoint;
+    if (typeof saved.owner === "string" && /^0x[0-9a-fA-F]{64}$/.test(saved.owner)) decision.blobOwner = saved.owner;
     if (saved.blobId) session.trace.blobId = saved.blobId;
+    if (decision.objectId) {
+      await remember(deps, {
+        account: draft.account,
+        kind: decision.kind,
+        text: decision.text,
+        idempotencyKey: `${decision.id}:chain`,
+        decision: decisionDocument(decision),
+      });
+    }
     await rememberObservedEpoch(deps, decision);
   }
   if (decision.replaces) {
@@ -1628,6 +1668,7 @@ function decisionDocument(decision) {
     spokenAt: typeof decision.spokenAt === "string" ? decision.spokenAt : "",
     blobId: decision.blobId ?? null,
     objectId: decision.objectId ?? null,
+    digest: decision.digest ?? null,
     connectorId: decision.connectorId ?? null,
     sourceDeliveryId: typeof decision.sourceDeliveryId === "string" ? decision.sourceDeliveryId : "",
     deleted: decision.deleted === true,
@@ -1659,6 +1700,7 @@ function copyDecision(doc) {
     replacedBy: decision.replacedBy ?? null,
     blobId: typeof doc.blobId === "string" ? doc.blobId : (typeof decision.blobId === "string" ? decision.blobId : null),
     objectId: typeof decision.objectId === "string" ? decision.objectId : null,
+    digest: typeof decision.digest === "string" ? decision.digest : null,
     connectorId: typeof decision.connectorId === "string" ? decision.connectorId : null,
     sourceDeliveryId: typeof decision.sourceDeliveryId === "string" ? decision.sourceDeliveryId : "",
     deleted: decision.deleted === true,
@@ -1681,6 +1723,7 @@ function applyIndexedDocuments(session, docs, blankText) {
     absorbAccess(session, copyAccess(doc));
     absorbHearing(session, copyHearing(doc));
     absorbActivity(session, doc?.activity);
+    absorbLearned(session, doc);
     const observedId = typeof doc?.expiry?.decisionId === "string" ? doc.expiry.decisionId : "";
     const observed = epochOf(doc?.expiry?.expiryEpoch);
     if (observedId && observed != null && !epochs.has(observedId)) epochs.set(observedId, observed);
@@ -1717,6 +1760,28 @@ function foldDecision(existing, decision, blankText) {
   if (Array.isArray(decision.inviteMemberIds) && decision.inviteMemberIds.length) {
     existing.inviteMemberIds = decision.inviteMemberIds.map(String);
   }
+}
+
+function absorbLearned(session, doc) {
+  const learned = doc?.learned;
+  const minutes = doc?.minutes;
+  const actionItem = doc?.actionItem;
+  const row = learned || (minutes ? { ...minutes, kind: "minutes" } : null) || (actionItem ? { ...actionItem, kind: "action-item" } : null);
+  if (!row) return;
+  const text = typeof row.text === "string" ? row.text : "";
+  if (!text) return;
+  const kind = row.kind || "memory";
+  const key = typeof row.key === "string" && row.key ? row.key : `${kind}:${text}`;
+  session.learned ??= [];
+  if (session.learned.some((item) => item.key === key || (item.kind === kind && item.text === text))) return;
+  session.learned.push({
+    key,
+    kind,
+    text,
+    at: typeof row.at === "string" ? row.at : "",
+    verified: "unknown",
+    roomId: typeof row.roomId === "string" ? row.roomId : "",
+  });
 }
 
 function copyHearing(doc) {
@@ -1905,15 +1970,16 @@ async function answerRecall(input, session, deps) {
         checkpoint: object?.checkpoint ?? null,
         objectId: typeof object?.objectId === "string" ? object.objectId : null,
       });
+      if (object?.proof?.status) decision.proofStatus = object.proof.status;
     } catch {
       failed = true;
       proofs.set(decision.id, { failed: true });
     }
   }
-  return renderVisible(session, memberId, roomId, proofs, failed, scope);
+  return renderVisible(session, memberId, roomId, proofs, failed, scope, input.text);
 }
 
-function renderVisible(session, memberId, roomId, proofs, failed = false, scope = "") {
+function renderVisible(session, memberId, roomId, proofs, failed = false, scope = "", question = "") {
   const preference = resolvePreference(session.preferences, "linear", roomId);
   const statuses = clashStatuses(session.decisions.filter((decision) => keptInWorkspace(decision, scope)));
   const statusOf = new Map(statuses.map((row) => [row.id, row.status]));
@@ -1952,16 +2018,33 @@ function renderVisible(session, memberId, roomId, proofs, failed = false, scope 
   lines.push(`preference ${preference}`);
   const status = sawUnknown && !sawSentence ? "unknown" : lastStatus;
   const checkpoint = [...(proofs?.values() ?? [])].find((proof) => proof && !proof.failed && proof.checkpoint != null)?.checkpoint ?? null;
+  const shaped = question
+    ? shapeAnswer({
+      question,
+      sentences: visible.map((row) => row.text).filter(Boolean),
+      memories: memoriesFor(session),
+    })
+    : null;
+  let body = lines.join("\n");
+  let learned = "";
+  let why = [];
+  if (shaped && (shaped.replaced || shaped.appended) && shaped.text) {
+    body = [shaped.text, status, `preference ${preference}`].filter(Boolean).join("\n");
+    learned = shaped.text;
+  }
+  if (shaped?.why?.length) why = shaped.why;
   return finish(session, {
     status: failed && !sawSentence ? "unknown" : status,
     kind: "answer",
-    body: lines.join("\n"),
+    body,
     allow: "read",
     preference,
     checkpoint,
     decisionId: lastId,
     objectLink,
     visible,
+    learned,
+    why,
   });
 }
 
@@ -2088,9 +2171,19 @@ async function remember(deps, document) {
       access: document.access,
       hearing: document.hearing,
       activity: document.activity,
+      learned: document.learned,
+      minutes: document.minutes,
+      actionItem: document.actionItem,
     });
     const blobId = saved && typeof saved.blobId === "string" ? saved.blobId : null;
-    return { blobId, expiryEpoch: epochOf(saved?.expiryEpoch) };
+    return {
+      blobId,
+      expiryEpoch: epochOf(saved?.expiryEpoch),
+      objectId: typeof saved?.objectId === "string" ? saved.objectId : null,
+      digest: typeof saved?.digest === "string" ? saved.digest : null,
+      checkpoint: Number.isInteger(saved?.checkpoint) ? saved.checkpoint : null,
+      owner: typeof saved?.owner === "string" ? saved.owner : null,
+    };
   } catch {
     return null;
   }
@@ -2137,6 +2230,8 @@ function finish(session, fields) {
     visible: Array.isArray(fields.visible) ? fields.visible : [],
     outcome: fields.outcome ?? null,
   };
+  if (typeof fields.learned === "string" && fields.learned) result.learned = fields.learned;
+  if (Array.isArray(fields.why) && fields.why.length) result.why = fields.why;
   session.log.push(body);
   recordEvent(session, {
     kind: result.kind,
@@ -2233,29 +2328,88 @@ function restoreMeetingConfirms() {
 export async function readProofs(session, board, tatum) {
   const rows = Array.isArray(board?.decisions) ? board.decisions : [];
   const byId = new Map((session?.decisions ?? []).map((item) => [item.id, item]));
+  if (typeof tatum?.refreshChain === "function") {
+    try {
+      await tatum.refreshChain();
+    } catch {
+      // The tip is optional. Each proof still reads on its own.
+    }
+  }
   await Promise.all(rows.map(async (row) => {
     const source = byId.get(row.id);
     const blobId = typeof source?.blobId === "string" ? source.blobId : "";
     if (!blobId || typeof tatum?.getObject !== "function") {
       row.checkpoint = null;
+      row.proofStatus = "unknown";
+      row.proofReason = "The chain proof is incomplete.";
       return;
     }
+    const target = typeof source?.objectId === "string" && /^0x[0-9a-fA-F]{64}$/.test(source.objectId) ? source.objectId : blobId;
     try {
-      const object = await readObjectWithin(tatum, blobId, 1200);
+      const object = await readObjectWithin(tatum, target, 1200, {
+        blobId,
+        owner: source?.blobOwner,
+        digest: source?.digest,
+        checkpoint: source?.checkpoint,
+      });
       const text = typeof object?.text === "string" ? object.text.trim() : "";
       if (text) row.text = redact(text);
       row.checkpoint = Number.isInteger(object?.checkpoint) ? object.checkpoint : null;
+      const proof = object?.proof
+        ? publicProof({ ...object.proof, blobId: object.proof.blobId || blobId })
+        : publicProof({
+          status: "unknown",
+          reason: "The chain proof is incomplete.",
+          blobId,
+          objectId: typeof object?.objectId === "string" ? object.objectId : null,
+          digest: typeof object?.digest === "string" ? object.digest : null,
+          checkpoint: row.checkpoint,
+        });
+      row.proof = proof;
+      row.proofStatus = proof.status;
+      row.proofReason = proof.reason;
+      if (proof.blobId) row.blobId = proof.blobId;
+      if (proof.objectId) row.objectId = proof.objectId;
+      if (proof.digest) row.digest = proof.digest;
+      if (source) source.proofStatus = proof.status;
     } catch {
       row.checkpoint = null;
+      row.proofStatus = "unknown";
+      row.proofReason = "The chain proof is incomplete.";
+      row.proof = publicProof({ status: "unknown", reason: row.proofReason, blobId });
+      if (blobId) row.blobId = blobId;
     }
   }));
   return board;
 }
 
-function readObjectWithin(tatum, blobId, ms) {
+/**
+ * Write minutes and action items when a meeting ends. Decisions already stored
+ * are left alone. An unknown room writes nothing.
+ */
+export async function endMeeting(session, deps, roomId) {
+  const current = ensureSession(session);
+  const id = typeof roomId === "string" ? roomId.trim() : "";
+  if (!id) return [];
+  const room = (current.rooms ?? []).find((item) => item.id === id) || { id };
+  const decisions = (current.decisions ?? []).filter((item) => item.roomId === id && !item.deleted);
+  const actionItems = (current.actions ?? [])
+    .filter((item) => item.roomId === id)
+    .map((item) => ({ text: item.statement, owner: item.memberId || item.speaker || "", due: "" }));
+  const minutes = draftMinutes({ room, decisions, memories: current.learned ?? [] });
+  return rememberMeetingOutcome({
+    room: { ...room, attendees: room.memberIds || [] },
+    minutes,
+    actionItems,
+    decisions,
+    remember: (document) => remember(deps, document),
+  });
+}
+
+function readObjectWithin(tatum, blobId, ms, hints) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("Tatum read failed")), ms);
-    tatum.getObject(blobId).then(
+    tatum.getObject(blobId, hints).then(
       (object) => {
         clearTimeout(timer);
         resolve(object);

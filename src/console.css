@@ -5827,7 +5827,6 @@ body.ob-page {
   .preset-card .preset-action { grid-column: 2; grid-row: 1 / span 2; }
 }
 
-/* ===================================================================
    Design system components. Documented in docs/design/design-system.md.
    These come last so they settle the older per-page passes above.
    =================================================================== */
@@ -5908,3 +5907,23 @@ body.ob-page {
    so focus never disappears into the selected state. */
 .menu-item[aria-checked="true"]:focus-visible,
 .menu button[aria-checked="true"]:focus-visible { box-shadow: var(--focus-ring-inset); }
+=======
+.proof-panel { margin: 12px 0 16px; }
+.proof-panel h2 { margin: 0 0 6px; font-size: 14px; }
+.proof-id { overflow-wrap: anywhere; word-break: break-all; font-variant-numeric: tabular-nums; }
+.proof-links { display: flex; flex-wrap: wrap; gap: 8px 12px; margin: 8px 0; }
+.proof-links a { color: var(--foreground); text-decoration: underline; text-underline-offset: 2px; }
+.why-panel { margin-top: 8px; font-size: 13px; color: var(--muted-foreground); }
+.why-panel summary { cursor: pointer; color: var(--foreground); font-weight: 500; }
+.why-panel p { margin: 6px 0 0; overflow-wrap: anywhere; }
+#decision-dialog .panel { min-height: 0; max-height: calc(100dvh - 48px); }
+#decision-dialog .panel-body { flex: 1 1 auto; min-height: 0; }
+@media (max-width: 700px) {
+  .proof-panel { margin: 10px 0 12px; }
+  .proof-links { gap: 10px; }
+  .proof-panel .secondary { min-height: 44px; }
+  #decision-dialog.dialog { padding: 12px; }
+  #decision-dialog .panel { max-height: calc(100dvh - 24px); width: 100%; }
+}
+
+/* ============================================================

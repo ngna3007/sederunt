@@ -604,6 +604,14 @@ ${slack}
                 <div id="file-overview-people" class="faces"></div>
               </div>
               <div id="file-callout" class="callout" hidden></div>
+              <section id="proof-panel" class="detail-block proof-panel">
+                <h2>Proof</h2>
+                <p id="proof-status" class="meta">Proof is unknown until the chain is read.</p>
+                <dl class="kv" id="proof-facts"></dl>
+                <p id="proof-links" class="proof-links"></p>
+                <p id="proof-chain" class="meta">Read via Tatum gRPC · 0 calls</p>
+                <button type="button" class="secondary" id="proof-again">Verify again</button>
+              </section>
               <div class="overview-facts" id="overview-facts"></div>
               <div class="outcome-card" id="file-outcome" hidden></div>
               <dl class="kv" id="file-facts"></dl>
@@ -753,6 +761,14 @@ ${spaceDialog}
     <p id="decision-file" hidden></p>
     <p id="decision-ticket" hidden></p>
     <p id="decision-proof" hidden></p>
+    <section id="decision-proof-panel" class="detail-block proof-panel">
+      <h2>Proof</h2>
+      <p id="decision-proof-status" class="meta">Proof is unknown until the chain is read.</p>
+      <dl class="kv" id="decision-proof-facts"></dl>
+      <p id="decision-proof-links" class="proof-links"></p>
+      <p id="decision-proof-chain" class="meta">Read via Tatum gRPC · 0 calls</p>
+      <button type="button" class="secondary" id="decision-proof-again">Verify again</button>
+    </section>
     <p id="decision-epoch" hidden></p>
     <div id="decision-other"></div>
     ${linearAsk}
@@ -3668,6 +3684,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     showLine("decision-file", fileLine(decision));
     showLine("decision-ticket", ticketLine(decision));
     showLine("decision-proof", proofExplain(decision));
+    renderProofPanel("decision-proof", decision);
     showLine("decision-epoch", epochLine(decision));
     clear("decision-other");
     if (decision.status === "clashing") {
@@ -3843,6 +3860,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
       badge.className = decision.status === "clashing" ? "badge warn" : "badge";
       badge.textContent = statusLabel(decision.status || "recorded");
       line.append(badge);
+      line.setAttribute("role", "button");
+      line.tabIndex = 0;
+      line.addEventListener("click", function () { openDecision(decision); });
       if (who || when) {
         var meta = document.createElement("span");
         meta.className = "meta";
@@ -3867,6 +3887,96 @@ if (sessionWhen && sessionWhen.dataset.at) {
     renderWaiting();
     renderFiles();
     renderOutside();
+    renderProofPanel("proof", lead);
+  }
+
+  function chainLine() {
+    var chain = state && state.chain;
+    if (!chain) return "Read via Tatum gRPC · 0 calls";
+    var calls = chain.calls || 0;
+    var ms = chain.lastMs == null ? "" : " · last " + chain.lastMs + " ms";
+    var tip = chain.checkpoint == null ? "" : " · latest checkpoint " + chain.checkpoint;
+    return "Read via Tatum gRPC · " + calls + " calls" + ms + tip;
+  }
+
+  function suiscanHref(kind, id) {
+    if (id == null || id === "") return "";
+    return "https://suiscan.xyz/mainnet/" + kind + "/" + id;
+  }
+
+  function proofStatusCopy(decision) {
+    var proof = decision && decision.proof;
+    var status = (proof && proof.status) || (decision && decision.proofStatus) || "unknown";
+    if (status === "verified") return "Verified on chain.";
+    if (status === "unverified") return (proof && proof.reason) || (decision && decision.proofReason) || "Unverified.";
+    return (proof && proof.reason) || (decision && decision.proofReason) || "Proof is unknown.";
+  }
+
+  function renderProofPanel(prefix, decision) {
+    var status = document.getElementById(prefix + "-status");
+    var facts = document.getElementById(prefix + "-facts");
+    var links = document.getElementById(prefix + "-links");
+    var chain = document.getElementById(prefix + "-chain");
+    if (chain) chain.textContent = chainLine();
+    if (status) status.textContent = decision ? proofStatusCopy(decision) : "Proof is unknown until the chain is read.";
+    if (facts) {
+      facts.replaceChildren();
+      var proof = (decision && decision.proof) || {};
+      var rows = [
+        ["Blob", proof.blobId || (decision && decision.blobId) || ""],
+        ["Object", proof.objectId || (decision && decision.objectId) || ""],
+        ["Transaction", proof.digest || (decision && decision.digest) || ""],
+        ["Checkpoint", proof.checkpoint != null ? String(proof.checkpoint) : (decision && typeof decision.checkpoint === "number" ? String(decision.checkpoint) : "")],
+        ["Checkpoint time", proof.checkpointTime || ""]
+      ];
+      rows.forEach(function (pair) {
+        if (!pair[1]) return;
+        var term = document.createElement("dt");
+        term.textContent = pair[0];
+        var value = document.createElement("dd");
+        value.className = "proof-id";
+        value.textContent = pair[1];
+        facts.append(term, value);
+      });
+    }
+    if (links) {
+      links.replaceChildren();
+      var proof = (decision && decision.proof) || {};
+      var objectId = proof.objectId || (decision && decision.objectId) || "";
+      var digest = proof.digest || (decision && decision.digest) || "";
+      var checkpoint = proof.checkpoint != null ? proof.checkpoint : (decision && typeof decision.checkpoint === "number" ? decision.checkpoint : "");
+      [["object", objectId, "Object"], ["tx", digest, "Transaction"], ["checkpoint", checkpoint, "Checkpoint"]].forEach(function (item) {
+        if (item[1] === "" || item[1] == null) return;
+        var link = document.createElement("a");
+        link.href = suiscanHref(item[0], item[1]);
+        link.target = "_blank";
+        link.rel = "noopener";
+        link.textContent = item[2];
+        links.append(link);
+      });
+    }
+  }
+
+  function verifyDecision(decision) {
+    if (!decision || !decision.id) return;
+    fetch("/api/proof", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: decision.id, workspace: workspaceKind })
+    }).then(function (response) { return response.json(); }).then(function (result) {
+      decision.proof = result.proof || decision.proof;
+      decision.proofStatus = result.status || decision.proofStatus;
+      decision.proofReason = result.reason || decision.proofReason;
+      if (result.checkpoint != null) decision.checkpoint = result.checkpoint;
+      if (result.chain) state.chain = result.chain;
+      renderProofPanel("proof", decision);
+      renderProofPanel("decision-proof", decision);
+      showLine("decision-proof", proofExplain(decision));
+    }).catch(function () {
+      decision.proofStatus = "unknown";
+      decision.proofReason = "The chain proof is incomplete.";
+      renderProofPanel("proof", decision);
+    });
   }
 
   function renderFacts(room, named, rows) {
@@ -5705,6 +5815,15 @@ if (sessionWhen && sessionWhen.dataset.at) {
       navigator.clipboard.writeText(copied).then(done, function () { toast("Copy did not work."); });
     } else toast("Copy did not work.");
   });
+  var proofAgain = document.getElementById("proof-again");
+  if (proofAgain) proofAgain.addEventListener("click", function () {
+    var rows = fileRoom ? decisionsFor(fileRoom) : [];
+    verifyDecision(rows.length ? rows[rows.length - 1] : null);
+  });
+  var decisionAgain = document.getElementById("decision-proof-again");
+  if (decisionAgain) decisionAgain.addEventListener("click", function () {
+    verifyDecision(openDecisionRow);
+  });
   document.getElementById("chat-form").addEventListener("submit", function (event) {
     event.preventDefault();
     var sentence = document.getElementById("chat-text").value;
@@ -5719,11 +5838,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text: sentence, workspace: workspaceKind })
     }).then(function (response) { return response.json(); }).then(function (result) {
-      var answer = result.body || "";
-      if (answer === "A decision is kept from a room.") {
+      var learned = typeof result.learned === "string" ? result.learned.trim() : "";
+      var answer = learned || result.body || "";
+      if (!learned && answer === "A decision is kept from a room.") {
         answer = "A decision is kept from a room. Chat does not keep a decision. Ask what was decided.";
       }
-      var parts = chatParts(answer);
+      var parts = learned ? { answer: answer, detail: "", cites: [], clash: [] } : chatParts(answer);
       var purpose = document.getElementById("chat-purpose");
       if (purpose) purpose.hidden = true;
       var reading = document.querySelector("#chat-log .chat-turn:last-child .chat-body > span");
@@ -5823,6 +5943,25 @@ if (sessionWhen && sessionWhen.dataset.at) {
         reading.parentNode.append(extra);
       }
       if (reading && parts.cites && !(parts.clash && parts.clash.length > 1)) appendCites(reading.parentNode, parts.cites);
+      if (reading && result.why && result.why.length) {
+        var why = document.createElement("details");
+        why.className = "why-panel";
+        var summary = document.createElement("summary");
+        summary.textContent = "Why";
+        why.append(summary);
+        result.why.forEach(function (memory) {
+          var row = document.createElement("p");
+          var bits = [];
+          if (memory && memory.text) bits.push(memory.text);
+          if (memory && memory.kind) bits.push(memory.kind);
+          if (memory && memory.at) bits.push(memory.at);
+          var badge = memory && memory.verified === "verified" ? "verified on chain" : (memory && memory.verified === "unverified" ? "unverified" : "unknown");
+          bits.push(badge);
+          row.textContent = bits.join(" · ");
+          why.append(row);
+        });
+        reading.parentNode.append(why);
+      }
       document.getElementById("chat-text").value = "";
       growChat();
       placeChatAnswer((pending && pending.querySelector(".cite-row")) || pending);
