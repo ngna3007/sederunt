@@ -8,7 +8,7 @@ Open the booth room. Point at the decision: the booth opens at nine, badge picku
 
 ## 0:20–1:05 — The proof is on Sui, read through Tatum
 
-Stay on the room. Open the Proof panel. Read the blob id, the object id, the certifying transaction, and the checkpoint. Click the Suiscan object link and show the same object on mainnet. Come back. Read the line "Read via Tatum gRPC" and the latest checkpoint. Press Verify again and show the call count move. Say that every Sui read in the app uses Tatum native gRPC, and that a missing key leaves the proof unknown instead of hopping to a public node.
+Stay on the room. The overview is the meeting: title, status, platform, time, participants, and the decision. Click the **Verified on Walrus** badge in the header. The dialog says, in plain language, that this meeting's record is stored on Walrus and was confirmed on the Sui network, and that nobody can change it. Open **Technical details**. Read the checkpoint sentence, then the blob id, the object id, the certifying transaction, and the checkpoint. Click the Suiscan object link and show the same object on mainnet. Come back. Still inside Technical details, read the line "Read via Tatum gRPC" and the latest checkpoint. Press Verify again and show the call count move. Say that every Sui read in the app uses Tatum native gRPC, and that a missing key leaves the proof unknown instead of hopping to a public node.
 
 ## 1:05–1:35 — Minutes and action items are memories too
 
@@ -16,11 +16,11 @@ Open the decision about the banner, Rowan owning it. Mention that ending the mee
 
 ## 1:35–2:20 — It learned
 
-Go to chat. Ask "Where is the offsite?" Show the answer from the earlier decision. Then say the correction: the offsite is in Da Lat, not Da Nang. Ask the same question again. The answer has changed. Open Why. Read the correction, when it was kept, and the verified badge. Say that the next minutes will also follow the remembered preference to post them to #sederunt-demo.
+Go to chat. Ask "Where is the offsite?" Show the answer from the earlier decision. Then say the correction: the offsite is in Da Lat, not Da Nang. Ask the same question again. The answer has changed. Open Why. Read the plain sentence: the correction, when it was kept, and "Verified on Walrus." Open **Show source** only if you need the ids. Say that the next minutes will also follow the remembered preference to post them to #sederunt-demo.
 
 ## 2:20–2:40 — Close
 
-Return to the Proof panel for that correction's blob. It is verified on mainnet in Walrus epoch 43. One sentence: Walrus holds what the team learned, and Tatum is how Sederunt shows it is on chain.
+Return to the booth room and click **Verified on Walrus** again. It is verified on mainnet in Walrus epoch 43. One sentence: Walrus holds what the team learned, and Tatum is how Sederunt shows it is on chain.
 
 ## Live seed
 
