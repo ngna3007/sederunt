@@ -141,6 +141,7 @@ export function createCalendarAdapter(env = process.env, options = {}) {
         description: next.description,
         attendees: next.attendees,
         readOnly: false,
+        changed: Boolean(args),
       };
     },
     async call(name, params) {

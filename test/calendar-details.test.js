@@ -91,6 +91,7 @@ test("update_event sends the Calendar MCP shape: only changes, attendee diff, no
     notificationLevel: "NONE",
   }]);
   assert.equal(saved.description, "Ship after the checklist.");
+  assert.equal(saved.changed, true);
   assert.equal(saved.attendees.find((guest) => guest.email === "ada@example.com").organizer, true);
 
   sent.length = 0;
@@ -115,6 +116,7 @@ test("update_event sends the Calendar MCP shape: only changes, attendee diff, no
   });
   assert.deepEqual(sent, [], "nothing changed, so no write and no guest email");
   assert.equal(unchanged.description, "Walk the checklist.");
+  assert.equal(unchanged.changed, false, "an unchanged save reports no change");
 });
 
 test("get_event parsing: all-day dates, an organizer outside attendees, and events we cannot edit", async () => {

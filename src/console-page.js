@@ -4761,7 +4761,16 @@ if (sessionWhen && sessionWhen.dataset.at) {
       open = "";
       close = "";
     }
-    if (open && close) return open + " – " + close;
+    if (open && close) {
+      var sameDay = false;
+      try {
+        sameDay = formatConsoleWhen(start, { part: "day" }) === formatConsoleWhen(end, { part: "day" });
+      } catch (error) {
+        sameDay = false;
+      }
+      var clock = sameDay ? formatConsoleWhen(end, { part: "clock" }) : "";
+      return open + " – " + (clock || close);
+    }
     return open || close || "";
   }
 
@@ -4856,6 +4865,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
     return eventDraft.readOnly === true || eventSaving || !eventLoaded;
   }
 
+  function syncNotifyHelp() {
+    var notify = document.getElementById("event-notify");
+    var help = document.getElementById("event-notify-help");
+    if (!notify || !help) return;
+    help.textContent = notify.checked ? "Guests receive an email about this change." : "Guests won't get an email about this change.";
+  }
+
   function applyEventMode() {
     var readOnly = !!(eventDraft && eventDraft.readOnly);
     var locked = fieldsLocked();
@@ -4869,6 +4885,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (email) email.disabled = locked;
     if (add) add.disabled = locked;
     if (notify) notify.disabled = locked;
+    syncNotifyHelp();
     if (save) {
       save.hidden = readOnly;
       save.disabled = locked || readOnly;
@@ -5070,10 +5087,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
         eventDraft.description = result.body.event.description;
       }
       eventSnapshot = eventStamp();
-      var notified = result.body.sendUpdates !== "none";
+      var changed = result.body.changed !== false;
+      var notified = changed && result.body.sendUpdates !== "none";
       eventForceClose = true;
       closeDialog("event-dialog");
-      toast(notified ? "Saved. Guests were notified." : "Saved without notifying guests.");
+      toast(!changed ? "No changes to save." : (notified ? "Saved. Guests were notified." : "Saved without notifying guests."));
     }).catch(function () {
       if (!eventDraft || eventDraft.id !== id) return;
       setSaving(false);
@@ -5184,6 +5202,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (eventEmail.getAttribute("aria-invalid") === "true") showEmailError("");
     });
   }
+  var eventNotify = document.getElementById("event-notify");
+  if (eventNotify) eventNotify.addEventListener("change", syncNotifyHelp);
   var eventAdd = document.getElementById("event-add");
   if (eventAdd) eventAdd.addEventListener("click", function () {
     addGuestEmails(eventEmail ? eventEmail.value : "");

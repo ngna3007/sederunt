@@ -121,7 +121,7 @@ export function createFakeCalendarAdapter(env = {}, options = {}) {
       event.description = next.description;
       event.attendees = next.attendees;
       event.lastSendUpdates = next.sendUpdates;
-      return publicEvent(event);
+      return { ...publicEvent(event), changed: Boolean(payload) };
     },
   };
 }
