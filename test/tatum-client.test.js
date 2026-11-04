@@ -103,7 +103,7 @@ test("retries exhausted surface as a rate limit and a missing key never calls", 
   assert.equal(limited.log.filter((entry) => entry.outcome === "error").length, 1);
 
   opened = false;
-  const bare = createTatumClient({});
+  const bare = createTatumClient({ env: {} });
   await assert.rejects(() => bare.getObject(OBJECT_ID), /Tatum key not set/);
   assert.equal(opened, false);
   assert.equal(bare.log.length, 0);
