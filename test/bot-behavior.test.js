@@ -10,7 +10,7 @@ function createFakeModel(messages) {
   const assistant = (messages || []).find((message) => message.role === "assistant") || {};
   return {
     async complete({ system, messages: turn }) {
-      if (typeof system !== "string" || !system.includes("Sederunt")) throw new Error("missing system prompt");
+      if (typeof system !== "string" || !system.includes("You are Adam")) throw new Error("missing system prompt");
       if (!Array.isArray(turn) || turn.some((message) => message.role === "assistant")) throw new Error("model saw the scripted answer");
       return {
         text: assistant.text || "",
@@ -46,14 +46,35 @@ test("BOT_SYSTEM_PROMPT is the slack-mode default", () => {
   assert.match(BOT_SYSTEM_PROMPT, /owner\?/);
   assert.match(BOT_SYSTEM_PROMPT, /<!channel>/);
   assert.match(BOT_SYSTEM_PROMPT, /remember this/);
+  assert.match(BOT_SYSTEM_PROMPT, /You are Adam/);
+  assert.doesNotMatch(BOT_SYSTEM_PROMPT, /You are Sederunt/);
   assert.doesNotMatch(BOT_SYSTEM_PROMPT, /after the call/);
   const voice = buildSystemPrompt({ mode: "live_voice", language: "vi" });
   assert.match(voice, /after the call/);
   assert.match(voice, /half past two/);
   assert.match(voice, /Reply in Vietnamese/);
+  assert.match(voice, /addresses you as Adam/);
   assert.doesNotMatch(voice, /thread_ts/);
   const chat = buildSystemPrompt({ mode: "meeting_chat" });
   assert.match(chat, /Do not write a long post/);
+  assert.match(chat, /You are Adam/);
+  const named = buildSystemPrompt({ mode: "live_voice", botName: "Mai" });
+  assert.match(named, /You are Mai/);
+  assert.match(named, /addresses you as Mai/);
+  assert.doesNotMatch(named, /You are Adam/);
+  const fromWorkspace = buildSystemPrompt({
+    mode: "slack",
+    preferences: {
+      workspace: { bot_name: "Mai", tone: "warm" },
+      user: { bot_name: "Zed" },
+      applied: { bot_name: "Zed", tone: "terse" },
+    },
+  });
+  assert.match(fromWorkspace, /You are Mai/);
+  assert.match(fromWorkspace, /tone: terse/);
+  assert.doesNotMatch(fromWorkspace, /You are Zed/);
+  assert.doesNotMatch(fromWorkspace, /bot_name/);
+  assert.doesNotMatch(fromWorkspace, /wake_phrases/);
   const withPrefs = buildSystemPrompt({
     mode: "slack",
     preferences: { workspace: { tone: "warm" }, user: { tone: "terse" } },

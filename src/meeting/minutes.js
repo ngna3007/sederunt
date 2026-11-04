@@ -1,3 +1,5 @@
+import { DEFAULT_BOT_NAME, normalizeBotName } from "../bot/identity.js";
+
 /**
  * Where minutes go, and the text they use.
  *
@@ -97,20 +99,21 @@ function pushUnmatched({ email, notReached, emailSending, emailAddress }) {
 }
 
 /**
- * @param {{ meeting: object, minutes: object, slack: { openConversation: Function, postMessage: Function }, emailSender?: Function }} input
+ * @param {{ meeting: object, minutes: object, slack: { openConversation: Function, postMessage: Function }, emailSender?: Function, botName?: string }} input
  */
-export async function sendMinutes({ meeting, minutes, slack, emailSender }) {
+export async function sendMinutes({ meeting, minutes, slack, emailSender, botName } = {}) {
   const plan = decideMinutesDelivery(meeting);
   const text = renderMinutes({ ...(minutes || {}), notReached: plan.notReached });
+  const username = normalizeBotName(botName) || DEFAULT_BOT_NAME;
   const sent = [];
   if (plan.postToChannel) {
-    const posted = await slack.postMessage({ channel: plan.postToChannel.channelId, text });
+    const posted = await slack.postMessage({ channel: plan.postToChannel.channelId, text, username });
     sent.push({ kind: "channel", channel: plan.postToChannel.channelId, ts: posted?.ts || "" });
   } else {
     for (const dm of plan.dms) {
       const opened = await slack.openConversation({ users: dm.slackUserId });
       const channel = opened.channel?.id || opened.channel;
-      const posted = await slack.postMessage({ channel, text });
+      const posted = await slack.postMessage({ channel, text, username });
       sent.push({ kind: "dm", channel, slackUserId: dm.slackUserId, ts: posted?.ts || "" });
     }
   }

@@ -1,12 +1,17 @@
 /**
- * Sederunt's speaking rules, learned from Slackbot's public self-description
+ * The bot's speaking rules, learned from Slackbot's public self-description
  * and from public voice-agent guidance. Slackbot's private prompt is not
  * in this module. See docs/design/bot-behavior.md.
  *
- * `buildSystemPrompt({ mode, preferences, language })` selects one surface.
+ * The product is Sederunt. The persona name defaults to Adam and is the
+ * workspace bot name when one is passed.
+ *
+ * `buildSystemPrompt({ mode, preferences, language, botName })` selects one surface.
  * `BOT_SYSTEM_PROMPT` is the slack-mode prompt with no stored preferences.
  * `checkReply` is a deterministic checker. It does not call a model.
  */
+
+import { DEFAULT_BOT_NAME, normalizeBotName } from "./identity.js";
 
 export const MODES = Object.freeze(["live_voice", "meeting_chat", "slack"]);
 
@@ -40,7 +45,7 @@ export const REPLY_RULES = Object.freeze([
   "meeting_short",
 ]);
 
-const CORE = `You are Sederunt, a meeting bot. Be easy to understand and helpful.
+const CORE = `You are {{name}}, a meeting bot. Be easy to understand and helpful.
 Be honest. Say what you did and what you did not do. When something fails, say what failed and the next step.
 Writes (send, create, edit, delete) always need explicit confirmation before they run. After a write runs, report the result with a link.
 When an instruction is ambiguous, ask one short question. Do not ask a second question in the same reply.
@@ -70,7 +75,7 @@ Refer back to what people said, by name.
 Do not use lists, markdown, URLs, or read out ids. Say numbers and times the way people speak them, such as "half past two", not "14:30".
 Check understanding the way a person would.
 Yield the floor. Stop when interrupted. Do not monologue.
-Speak only when someone addresses you by name. Do not interrupt.
+Speak only when someone addresses you as {{name}}. Do not interrupt.
 Match the room's language and formality.
 A write is not done during the call. Say that it goes for approval after the call, for example: Sure, I'll send that to Lan for approval after the call. Never claim a write is done.`;
 
@@ -79,22 +84,25 @@ const LANGUAGE_LINE = {
   en: "Reply in English.",
 };
 
+const IDENTITY_KEYS = new Set(["bot_name", "wake_phrases"]);
+
 /**
- * @param {{ mode?: "live_voice" | "meeting_chat" | "slack", preferences?: { applied?: Record<string, string>, workspace?: Record<string, string>, user?: Record<string, string> } | null, language?: string }} [options]
+ * @param {{ mode?: "live_voice" | "meeting_chat" | "slack", preferences?: { applied?: Record<string, string>, workspace?: Record<string, string>, user?: Record<string, string> } | null, language?: string, botName?: string }} [options]
  */
-export function buildSystemPrompt({ mode = "slack", preferences = null, language = "" } = {}) {
+export function buildSystemPrompt({ mode = "slack", preferences = null, language = "", botName = "" } = {}) {
   if (!MODES.includes(mode)) throw new Error(`unknown mode: ${mode}`);
+  const name = normalizeBotName(botName) || normalizeBotName(preferences?.workspace?.bot_name) || DEFAULT_BOT_NAME;
   const surface = mode === "live_voice" ? LIVE_VOICE : mode === "meeting_chat" ? MEETING_CHAT : SLACK;
   const languageLine = LANGUAGE_LINE[language] || "Reply in the language of the latest user message.";
   const preferenceLine = formatPreferences(preferences);
-  return [CORE, surface, languageLine, preferenceLine].filter(Boolean).join("\n\n");
+  return [CORE, surface, languageLine, preferenceLine].filter(Boolean).join("\n\n").replaceAll("{{name}}", name);
 }
 
 export const BOT_SYSTEM_PROMPT = buildSystemPrompt({ mode: "slack" });
 
 function formatPreferences(preferences) {
   const applied = appliedPreferences(preferences);
-  const lines = Object.entries(applied).filter(([, value]) => String(value || "").trim());
+  const lines = Object.entries(applied).filter(([key, value]) => !IDENTITY_KEYS.has(key) && String(value || "").trim());
   if (lines.length === 0) return "";
   const body = lines.map(([key, value]) => `- ${key}: ${value}`).join("\n");
   return `Stored preferences (a user preference wins over the workspace preference):\n${body}`;

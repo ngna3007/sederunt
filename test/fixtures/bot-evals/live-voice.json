@@ -5,7 +5,7 @@
     "mode": "live_voice",
     "expect": "pass",
     "messages": [
-      { "role": "user", "text": "Sederunt, when is the retro?" },
+      { "role": "user", "text": "Adam, when is the retro?" },
       { "role": "assistant", "text": "Sure, the retro is half past two and I'll be there." }
     ]
   },
@@ -15,7 +15,7 @@
     "mode": "live_voice",
     "expect": "fail",
     "messages": [
-      { "role": "user", "text": "Sederunt, when is the retro?" },
+      { "role": "user", "text": "Adam, when is the retro?" },
       { "role": "assistant", "text": "Great question. You asked about the retro. Hope this helps, and I'll send notes." }
     ]
   },
@@ -25,7 +25,7 @@
     "mode": "live_voice",
     "expect": "pass",
     "messages": [
-      { "role": "user", "text": "Sederunt, what did Lan decide?" },
+      { "role": "user", "text": "Adam, what did Lan decide?" },
       { "role": "assistant", "text": "Sure, I'll walk through the decision the way Lan described it." }
     ]
   },
@@ -35,7 +35,7 @@
     "mode": "live_voice",
     "expect": "fail",
     "messages": [
-      { "role": "user", "text": "Sederunt, what did Lan decide?" },
+      { "role": "user", "text": "Adam, what did Lan decide?" },
       { "role": "assistant", "text": "• See https://example.com and <@U012345678> for the notes." }
     ]
   },
@@ -45,7 +45,7 @@
     "mode": "live_voice",
     "expect": "pass",
     "messages": [
-      { "role": "user", "text": "Sederunt, can you tell Lan?" },
+      { "role": "user", "text": "Adam, can you tell Lan?" },
       { "role": "assistant", "text": "Sure, I'll walk Lan through the notes after the meeting." }
     ]
   },
@@ -55,7 +55,7 @@
     "mode": "live_voice",
     "expect": "fail",
     "messages": [
-      { "role": "user", "text": "Sederunt, can you tell Lan?" },
+      { "role": "user", "text": "Adam, can you tell Lan?" },
       { "role": "assistant", "text": "I will walk Lan through the notes after the meeting today." }
     ]
   },
@@ -65,7 +65,7 @@
     "mode": "live_voice",
     "expect": "pass",
     "messages": [
-      { "role": "user", "text": "Sederunt, hold the notes." },
+      { "role": "user", "text": "Adam, hold the notes." },
       { "role": "assistant", "text": "Sure, I'll hold the notes until Lan asks for them." }
     ]
   },
@@ -75,7 +75,7 @@
     "mode": "live_voice",
     "expect": "fail",
     "messages": [
-      { "role": "user", "text": "Sederunt, hold the notes." },
+      { "role": "user", "text": "Adam, hold the notes." },
       { "role": "assistant", "text": "Task queued." }
     ]
   },
@@ -85,7 +85,7 @@
     "mode": "live_voice",
     "expect": "pass",
     "messages": [
-      { "role": "user", "text": "Sederunt, when do we start?" },
+      { "role": "user", "text": "Adam, when do we start?" },
       { "role": "assistant", "text": "Let's start at half past two, and I'll wait for Lan." }
     ]
   },
@@ -95,7 +95,7 @@
     "mode": "live_voice",
     "expect": "fail",
     "messages": [
-      { "role": "user", "text": "Sederunt, when do we start?" },
+      { "role": "user", "text": "Adam, when do we start?" },
       { "role": "assistant", "text": "Let's start at 14:30, and I'll wait for Lan." }
     ]
   },
@@ -106,7 +106,7 @@
     "expect": "pass",
     "context": { "writeRequested": true },
     "messages": [
-      { "role": "user", "text": "Sederunt, send that to Lan." },
+      { "role": "user", "text": "Adam, send that to Lan." },
       { "role": "assistant", "text": "Sure, I'll send that to Lan for approval after the call." }
     ]
   },
@@ -117,7 +117,7 @@
     "expect": "fail",
     "context": { "writeRequested": true },
     "messages": [
-      { "role": "user", "text": "Sederunt, send that to Lan." },
+      { "role": "user", "text": "Adam, send that to Lan." },
       { "role": "assistant", "text": "Done, I sent it." }
     ]
   },
@@ -150,7 +150,7 @@
     "expect": "pass",
     "context": { "interrupted": true },
     "messages": [
-      { "role": "user", "text": "Sederunt, wait." },
+      { "role": "user", "text": "Adam, wait." },
       { "role": "assistant", "text": "Sure." }
     ]
   },
@@ -161,7 +161,7 @@
     "expect": "fail",
     "context": { "interrupted": true },
     "messages": [
-      { "role": "user", "text": "Sederunt, wait." },
+      { "role": "user", "text": "Adam, wait." },
       { "role": "assistant", "text": "I'll keep going through the whole agenda, the budget, the hiring plan, and the launch date before anyone else speaks." }
     ]
   },
@@ -171,7 +171,7 @@
     "mode": "live_voice",
     "expect": "fail",
     "messages": [
-      { "role": "user", "text": "Sederunt, tell the room." },
+      { "role": "user", "text": "Adam, tell the room." },
       { "role": "assistant", "text": "I'll ping @channel after the call." }
     ]
   },
@@ -181,7 +181,7 @@
     "mode": "live_voice",
     "expect": "fail",
     "messages": [
-      { "role": "user", "text": "Sederunt, file that." },
+      { "role": "user", "text": "Adam, file that." },
       { "role": "assistant", "text": "Request acknowledged." }
     ]
   }

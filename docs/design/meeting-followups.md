@@ -42,6 +42,8 @@ The Account page card "People matching" (`src/console/people-matching.js`) lists
 
 `src/bot/preferences.js` is the API. The in-memory store is the stand-in the tests use. The prompt receives the applied map: workspace first, then that user's keys.
 
+`bot_name` and `wake_phrases` are workspace rows (`user_id` null). A missing name means Adam. Wake phrases are stored only when someone customizes them; otherwise they are `Hey {name}` and `{name}`. A member cannot put those keys on their own row: the check constraint requires `user_id` null, and the value has to be a real name or a JSON list of phrases. The prompt ignores both keys, so a user preference cannot rename the bot. See [bot behavior](./bot-behavior.md).
+
 ## Action DM
 
 `src/meeting/actions.js` asks an injected model for structured JSON and validates it. An item is one of `assign_task`, `create_form`, `edit_calendar`, or `other`. Each item names who asked, a one-line summary, and where the write would happen. A missing requester, a multiline summary, or an unknown kind is rejected.

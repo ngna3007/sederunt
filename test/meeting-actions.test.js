@@ -86,8 +86,10 @@ test("only Approve runs the item, and only the requester can approve", async () 
   assert.equal(runs.length, 0);
   assert.equal(posts.length, 1);
   assert.equal(posts[0].channel, "D1");
+  assert.equal(posts[0].username, "Adam");
   const stored = await store.get("form-retro");
   assert.equal(stored.status, "pending");
+  assert.equal(stored.botName, "Adam");
   assert.equal(stored.threadTs, "1710000000.000200");
 
   const stranger = await handleActionPayload({
@@ -110,6 +112,7 @@ test("only Approve runs the item, and only the requester can approve", async () 
   assert.equal((await store.get("form-retro")).status, "skipped");
   assert.equal(posts.at(-1).thread_ts, "1710000000.000200");
   assert.match(posts.at(-1).text, /Skipped/);
+  assert.equal(posts.at(-1).username, "Adam");
   assert.equal(runs.length, 0);
 
   await store.update("form-retro", { status: "pending" });
@@ -162,6 +165,28 @@ test("edit without a modal asks in the same thread and does not run", async () =
   assert.equal(ran, false);
   assert.match(posts[0].text, /What should change/);
   assert.equal(posts[0].thread_ts, "171.1");
+});
+
+test("action posts use the workspace bot name and leave the line unchanged", async () => {
+  const store = createMemoryActionStore();
+  const posts = [];
+  const slack = {
+    async openConversation() { return { channel: { id: "D9" } }; },
+    async postMessage(body) { posts.push(body); return { ts: "171.9" }; },
+  };
+  await sendActionDms({ items: [formItem], slack, store, botName: "Lan" });
+  assert.equal(posts[0].username, "Lan");
+  assert.equal(posts[0].text.includes("Lan"), false);
+  assert.equal((await store.get("form-retro")).botName, "Lan");
+  await handleActionPayload({
+    payload: { type: "block_actions", user: { id: "U04LAN" }, channel: { id: "D9" }, message: { ts: "171.9" }, actions: [{ action_id: "skip:form-retro", value: "form-retro" }] },
+    store,
+    slack,
+    connectors: { async run() { return { ok: true }; } },
+    botName: "Mai",
+  });
+  assert.equal(posts.at(-1).username, "Mai");
+  assert.match(posts.at(-1).text, /Skipped/);
 });
 
 test("a form-encoded payload is accepted", () => {

@@ -138,11 +138,21 @@ test("sendMinutes posts once to the channel, or DMs attendees, and does not emai
     emailSender: async () => { throw new Error("email should not run"); },
   });
   assert.equal(posted.plan.postToChannel.channelId, "C_BIND");
+  assert.equal(channelCalls.find((call) => call && call.channel)?.username, "Adam");
   assert.equal(posted.sent.length, 1);
   assert.equal(posted.sent[0].kind, "channel");
   assert.equal(channelCalls.filter((call) => call === "open").length, 0);
   assert.match(posted.text, /Not reached: c@ex.com, e@ex.com/);
   assert.equal(posted.emailed.length, 0);
+  const named = [];
+  await sendMinutes({
+    meeting: { bindingChannelId: "C_BIND", people },
+    minutes,
+    slack: { async postMessage(body) { named.push(body); return { ts: "9" }; } },
+    botName: "Mai",
+  });
+  assert.equal(named[0].username, "Mai");
+  assert.equal(named[0].text.includes("Mai"), false);
 
   const dmCalls = [];
   const dmSlack = {

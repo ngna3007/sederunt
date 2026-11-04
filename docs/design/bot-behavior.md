@@ -38,7 +38,7 @@ Public Slack docs that sit beside that self-description:
 
 ## Three modes
 
-`buildSystemPrompt({ mode, preferences, language })` in `src/bot/persona.js` builds the prompt. `BOT_SYSTEM_PROMPT` is the slack mode with no stored preferences. `checkReply(reply, context)` enforces the rules for that mode. It does not call a model.
+`buildSystemPrompt({ mode, preferences, language, botName })` in `src/bot/persona.js` builds the prompt. `botName` wins when it is passed. Otherwise the prompt uses `preferences.workspace.bot_name`, then Adam. `BOT_SYSTEM_PROMPT` is the slack mode with no stored preferences, so the persona is Adam. `checkReply(reply, context)` enforces the rules for that mode. It does not call a model.
 
 All three modes share: answer first (a live acknowledgement may lead a spoken turn), be honest about what happened and what did not, confirm before a write, ask one short question when the instruction is ambiguous, never use `@channel` / `@here` / `<!channel>` / `<!here>` / `<!everyone>`, and reply in the user's language. This team uses Vietnamese and English.
 
@@ -86,16 +86,40 @@ Live rules the checker enforces:
 
 Good:
 
-> Lan: Sederunt, send the notes to Mai.
-> Sederunt: Sure, I'll send that to Mai for approval after the call.
+> Lan: Adam, send the notes to Mai.
+> Adam: Sure, I'll send that to Mai for approval after the call.
 
 Bad:
 
-> Sederunt: Task queued. Done, I sent it. See https://docs.google.com/document/d/abc at 14:30.
+> Adam: Task queued. Done, I sent it. See https://docs.google.com/document/d/abc at 14:30.
 
 ## Preferences
 
-`src/bot/preferences.js` stores a key and a value. A workspace row has no user. A user row belongs to one person. `loadPreferences` returns both, and `applied` lets the user value replace the workspace value for the same key. The prompt lists `applied`. An utterance that says "remember this" is the write. "for the workspace" / "for everyone" / "for the team" marks a workspace row. The table and its RLS are in [meeting follow-ups](./meeting-followups.md).
+`src/bot/preferences.js` stores a key and a value. A workspace row has no user. A user row belongs to one person. `loadPreferences` returns both, and `applied` lets the user value replace the workspace value for the same key. The prompt lists `applied`, except `bot_name` and `wake_phrases`, which are the workspace persona and are not a spoken preference. An utterance that says "remember this" is the write. "for the workspace" / "for everyone" / "for the team" marks a workspace row. The table and its RLS are in [meeting follow-ups](./meeting-followups.md).
+
+## Bot name and wake phrases
+
+The product name stays Sederunt. Each workspace sets the bot's display name. The default is Adam. A missing `bot_name` row means Adam, so the default is not stored. The name is what Recall shows as `bot_name`. The camera page still uses the hearing guest name. Slack posts, minutes, and action DMs send the name as the Slack `username`. The minutes text and the action line stay unchanged.
+
+Wake phrases default to `Hey {name}` and `{name}` when the name is at least two characters. A one-character name uses only `Hey {name}`, because a phrase is at least two characters. Phrases are stored only after someone customizes them. A rename with no custom phrases follows the new name. There are at most five phrases. Each one is 2–40 characters, unique ignoring case, and contains the bot name as whole words. `Adamant` does not contain `Adam`.
+
+The Account page has a Bot card. An owner or admin can edit it. A member sees the same card with the fields locked. The first welcome step has an optional name, prefilled Adam. Leaving it as Adam stores nothing. Joining an existing workspace does not rename the bot.
+
+`detectWake` in `src/bot/wake.js` decides whether an utterance addresses the bot. It triggers when a wake phrase is at the start of a clause, when the name itself starts a clause, when the name is vocative, or when the name is a question tag at the end (`What time is it, Adam?`). Vocative means a comma before the name, a comma after the name when the name starts the clause, or one of hey, hi, ok, okay, này, hây, ơi, or à beside the name. `anh Adam ơi` and `anh, Adam` count. `anh Adam nói là` does not.
+
+It does not trigger for a mid-sentence mention (`I told Adam yesterday`, `tôi nói với Adam hôm qua`), a possessive (`Adam's report`), or a title used as a reference (`anh Adam nói là`).
+
+Matching ignores case and punctuation. Diacritics fold, and đ folds to d, so `Ê đam`, `A đam`, and `Hây Adam` can match Adam. A name of three or more characters may be one substitution away on a token of the same length (`Adum`, `Edam`) or split into two pieces (`a dam`, `Ad am`).
+
+Limits:
+
+- This is not a grammar parser. `please ask Adam` does not wake. `Edam cheese` at the start of a clause can wake, because Edam is one edit from Adam. The same is true of any same-length neighbor, such as Atom.
+- A two-token split at the start of a clause wakes, including `a dam report`.
+- Fuzzy matching is for detection only. A stored phrase must contain the exact name.
+- `à` is the character à. A plain "a" is not that particle. Inside a stored phrase, text is folded, so `à` and `a` look the same.
+- `hây` folds to `hay`, and `hay` is treated as hey. The English word "hay" beside the name can wake the bot.
+- Names shorter than three characters match only exactly. An extra or missing letter (`Addam`) does not match, because the lengths differ.
+- `ok` or `hey` beside the name counts even in the middle of a sentence.
 
 ## Checker
 

@@ -9,6 +9,7 @@
  * whose `updateEventDetails` is the Calendar MCP write.
  */
 
+import { DEFAULT_BOT_NAME, normalizeBotName } from "../bot/identity.js";
 import { callTool as defaultCallTool } from "../connectors/client.js";
 
 export const ACTION_KINDS = Object.freeze(["assign_task", "create_form", "edit_calendar", "other"]);
@@ -162,20 +163,21 @@ function groupByRequester(items) {
  * One DM per requester. Items with no Slack id are returned as undelivered
  * and are not posted.
  */
-export async function sendActionDms({ items, slack, store }) {
+export async function sendActionDms({ items, slack, store, botName }) {
   const undelivered = [];
   const sent = [];
+  const username = normalizeBotName(botName) || DEFAULT_BOT_NAME;
   for (const [requesterSlackId, group] of groupByRequester(items)) {
     if (!requesterSlackId) {
       undelivered.push(...group.map((item) => item.id));
       continue;
     }
-    for (const item of group) await store.put({ ...item, status: "pending" });
+    for (const item of group) await store.put({ ...item, status: "pending", botName: username });
     const opened = await slack.openConversation({ users: requesterSlackId });
     const channel = opened.channel?.id || opened.channel;
     const blocks = actionChecklistBlocks(group);
     const text = group.map((item) => actionLine(item)).join("\n");
-    const posted = await slack.postMessage({ channel, text, blocks });
+    const posted = await slack.postMessage({ channel, text, blocks, username });
     for (const item of group) {
       await store.update(item.id, { channelId: channel, threadTs: posted.ts, status: "pending" });
     }
@@ -208,7 +210,7 @@ function channelOf(payload, item) {
  * Approve is the only path that calls the connector. The actor must be the
  * requester. Results are posted with thread_ts so they stay in the DM.
  */
-export async function handleActionPayload({ payload, store, slack, connectors, actorSlackId }) {
+export async function handleActionPayload({ payload, store, slack, connectors, actorSlackId, botName }) {
   const body = parseActionPayload(payload);
   const action = body?.actions?.[0];
   if (!action?.value) return { ok: false, error: "missing", ran: false };
@@ -219,6 +221,7 @@ export async function handleActionPayload({ payload, store, slack, connectors, a
   const verb = String(action.action_id || "").split(":")[0];
   const channel = channelOf(body, item);
   const thread_ts = threadOf(body, item);
+  const username = normalizeBotName(botName) || normalizeBotName(item.botName) || DEFAULT_BOT_NAME;
 
   if (verb === "skip") {
     await store.update(item.id, { status: "skipped" });
@@ -226,6 +229,7 @@ export async function handleActionPayload({ payload, store, slack, connectors, a
       channel,
       thread_ts,
       text: `Skipped: ${actionLine(item)}. I did not run it.`,
+      username,
     });
     return { ok: true, status: "skipped", ran: false };
   }
@@ -242,6 +246,7 @@ export async function handleActionPayload({ payload, store, slack, connectors, a
         channel,
         thread_ts,
         text: `What should change in "${actionLine(item)}"?`,
+        username,
       });
     }
     return { ok: true, status: "editing", ran: false, modal: opened };
@@ -256,7 +261,7 @@ export async function handleActionPayload({ payload, store, slack, connectors, a
   const text = result?.ok
     ? `${actionLine(item)}. ${result.link || ""}`.trim()
     : `I couldn't ${item.summary}. Next: ${result?.next || "check the connector, then approve again."}`;
-  await slack.postMessage({ channel, thread_ts, text });
+  await slack.postMessage({ channel, thread_ts, text, username });
   return { ok: Boolean(result?.ok), status, ran: true };
 }
 

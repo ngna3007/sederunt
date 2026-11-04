@@ -10,19 +10,25 @@ export function createSlackClient(env = {}, fetchImpl = globalThis.fetch) {
   const token = typeof env.SLACK_BOT_TOKEN === "string" ? env.SLACK_BOT_TOKEN.trim() : "";
   return {
     fetch: fetchImpl,
-    async postMessage({ channel, text, thread } = {}) {
+    async postMessage({ channel, text, thread, username } = {}) {
       if (!token || !channel || !text) {
         const error = new Error("unsupported");
         error.reason = "unsupported";
         throw error;
       }
+      const speaker = typeof username === "string" ? username.trim() : "";
       const response = await fetchImpl("https://slack.com/api/chat.postMessage", {
         method: "POST",
         headers: {
           authorization: `Bearer ${token}`,
           "content-type": "application/json",
         },
-        body: JSON.stringify({ channel, text, thread_ts: thread || undefined }),
+        body: JSON.stringify({
+          channel,
+          text,
+          thread_ts: thread || undefined,
+          ...(speaker ? { username: speaker } : {}),
+        }),
       });
       if (!response.ok) {
         const error = new Error(`Slack chat.postMessage failed with HTTP ${response.status}`);
