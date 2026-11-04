@@ -6062,7 +6062,9 @@ body.room-open .room-right .kv dt { padding-right: 12px; }
 }
 .proof-tech .kv, .why-source p { margin-top: 8px; }
 #proof-dialog .kv,
-#decision-proof-panel .kv { grid-template-columns: 11rem minmax(0, 1fr); align-items: start; }
+#decision-proof-panel .kv { grid-template-columns: 11rem minmax(0, 1fr); align-items: stretch; column-gap: 0; row-gap: 0; }
+#proof-dialog .kv dt,
+#decision-proof-panel .kv dt { padding-right: 12px; }
 #proof-dialog .kv dd,
 #decision-proof-panel .kv dd,
 .why-source .proof-id {
