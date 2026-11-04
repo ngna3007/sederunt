@@ -846,6 +846,16 @@ ${spaceDialog}
     </form>
   </div>
 </div>
+<div id="mcp-manage-dialog" class="dialog mcp-manage-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="mcp-manage-title">
+  <div class="shade" data-manage-close></div>
+  <div class="panel">
+    <div class="panel-bar">
+      <h2 id="mcp-manage-title">Connector</h2>
+      <button type="button" class="close" data-manage-close aria-label="Close">${closeIcon}</button>
+    </div>
+    <div id="mcp-manage-body" class="panel-body"></div>
+  </div>
+</div>
 <div id="mcp-token-dialog" class="dialog" hidden role="dialog" aria-modal="true" aria-labelledby="mcp-token-title">
   <div class="shade" data-close="mcp-token-dialog"></div>
   <div class="panel">
@@ -2912,7 +2922,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function dialogOpen() {
-    var ids = ["event-dialog", "profile-dialog", "decision-dialog", "create-dialog", "workspace-dialog", "space-dialog", "mcp-dialog", "mcp-token-dialog", "mcp-remove-dialog"];
+    var ids = ["event-dialog", "profile-dialog", "decision-dialog", "create-dialog", "workspace-dialog", "space-dialog", "mcp-dialog", "mcp-manage-dialog", "mcp-token-dialog", "mcp-remove-dialog"];
     for (var i = 0; i < ids.length; i += 1) {
       var node = document.getElementById(ids[i]);
       if (node && !node.hidden) return true;
@@ -5506,6 +5516,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (mcpTokenDialog && !mcpTokenDialog.hidden) { closeDialog("mcp-token-dialog"); return; }
     var mcpRemoveDialog = document.getElementById("mcp-remove-dialog");
     if (mcpRemoveDialog && !mcpRemoveDialog.hidden) { closeDialog("mcp-remove-dialog"); return; }
+    var mcpManageDialog = document.getElementById("mcp-manage-dialog");
+    if (mcpManageDialog && !mcpManageDialog.hidden) { closeMcpManage(); return; }
     if (!document.getElementById("account-menu").hidden) closeAccountMenu();
     else if (!document.getElementById("profile-dialog").hidden) closeDialog("profile-dialog");
     else if (!document.getElementById("palette").hidden) closePalette();
@@ -6457,6 +6469,29 @@ if (sessionWhen && sessionWhen.dataset.at) {
     connectors.forEach(function (connector) {
       list.appendChild(mcpCard(connector));
     });
+    var manageDialog = document.getElementById("mcp-manage-dialog");
+    if (mcpManageId && manageDialog && !manageDialog.hidden) paintMcpManage();
+  }
+
+  function mcpIcon(connector) {
+    var key = connector.preset || (connector.url === "builtin:google-forms" ? "google-forms" : /calendarmcp\.googleapis\.com/.test(connector.url || "") ? "google-calendar" : "");
+    var source = key ? document.querySelector(".preset-card[data-preset='" + key + "'] .conn-mark") : null;
+    if (source) {
+      var copy = source.cloneNode(true);
+      copy.setAttribute("aria-hidden", "true");
+      return copy;
+    }
+    var mark = document.createElement("span");
+    mark.className = "conn-mark mcp-generic-mark";
+    mark.setAttribute("aria-hidden", "true");
+    mark.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/></svg>';
+    return mark;
+  }
+
+  function mcpSummary(connector) {
+    var tools = connector.tools || [];
+    var on = tools.filter(function (tool) { return tool.enabled === true; }).length;
+    return tools.length + (tools.length === 1 ? " tool" : " tools") + " · " + on + " on";
   }
 
   function mcpCard(connector) {
@@ -6465,6 +6500,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
     card.setAttribute("data-connector", connector.id || "");
     var head = document.createElement("div");
     head.className = "mcp-card-head";
+    var who = document.createElement("div");
+    who.className = "mcp-card-who";
     var title = document.createElement("h2");
     title.className = "mcp-name";
     title.textContent = connector.name || "Connector";
@@ -6472,14 +6509,19 @@ if (sessionWhen && sessionWhen.dataset.at) {
     pill.className = mcpBadgeClass(connector.status);
     pill.setAttribute("data-status", connector.status || "draft");
     pill.textContent = mcpStatusLabel(connector.status);
-    head.append(title, pill);
-    var url = document.createElement("p");
-    url.className = "mcp-url";
-    url.textContent = (connector.preset === "google-forms" || connector.url === "builtin:google-forms") ? "Built in" : (connector.url || "");
-    var tested = document.createElement("p");
-    tested.className = "meta";
-    tested.textContent = mcpWhen(connector.lastTestedAt);
-    card.append(head, url, tested);
+    who.append(mcpIcon(connector), title, pill);
+    var manage = document.createElement("button");
+    manage.type = "button";
+    manage.className = "secondary mcp-manage";
+    manage.textContent = "Manage";
+    manage.setAttribute("aria-haspopup", "dialog");
+    manage.setAttribute("aria-label", "Manage " + (connector.name || "connector"));
+    manage.addEventListener("click", function () { openMcpManage(connector.id); });
+    head.append(who, manage);
+    var summary = document.createElement("p");
+    summary.className = "mcp-summary";
+    summary.textContent = mcpSummary(connector);
+    card.append(head, summary);
     if (connector.lastError) {
       var error = document.createElement("p");
       error.className = "alert";
@@ -6487,23 +6529,82 @@ if (sessionWhen && sessionWhen.dataset.at) {
       error.textContent = connector.lastError;
       card.append(error);
     }
-    var tokenLine = document.createElement("p");
-    tokenLine.className = "mcp-token-line";
-    var tokenButton = document.createElement("button");
-    tokenButton.type = "button";
-    tokenButton.className = "secondary";
-    tokenButton.setAttribute("data-token", connector.id || "");
-    if (connector.hasToken) tokenButton.textContent = "Set ••••" + String(connector.tokenLast4 || "") + " · Replace";
-    else tokenButton.textContent = "Add token";
-    tokenButton.addEventListener("click", function () { openMcpToken(connector); });
-    tokenLine.append(tokenButton);
+    return card;
+  }
+
+  var mcpManageId = "";
+  var mcpManageOpener = null;
+
+  function openMcpManage(id) {
+    mcpManageId = id || "";
+    mcpManageOpener = document.activeElement;
+    if (!paintMcpManage()) return;
+    openDialog("mcp-manage-dialog");
+  }
+
+  function closeMcpManage() {
+    closeDialog("mcp-manage-dialog");
+    mcpManageId = "";
+    var target = mcpManageOpener;
+    if (target && !document.body.contains(target) ) target = null;
+    if (!target) target = document.querySelector("#mcp-list .mcp-manage");
+    if (target && target.focus) target.focus();
+  }
+
+  function paintMcpManage() {
+    var connector = null;
+    mcpRows.forEach(function (row) { if (row.id === mcpManageId) connector = row; });
+    var dialog = document.getElementById("mcp-manage-dialog");
+    if (!connector) {
+      if (dialog && !dialog.hidden) closeMcpManage();
+      return false;
+    }
+    var titleNode = document.getElementById("mcp-manage-title");
+    if (titleNode) titleNode.textContent = connector.name || "Connector";
+    var body = document.getElementById("mcp-manage-body");
+    if (!body) return false;
+    var keep = body.scrollTop;
+    var focusTool = document.activeElement && body.contains(document.activeElement) && document.activeElement.closest("[data-tool]");
+    var focusName = focusTool ? focusTool.getAttribute("data-tool") : "";
+    body.replaceChildren();
+    var top = document.createElement("div");
+    top.className = "mcp-manage-top";
+    var pill = document.createElement("span");
+    pill.className = mcpBadgeClass(connector.status);
+    pill.setAttribute("data-status", connector.status || "draft");
+    pill.textContent = mcpStatusLabel(connector.status);
+    var url = document.createElement("p");
+    url.className = "mcp-url";
+    url.textContent = (connector.preset === "google-forms" || connector.url === "builtin:google-forms") ? "Built in" : (connector.url || "");
+    top.append(pill, url);
+    var tested = document.createElement("p");
+    tested.className = "meta";
+    tested.textContent = mcpWhen(connector.lastTestedAt);
+    body.append(top, tested);
+    if (connector.lastError) {
+      var error = document.createElement("p");
+      error.className = "alert";
+      error.setAttribute("role", "alert");
+      error.textContent = connector.lastError;
+      body.append(error);
+    }
     if (connector.authType === "google_oauth") {
       var account = document.createElement("p");
       account.className = "meta";
       account.textContent = "Uses this person's Google account.";
-      card.append(account);
+      body.append(account);
     } else {
-      card.append(tokenLine);
+      var tokenLine = document.createElement("p");
+      tokenLine.className = "mcp-token-line";
+      var tokenButton = document.createElement("button");
+      tokenButton.type = "button";
+      tokenButton.className = "secondary";
+      tokenButton.setAttribute("data-token", connector.id || "");
+      if (connector.hasToken) tokenButton.textContent = "Set ••••" + String(connector.tokenLast4 || "") + " · Replace";
+      else tokenButton.textContent = "Add token";
+      tokenButton.addEventListener("click", function () { openMcpToken(connector); });
+      tokenLine.append(tokenButton);
+      body.append(tokenLine);
     }
     var actions = document.createElement("div");
     actions.className = "wait-actions";
@@ -6518,14 +6619,41 @@ if (sessionWhen && sessionWhen.dataset.at) {
     remove.textContent = "Remove";
     remove.addEventListener("click", function () { openMcpRemove(connector); });
     actions.append(again, remove);
-    card.append(actions);
-    var tools = document.createElement("div");
-    tools.className = "mcp-tools";
-    (connector.tools || []).forEach(function (tool) {
-      tools.appendChild(mcpToolRow(connector, tool));
+    body.append(actions);
+    var tools = connector.tools || [];
+    var groups = [["read", "Read"], ["write", "Write"], ["delete", "Delete"]];
+    var wrap = document.createElement("div");
+    wrap.className = "mcp-tools";
+    groups.forEach(function (group) {
+      var members = tools.filter(function (tool) {
+        var kind = tool.actionClass === "read" || tool.actionClass === "delete" ? tool.actionClass : "write";
+        return kind === group[0];
+      });
+      if (!members.length) return;
+      var section = document.createElement("section");
+      section.className = "mcp-tool-group";
+      section.setAttribute("data-group", group[0]);
+      var heading = document.createElement("h3");
+      heading.id = "mcp-group-" + group[0];
+      heading.textContent = group[1] + " · " + members.length;
+      section.setAttribute("aria-labelledby", heading.id);
+      section.append(heading);
+      members.forEach(function (tool) { section.appendChild(mcpToolRow(connector, tool)); });
+      wrap.append(section);
     });
-    card.append(tools);
-    return card;
+    if (!tools.length) {
+      var none = document.createElement("p");
+      none.className = "meta";
+      none.textContent = "No tools found. Test again to refresh.";
+      wrap.append(none);
+    }
+    body.append(wrap);
+    body.scrollTop = keep;
+    if (focusName) {
+      var back = body.querySelector("[data-tool='" + focusName + "'] input");
+      if (back) back.focus();
+    }
+    return true;
   }
 
   function mcpToolRow(connector, tool) {
@@ -6803,6 +6931,28 @@ if (sessionWhen && sessionWhen.dataset.at) {
   if (mcpTokenForm) mcpTokenForm.addEventListener("submit", function (event) { saveMcpToken(event, false); });
   var mcpTokenClear = document.getElementById("mcp-token-clear");
   if (mcpTokenClear) mcpTokenClear.addEventListener("click", function () { saveMcpToken(null, true); });
+  document.querySelectorAll("[data-manage-close]").forEach(function (node) {
+    node.addEventListener("click", function (event) { event.stopPropagation(); closeMcpManage(); });
+  });
+  document.addEventListener("keydown", function (event) {
+    if (event.key !== "Tab") return;
+    var top = null;
+    ["mcp-remove-dialog", "mcp-token-dialog", "mcp-manage-dialog"].forEach(function (id) {
+      var node = document.getElementById(id);
+      if (!top && node && !node.hidden) top = node;
+    });
+    if (!top) return;
+    var list = Array.prototype.filter.call(top.querySelectorAll("button, input, select, textarea, a[href], [tabindex]:not([tabindex='-1'])"), function (node) {
+      return !node.disabled && node.offsetParent !== null;
+    });
+    if (!list.length) return;
+    var first = list[0];
+    var last = list[list.length - 1];
+    var active = document.activeElement;
+    if (!top.contains(active)) { event.preventDefault(); (event.shiftKey ? last : first).focus(); return; }
+    if (event.shiftKey && active === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && active === last) { event.preventDefault(); first.focus(); }
+  });
   var mcpRemoveConfirm = document.getElementById("mcp-remove-confirm");
   if (mcpRemoveConfirm) mcpRemoveConfirm.addEventListener("click", confirmMcpRemove);
 

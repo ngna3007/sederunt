@@ -5640,3 +5640,22 @@ body.ob-page {
 }
 .ob-soon-line { margin: 12px 0 0; font-size: 12px; line-height: 1.6; color: var(--muted-foreground); }
 .ob-soon-line .ob-soon { margin-right: 4px; }
+
+/* p5f: compact connector cards; details live in the Manage modal. */
+.mcp-card { gap: 6px; padding: 14px 16px; }
+.mcp-card-who { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; flex: 1 1 12rem; }
+.mcp-card .conn-mark { width: 28px; height: 28px; }
+.mcp-generic-mark { display: inline-grid; place-items: center; border-radius: 8px; background: var(--muted); color: var(--muted-foreground); }
+.mcp-summary { margin: 0; color: var(--muted-foreground); font-size: 13px; }
+.mcp-manage-dialog .panel { width: min(40rem, 100%); max-height: min(44rem, calc(100dvh - 48px)); }
+.mcp-manage-dialog .panel-body { overscroll-behavior: contain; }
+.mcp-manage-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.mcp-manage-dialog .mcp-url, .mcp-manage-dialog .meta { margin: 0; }
+.mcp-manage-dialog .wait-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.mcp-tool-group { display: flex; flex-direction: column; gap: 10px; }
+.mcp-tool-group h3 { margin: 4px 0 0; }
+@media (max-width: 480px) {
+  .mcp-manage-dialog { padding: 0; place-items: stretch; }
+  .mcp-manage-dialog .panel { width: 100%; max-width: 100%; height: 100dvh; max-height: 100dvh; border-radius: 0; border: 0; }
+  .mcp-manage-dialog .panel-bar { position: sticky; top: 0; background: var(--card); }
+}
