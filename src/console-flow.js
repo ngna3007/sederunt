@@ -181,6 +181,7 @@ export function resealOAuth(req, env, session, patch = {}) {
     accessExp: session.accessExp,
     tenantId,
     onboarded: patch.onboarded === true || session.onboarded === true,
+    provider: session.provider === "github" ? "github" : session.provider === "google" ? "google" : "",
   }, sessionSecret(env));
   const maxAge = Math.max(0, Math.floor((Number(session.exp) - Date.now()) / 1000)) || Math.floor(CONSOLE_SESSION_MS / 1000);
   return sessionCookie(sealed, req, maxAge);

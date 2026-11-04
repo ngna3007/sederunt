@@ -1466,7 +1466,8 @@ button.tile {
   justify-content: center;
   gap: 8px;
   width: 100%;
-  min-height: var(--control-h);
+  min-height: 40px;
+  height: auto;
   padding: 0 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1476,6 +1477,7 @@ button.tile {
   font-weight: 500;
   text-decoration: none;
 }
+.auth-logo { display: block; flex: none; }
 .auth-provider:hover { background: var(--muted); }
 .auth-provider:focus-visible { box-shadow: var(--focus-ring); }
 .auth-letter {
@@ -1620,6 +1622,42 @@ a.welcome-go:hover { background: var(--primary-hover); color: var(--primary-fore
   .choice-grid, .choice-two { grid-template-columns: 1fr; }
   button.choice-card, label.choice-card, button.text-link, a.welcome-go { min-height: 44px; }
   .menu .space-form button, #workspace-menu #create-workspace { min-height: 44px; }
+  a.auth-provider { min-height: 44px; }
+}
+.tool-need {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--muted);
+  min-width: 0;
+  text-align: left;
+}
+#home-empty .tool-need { flex: 1 0 100%; }
+.tool-need p { margin: 0; line-height: 1.45; }
+.tool-need-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.tool-need-actions button { min-height: 32px; }
+@media (max-width: 768px) {
+  .tool-need-actions button { min-height: 44px; }
+}
+.account-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+  display: block;
+}
+#account-detail-email,
+#account-detail-provider,
+#account-detail-workspace,
+#account-detail-role,
+#account-page-name {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+  overflow-wrap: anywhere;
 }
 
 #join-ready.off { color: var(--muted-foreground); }

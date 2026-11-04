@@ -39,3 +39,16 @@ export function displayNameFromUser(user) {
   const local = String(user?.email || "").split("@")[0] || "";
   return local.slice(0, 120);
 }
+
+/**
+ * Google or GitHub, from the verified user. Anything else is blank.
+ *
+ * @param {{ app_metadata?: { provider?: string }, identities?: Array<{ provider?: string }> } | null | undefined} user
+ */
+export function providerFromUser(user) {
+  const fromApp = user?.app_metadata?.provider;
+  if (fromApp === "google" || fromApp === "github") return fromApp;
+  const identities = Array.isArray(user?.identities) ? user.identities : [];
+  const found = identities.find((row) => row?.provider === "google" || row?.provider === "github");
+  return found?.provider || "";
+}

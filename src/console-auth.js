@@ -107,6 +107,7 @@ export function sealSession(fields, secret) {
     payload.accessExp = typeof fields.accessExp === "number" ? fields.accessExp : payload.exp;
     if (typeof fields.tenantId === "string" && fields.tenantId) payload.tenantId = fields.tenantId.slice(0, 80);
     if (fields.onboarded === true) payload.onboarded = true;
+    if (fields.provider === "google" || fields.provider === "github") payload.provider = fields.provider;
   }
   return sealPayload(payload, secret);
 }
@@ -138,6 +139,7 @@ export function openSession(token, secret, now = Date.now()) {
     session.accessExp = typeof payload.accessExp === "number" ? payload.accessExp : 0;
     session.tenantId = typeof payload.tenantId === "string" ? payload.tenantId : "";
     session.onboarded = payload.onboarded === true;
+    session.provider = payload.provider === "github" ? "github" : payload.provider === "google" ? "google" : "";
   }
   return session;
 }

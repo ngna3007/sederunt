@@ -15,7 +15,7 @@ import {
   sealPending,
 } from "./pending.js";
 import { codeChallengeFor, createCodeVerifier } from "./pkce.js";
-import { displayNameFromUser, identityConfigured } from "./shared.js";
+import { displayNameFromUser, identityConfigured, providerFromUser } from "./shared.js";
 
 const PROVIDERS = new Set(["google", "github"]);
 
@@ -162,6 +162,7 @@ async function finishCallback(ctx) {
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       accessExp: tokens.expiresAt,
+      provider: providerFromUser(user),
     }, sessionSecret(env));
     redirect(res, safeConsoleNext(pending.next), {
       "set-cookie": [

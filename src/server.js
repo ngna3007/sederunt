@@ -32,6 +32,7 @@ import { createIdentity, identityConfigured } from "./identity/client.js";
 import { clearOAuthCookie } from "./identity/pending.js";
 import { handleAuthRoute } from "./identity/routes.js";
 import { refreshOAuthSession, rememberRefreshCookie } from "./identity/session.js";
+import { handleToolPref, loadAccountProfile, loadToolAsk } from "./console-account.js";
 import { handleInvite, handleSpaceSwitch, handleWelcome, loadSpaceView, welcomeLocation } from "./console-flow.js";
 import { roleLabel } from "./identity/onboarding.js";
 import { renderLanding } from "./landing.js";
@@ -551,6 +552,10 @@ export function createApp(options = {}) {
       await handleSpaceSwitch({ req, res, url, env, identity, send, redirect, readPosted });
       return;
     }
+    if (req.method === "POST" && url.pathname === "/console/tool-prefs") {
+      await handleToolPref({ req, res, url, env, identity, send, readPosted });
+      return;
+    }
     const invitePath = /^\/console\/invite\/([^/]+)$/.exec(url.pathname);
     if (invitePath && (req.method === "GET" || req.method === "POST")) {
       let token = invitePath[1];
@@ -594,9 +599,11 @@ export function createApp(options = {}) {
           || (current.activity || []).some((row) => row.origin?.roomId === id);
         if (readable && !known) status = 404;
       }
-      const spaces = identity && gate.session?.kind === "oauth"
-        ? await loadSpaceView(identity, gate.session)
-        : null;
+      const oauth = identity && gate.session?.kind === "oauth";
+      const spaces = oauth ? await loadSpaceView(identity, gate.session) : null;
+      const connectedDoors = oauth ? doorReport(env, workspace.linearReady === true) : null;
+      const accountProfile = oauth ? await loadAccountProfile(identity, gate.session, spaces) : null;
+      const toolAsk = oauth ? await loadToolAsk(identity, gate.session, connectedDoors || {}) : null;
       send(res, status, "text/html; charset=utf-8", renderConsolePage({
         meeting: doors.meeting,
         meetingSetup: !env.SEDERUNT_PUBLIC_ORIGIN
@@ -609,14 +616,16 @@ export function createApp(options = {}) {
         slackReady: Boolean(env.SLACK_SIGNING_SECRET && env.SLACK_BOT_TOKEN),
         signedIn: Boolean(gate.session),
         signInOff: !consoleSecret(env) && !identity,
-        accountMember: gate.session?.memberId || String(env.SEDERUNT_MEMBER || "").trim(),
-        accountName: gate.session?.name?.trim() || String(env.SEDERUNT_MEMBER || "").trim(),
+        accountMember: gate.session?.kind === "oauth" ? "" : (gate.session?.memberId || String(env.SEDERUNT_MEMBER || "").trim()),
+        accountName: accountProfile?.name || gate.session?.name?.trim() || String(env.SEDERUNT_MEMBER || "").trim(),
         accountLine: spaces?.oauth
           ? (roleLabel(spaces.activeRole) || "Owner")
           : (gate.session ? "Owner" : "Sign-in is not set up"),
         accountExpiry: gate.session?.exp || 0,
         calendarTimeZone: calendarTimeZone(env),
         spaces,
+        accountProfile,
+        toolAsk,
       }));
       return;
     }

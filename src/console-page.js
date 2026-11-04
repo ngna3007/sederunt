@@ -18,7 +18,7 @@ export const DECISION_COLUMNS = ["Decision", "Room", "Status", ""];
  * label, or the process member when sign-in is not configured.
  * The room file pins the decision. Each setting is a row, label then control.
  *
- * @param {{ meeting?: boolean, meetingSetup?: string, slackReady?: boolean, signedIn?: boolean, accountName?: string, accountMember?: string, accountLine?: string, spaces?: object | null }} [state]
+ * @param {{ meeting?: boolean, meetingSetup?: string, slackReady?: boolean, signedIn?: boolean, accountName?: string, accountMember?: string, accountLine?: string, spaces?: object | null, accountProfile?: object | null, toolAsk?: object | null }} [state]
  */
 export function renderConsolePage(state = {}) {
   const signedIn = state.signedIn === true;
@@ -71,6 +71,24 @@ export function renderConsolePage(state = {}) {
     : "";
   const switcher = renderWorkspaceSwitcher(state.spaces, switchIcon);
   const spaceDialog = state.spaces?.oauth ? renderSpaceDialog(closeIcon) : "";
+  const profile = state.accountProfile?.oauth ? state.accountProfile : null;
+  const asks = state.toolAsk?.oauth === true;
+  const calendarAsk = asks ? toolNeedCard("calendar", "Connect Calendar to add Sederunt to a meeting.") : "";
+  const slackAsk = asks ? toolNeedCard("slack", "Connect Slack to use a channel.", true) : "";
+  const linearAsk = asks ? toolNeedCard("linear", "Connect Linear to file a ticket.") : "";
+  const fileTicket = asks ? `<button type="button" id="file-ticket">File a ticket</button>` : "";
+  const heroAvatar = profile?.avatar
+    ? `<img src="${escapeHtml(profile.avatar)}" alt="">`
+    : escapeHtml(accountInitials(profile?.name || accountName));
+  const heroName = profile?.name ? escapeHtml(profile.name) : "";
+  const heroRole = profile ? escapeHtml(profile.spaceRole || profile.providerLabel || "") : "";
+  const detailName = profile?.name ? escapeHtml(profile.name) : "";
+  const workspaceDetail = profile ? escapeHtml(profile.spaceName || "Personal") : "Company";
+  const profileRows = profile
+    ? `${profile.email ? `<dt>Email</dt><dd id="account-detail-email">${escapeHtml(profile.email)}</dd>` : ""}
+            <dt>Sign-in</dt><dd id="account-detail-provider">${escapeHtml(profile.providerLabel || "Signed in")}</dd>
+            ${profile.spaceRole ? `<dt>Role</dt><dd id="account-detail-role">${escapeHtml(profile.spaceRole)}</dd>` : ""}`
+    : "";
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -194,6 +212,7 @@ ${slack}
       <div class="empty-actions">
         <button type="button" class="primary" id="home-add-meeting">Add Sederunt to a meeting</button>
         <a class="secondary" href="/console/setup" id="home-connect-tools">Connect tools</a>
+        ${calendarAsk}
       </div>
     </div>
     <div id="home-stats">
@@ -404,18 +423,19 @@ ${slack}
       <div class="page-head"><div><p class="page-title">Account</p><p class="page-lede">Who is signed in, and how long this sign-in lasts.</p></div></div>
       <div class="account-layout">
         <div class="overview-card account-hero" id="account-card">
-          <span id="account-page-avatar" class="account-avatar lg" aria-hidden="true">${escapeHtml(accountInitials(accountName))}</span>
+          <span id="account-page-avatar" class="account-avatar lg" aria-hidden="true">${heroAvatar}</span>
           <div class="account-identity">
-            <p id="account-page-name" class="empty-title"></p>
-            <p id="account-page-role" class="meta"></p>
+            <p id="account-page-name" class="empty-title">${heroName}</p>
+            <p id="account-page-role" class="meta">${heroRole}</p>
           </div>
           ${signedIn ? `<button type="button" class="secondary" id="account-edit">Edit profile</button>` : ""}
         </div>
         <div class="settings-card">
           <p class="section-label">Details</p>
           <dl class="kv account-kv">
-            <dt class="account-name-row">Name</dt><dd id="account-detail-name" class="account-name-row"></dd>
-            <dt>Workspace</dt><dd id="account-detail-workspace">Company</dd>
+            <dt class="account-name-row">Name</dt><dd id="account-detail-name" class="account-name-row">${detailName}</dd>
+            ${profileRows}
+            <dt>Workspace</dt><dd id="account-detail-workspace">${workspaceDetail}</dd>
             <dt id="account-session-label">${state.accountExpiry ? "Expires" : "Session"}</dt><dd id="account-detail-expiry"${state.accountExpiry ? ` data-at="${escapeHtml(new Date(state.accountExpiry).toISOString())}" data-kind="expiry"` : ""}>${escapeHtml(signedIn ? "This sign-in does not list an expiry." : "Sign-in is not set up.")}</dd>
           </dl>
         </div>
@@ -630,6 +650,7 @@ ${slack}
       <p id="join-hint" class="sr">Sederunt joins that meeting when Meet is ready. If Meet is not ready, the status line says so.</p>
     </form>
     <div id="channel-door" hidden>
+      ${slackAsk}
       <p id="channel-setup"></p>
       <p>No channel is in use.<br>Slack is the channel tool. Status shows whether it is connected.</p>
       <button id="channel-connectors" type="button">Open Setup</button>
@@ -671,9 +692,11 @@ ${spaceDialog}
     <p id="decision-proof" hidden></p>
     <p id="decision-epoch" hidden></p>
     <div id="decision-other"></div>
+    ${linearAsk}
     <div class="decision-actions">
       <a id="decision-room" href="/console/rooms">Open room</a>
       <button type="button" id="decision-copy">Copy</button>
+      ${fileTicket}
     </div>
     </div>
   </div>
@@ -728,6 +751,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
   var slowTimer = null;
   var toastTimer = null;
   var consoleSpaces = ${jsonForScript(state.spaces || null)};
+  var accountProfile = ${jsonForScript(state.accountProfile || null)};
+  var toolAsk = ${jsonForScript(state.toolAsk || null)};
   var workspaceKind = consoleSpaces && consoleSpaces.activeKind === "personal" ? "personal" : "company";
   var sectionName = "home";
   var returnSection = "home";
@@ -2603,15 +2628,22 @@ if (sessionWhen && sessionWhen.dataset.at) {
     placeNotice();
     var pageName = document.getElementById("account-page-name");
     var shownName = member() || "Account";
+    if (accountProfile && accountProfile.oauth && accountProfile.name) shownName = accountProfile.name;
     if (pageName) pageName.textContent = shownName;
     var pageRole = document.getElementById("account-page-role");
     var roleLine = (document.getElementById("account-line") || {}).textContent || "";
+    if (accountProfile && accountProfile.oauth && accountProfile.spaceRole) roleLine = accountProfile.spaceRole;
     if (pageRole) pageRole.textContent = roleLine;
     text("account-detail-role", roleLine);
+    var detailNameNode = document.getElementById("account-detail-name");
+    if (detailNameNode && shownName && shownName !== "Account") detailNameNode.textContent = shownName;
     var avatar = document.getElementById("account-page-avatar");
-    if (avatar) avatar.textContent = initials(shownName);
+    if (avatar && !avatar.querySelector("img")) avatar.textContent = initials(shownName);
     var workspaceLabel = document.getElementById("account-detail-workspace");
-    if (workspaceLabel) workspaceLabel.textContent = workspaceKind === "personal" ? "Personal" : "Company";
+    if (workspaceLabel) {
+      if (accountProfile && accountProfile.oauth && accountProfile.spaceName) workspaceLabel.textContent = accountProfile.spaceName;
+      else workspaceLabel.textContent = workspaceKind === "personal" ? "Personal" : "Company";
+    }
     placeNewRoom();
     if (!routeQuiet && window.history && window.history.pushState) {
       if (onFile && fileRoom) {
@@ -4516,8 +4548,38 @@ if (sessionWhen && sessionWhen.dataset.at) {
       showSection(button.getAttribute("data-show") || "connectors");
     });
   });
+  function shouldAsk(tool) {
+    if (!toolAsk || !toolAsk.oauth) return false;
+    if (toolAsk.connected && toolAsk.connected[tool]) return false;
+    var pref = toolAsk.prefs ? toolAsk.prefs[tool] : "";
+    if (pref === "connect" || pref === "never") return false;
+    return true;
+  }
+
+  function saveToolChoice(tool, choice) {
+    return fetch("/console/tool-prefs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tool: tool, choice: choice })
+    }).then(function (response) {
+      if (!response.ok) throw new Error("no");
+      return response.json();
+    }).then(function (result) {
+      if (!toolAsk.prefs) toolAsk.prefs = {};
+      if (result && result.prefs) toolAsk.prefs = result.prefs;
+      else toolAsk.prefs[tool] = choice;
+    });
+  }
+
   var homeAdd = document.getElementById("home-add-meeting");
   if (homeAdd) homeAdd.addEventListener("click", function () {
+    if (shouldAsk("calendar")) {
+      var card = document.getElementById("tool-ask-calendar");
+      if (card) {
+        card.hidden = false;
+        return;
+      }
+    }
     document.getElementById("new-room").click();
   });
   var homeConnect = document.getElementById("home-connect-tools");
@@ -4535,7 +4597,43 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (linkLabel && !linkLabel.hidden) document.getElementById("meet-link").focus();
   });
   document.getElementById("pick-meeting").addEventListener("click", function () { pickDoor(true); });
-  document.getElementById("pick-channel").addEventListener("click", function () { pickDoor(false); });
+  document.getElementById("pick-channel").addEventListener("click", function () {
+    pickDoor(false);
+    var card = document.getElementById("tool-ask-slack");
+    if (card) card.hidden = !shouldAsk("slack");
+  });
+  var fileTicket = document.getElementById("file-ticket");
+  if (fileTicket) fileTicket.addEventListener("click", function () {
+    var card = document.getElementById("tool-ask-linear");
+    if (shouldAsk("linear") && card) {
+      card.hidden = false;
+      return;
+    }
+    closeDialog("decision-dialog");
+    showSection("connectors");
+  });
+  document.querySelectorAll(".tool-need [data-tool-choice]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var card = button.closest(".tool-need");
+      if (!card) return;
+      var tool = card.getAttribute("data-tool");
+      var choice = button.getAttribute("data-tool-choice");
+      var error = card.querySelector(".tool-need-error");
+      if (error) error.hidden = true;
+      saveToolChoice(tool, choice).then(function () {
+        card.hidden = true;
+        if (choice === "connect") {
+          location.href = "/console/setup";
+          return;
+        }
+        if (tool === "calendar" && choice === "later") document.getElementById("new-room").click();
+      }).catch(function () {
+        if (!error) return;
+        error.hidden = false;
+        error.textContent = "That could not be saved. Try again.";
+      });
+    });
+  });
   document.querySelectorAll("[data-close]").forEach(function (node) {
     node.addEventListener("click", function (event) {
       event.stopPropagation();
@@ -4983,7 +5081,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var pageName = document.getElementById("account-page-name");
       if (pageName) pageName.textContent = shown;
       var pageAvatar = document.getElementById("account-page-avatar");
-      if (pageAvatar) pageAvatar.textContent = initials(shown);
+      if (pageAvatar && !pageAvatar.querySelector("img")) pageAvatar.textContent = initials(shown);
       text("profile-note", "");
       closeDialog("profile-dialog");
       if (state) paint(state);
@@ -5411,6 +5509,18 @@ function accountInitials(name) {
   const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
   const letters = parts.slice(0, 2).map((part) => part.charAt(0).toUpperCase()).join("");
   return letters || "?";
+}
+
+function toolNeedCard(tool, copy, never = false) {
+  return `<div id="tool-ask-${tool}" class="tool-need" data-tool="${tool}" hidden>
+    <p>${escapeHtml(copy)}</p>
+    <div class="tool-need-actions">
+      <button type="button" class="primary" data-tool-choice="connect">Connect now</button>
+      <button type="button" data-tool-choice="later">Later</button>
+      ${never ? `<button type="button" data-tool-choice="never">Never</button>` : ""}
+    </div>
+    <p class="tool-need-error alert" hidden role="alert"></p>
+  </div>`;
 }
 
 function escapeHtml(value) {

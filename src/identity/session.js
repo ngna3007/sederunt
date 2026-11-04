@@ -6,7 +6,7 @@ import {
   sessionCookie,
   sessionSecret,
 } from "../console-auth.js";
-import { displayNameFromUser } from "./shared.js";
+import { displayNameFromUser, providerFromUser } from "./shared.js";
 
 const REFRESH_SKEW_MS = 30 * 1000;
 
@@ -48,6 +48,7 @@ export async function refreshOAuthSession(req, identity, env, now = Date.now()) 
       accessExp: tokens.expiresAt,
       tenantId: gate.session.tenantId || "",
       onboarded: gate.session.onboarded === true,
+      provider: providerFromUser(user) || gate.session.provider || "",
     }, sessionSecret(env));
     req.headers.cookie = replaceCookie(req.headers.cookie, CONSOLE_COOKIE, sealed);
     const maxAge = Math.max(0, Math.floor((gate.session.exp - now) / 1000));

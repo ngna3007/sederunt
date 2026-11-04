@@ -1,4 +1,4 @@
-import { brandLogo } from "./brand-logos.js";
+import { providerMark } from "./provider-marks.js";
 
 /**
  * Console sign-in. Passphrase mode is unchanged. When Supabase or the fake
@@ -76,13 +76,6 @@ function providerButtons(next) {
     <a class="auth-provider" id="auth-google" href="/console/auth/google?${query}">${providerMark("google")}<span>Continue with Google</span></a>
     <a class="auth-provider" id="auth-github" href="/console/auth/github?${query}">${providerMark("github")}<span>Continue with GitHub</span></a>
   </div>`;
-}
-
-function providerMark(name) {
-  const logo = brandLogo(name, 16);
-  if (logo) return logo;
-  const letter = name === "github" ? "Gh" : "G";
-  return `<span class="auth-letter" aria-hidden="true">${letter}</span>`;
 }
 
 function passphraseBlock(oauth, next, name, passInvalid, passMessage) {
