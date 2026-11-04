@@ -97,4 +97,4 @@ The unit tests use a fake Slack client, a fake model, and fake connectors. They 
 - `src/slack/match.js`, `src/console/people-matching.js`
 - `src/bot/preferences.js`, `src/bot/persona.js`
 - `src/meeting/actions.js`, `src/meeting/minutes.js`
-- `supabase/migrations/20261104180000_slack_matches_and_bot_preferences.sql`
+- `supabase/migrations/20261104102057_slack_matches_and_bot_preferences.sql`
