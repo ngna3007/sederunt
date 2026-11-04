@@ -71,6 +71,12 @@ export function renderConsolePage(state = {}) {
     ? `<div class="settings-card" id="console-secret"><p class="section-label">Console sign-in</p><p class="card-help">Sign-in is off. Anyone with this link can act as you. Set SEDERUNT_CONSOLE_SECRET outside this page, then restart. This page never shows the secret.</p></div>`
     : "";
   const switcher = renderWorkspaceSwitcher(state.spaces, switchIcon);
+  const canInvite = state.spaces?.oauth === true && (state.spaces.activeRole === "owner" || state.spaces.activeRole === "admin");
+  const inviteHref = "/console/welcome?step=team&amp;mode=manage";
+  const peopleInvite = canInvite ? `<a class="secondary" href="${inviteHref}" id="people-invite">${glyph('<path d="M8 3.2v9.6M3.2 8h9.6"/>')}Invite people</a>` : "";
+  const membersCard = canInvite
+    ? `<div class="settings-card" id="members-card"><p class="section-label">Members</p><p class="card-help">Invite people by email, copy the workspace invite link, or let anyone with your company email join.</p><div class="wait-actions"><a class="secondary" href="${inviteHref}" id="setup-invite">Invite people</a></div></div>`
+    : "";
   const spaceDialog = state.spaces?.oauth ? renderSpaceDialog(closeIcon) : "";
   const profile = state.accountProfile?.oauth ? state.accountProfile : null;
   const asks = state.toolAsk?.oauth === true;
@@ -209,6 +215,7 @@ ${slack}
     </div>
     </div>
     <div class="home-tools">
+    ${renderChecklist(state.checklist, closeIcon)}
     <div id="home-empty" class="home-empty" hidden>
       <span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.6h10.8v8.8H2.6z"/><path d="M2.6 6.6h10.8"/></svg></span>
       <p id="home-empty-line">No rooms yet.</p>
@@ -246,6 +253,7 @@ ${slack}
     <div id="overview" hidden>
       <div class="page-head"><div><p class="page-title">Setup</p><p class="page-lede">Which tools Sederunt can use, and how the meeting guest listens.</p></div><div class="page-actions"></div></div>
       ${secretCard}
+      ${membersCard}
       <p id="connector-split"></p>
       <div class="settings-card" id="meeting-card"${state.meeting ? " hidden" : ""}>
         <p class="section-label">Meeting</p>
@@ -466,6 +474,7 @@ ${slack}
       <div class="page-head"><div><p class="page-title">People</p><p class="page-lede">Names heard in a room.</p></div></div>
       <div class="toolbar page-toolbar" id="people-toolbar">
         <label class="search">${searchIcon}<span class="sr">Search people</span><input id="people-search" type="search" placeholder="Search" autocomplete="off"></label>
+        ${peopleInvite}
       </div>
       <div id="people-empty" class="empty-state" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="5.2" r="2.2"/><path d="M3.4 12.6c.7-2 2.4-3 4.6-3s3.9 1 4.6 3"/></svg></span><p class="empty-title">No one is listed yet.</p><p>People from a meeting or a channel show up here.</p></div>
       <p class="section-next"><button id="people-next" class="primary" type="button" hidden>Open Home</button></p>
@@ -941,6 +950,27 @@ if (sessionWhen && sessionWhen.dataset.at) {
     return rooms.length + pending.length;
   }
 
+  function paintChecklist(hasMeeting, emptyHome) {
+    var card = document.getElementById("home-checklist");
+    if (!card) return;
+    var item = document.getElementById("checklist-meeting");
+    if (item) {
+      item.classList.toggle("done", hasMeeting);
+      var action = document.getElementById("checklist-add-meeting");
+      // The empty Home already shows this button right below; one is enough.
+      if (action) action.hidden = hasMeeting || emptyHome;
+      var mark = item.querySelector(".check-state");
+      if (mark) mark.textContent = hasMeeting ? "Done" : "To do";
+    }
+    var items = card.querySelectorAll(".check-item");
+    var done = card.querySelectorAll(".check-item.done").length;
+    var count = document.getElementById("checklist-count");
+    if (count) count.textContent = done + " of " + items.length + " done";
+    var bar = document.getElementById("checklist-bar");
+    if (bar) bar.style.width = Math.round((done / Math.max(items.length, 1)) * 100) + "%";
+    if (done === items.length && items.length) card.classList.add("complete");
+  }
+
   function syncHomeChrome() {
     var personal = workspaceKind === "personal";
     var pending = !state || state.reading === true;
@@ -948,6 +978,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var homeEmpty = document.getElementById("home-empty");
     var blockedHome = !!(document.getElementById("meet-block") && document.getElementById("slack-block"));
     if (homeEmpty) homeEmpty.hidden = !emptyHome;
+    paintChecklist(!pending && roomTotal() > 0, emptyHome);
     var stats = document.getElementById("home-stats");
     if (stats) stats.hidden = sectionName !== "home" || emptyHome || (state && state.read === "failed");
     var note = document.getElementById("read-note");
@@ -4542,17 +4573,6 @@ if (sessionWhen && sessionWhen.dataset.at) {
     items.forEach(function (item, i) { item.tabIndex = i === index ? 0 : -1; });
     items[index].focus();
   });
-  var spaceKindBox = document.getElementById("space-kind");
-  if (spaceKindBox) {
-    spaceKindBox.addEventListener("change", function () {
-      var company = spaceKindBox.querySelector("input[value='company']");
-      var on = !!(company && company.checked);
-      var label = document.getElementById("space-domain-label");
-      var input = document.getElementById("space-domain");
-      if (label) label.hidden = !on;
-      if (input) input.disabled = !on;
-    });
-  }
   document.addEventListener("click", function () { closeMenu(); });
   document.getElementById("continue").addEventListener("click", function () {
     onboard.hidden = true;
@@ -5265,6 +5285,18 @@ if (sessionWhen && sessionWhen.dataset.at) {
   if (homeAdd) homeAdd.addEventListener("click", onHomeAddMeeting);
   var homeAddToMeeting = document.getElementById("home-add-to-meeting");
   if (homeAddToMeeting) homeAddToMeeting.addEventListener("click", onHomeAddMeeting);
+  var checklistAdd = document.getElementById("checklist-add-meeting");
+  if (checklistAdd) checklistAdd.addEventListener("click", onHomeAddMeeting);
+  var checklist = document.getElementById("home-checklist");
+  if (checklist) {
+    var checklistKey = "sederunt-checklist-hidden:" + checklist.getAttribute("data-tenant");
+    try { if (localStorage.getItem(checklistKey) === "1") checklist.hidden = true; } catch (error) { /* private mode */ }
+    var checklistClose = document.getElementById("checklist-dismiss");
+    if (checklistClose) checklistClose.addEventListener("click", function () {
+      checklist.hidden = true;
+      try { localStorage.setItem(checklistKey, "1"); } catch (error) { /* private mode */ }
+    });
+  }
   var homeConnect = document.getElementById("home-connect-tools");
   if (homeConnect) homeConnect.addEventListener("click", function (event) {
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
@@ -6234,6 +6266,43 @@ function jsonForScript(value) {
     .replace(/\u2029/g, "\\u2029");
 }
 
+/**
+ * Home's getting-started card. Real state only: the server reads tools and
+ * team, the page marks the meeting item once a room exists.
+ *
+ * @param {{ tenantId: string, calendar: boolean, chat: boolean, team: boolean, canInvite: boolean } | null | undefined} list
+ * @param {string} closeIcon
+ */
+function renderChecklist(list, closeIcon) {
+  if (!list || !list.tenantId) return "";
+  const tick = `<svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  const item = (id, done, title, action) => `<li class="check-item${done ? " done" : ""}" id="checklist-${id}">
+        <span class="check-dot" aria-hidden="true">${tick}</span>
+        <span class="check-title">${title}</span>
+        <span class="sr check-state">${done ? "Done" : "To do"}</span>
+        ${done ? "" : action}
+      </li>`;
+  const rows = [
+    item("calendar", list.calendar, list.calendar ? "Calendar connected" : "Connect your calendar", `<a class="check-go" href="/console/setup#tools-card">Connect</a>`),
+    item("chat", list.chat, list.chat ? "Slack connected" : "Choose where Sederunt posts", `<a class="check-go" href="/console/setup#tools-card">Set up</a>`),
+    list.canInvite ? item("team", list.team, list.team ? "Team invited" : "Invite your team", `<a class="check-go" href="/console/welcome?step=team&amp;mode=manage">Invite</a>`) : "",
+    item("meeting", false, "Add Sederunt to a meeting", `<button type="button" class="check-go" id="checklist-add-meeting">Add</button>`),
+  ].filter(Boolean);
+  const total = rows.length;
+  const done = [list.calendar, list.chat, list.canInvite && list.team].filter(Boolean).length;
+  return `<section class="home-checklist" id="home-checklist" data-tenant="${escapeHtml(list.tenantId)}" aria-labelledby="checklist-title">
+      <div class="check-head">
+        <div>
+          <h2 id="checklist-title" class="check-heading">Get started with Sederunt</h2>
+          <p class="check-sub"><span id="checklist-count">${done} of ${total} done</span></p>
+        </div>
+        <button type="button" class="icon-button check-close" id="checklist-dismiss" aria-label="Hide getting started">${closeIcon}</button>
+      </div>
+      <div class="check-track" aria-hidden="true"><span id="checklist-bar" style="width:${Math.round((done / total) * 100)}%"></span></div>
+      <ul class="check-list">${rows.join("")}</ul>
+    </section>`;
+}
+
 function renderWorkspaceSwitcher(spaces, switchIcon) {
   if (!spaces?.oauth) {
     return `<button id="workspace-chip" class="chip" type="button" aria-expanded="false" aria-haspopup="menu" aria-controls="workspace-menu">
@@ -6277,7 +6346,7 @@ function renderWorkspaceSwitcher(spaces, switchIcon) {
           ${error}
           ${rows}
           <div class="menu-rule" role="separator"></div>
-          <button id="create-workspace" type="button" role="menuitem" tabindex="${items.length ? "-1" : "0"}"><span class="ws-copy"><span>Create a space</span><span class="menu-hint">Team or company</span></span></button>
+          <button id="create-workspace" type="button" role="menuitem" tabindex="${items.length ? "-1" : "0"}"><span class="ws-copy"><span>Create workspace</span><span class="menu-hint">For another company or team</span></span></button>
         </div>`;
 }
 
@@ -6286,39 +6355,19 @@ function renderSpaceDialog(closeIcon) {
   <div class="shade" data-close="space-dialog"></div>
   <div class="panel">
     <div class="panel-bar">
-      <h2 id="space-dialog-title">Create a space</h2>
+      <h2 id="space-dialog-title">Create workspace</h2>
       <button type="button" class="close" data-close="space-dialog" aria-label="Close">${closeIcon}</button>
     </div>
     <form class="panel-body" method="post" action="/console/welcome" id="space-dialog-form">
-      <p class="page-lede">Name the team or company, then invite people if you want. Sederunt does not send email yet.</p>
+      <p class="page-lede">A separate workspace with its own meetings and people. You can invite people next.</p>
       <input type="hidden" name="action" value="create">
-      <fieldset class="choice-two" id="space-kind">
-        <legend class="sr">Kind of space</legend>
-        <label class="choice-card radio-card">
-          <input type="radio" name="kind" value="team" checked>
-          <span class="choice-title">Team</span>
-          <span class="choice-copy">A shared space for the people you work with.</span>
-        </label>
-        <label class="choice-card radio-card">
-          <input type="radio" name="kind" value="company">
-          <span class="choice-title">Company</span>
-          <span class="choice-copy">A space for the company, with an optional email domain.</span>
-        </label>
-      </fieldset>
-      <label>Name
-        <input id="space-name" name="name" required maxlength="120" minlength="1" autocomplete="organization">
-      </label>
-      <label id="space-domain-label" hidden>Email domain (optional)
-        <input id="space-domain" name="domain" autocomplete="off" maxlength="253" placeholder="example.com" disabled>
-        <span class="field-hint">Optional. Leave it blank if you don't want one saved.</span>
-      </label>
-      <label>Invite emails (optional)
-        <textarea id="space-emails" name="emails" rows="3" placeholder="one@example.com, two@example.com"></textarea>
-        <span class="field-hint">Optional. Separate addresses with commas or new lines.</span>
+      <input type="hidden" name="from" value="switcher">
+      <label>Workspace name
+        <input id="space-name" name="name" required maxlength="120" minlength="1" autocomplete="organization" placeholder="Acme">
       </label>
       <div class="wait-actions">
         <button type="button" class="secondary" data-close="space-dialog">Cancel</button>
-        <button class="primary" type="submit" id="space-submit">Create the space</button>
+        <button class="primary" type="submit" id="space-submit">Create workspace</button>
       </div>
     </form>
   </div>
