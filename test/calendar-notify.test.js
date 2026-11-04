@@ -69,7 +69,7 @@ test("saving with notify off sends sendUpdates none", async (t) => {
   })).raw);
   assert.equal(saved.ok, true);
   assert.equal(saved.sendUpdates, "none");
-  assert.equal(calendar.calls.at(-1).arguments.sendUpdates, "none");
+  assert.equal(calendar.calls.at(-1).arguments.notificationLevel, "NONE");
 });
 
 async function browserPath(chromium) {
@@ -137,11 +137,12 @@ test("notify off toast says saved without notifying guests", { timeout: 180000 }
     const save = document.getElementById("event-save");
     return save && !save.disabled;
   });
+  await page.fill("#event-description", "Notify-off check");
   await page.locator("#event-notify").uncheck();
   await page.click("#event-save");
   await page.waitForFunction(() => {
     const toast = document.getElementById("toast");
     return toast && !toast.hidden && toast.textContent.includes("Saved without notifying guests.");
   });
-  assert.equal(calendar.calls.at(-1).arguments.sendUpdates, "none");
+  assert.equal(calendar.calls.at(-1).arguments.notificationLevel, "NONE");
 });
