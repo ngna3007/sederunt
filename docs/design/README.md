@@ -18,7 +18,7 @@ shaped that way.
 ## Documents
 
 - [system.md](./system.md) — the process, the doors, and the gate. Read first.
-- [walrus-files.md](./walrus-files.md) — files sent in channels: storage on Walrus, access, deletion, memory cleanup (draft).
+- [walrus-files.md](./walrus-files.md) — channel files on Walrus Console: one private folder, Postgres visibility, deletion, memory cleanup.
 - [entities.md](./entities.md) — the records and their invariants.
 - [access.md](./access.md) — who may hear a sentence.
 - [record.md](./record.md) — Walrus Memory, Walrus Console, and the Tatum proof.

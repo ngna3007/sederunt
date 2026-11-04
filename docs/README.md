@@ -20,6 +20,10 @@ docs/
 └── templates/       # document templates
 ```
 
+## File storage
+
+Channel files live on one Walrus Console account. The server environment names are `CONSOLE_API_KEY`, `CONSOLE_SERVICE_PRIVATE_KEY`, `CONSOLE_SPACE_ID` (optional), `CONSOLE_FOLDER_ID` (optional; an existing folder, never created), `CONSOLE_FILES_FOLDER_NAME` (optional; default `sederunt-files`), and `FILES_DEMO`. Memory cleanup also reads `SEDERUNT_MEMWAL_KEY`, `SEDERUNT_MEMWAL_ACCOUNT_ID`, `SEDERUNT_MEMWAL_OWNER_KEY`, and `SEDERUNT_MEMWAL_SERVER`. The design is [design/walrus-files.md](./design/walrus-files.md).
+
 ## When to read what
 
 - **Any task:** [`ai/`](./ai/) — find the right source files for a topic.
