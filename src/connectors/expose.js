@@ -134,9 +134,12 @@ export async function callCustomTool(input) {
   }
   const invoke = (bearer) => callTool({
     url: connector.url,
+    preset: connector.preset,
     token: bearer,
     headerName,
     transport: connector.transport,
+    forms: input.forms,
+    origin: input.origin,
   }, tool.name, cleanArgs(input.args), { env: input.env, timeoutMs: 10000 });
   let bearer = token;
   let called = await invoke(bearer);

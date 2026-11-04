@@ -1,10 +1,11 @@
 import { formsFakeEnabled } from "../mcp-forms/api.js";
 import { requestOrigin } from "../identity/routes.js";
+import { BUILTIN_GOOGLE_FORMS_URL, GOOGLE_FORMS_PRESET } from "./builtin-forms.js";
 import { testConnection } from "./client.js";
 import { connectorMessage } from "./errors.js";
 import { FORMS_SCOPES } from "./google-person.js";
 
-export const GOOGLE_FORMS_PRESET = "google-forms";
+export { BUILTIN_GOOGLE_FORMS_URL, GOOGLE_FORMS_PRESET };
 
 export const GOOGLE_FORMS_TOOLS = Object.freeze([
   "create_form",
@@ -66,7 +67,7 @@ export async function addGoogleFormsPreset(input) {
       message: "Connect Google Forms before adding it.",
     };
   }
-  const url = `${requestOrigin(input.req, input.env)}/mcp/forms`;
+  const url = BUILTIN_GOOGLE_FORMS_URL;
   const connector = await input.store.create(input.tenantId, {
     name: "Google Forms",
     url,
@@ -74,7 +75,13 @@ export async function addGoogleFormsPreset(input) {
     authType: "google_oauth",
     scopes: FORMS_SCOPES,
   });
-  const test = await testConnection({ url, env: input.env });
+  const test = await testConnection({
+    url,
+    preset: GOOGLE_FORMS_PRESET,
+    env: input.env,
+    forms: input.forms,
+    origin: requestOrigin(input.req, input.env),
+  });
   if (!test?.ok) {
     await input.store.remove(input.tenantId, connector.id);
     return {

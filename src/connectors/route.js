@@ -4,6 +4,7 @@ import { ensureDemoServer } from "./demo.js";
 import { addGoogleFormsPreset, googleFormsPresetState } from "./forms-preset.js";
 import { loadSpaceView } from "../console-flow.js";
 import { guardConsole } from "../console-auth.js";
+import { requestOrigin } from "../identity/routes.js";
 import { validToolName } from "./tools.js";
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -76,6 +77,7 @@ export async function handleConnectorRoutes(ctx) {
         req,
         grants: ctx.workspace?.googleGrants,
         personId: personIdFrom(gate, ctx.env),
+        forms: ctx.workspace?.forms,
       });
       if (!result.ok) {
         sendJson(ctx, result.code === "needs_access" ? 200 : 400, {
@@ -91,7 +93,7 @@ export async function handleConnectorRoutes(ctx) {
     }
     if (req.method === "POST" && url.pathname === "/console/connectors/probe") {
       const body = await readBody(ctx);
-      const test = await testConnection(authInput(body, ctx.env));
+      const test = await testConnection(authInput(body, ctx.env, formsInput(ctx)));
       sendJson(ctx, 200, publicTest(test));
       return true;
     }
@@ -103,7 +105,7 @@ export async function handleConnectorRoutes(ctx) {
         token: body.token,
         headerName: body.headerName,
       });
-      const test = await testConnection(authInput({ ...body, url: connector.url }, ctx.env));
+      const test = await testConnection(authInput({ ...body, url: connector.url }, ctx.env, formsInput(ctx)));
       const saved = await store.recordTest(tenantId, connector.id, test);
       sendJson(ctx, 200, { ok: true, connector: saved, test: publicTest(test) });
       return true;
@@ -161,8 +163,10 @@ export async function handleConnectorRoutes(ctx) {
       const secret = await store.openToken(tenantId, id);
       const test = await testConnection({
         url: current.url,
+        preset: current.preset,
         auth: secret ? { token: secret.token, headerName: secret.headerName } : {},
         env: ctx.env,
+        ...formsInput(ctx),
       });
       const saved = await store.recordTest(tenantId, id, test);
       sendJson(ctx, 200, { ok: true, connector: saved, test: publicTest(test) });
@@ -202,13 +206,21 @@ async function readBody(ctx) {
   }
 }
 
-function authInput(body, env) {
+function formsInput(ctx) {
+  return {
+    forms: ctx.workspace?.forms,
+    origin: requestOrigin(ctx.req, ctx.env),
+  };
+}
+
+function authInput(body, env, extras = {}) {
   const token = typeof body?.token === "string" ? body.token : "";
   const headerName = typeof body?.headerName === "string" && body.headerName.trim() ? body.headerName.trim() : "Authorization";
   return {
     url: typeof body?.url === "string" ? body.url : "",
     auth: token ? { token, headerName } : {},
     env,
+    ...extras,
   };
 }
 

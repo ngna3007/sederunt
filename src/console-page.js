@@ -6454,7 +6454,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     head.append(title, pill);
     var url = document.createElement("p");
     url.className = "mcp-url";
-    url.textContent = connector.url || "";
+    url.textContent = (connector.preset === "google-forms" || connector.url === "builtin:google-forms") ? "Built in" : (connector.url || "");
     var tested = document.createElement("p");
     tested.className = "meta";
     tested.textContent = mcpWhen(connector.lastTestedAt);

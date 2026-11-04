@@ -11,6 +11,7 @@ import {
   validToolName,
   withEnabled,
 } from "./tools.js";
+import { BUILTIN_GOOGLE_FORMS_URL, isBuiltinGoogleForms } from "./builtin-forms.js";
 import { guardConnectorUrl } from "./url-guard.js";
 import { FORMS_SCOPES } from "./google-person.js";
 
@@ -71,7 +72,7 @@ export function createMemoryConnectorStore(env = process.env) {
     async create(tenantId, input) {
       const name = String(input?.name || "").trim();
       if (!name || name.length > 120) throw connectorError("invalid-url", "Enter a name.");
-      const url = await guardConnectorUrl(input?.url, { env, lookup: input?.lookup });
+      const url = await resolveConnectorUrl(input, env);
       const headerName = input?.token ? validHeaderName(input?.headerName || "Authorization") : "";
       if (input?.token && !headerName) throw connectorError("invalid-url", "Enter a header name.");
       const base = slugFromName(name);
@@ -84,7 +85,7 @@ export function createMemoryConnectorStore(env = process.env) {
         tenantId,
         slug,
         name,
-        url: url.href,
+        url,
         transport: "streamable_http",
         authType: storedAuthType(input),
         preset: storedPreset(input),
@@ -109,8 +110,7 @@ export function createMemoryConnectorStore(env = process.env) {
       if (!row) return null;
       if (typeof patch?.name === "string" && patch.name.trim()) row.name = patch.name.trim().slice(0, 120);
       if (typeof patch?.url === "string") {
-        const url = await guardConnectorUrl(patch.url, { env, lookup: patch.lookup });
-        row.url = url.href;
+        row.url = await resolveConnectorUrl({ url: patch.url, preset: row.preset, lookup: patch.lookup }, env);
         row.status = "draft";
         row.lastTestedAt = null;
       }
@@ -182,6 +182,18 @@ export function createMemoryConnectorStore(env = process.env) {
       return present(row);
     },
   };
+}
+
+/**
+ * The Forms preset keeps a marker. Every other connector still goes through the URL guard.
+ *
+ * @param {{ url?: string, preset?: string, lookup?: Function }} input
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
+ */
+async function resolveConnectorUrl(input, env) {
+  if (isBuiltinGoogleForms(input)) return BUILTIN_GOOGLE_FORMS_URL;
+  const url = await guardConnectorUrl(input?.url, { env, lookup: input?.lookup });
+  return url.href;
 }
 
 function storedPreset(input) {
@@ -340,7 +352,7 @@ export function createSupabaseConnectorStore({ url, key, fetchImpl, env }) {
     async create(tenantId, input) {
       const name = String(input?.name || "").trim();
       if (!name || name.length > 120) throw connectorError("invalid-url", "Enter a name.");
-      const guarded = await guardConnectorUrl(input?.url, { env, lookup: input?.lookup });
+      const guarded = await resolveConnectorUrl(input, env);
       const headerName = input?.token ? validHeaderName(input?.headerName || "Authorization") : "";
       if (input?.token && !headerName) throw connectorError("invalid-url", "Enter a header name.");
       const base = slugFromName(name);
@@ -359,7 +371,7 @@ export function createSupabaseConnectorStore({ url, key, fetchImpl, env }) {
         display_name: name,
         preset: storedPreset(input),
         transport: "streamable_http",
-        url: guarded.href,
+        url: guarded,
         command: null,
         auth_type: storedAuthType(input),
         headers_public: input?.token ? { header_name: headerName, token_last4: tokenLast4(input.token) } : {},
@@ -378,7 +390,9 @@ export function createSupabaseConnectorStore({ url, key, fetchImpl, env }) {
       if (!current) return null;
       const body = {};
       if (typeof patch?.name === "string" && patch.name.trim()) body.display_name = patch.name.trim().slice(0, 120);
-      if (typeof patch?.url === "string") body.url = (await guardConnectorUrl(patch.url, { env, lookup: patch.lookup })).href;
+      if (typeof patch?.url === "string") {
+        body.url = await resolveConnectorUrl({ url: patch.url, preset: current.preset, lookup: patch.lookup }, env);
+      }
       if (!Object.keys(body).length) return current;
       await call("mcp_connectors", { method: "PATCH", query: { id: `eq.${id}`, tenant_id: `eq.${tenantId}` }, body });
       return this.get(tenantId, id);

@@ -1,4 +1,7 @@
-import { Client, SSEClientTransport, StreamableHTTPClientTransport, UnauthorizedError } from "@modelcontextprotocol/client";
+import { Client, InMemoryTransport, SSEClientTransport, StreamableHTTPClientTransport, UnauthorizedError } from "@modelcontextprotocol/client";
+import { runWithFormsContext } from "../mcp-forms/context.js";
+import { createFormsMcpServer } from "../mcp-forms/server.js";
+import { isBuiltinGoogleForms } from "./builtin-forms.js";
 import { connectorError, connectorMessage } from "./errors.js";
 import { guardConnectorUrl } from "./url-guard.js";
 
@@ -13,6 +16,25 @@ export async function testConnection(input) {
   const started = Date.now();
   const timeoutMs = positiveTimeout(input?.timeoutMs);
   try {
+    if (isBuiltinGoogleForms(input)) {
+      let payload;
+      await withTimeout(timeoutMs, async () => {
+        payload = await withBuiltinClient(input, timeoutMs, async ({ client, transport }) => ({
+          serverInfo: readServerInfo(client),
+          protocolVersion: transport.protocolVersion || null,
+          tools: await listPages(client, timeoutMs),
+        }));
+      });
+      return {
+        ok: true,
+        serverInfo: payload.serverInfo,
+        protocolVersion: payload.protocolVersion,
+        tools: payload.tools,
+        latencyMs: Date.now() - started,
+        code: "",
+        message: "",
+      };
+    }
     const url = await guardConnectorUrl(input?.url, { env: input?.env, lookup: input?.lookup });
     const auth = authFrom(input);
     const tools = [];
@@ -74,9 +96,54 @@ export async function testConnection(input) {
  * @param {Record<string, unknown>} [args]
  * @param {{ env?: NodeJS.ProcessEnv, timeoutMs?: number, lookup?: Function, fetch?: typeof fetch, transport?: string }} [options]
  */
+/**
+ * Tool definitions for a connector. The built-in Forms preset is read in-process.
+ *
+ * @param {{ url?: string, preset?: string, forms?: object, origin?: string, env?: NodeJS.ProcessEnv, timeoutMs?: number, token?: string, fetch?: typeof fetch, lookup?: Function }} input
+ */
+export async function listTools(input) {
+  const timeoutMs = positiveTimeout(input?.timeoutMs);
+  if (isBuiltinGoogleForms(input)) {
+    let tools = [];
+    await withTimeout(timeoutMs, async () => {
+      tools = await withBuiltinClient(input, timeoutMs, ({ client }) => listPages(client, timeoutMs));
+    });
+    return tools;
+  }
+  const tested = await testConnection(input);
+  if (!tested.ok) throw connectorError(tested.code || "protocol");
+  return tested.tools;
+}
+
 export async function callTool(connector, name, args = {}, options = {}) {
   const timeoutMs = positiveTimeout(options.timeoutMs);
+  const target = {
+    url: connector?.url,
+    preset: connector?.preset || options.preset,
+    token: connector?.token || options.token || "",
+    forms: options.forms || connector?.forms,
+    origin: options.origin || connector?.origin,
+    env: options.env,
+  };
   try {
+    if (isBuiltinGoogleForms(target)) {
+      let result = null;
+      await withTimeout(timeoutMs, async () => {
+        result = await withBuiltinClient(target, timeoutMs, ({ client }) => client.callTool({
+          name,
+          arguments: args && typeof args === "object" ? args : {},
+        }, { timeout: timeoutMs }));
+      });
+      const text = toolText(result);
+      return {
+        ok: result?.isError !== true,
+        text,
+        structuredContent: result?.structuredContent,
+        isError: result?.isError === true,
+        code: "",
+        message: "",
+      };
+    }
     const url = await guardConnectorUrl(connector?.url, { env: options.env, lookup: options.lookup });
     const auth = authFrom({ ...connector, ...options, token: connector?.token || "" });
     let result = null;
@@ -104,6 +171,58 @@ export async function callTool(connector, name, args = {}, options = {}) {
   } catch (error) {
     const code = classify(error);
     return { ok: false, text: "", isError: true, code, message: connectorMessage(code) };
+  }
+}
+
+function formsServiceOf(input) {
+  if (input?.forms?.service && typeof input.forms.service.createForm === "function") return input.forms.service;
+  if (typeof input?.forms?.createForm === "function") return input.forms;
+  return null;
+}
+
+function tokenFrom(input) {
+  if (typeof input?.auth?.token === "string" && input.auth.token) return input.auth.token;
+  if (typeof input?.token === "string") return input.token;
+  return "";
+}
+
+/**
+ * The person's access token stays in the request context. This does not open a socket.
+ *
+ * @param {object} input
+ * @param {number} timeoutMs
+ * @param {(opened: { client: Client, transport: InMemoryTransport }) => Promise<unknown>} run
+ */
+async function withBuiltinClient(input, timeoutMs, run) {
+  const service = formsServiceOf(input);
+  if (!service) throw connectorError("protocol");
+  const context = {
+    token: tokenFrom(input),
+    origin: typeof input?.origin === "string" && input.origin ? input.origin : "http://127.0.0.1",
+  };
+  const bound = {
+    createForm: (args) => runWithFormsContext(context, () => service.createForm(args)),
+    addQuestions: (args) => runWithFormsContext(context, () => service.addQuestions(args)),
+    getForm: (args) => runWithFormsContext(context, () => service.getForm(args)),
+    listResponses: (args) => runWithFormsContext(context, () => service.listResponses(args)),
+    publishForm: (args) => runWithFormsContext(context, () => service.publishForm(args)),
+  };
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = createFormsMcpServer(bound);
+  const client = new Client(
+    { name: "sederunt", version: "0.0.0" },
+    { versionNegotiation: { mode: "legacy" } },
+  );
+  const pendingServer = server.connect(serverTransport);
+  const pendingClient = client.connect(clientTransport, { timeout: timeoutMs });
+  pendingServer.catch(() => {});
+  pendingClient.catch(() => {});
+  try {
+    await Promise.all([pendingServer, pendingClient]);
+    return await run({ client, transport: clientTransport });
+  } finally {
+    await client.close().catch(() => {});
+    await server.close().catch(() => {});
   }
 }
 

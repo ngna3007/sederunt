@@ -136,7 +136,7 @@ test("google forms preset adds five tools and confirms a write", async (t) => {
   assert.equal(connector.slug, "google-forms");
   assert.equal(connector.hasToken, false);
   assert.equal(connector.tokenLast4, "");
-  assert.match(connector.url, /^http:\/\/127\.0\.0\.1:\d+\/mcp\/forms$/);
+  assert.equal(connector.url, "builtin:google-forms");
   assert.deepEqual(connector.scopes, [...FORMS_SCOPES]);
   assert.equal(connector.tools.length, 5);
   assert.equal(connector.tools.every((tool) => tool.enabled === true), true);

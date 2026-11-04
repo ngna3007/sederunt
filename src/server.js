@@ -37,7 +37,7 @@ import {
 } from "./console-auth.js";
 import { createIdentity, identityConfigured } from "./identity/client.js";
 import { clearOAuthCookie } from "./identity/pending.js";
-import { handleAuthRoute } from "./identity/routes.js";
+import { handleAuthRoute, requestOrigin } from "./identity/routes.js";
 import { refreshOAuthSession, rememberRefreshCookie } from "./identity/session.js";
 import { handleToolPref, loadAccountProfile, loadToolAsk } from "./console-account.js";
 import { handleInvite, handleJoinLink, handleSpaceSwitch, handleWelcome, loadChecklist, loadSpaceView, welcomeLocation } from "./console-flow.js";
@@ -315,7 +315,14 @@ export function createApp(options = {}) {
     const gate = guardConsole(req, env);
     const tenantId = await resolveMcpSpace(gate, identity, workspace.deps.connectors);
     const personId = String(gate.session?.userId || gate.session?.memberId || env.SEDERUNT_MEMBER || "").trim();
-    return { tenantId, env, personId, googleGrants: workspace.googleGrants };
+    return {
+      tenantId,
+      env,
+      personId,
+      googleGrants: workspace.googleGrants,
+      forms: workspace.forms,
+      origin: requestOrigin(req, env),
+    };
   }
   const server = createServer(async (req, res) => {
   try {
