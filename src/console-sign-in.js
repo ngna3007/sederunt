@@ -30,7 +30,7 @@ export function renderSignInPage(state = {}) {
   const noticeHtml = notice
     ? `<p class="alert info" id="auth-notice" role="status">${escapeText(notice)}</p>`
     : "";
-  const lede = oauth ? "Continue with Google or GitHub." : "Enter your workspace passphrase.";
+  const lede = oauth ? "Sederunt joins your meetings and keeps what was decided." : "Enter your workspace passphrase.";
   const providers = oauth ? providerButtons(next) : "";
   const form = configured ? passphraseBlock(oauth, nextEscaped, name, passInvalid, passMessage) : "";
   return `<!DOCTYPE html>
