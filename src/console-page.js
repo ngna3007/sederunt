@@ -867,7 +867,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (stats) stats.hidden = sectionName !== "home" || emptyHome || (state && state.read === "failed");
     var note = document.getElementById("read-note");
     if (note) note.hidden = sectionName !== "home" || emptyHome;
-    var explorer = document.querySelector(".explorer");
+    var explorer = document.querySelector("#rooms .explorer");
     if (explorer && !personal) explorer.hidden = pending || (sectionName === "home" && emptyHome);
     var line = document.getElementById("home-empty-line");
     var aside = document.getElementById("home-empty-aside");
@@ -1469,7 +1469,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     clear("room-list");
     var personal = workspaceKind === "personal";
     syncNewRoom();
-    var explorer = document.querySelector(".explorer");
+    var explorer = document.querySelector("#rooms .explorer");
     var notes = document.getElementById("personal-notes");
     if (personal) {
       if (explorer) explorer.hidden = true;
@@ -1565,7 +1565,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         : "Bring Sederunt into a meeting or a channel.";
     var clearFilters = document.getElementById("clear-filters");
     if (clearFilters) clearFilters.hidden = !filteredOut;
-    var explorer = document.querySelector(".explorer");
+    var explorer = document.querySelector("#rooms .explorer");
     if (explorer) {
       var anyWait = waiting.length > 0 || rooms.some(function (room) { return waitingFor(room.id).length > 0; });
       explorer.classList.toggle("no-wait", !anyWait);

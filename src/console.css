@@ -3974,6 +3974,8 @@ button.room:focus-visible {
   box-sizing: border-box;
   overflow: visible;
 }
+/* [hidden] loses to the grid rule above. An empty Home sets this. */
+#rooms .explorer[hidden] { display: none !important; }
 body.is-reading #rooms .explorer { display: none !important; }
 #rooms .explorer-head,
 #rooms #room-list,
