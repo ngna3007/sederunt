@@ -26,7 +26,12 @@ import {
   safeConsoleNext,
   sealSession,
   sessionCookie,
+  sessionSecret,
 } from "./console-auth.js";
+import { createIdentity, identityConfigured } from "./identity/client.js";
+import { clearOAuthCookie } from "./identity/pending.js";
+import { handleAuthRoute } from "./identity/routes.js";
+import { refreshOAuthSession, rememberRefreshCookie } from "./identity/session.js";
 import { renderLanding } from "./landing.js";
 import { loadCompanyEnv, loadLocalEnv } from "./local-env.js";
 import { looksLikeOpenQuestion } from "./parse.js";
@@ -292,8 +297,10 @@ export function createApp(options = {}) {
     linearReady: options.linearReady === true || (options.env ? false : linearReady()),
     recall: options.recall || null,
   };
+  const identity = options.identity ?? (identityConfigured(env) ? createIdentity(env) : null);
   return createServer(async (req, res) => {
   try {
+    if (identity) rememberRefreshCookie(res, await refreshOAuthSession(req, identity, env));
     const url = new URL(req.url || "/", `http://127.0.0.1:${port}`);
     if (req.method === "GET" && url.pathname.startsWith("/media/")) {
       if (await sendMedia(res, url.pathname)) return;
@@ -346,8 +353,12 @@ export function createApp(options = {}) {
       res.end(bytes);
       return;
     }
+    if (url.pathname === "/console/auth" || url.pathname.startsWith("/console/auth/")) {
+      await handleAuthRoute({ req, res, url, env, identity, send, redirect });
+      return;
+    }
     if (req.method === "GET" && url.pathname === "/console/sign-in") {
-      if (!consoleSecret(env)) {
+      if (!consoleSecret(env) && !identity) {
         redirect(res, "/console");
         return;
       }
@@ -356,9 +367,10 @@ export function createApp(options = {}) {
         redirect(res, safeConsoleNext(url.searchParams.get("next") || "/console"));
         return;
       }
-      const reason = url.searchParams.get("reason") || "";
+      const reason = url.searchParams.get("reason") || req.authFailure || "";
       send(res, 200, "text/html; charset=utf-8", renderSignInPage({
         configured: Boolean(consoleSecret(env)),
+        oauth: Boolean(identity),
         memberSet: Boolean(String(env.SEDERUNT_MEMBER || "").trim()),
         reason: reason === "expired" || reason === "invalid" || reason === "mismatch" || reason === "missing-pass" ? reason : "",
         name: url.searchParams.get("name") || "",
@@ -374,6 +386,7 @@ export function createApp(options = {}) {
       if (!secret) {
         send(res, 200, "text/html; charset=utf-8", renderSignInPage({
           configured: false,
+          oauth: Boolean(identity),
           memberSet: Boolean(String(env.SEDERUNT_MEMBER || "").trim()),
           name,
           next,
@@ -384,6 +397,7 @@ export function createApp(options = {}) {
       if (!given) {
         send(res, 400, "text/html; charset=utf-8", renderSignInPage({
           configured: true,
+          oauth: Boolean(identity),
           memberSet: Boolean(String(env.SEDERUNT_MEMBER || "").trim()),
           reason: "missing-pass",
           name,
@@ -394,6 +408,7 @@ export function createApp(options = {}) {
       if (!passphraseMatches(given, secret)) {
         send(res, 401, "text/html; charset=utf-8", renderSignInPage({
           configured: true,
+          oauth: Boolean(identity),
           memberSet: Boolean(String(env.SEDERUNT_MEMBER || "").trim()),
           reason: "mismatch",
           name,
@@ -414,7 +429,8 @@ export function createApp(options = {}) {
       const gate = guardConsole(req, env);
       const body = await readJson(req);
       const name = typeof body.name === "string" ? body.name.trim().slice(0, 80) : "";
-      if (!secret || !gate.session) {
+      const oauth = gate.session?.kind === "oauth";
+      if ((!secret && !oauth) || !gate.session) {
         send(res, 409, "application/json; charset=utf-8", JSON.stringify({ error: "Sign-in is not set up." }));
         return;
       }
@@ -422,18 +438,22 @@ export function createApp(options = {}) {
         send(res, 400, "application/json; charset=utf-8", JSON.stringify({ error: "Enter a display name." }));
         return;
       }
-      const token = sealSession({
+      const token = sealSession(oauth ? {
+        ...gate.session,
+        name,
+        exp: Date.now() + CONSOLE_SESSION_MS,
+      } : {
         memberId: gate.session.memberId || String(env.SEDERUNT_MEMBER || "").trim(),
         name,
         exp: Date.now() + CONSOLE_SESSION_MS,
-      }, secret);
+      }, oauth ? sessionSecret(env) : secret);
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({ name }), {
         "set-cookie": sessionCookie(token, req, Math.floor(CONSOLE_SESSION_MS / 1000)),
       });
       return;
     }
     if (req.method === "POST" && url.pathname === "/console/sign-out") {
-      redirect(res, "/console/sign-in", { "set-cookie": clearedSessionCookie(req) });
+      redirect(res, "/console/sign-in", { "set-cookie": [clearedSessionCookie(req), clearOAuthCookie(req)] });
       return;
     }
     if (req.method === "GET" && /^\/console\/rooms\/[^/]+\/media$/.test(url.pathname)) {
@@ -561,8 +581,8 @@ export function createApp(options = {}) {
               : "Check that SEDERUNT_PUBLIC_ORIGIN is a public https address, then restart.",
         slackReady: Boolean(env.SLACK_SIGNING_SECRET && env.SLACK_BOT_TOKEN),
         signedIn: Boolean(gate.session),
-        signInOff: !consoleSecret(env),
-        accountMember: String(env.SEDERUNT_MEMBER || "").trim(),
+        signInOff: !consoleSecret(env) && !identity,
+        accountMember: gate.session?.memberId || String(env.SEDERUNT_MEMBER || "").trim(),
         accountName: gate.session?.name?.trim() || String(env.SEDERUNT_MEMBER || "").trim(),
         accountLine: gate.session ? "Owner" : "Sign-in is not set up",
         accountExpiry: gate.session?.exp || 0,

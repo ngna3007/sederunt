@@ -1439,6 +1439,47 @@ button.tile {
 .auth-card form { display: flex; flex-direction: column; gap: 12px; }
 .auth-card label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 500; }
 .auth-card button.primary { width: 100%; min-height: var(--control-h); height: var(--control-h); }
+.auth-providers { display: flex; flex-direction: column; gap: 8px; margin: 0 0 14px; }
+.auth-provider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: var(--control-h);
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+}
+.auth-provider:hover { background: var(--muted); }
+.auth-provider:focus-visible { box-shadow: var(--focus-ring); }
+.auth-letter {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+.auth-fallback { margin-top: 2px; }
+.auth-fallback summary {
+  cursor: pointer;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  font-weight: 500;
+}
+.auth-fallback[open] summary { margin-bottom: 12px; }
+.auth-fallback form { margin-top: 4px; }
 .alert {
   margin: 0 0 14px;
   padding: 10px 12px;
