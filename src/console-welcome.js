@@ -83,10 +83,15 @@ ${brandSprite()}
 </html>`;
 }
 
+function backLink(href) {
+  return `<a class="ob-link" href="${href}" id="ob-back">Back</a>`;
+}
+
 function workspaceStep(state) {
+  const renaming = state.renaming === true;
   const name = String(state.name || "");
   const invalid = state.error ? ` aria-invalid="true" aria-describedby="ob-error"` : "";
-  const joinable = Array.isArray(state.joinable) ? state.joinable.filter((row) => row && row.id) : [];
+  const joinable = renaming ? [] : (Array.isArray(state.joinable) ? state.joinable.filter((row) => row && row.id) : []);
   const joins = joinable.length ? `<div class="ob-join" id="ob-joinable">
         <p class="ob-label">Your team is already here</p>
         <ul class="ob-list">${joinable.map((row) => `<li class="ob-row">
@@ -97,9 +102,11 @@ function workspaceStep(state) {
         <p class="ob-or"><span>or create a new one</span></p>
       </div>` : "";
   return {
-    title: "Create your workspace",
-    sub: "Meetings, decisions and follow-ups live here. Your team joins it next.",
-    body: `${joins}<input type="hidden" name="action" value="create">
+    title: renaming ? "Your workspace" : "Create your workspace",
+    sub: renaming
+      ? "This is the name your team sees. You can change it."
+      : "Meetings, decisions and follow-ups live here. Your team joins it next.",
+    body: `${joins}<input type="hidden" name="action" value="${renaming ? "rename" : "create"}">
       <label class="ob-field" for="workspace-name"><span class="ob-label">Workspace name</span>
         <input id="workspace-name" name="name" type="text" value="${escapeAttr(name)}" maxlength="120" autocomplete="organization" required${invalid}>
       </label>
@@ -144,7 +151,7 @@ function calendarStep(state) {
       </ul>
       ${upcoming}
       ${toggle}`,
-    left: connected ? "" : `<button class="ob-link" type="submit" name="choice" value="later" id="ob-skip" formnovalidate>Not now</button>`,
+    left: `${backLink("/console/welcome?step=workspace")}${connected ? "" : `<button class="ob-link" type="submit" name="choice" value="later" id="ob-skip" formnovalidate>Not now</button>`}`,
     right: connected
       ? `<button class="ob-primary" type="submit" name="choice" value="continue" id="ob-continue">Continue</button>`
       : `<button class="ob-primary" type="submit" name="choice" value="connect" id="calendar-connect" data-docs="${escapeAttr(state.fakeTools ? "" : CALENDAR_DOCS)}">Connect Google Calendar</button>`,
@@ -154,7 +161,8 @@ function calendarStep(state) {
 function chatStep(state) {
   const chat = state.chat || {};
   const slack = chat.slack === true;
-  const channel = String(chat.channel || "").replace(/^#/, "");
+  const rawChannel = String(chat.channel || "").replace(/^#/, "");
+  const channel = /^[CDGW][A-Z0-9]{2,}$/.test(rawChannel) ? "" : rawChannel;
   const status = slack
     ? `<span class="ob-status ok" id="slack-status">${check()}Connected</span>`
     : `<span class="ob-status" id="slack-status">${chat.asked ? "Finish in Setup" : "Not connected"}</span>`;
@@ -177,7 +185,7 @@ function chatStep(state) {
       </ul>
       <p class="ob-soon-line" id="chat-soon"><span class="ob-soon">Coming soon</span> ${soon.map(([id, label]) => `<span id="chat-${id}">${label}</span>`).join(", ")}</p>
       <p class="ob-hint">You can change this any time in Setup.</p>`,
-    left: slack ? "" : `<button class="ob-link" type="submit" name="choice" value="later" id="ob-skip" formnovalidate>Not now</button>`,
+    left: `${backLink("/console/welcome?step=calendar")}${slack ? "" : `<button class="ob-link" type="submit" name="choice" value="later" id="ob-skip" formnovalidate>Not now</button>`}`,
     right: slack
       ? `<button class="ob-primary" type="submit" name="choice" value="continue" id="ob-continue">Continue</button>`
       : `<button class="ob-primary" type="submit" name="choice" value="connect" id="slack-connect" data-docs="${escapeAttr(state.fakeTools ? "" : SLACK_DOCS)}">Connect Slack</button>`,
@@ -191,10 +199,13 @@ function teamStep(state, manage) {
   const rows = invites.map((row) => inviteeRow(row.email, row.role)).join("");
   const count = invites.length;
   const link = team.link ? `<div class="ob-share" id="invite-link-row">
-        <span class="ob-share-icon" aria-hidden="true">${linkIcon()}</span>
-        <label class="sr" for="invite-link">Invite link</label>
-        <input id="invite-link" type="text" value="${escapeAttr(team.link)}" readonly>
-        <button class="ob-btn" type="button" data-copy="invite-link" id="copy-invite-link">Copy link</button>
+        <p class="ob-label" id="invite-link-label">Or share this link</p>
+        <div class="ob-share-row">
+          <span class="ob-share-icon" aria-hidden="true">${linkIcon()}</span>
+          <label class="sr" for="invite-link">Invite link</label>
+          <textarea id="invite-link" readonly rows="2">${escapeText(team.link)}</textarea>
+          <button class="ob-btn" type="button" data-copy="invite-link" id="copy-invite-link">Copy link</button>
+        </div>
       </div>` : "";
   const domainRow = domain ? `<label class="ob-toggle subtle" for="domain-join">
         <span class="ob-toggle-copy"><span class="ob-row-title">Anyone with an @${escapeText(domain)} email can join</span><span class="ob-row-meta">They join as Members.</span></span>
@@ -219,12 +230,12 @@ function teamStep(state, manage) {
       <p class="ob-hint" id="invite-hint">Paste several addresses at once, separated by commas or spaces.</p>
       <p class="ob-field-error" id="invite-field-error" role="alert"${state.inviteError ? "" : " hidden"}>${escapeText(state.inviteError || "")}</p>
       <ul class="ob-people" id="invitee-list" aria-label="People to invite"${count ? "" : " hidden"}>${rows}</ul>
-      <div class="ob-empty" id="invitee-empty"${count ? " hidden" : ""}>Nobody added yet</div>
+      <p class="ob-empty-line" id="invitee-empty"${count ? " hidden" : ""}>No one on the list yet.</p>
       ${link || domainRow ? `<div class="ob-extras" id="invite-extras">${link}${domainRow}</div>` : ""}
       <template id="invitee-template">${inviteeRow("", "member")}</template>`,
     left: manage
       ? `<a class="ob-link" href="/console/people" id="ob-skip">Back to People</a>`
-      : `<button class="ob-link" type="submit" name="action" value="skip" id="ob-skip" formnovalidate>I'll do this later</button>`,
+      : `${backLink("/console/welcome?step=chat")}<button class="ob-link" type="submit" name="action" value="skip" id="ob-skip" formnovalidate>I'll do this later</button>`,
     right: `<button class="ob-primary" type="submit" id="invite-send" data-count="${count}" data-empty="${empty}">${label}</button>`,
   };
 }

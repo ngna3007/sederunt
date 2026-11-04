@@ -580,6 +580,7 @@ export function createApp(options = {}) {
         readPosted: readPostedAll,
         calendar: workspace.deps.calendar,
         doors: doorReport(env, workspace.linearReady === true),
+        slack: workspace.deps.slack,
         slackChannel: workspace.deps.app?.slackChannel || "",
       });
       return;
@@ -733,14 +734,13 @@ export function createApp(options = {}) {
       }
       const companyId = url.searchParams.get("company") || "";
       const current = await prepareWorkspace(workspace, companyId, false, 2000);
-      const requested = (url.searchParams.get("member") || "").trim();
-      const configured = typeof env.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
-      const memberId = gate.session ? (gate.session.memberId || configured) : (requested || configured);
+      const workspaceKind = url.searchParams.get("workspace") || "";
+      const memberId = consoleBoardMember(gate.session, env, workspaceKind, url.searchParams.get("member") || "");
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(await consolePayload(
         workspace,
         current,
         memberId,
-        url.searchParams.get("workspace") || "",
+        workspaceKind,
       )));
       return;
     }
@@ -752,12 +752,12 @@ export function createApp(options = {}) {
       }
       const companyId = url.searchParams.get("company") || "";
       const current = await prepareWorkspace(workspace, companyId, true);
-      const configured = typeof env.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
+      const workspaceKind = url.searchParams.get("workspace") || "";
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(await consolePayload(
         workspace,
         current,
-        gate.session ? (gate.session.memberId || configured) : configured,
-        url.searchParams.get("workspace") || "",
+        consoleBoardMember(gate.session, env, workspaceKind, ""),
+        workspaceKind,
       )));
       return;
     }
@@ -1345,6 +1345,20 @@ async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0)
     new Promise((resolve) => setTimeout(resolve, waitMs)),
   ]);
   return current;
+}
+
+/**
+ * Who the company board is read as. An OAuth user id is not a meeting
+ * participant, so a company board uses SEDERUNT_MEMBER when it is set.
+ * A personal board stays on the signed-in user. A passphrase session keeps
+ * its own member id, and an unsigned read can still ask with ?member=.
+ */
+export function consoleBoardMember(session, env, workspace, requested = "") {
+  const configured = typeof env?.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
+  const asked = String(requested || "").trim();
+  const signed = session ? (String(session.memberId || "").trim() || configured) : (asked || configured);
+  if (session?.kind === "oauth" && workspace !== "personal" && configured) return configured;
+  return signed;
 }
 
 async function consolePayload(workspace, current, memberId, kind = "company") {

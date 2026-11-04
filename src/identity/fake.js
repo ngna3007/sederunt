@@ -269,6 +269,23 @@ export function createFakeIdentity(env = {}) {
       return { ...user, user_metadata: { ...next } };
     },
 
+    async renameTenant(accessToken, tenantId, name) {
+      const user = requireUser(accessToken);
+      const tenant = store.tenants.get(tenantId);
+      const membership = roleOn(tenantId, user.id);
+      if (!tenant || (membership !== "owner" && membership !== "admin")) {
+        throw new IdentityError("forbidden", "Only an owner or admin can change the space.");
+      }
+      if (tenant.kind === "personal") {
+        throw new IdentityError("invalid_tenant", "A personal tenant has no shared name.");
+      }
+      const trimmed = typeof name === "string" ? name.trim() : "";
+      if (trimmed.length < 1 || trimmed.length > 120) {
+        throw new IdentityError("invalid_tenant", "Tenant name must be 1 to 120 characters.");
+      }
+      tenant.name = trimmed;
+    },
+
     async setAllowedDomain(accessToken, tenantId, domain) {
       const user = requireUser(accessToken);
       const tenant = store.tenants.get(tenantId);
