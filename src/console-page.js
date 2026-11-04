@@ -3912,6 +3912,16 @@ if (sessionWhen && sessionWhen.dataset.at) {
     return (proof && proof.reason) || (decision && decision.proofReason) || "Proof is unknown.";
   }
 
+  // A chain or memory time in the viewer's zone, with the zone named:
+  // "Today at 11:44 PM GMT+7" rather than a raw ISO string.
+  function chainWhen(iso) {
+    if (!iso) return "";
+    var text = formatConsoleWhen(iso);
+    if (!text) return "";
+    var zone = zoneShortName(iso, Intl.DateTimeFormat().resolvedOptions().timeZone);
+    return zone ? text + " " + zone : text;
+  }
+
   function renderProofPanel(prefix, decision) {
     var status = document.getElementById(prefix + "-status");
     var facts = document.getElementById(prefix + "-facts");
@@ -3927,7 +3937,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         ["Object", proof.objectId || (decision && decision.objectId) || ""],
         ["Transaction", proof.digest || (decision && decision.digest) || ""],
         ["Checkpoint", proof.checkpoint != null ? String(proof.checkpoint) : (decision && typeof decision.checkpoint === "number" ? String(decision.checkpoint) : "")],
-        ["Checkpoint time", proof.checkpointTime || ""],
+        ["Checkpoint time", chainWhen(proof.checkpointTime)],
         ["Certified in Walrus epoch", proof.certifiedEpoch != null ? String(proof.certifiedEpoch) : ""]
       ];
       rows.forEach(function (pair) {
@@ -5955,7 +5965,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
           var bits = [];
           if (memory && memory.text) bits.push(memory.text);
           if (memory && memory.kind) bits.push(memory.kind);
-          if (memory && memory.at) bits.push(memory.at);
+          if (memory && memory.at) bits.push(chainWhen(memory.at) || memory.at);
           var badge = memory && memory.verified === "verified" ? "verified on chain" : (memory && memory.verified === "unverified" ? "unverified" : "unknown");
           bits.push(badge);
           row.textContent = bits.join(" · ");
