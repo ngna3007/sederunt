@@ -42,14 +42,15 @@ Values stay in the server environment. The names are:
 
 `scripts/walrus-live-proof.mjs` sealed a small text file, stored it with `writeBlob` (`deletable: true`, 1 epoch) through the upload relay, read it back, and deleted it. SHA-256 matched. The full record is `docs/files-live-proof.json`.
 
-- Blob `J8QjAf4bLbyNmJcwyWPvjMt-23nfdKe9ABZLSV-nSMM`
-- Object `0x4fcab5199d911715bc52307b2f2d72dd4a893372091808391701771773786f87` — https://suiscan.xyz/testnet/object/0x4fcab5199d911715bc52307b2f2d72dd4a893372091808391701771773786f87
-- Register `6r7JjkmdBTc2yczr7cxvobxCGuNLjFR26dZ4iBVjHUDE` — https://suiscan.xyz/testnet/tx/6r7JjkmdBTc2yczr7cxvobxCGuNLjFR26dZ4iBVjHUDE
-- Certify `56NLD2KVpam5FrhKTqNpvTHNRe6SE88p7CKX12PkBzzV` — https://suiscan.xyz/testnet/tx/56NLD2KVpam5FrhKTqNpvTHNRe6SE88p7CKX12PkBzzV
-- Delete `5mQV4FduZ3DhvQUEXjZzfzuLVigSt2JErmqYxV8Uzro2` — https://suiscan.xyz/testnet/tx/5mQV4FduZ3DhvQUEXjZzfzuLVigSt2JErmqYxV8Uzro2
+- Run 2026-11-04T15:49:05.566Z (UTC), encryption `seal` (Seal testnet key servers, AES-256-GCM body)
+- Blob `NwHYGQhE2LpAzI4iN0vURy73E4buG5NaDKtrKrmtXOM`
+- Object `0xd36e03f1cbb22502d1b7302f0c2e541a8f8cab122a922585132a10398beb1431` — https://suiscan.xyz/testnet/object/0xd36e03f1cbb22502d1b7302f0c2e541a8f8cab122a922585132a10398beb1431
+- Register `DejycKHGfZ7DP3z6TXfLAGBQBgHmwg5kDRHFEbVgXLYt` — https://suiscan.xyz/testnet/tx/DejycKHGfZ7DP3z6TXfLAGBQBgHmwg5kDRHFEbVgXLYt
+- Certify `7v6xJfXZYHF5BYt58xCRMhCxMZytK4PN4U9tsPmzkVq5` — https://suiscan.xyz/testnet/tx/7v6xJfXZYHF5BYt58xCRMhCxMZytK4PN4U9tsPmzkVq5
+- Delete `FBkaAe2EnQdy6XHdAhnWHTwahT4A53SjWyFpHacmcpkV` — https://suiscan.xyz/testnet/tx/FBkaAe2EnQdy6XHdAhnWHTwahT4A53SjWyFpHacmcpkV
 - End epoch 572
 
-The read used the testnet aggregator after storage nodes returned no metadata. `walrus blob-status` before delete did not get a node quorum. After delete it reported `"status": "nonexistent"`, and the Sui object was not found. The aggregator still returned HTTP 200, which is its cache (`max-age=86400`), not the Blob object.
+The read used the testnet aggregator after storage nodes returned no metadata. `walrus blob-status` before delete did not get a node quorum in five tries over about a minute; the Sui Blob object was present then (`objectBeforeDelete` in the JSON). After delete it reported `"status": "nonexistent"`, and the Sui object was not found. The aggregator still returned HTTP 200, which is its cache (`max-age=86400`), not the Blob object.
 
 ## Mission
 

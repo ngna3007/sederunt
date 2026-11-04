@@ -209,7 +209,12 @@ async function main() {
     log("walrus: sha256 matched");
     beforeObject = await objectState(sui, written.objectId);
     log("walrus: blob-status before delete");
-    statusBefore = await runWalrus(["blob-status", "--json", "--timeout", "30s", "--blob-id", written.blobId]);
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      statusBefore = await runWalrus(["blob-status", "--json", "--timeout", "30s", "--blob-id", written.blobId]);
+      if (statusBefore.code === 0) break;
+      log(`walrus: blob-status not ready (${attempt})`);
+      await new Promise((resolve) => setTimeout(resolve, 10_000));
+    }
   } catch (error) {
     readError = error;
     log(`walrus: read failed (${redact(error?.message || error).slice(0, 300)})`);
@@ -226,7 +231,10 @@ async function main() {
   let aggregatorAfter = null;
   try {
     const again = await fetch(`https://aggregator.walrus-testnet.walrus.space/v1/blobs/${encodeURIComponent(written.blobId)}`);
-    aggregatorAfter = { status: again.status };
+    aggregatorAfter = {
+      status: again.status,
+      note: "The public aggregator may still serve cached slivers after delete; Walrus delete does not purge caches. The bytes are Seal ciphertext.",
+    };
   } catch (error) {
     aggregatorAfter = { error: redact(error?.message || error).slice(0, 200) };
   }
