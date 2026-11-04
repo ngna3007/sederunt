@@ -22,3 +22,12 @@ test("the room header hides an empty start and opens proof from a chip", async (
   assert.doesNotMatch(css, /^(<<<<<<<|=======|>>>>>>>)/m);
   assert.match(css, /\.room-left\.no-recording \.player \{[\s\S]*?aspect-ratio: auto !important;/);
 });
+
+test("room overview leads with a plain summary and proof details start collapsed", async () => {
+  const src = (await import("node:fs")).readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
+  assert.match(src, /<summary>Show technical details<\/summary>/);
+  assert.doesNotMatch(src, /id="proof-tech" open/);
+  assert.match(src, /Nothing decided in this meeting yet\./);
+  assert.match(src, /paintMeetingOutcome\(outcome, leadRows, people\)/);
+  assert.match(src, /<summary>Show source<\/summary>/);
+});

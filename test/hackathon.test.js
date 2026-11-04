@@ -106,7 +106,7 @@ test("the room and the decision show a proof panel, and an answer can show why",
   assert.match(page, /id="decision-proof-again"/);
   assert.match(page, /Read via Tatum gRPC/);
   assert.match(page, /Verify again/);
-  assert.match(page, /Technical details/);
+  assert.match(page, /Show technical details/);
   assert.match(page, /Show source/);
   assert.match(page, /Nobody can change it/);
   assert.match(page, /why-panel/);
