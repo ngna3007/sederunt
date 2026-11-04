@@ -193,3 +193,41 @@ function checkpointFrame(height) {
     },
   }));
 }
+
+test("two clients on the real clock share one gateway throttle", async () => {
+  const exchange = async () => ({ httpStatus: "200", grpcStatus: "5", grpcMessage: "not found", body: Buffer.alloc(0) });
+  const a = createTatumClient({ env: {}, apiKey: KEY, rps: 20, retries: 0, exchange });
+  const b = createTatumClient({ env: {}, apiKey: KEY, rps: 20, retries: 0, exchange });
+  const started = Date.now();
+  await Promise.allSettled([a.getObject(OBJECT_ID), b.getObject(OBJECT_ID), a.getObject(OBJECT_ID), b.getObject(OBJECT_ID)]);
+  assert.ok(Date.now() - started >= 140, "four calls at 20 rps across two clients take at least three gaps");
+});
+
+test("a transaction read returns the certifying checkpoint and time from the ledger response", async () => {
+  const paths = [];
+  const client = createTatumClient({
+    env: {},
+    apiKey: KEY,
+    retries: 0,
+    rps: 1000,
+    exchange: async (call) => {
+      paths.push(call.path);
+      return {
+        grpcStatus: "0",
+        body: frameMessage(GrpcTypes.GetTransactionResponse.toBinary({
+          transaction: {
+            digest: "HMNM1usyR6SbipnmP2d7Ds7NpcmqQE4cEA83QiAMYKfs",
+            checkpoint: 338404221n,
+            timestamp: { seconds: 1761500403n, nanos: 65000000 },
+            signatures: [],
+            balanceChanges: [],
+          },
+        })),
+      };
+    },
+  });
+  const tx = await client.getTransaction("HMNM1usyR6SbipnmP2d7Ds7NpcmqQE4cEA83QiAMYKfs");
+  assert.equal(tx.checkpoint, 338404221);
+  assert.equal(tx.timestampMs, 1761500403065);
+  assert.deepEqual(paths.map((path) => path.split("/").pop()), ["GetTransaction"]);
+});

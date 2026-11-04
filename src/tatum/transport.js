@@ -26,7 +26,12 @@ export function createNativeGrpcTransport(options = {}) {
   const random = options.random ?? Math.random;
   const log = options.log ?? [];
   const cache = new Map();
-  const acquire = createThrottle({ rps, now, sleep });
+  // One throttle per gateway and rate for the whole process, so separate
+  // clients (proof reader, Seal) share the free-plan budget. Injected clocks
+  // in tests get their own throttle.
+  const acquire = options.now || options.sleep
+    ? createThrottle({ rps, now, sleep })
+    : sharedThrottle(baseUrl, rps, now, sleep);
   const defaults = {
     baseUrl,
     timeout: timeoutMs,
@@ -302,6 +307,14 @@ function backoffMs(failedAttempt, random) {
   const base = Math.min(2000, 200 * (2 ** failedAttempt));
   const jitter = Math.floor(Number(random()) * (base / 2));
   return base + (Number.isFinite(jitter) ? jitter : 0);
+}
+
+const SHARED_THROTTLES = new Map();
+
+function sharedThrottle(baseUrl, rps, now, sleep) {
+  const key = `${baseUrl}|${rps}`;
+  if (!SHARED_THROTTLES.has(key)) SHARED_THROTTLES.set(key, createThrottle({ rps, now, sleep }));
+  return SHARED_THROTTLES.get(key);
 }
 
 function createThrottle({ rps, now, sleep }) {

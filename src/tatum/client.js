@@ -82,12 +82,19 @@ export function createTatumClient(options = {}) {
       });
     },
     async getTransaction(digest) {
-      const tx = await sui.getTransaction({ digest });
+      // The raw ledger call asks for three fields. The SDK's getTransaction
+      // wraps the result as { Transaction } and reads more than the proof needs.
+      const finished = await sui.ledgerService.getTransaction({
+        digest,
+        readMask: { paths: ["digest", "checkpoint", "timestamp"] },
+      });
+      const tx = finished.response?.transaction;
       const checkpoint = tx?.checkpoint == null ? null : Number(tx.checkpoint);
+      const at = timestampIso(tx?.timestamp);
       return {
         digest: typeof tx?.digest === "string" ? tx.digest : digest,
         checkpoint: Number.isSafeInteger(checkpoint) ? checkpoint : null,
-        timestampMs: Number.isFinite(tx?.timestampMs) ? tx.timestampMs : null,
+        timestampMs: at ? Date.parse(at) : null,
       };
     },
     async getCheckpoint(sequence) {
