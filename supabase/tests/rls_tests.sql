@@ -167,6 +167,80 @@ begin
   get diagnostics n = row_count;
   r := r || jsonb_build_object('t','admin can flip remember_messages','pass', n = 1);
 
+  ---------------------------------------------------------------- slack matches and bot preferences (server writes lookups)
+  execute 'reset role';
+  perform set_config('request.jwt.claims', '', true);
+  insert into public.slack_user_matches (tenant_id, external_workspace_id, email, slack_user_id, source)
+    values (acme, 'T_ACME', 'mai@example.test', 'UMAI', 'lookup');
+  insert into public.slack_user_matches (tenant_id, external_workspace_id, email, slack_user_id, source)
+    values (secretco, 'T_SECRET', 'secret@example.test', 'USECRET', 'lookup');
+  select count(*) into n from public.slack_user_matches where source = 'lookup' and email = 'mai@example.test';
+  r := r || jsonb_build_object('t','server role can write a lookup match','pass', n = 1);
+
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claims', json_build_object('sub', bob, 'role', 'authenticated',
+                     'email', 'bob@example.test')::text, true);
+  select count(*) into n from public.slack_user_matches;
+  r := r || jsonb_build_object('t','member reads slack matches for their tenant only','pass', n = 1);
+  begin
+    insert into public.slack_user_matches (tenant_id, external_workspace_id, email, slack_user_id, source, overridden_by)
+      values (acme, 'T_ACME', 'new@example.test', 'UNEW', 'override', bob);
+    ok := false;
+  exception when insufficient_privilege then ok := true; end;
+  r := r || jsonb_build_object('t','member cannot insert a slack match override','pass', ok);
+  update public.slack_user_matches set source = 'override', slack_user_id = 'UHACK', overridden_by = bob
+    where email = 'mai@example.test';
+  get diagnostics n = row_count;
+  r := r || jsonb_build_object('t','member cannot update a slack match','pass', n = 0);
+  insert into public.bot_preferences (tenant_id, user_id, pref_key, pref_value)
+    values (acme, bob, 'tone', 'terse');
+  select count(*) into n from public.bot_preferences where user_id = bob and pref_key = 'tone';
+  r := r || jsonb_build_object('t','member can write their own bot preference','pass', n = 1);
+  begin
+    insert into public.bot_preferences (tenant_id, user_id, pref_key, pref_value)
+      values (acme, null, 'language', 'vi');
+    ok := false;
+  exception when insufficient_privilege then ok := true; end;
+  r := r || jsonb_build_object('t','member cannot write a workspace bot preference','pass', ok);
+
+  perform set_config('request.jwt.claims', json_build_object('sub', alice, 'role', 'authenticated',
+                     'email', 'alice@example.test')::text, true);
+  insert into public.slack_user_matches (tenant_id, external_workspace_id, email, slack_user_id, source, overridden_by)
+    values (acme, 'T_ACME', 'guest@example.test', 'UGUEST', 'override', alice);
+  select count(*) into n from public.slack_user_matches where email = 'guest@example.test' and source = 'override';
+  r := r || jsonb_build_object('t','admin can insert a slack match override','pass', n = 1);
+  begin
+    insert into public.slack_user_matches (tenant_id, external_workspace_id, email, slack_user_id, source)
+      values (acme, 'T_ACME', 'lookup@example.test', 'ULOOK', 'lookup');
+    ok := false;
+  exception when insufficient_privilege then ok := true; end;
+  r := r || jsonb_build_object('t','admin client cannot insert a lookup row','pass', ok);
+  update public.slack_user_matches
+    set slack_user_id = 'UOVERRIDE', source = 'override', overridden_by = alice
+    where email = 'mai@example.test';
+  get diagnostics n = row_count;
+  r := r || jsonb_build_object('t','admin override replaces a lookup row','pass', n = 1);
+  delete from public.slack_user_matches where email = 'guest@example.test';
+  get diagnostics n = row_count;
+  r := r || jsonb_build_object('t','admin can delete an override','pass', n = 1);
+  delete from public.slack_user_matches where email = 'mai@example.test' and source = 'override';
+  get diagnostics n = row_count;
+  r := r || jsonb_build_object('t','admin delete of an override removes that row','pass', n = 1);
+
+  insert into public.bot_preferences (tenant_id, user_id, pref_key, pref_value)
+    values (acme, null, 'language', 'vi');
+  insert into public.bot_preferences (tenant_id, user_id, pref_key, pref_value)
+    values (acme, alice, 'tone', 'warm');
+  perform set_config('request.jwt.claims', json_build_object('sub', bob, 'role', 'authenticated',
+                     'email', 'bob@example.test')::text, true);
+  select count(*) into n from public.bot_preferences where pref_key = 'language' and user_id is null;
+  r := r || jsonb_build_object('t','member can read workspace bot preferences','pass', n = 1);
+  select count(*) into n from public.bot_preferences where user_id = alice;
+  r := r || jsonb_build_object('t','member cannot read another user bot preference','pass', n = 0);
+  update public.bot_preferences set pref_value = 'hacked' where user_id is null;
+  get diagnostics n = row_count;
+  r := r || jsonb_build_object('t','member cannot update a workspace preference','pass', n = 0);
+
   ---------------------------------------------------------------- anon
   perform set_config('role', 'anon', true);
   perform set_config('request.jwt.claims', '{"role":"anon"}', true);
