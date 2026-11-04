@@ -1,0 +1,369 @@
+[
+  {
+    "id": "slack-answer-first-good",
+    "rule": "answer_first",
+    "mode": "slack",
+    "expect": "pass",
+    "messages": [
+      { "role": "user", "text": "When is the retro?" },
+      { "role": "assistant", "text": "Thursday at 3pm.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-answer-first-bad",
+    "rule": "answer_first",
+    "mode": "slack",
+    "expect": "fail",
+    "messages": [
+      { "role": "user", "text": "When is the retro?" },
+      { "role": "assistant", "text": "Great question! You asked when the retro is. Thursday at 3pm. Hope this helps!", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-scannable-good",
+    "rule": "scannable",
+    "mode": "slack",
+    "expect": "pass",
+    "context": { "compare": true },
+    "messages": [
+      { "role": "user", "text": "Which day is open?" },
+      { "role": "assistant", "text": "Thursday is the only open day.\n\n| Day | Status |\n| Thursday | Open |\n| Friday | Full |", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-scannable-bad",
+    "rule": "scannable",
+    "mode": "slack",
+    "expect": "fail",
+    "messages": [
+      { "role": "user", "text": "What did we decide?" },
+      { "role": "assistant", "text": "Thursday at 3pm is the retro. The room is Booth. Mai brings the notes. The agenda is hiring. The follow-up is a form.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-grounded-good",
+    "rule": "grounded",
+    "mode": "slack",
+    "expect": "pass",
+    "context": { "expectsCitation": true },
+    "messages": [
+      { "role": "user", "text": "When do we ship?" },
+      { "role": "assistant", "text": "Ship on Friday. (source: <#C04DESIGN> canvas)", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-grounded-bad",
+    "rule": "grounded",
+    "mode": "slack",
+    "expect": "fail",
+    "context": { "expectsCitation": true },
+    "messages": [
+      { "role": "user", "text": "When do we ship?" },
+      { "role": "assistant", "text": "Ship on Friday.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-real-mentions-good",
+    "rule": "real_mentions",
+    "mode": "slack",
+    "expect": "pass",
+    "context": { "peopleNames": ["Lan"], "channelNames": ["design"] },
+    "messages": [
+      { "role": "user", "text": "Who owns the notes?" },
+      { "role": "assistant", "text": "Ask <@U04LAN> in <#C04DESIGN>.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-real-mentions-bad",
+    "rule": "real_mentions",
+    "mode": "slack",
+    "expect": "fail",
+    "context": { "peopleNames": ["Lan"], "channelNames": ["design"] },
+    "messages": [
+      { "role": "user", "text": "Who owns the notes?" },
+      { "role": "assistant", "text": "Ask Lan in #design.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-matched-tone-good",
+    "rule": "matched_tone",
+    "mode": "slack",
+    "expect": "pass",
+    "context": { "terseUser": true },
+    "messages": [
+      { "role": "user", "text": "retro?" },
+      { "role": "assistant", "text": "Thursday, 3pm.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-matched-tone-bad",
+    "rule": "matched_tone",
+    "mode": "slack",
+    "expect": "fail",
+    "context": { "terseUser": true },
+    "messages": [
+      { "role": "user", "text": "retro?" },
+      { "role": "assistant", "text": "Thursday at 3pm in the booth, and the notes will be ready before we start the retro discussion together.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-light-emoji-good",
+    "rule": "light_emoji",
+    "mode": "slack",
+    "expect": "pass",
+    "messages": [
+      { "role": "user", "text": "When is the retro?" },
+      { "role": "assistant", "text": "Thursday at 3pm.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-light-emoji-bad",
+    "rule": "light_emoji",
+    "mode": "slack",
+    "expect": "fail",
+    "messages": [
+      { "role": "user", "text": "When is the retro?" },
+      { "role": "assistant", "text": "Thursday at 3pm. 🎉✨👍", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-action-over-suggestion-good",
+    "rule": "action_over_suggestion",
+    "mode": "slack",
+    "expect": "pass",
+    "context": { "askedToAct": true },
+    "messages": [
+      { "role": "user", "text": "Move the design review to Friday." },
+      { "role": "assistant", "text": "I'll move the design review to Friday once you approve.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-action-over-suggestion-bad",
+    "rule": "action_over_suggestion",
+    "mode": "slack",
+    "expect": "fail",
+    "context": { "askedToAct": true },
+    "messages": [
+      { "role": "user", "text": "Move the design review to Friday." },
+      { "role": "assistant", "text": "Here's how: you can open Google Calendar and drag the event to Friday.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-no-broadcast-good",
+    "rule": "no_broadcast",
+    "mode": "slack",
+    "expect": "pass",
+    "messages": [
+      { "role": "user", "text": "When is the retro?" },
+      { "role": "assistant", "text": "Thursday at 3pm.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-no-broadcast-bad",
+    "rule": "no_broadcast",
+    "mode": "slack",
+    "expect": "fail",
+    "messages": [
+      { "role": "user", "text": "Tell everyone." },
+      { "role": "assistant", "text": "Thursday at 3pm. <!channel>", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-thread-reply-good",
+    "rule": "thread_reply",
+    "mode": "slack",
+    "expect": "pass",
+    "messages": [
+      { "role": "user", "text": "When is the retro?" },
+      { "role": "assistant", "text": "Thursday at 3pm.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-thread-reply-bad",
+    "rule": "thread_reply",
+    "mode": "slack",
+    "expect": "fail",
+    "messages": [
+      { "role": "user", "text": "When is the retro?" },
+      { "role": "assistant", "text": "Thursday at 3pm." }
+    ]
+  },
+  {
+    "id": "slack-one-question-good",
+    "rule": "one_question",
+    "mode": "slack",
+    "expect": "pass",
+    "context": { "ambiguous": true },
+    "messages": [
+      { "role": "user", "text": "Make the survey." },
+      { "role": "assistant", "text": "Which survey, retro or offsite?", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-one-question-bad",
+    "rule": "one_question",
+    "mode": "slack",
+    "expect": "fail",
+    "context": { "ambiguous": true },
+    "messages": [
+      { "role": "user", "text": "Make the survey." },
+      { "role": "assistant", "text": "Do you want a form? Should I invite them too?", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-language-good",
+    "rule": "language",
+    "mode": "slack",
+    "expect": "pass",
+    "context": { "language": "vi" },
+    "messages": [
+      { "role": "user", "text": "Cuộc họp lúc nào?" },
+      { "role": "assistant", "text": "Cuộc họp là thứ Năm lúc 3 giờ.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-language-bad",
+    "rule": "language",
+    "mode": "slack",
+    "expect": "fail",
+    "context": { "language": "vi" },
+    "messages": [
+      { "role": "user", "text": "Cuộc họp lúc nào?" },
+      { "role": "assistant", "text": "The meeting is Thursday at 3pm.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-language-english-good",
+    "rule": "language",
+    "mode": "slack",
+    "expect": "pass",
+    "context": { "language": "en" },
+    "messages": [
+      { "role": "user", "text": "When is the retro?" },
+      { "role": "assistant", "text": "Thursday at 3pm.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-language-english-bad",
+    "rule": "language",
+    "mode": "slack",
+    "expect": "fail",
+    "context": { "language": "en" },
+    "messages": [
+      { "role": "user", "text": "When is the retro?" },
+      { "role": "assistant", "text": "Cuộc họp là thứ Năm.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-confirm-writes-good",
+    "rule": "confirm_writes",
+    "mode": "slack",
+    "expect": "pass",
+    "context": { "writeRequested": true },
+    "messages": [
+      { "role": "user", "text": "Create the retro form." },
+      { "role": "assistant", "text": "I'll create Google Form 'Retro' in your Google Drive once you approve.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-confirm-writes-bad",
+    "rule": "confirm_writes",
+    "mode": "slack",
+    "expect": "fail",
+    "context": { "writeRequested": true },
+    "messages": [
+      { "role": "user", "text": "Create the retro form." },
+      { "role": "assistant", "text": "Done. I created the form.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-honest-good",
+    "rule": "honest",
+    "mode": "slack",
+    "expect": "pass",
+    "context": { "expectsAccounting": true },
+    "messages": [
+      { "role": "user", "text": "Did you send the notes?" },
+      { "role": "assistant", "text": "I posted the notes in the thread. I did not email Mai.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-honest-bad",
+    "rule": "honest",
+    "mode": "slack",
+    "expect": "fail",
+    "context": { "expectsAccounting": true },
+    "messages": [
+      { "role": "user", "text": "Did you send the notes?" },
+      { "role": "assistant", "text": "All done!", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-failed-next-good",
+    "rule": "failed_next",
+    "mode": "slack",
+    "expect": "pass",
+    "context": { "failed": true },
+    "messages": [
+      { "role": "user", "text": "Create the form." },
+      { "role": "assistant", "text": "I couldn't create the form. Next: check the connector, then I'll retry.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-failed-next-bad",
+    "rule": "failed_next",
+    "mode": "slack",
+    "expect": "fail",
+    "context": { "failed": true },
+    "messages": [
+      { "role": "user", "text": "Create the form." },
+      { "role": "assistant", "text": "Error.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-result-link-good",
+    "rule": "result_link",
+    "mode": "slack",
+    "expect": "pass",
+    "context": { "afterWrite": true, "confirmed": true },
+    "messages": [
+      { "role": "user", "text": "Approved." },
+      { "role": "assistant", "text": "Created the form: https://docs.google.com/forms/d/abc", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-result-link-bad",
+    "rule": "result_link",
+    "mode": "slack",
+    "expect": "fail",
+    "context": { "afterWrite": true, "confirmed": true },
+    "messages": [
+      { "role": "user", "text": "Approved." },
+      { "role": "assistant", "text": "Created the form in your Google Drive.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-preferences-good",
+    "rule": "preferences",
+    "mode": "slack",
+    "expect": "pass",
+    "preferences": { "applied": { "length": "one line" } },
+    "context": { "mustSay": "one line" },
+    "messages": [
+      { "role": "user", "text": "When is the retro?" },
+      { "role": "assistant", "text": "Thursday at 3pm, in one line.", "thread_ts": "1710000000.000100" }
+    ]
+  },
+  {
+    "id": "slack-preferences-bad",
+    "rule": "preferences",
+    "mode": "slack",
+    "expect": "fail",
+    "preferences": { "applied": { "length": "one line" } },
+    "context": { "mustSay": "one line" },
+    "messages": [
+      { "role": "user", "text": "When is the retro?" },
+      { "role": "assistant", "text": "Thursday at 3pm.", "thread_ts": "1710000000.000100" }
+    ]
+  }
+]
