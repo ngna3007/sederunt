@@ -606,7 +606,7 @@ ${slack}
               <div id="file-callout" class="callout" hidden></div>
               <section id="proof-panel" class="detail-block proof-panel">
                 <h2>Proof</h2>
-                <p id="proof-status" class="meta">Proof is unknown until the chain is read.</p>
+                <p id="proof-status" class="meta" aria-live="polite">Verifying on chain…</p>
                 <dl class="kv" id="proof-facts"></dl>
                 <p id="proof-links" class="proof-links"></p>
                 <p id="proof-chain" class="meta">Read via Tatum gRPC · 0 calls</p>
@@ -763,7 +763,7 @@ ${spaceDialog}
     <p id="decision-proof" hidden></p>
     <section id="decision-proof-panel" class="detail-block proof-panel">
       <h2>Proof</h2>
-      <p id="decision-proof-status" class="meta">Proof is unknown until the chain is read.</p>
+      <p id="decision-proof-status" class="meta" aria-live="polite">Verifying on chain…</p>
       <dl class="kv" id="decision-proof-facts"></dl>
       <p id="decision-proof-links" class="proof-links"></p>
       <p id="decision-proof-chain" class="meta">Read via Tatum gRPC · 0 calls</p>
@@ -3908,6 +3908,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var proof = decision && decision.proof;
     var status = (proof && proof.status) || (decision && decision.proofStatus) || "unknown";
     if (status === "verified") return "Verified on chain.";
+    if (status === "pending") return "Verifying on chain…";
     if (status === "unverified") return (proof && proof.reason) || (decision && decision.proofReason) || "Unverified.";
     return (proof && proof.reason) || (decision && decision.proofReason) || "Proof is unknown.";
   }
@@ -3929,6 +3930,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var chain = document.getElementById(prefix + "-chain");
     if (chain) chain.textContent = chainLine();
     if (status) status.textContent = decision ? proofStatusCopy(decision) : "Proof is unknown until the chain is read.";
+    if (status) status.setAttribute("data-proof", decision ? ((decision.proof && decision.proof.status) || decision.proofStatus || "unknown") : "none");
+    if (decision && proofPending(decision)) followProof(decision);
     if (facts) {
       facts.replaceChildren();
       var proof = (decision && decision.proof) || {};
@@ -3968,25 +3971,95 @@ if (sessionWhen && sessionWhen.dataset.at) {
     }
   }
 
-  function verifyDecision(decision) {
-    if (!decision || !decision.id) return;
-    fetch("/api/proof", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id: decision.id, workspace: workspaceKind })
-    }).then(function (response) { return response.json(); }).then(function (result) {
-      decision.proof = result.proof || decision.proof;
-      decision.proofStatus = result.status || decision.proofStatus;
-      decision.proofReason = result.reason || decision.proofReason;
-      if (result.checkpoint != null) decision.checkpoint = result.checkpoint;
-      if (result.chain) state.chain = result.chain;
-      renderProofPanel("proof", decision);
+  // A proof the server is still reading comes back "pending". The panel says
+  // so and follows it up here, without a reload. Each follow-up waits on the
+  // read already running on the server, so this does not add gateway calls.
+  // "unknown" is shown only after a real failure, with Verify again.
+  var PROOF_FOLLOW_TRIES = 8;
+  var PROOF_FOLLOW_GAP_MS = 750;
+
+  function proofPending(decision) {
+    var proof = decision && decision.proof;
+    return ((proof && proof.status) || (decision && decision.proofStatus)) === "pending";
+  }
+
+  function applyProofResult(decision, result) {
+    decision.proof = result.proof || decision.proof;
+    decision.proofStatus = result.status || decision.proofStatus;
+    decision.proofReason = result.reason || decision.proofReason;
+    if (result.checkpoint != null) decision.checkpoint = result.checkpoint;
+    if (result.chain) state.chain = result.chain;
+  }
+
+  function paintProof(decision) {
+    var rows = fileRoom ? decisionsFor(fileRoom) : [];
+    var lead = rows.length ? rows[rows.length - 1] : null;
+    if (lead && lead.id === decision.id) renderProofPanel("proof", decision);
+    if (openDecisionRow && openDecisionRow.id === decision.id) {
       renderProofPanel("decision-proof", decision);
       showLine("decision-proof", proofExplain(decision));
+    }
+  }
+
+  function proofFailed(decision, reason) {
+    decision.proof = { status: "unknown", reason: reason, blobId: (decision.proof && decision.proof.blobId) || decision.blobId || null, links: {} };
+    decision.proofStatus = "unknown";
+    decision.proofReason = reason;
+    paintProof(decision);
+  }
+
+  function askProof(decision, fresh) {
+    return fetch("/api/proof", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: decision.id, workspace: workspaceKind, fresh: fresh === true })
+    }).then(function (response) {
+      if (!response.ok) throw new Error("proof " + response.status);
+      return response.json();
+    });
+  }
+
+  function followProof(decision, tries) {
+    if (!decision || !decision.id) return;
+    if (tries == null) {
+      if (decision.proofFollowing) return;
+      decision.proofFollowing = true;
+      tries = 0;
+    }
+    askProof(decision, false).then(function (result) {
+      applyProofResult(decision, result);
+      if (proofPending(decision)) {
+        if (tries + 1 >= PROOF_FOLLOW_TRIES) {
+          decision.proofFollowing = false;
+          proofFailed(decision, "Tatum did not answer in time. Try Verify again.");
+          return;
+        }
+        paintProof(decision);
+        setTimeout(function () { followProof(decision, tries + 1); }, PROOF_FOLLOW_GAP_MS);
+        return;
+      }
+      decision.proofFollowing = false;
+      paintProof(decision);
     }).catch(function () {
-      decision.proofStatus = "unknown";
-      decision.proofReason = "The chain proof is incomplete.";
-      renderProofPanel("proof", decision);
+      decision.proofFollowing = false;
+      proofFailed(decision, "The chain read failed. Try Verify again.");
+    });
+  }
+
+  function verifyDecision(decision) {
+    if (!decision || !decision.id) return;
+    decision.proof = { status: "pending", reason: "Verifying on chain…", blobId: (decision.proof && decision.proof.blobId) || decision.blobId || null, links: {} };
+    decision.proofStatus = "pending";
+    // Hold off the follow-up while this fresh read is out.
+    decision.proofFollowing = true;
+    paintProof(decision);
+    askProof(decision, true).then(function (result) {
+      decision.proofFollowing = false;
+      applyProofResult(decision, result);
+      paintProof(decision);
+    }).catch(function () {
+      decision.proofFollowing = false;
+      proofFailed(decision, "The chain read failed. Try Verify again.");
     });
   }
 
