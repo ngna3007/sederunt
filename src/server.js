@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { redact } from "./domain/redact.js";
 import { handleCalendarEvent } from "./calendar/route.js";
 import { handleConnectorRoutes } from "./connectors/route.js";
+import { createFormsApp, handleNodeForms } from "./mcp-forms/http.js";
 import { createConnectorStore } from "./connectors/store.js";
 import { calendarPresentedConnected, calendarTimeZone, createCalendarAdapter } from "./calendar/mcp.js";
 import { createConsoleAdapter } from "./console/upload.js";
@@ -307,6 +308,7 @@ export function createApp(options = {}) {
     recall: options.recall || null,
   };
   const identity = options.identity ?? (identityConfigured(env) ? createIdentity(env) : null);
+  workspace.forms = createFormsApp({ env, fetchImpl: options.fetch });
   async function mcpCallContext(req) {
     const gate = guardConsole(req, env);
     const tenantId = await resolveMcpSpace(gate, identity, workspace.deps.connectors);
@@ -316,6 +318,7 @@ export function createApp(options = {}) {
   try {
     if (identity) rememberRefreshCookie(res, await refreshOAuthSession(req, identity, env));
     const url = new URL(req.url || "/", `http://127.0.0.1:${port}`);
+    if (await handleNodeForms(req, res, { forms: workspace.forms, env, url })) return;
     if (req.method === "GET" && url.pathname.startsWith("/media/")) {
       if (await sendMedia(res, url.pathname)) return;
       send(res, 404, "text/plain; charset=utf-8", "Not found");
