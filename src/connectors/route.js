@@ -1,6 +1,7 @@
 import { connectorMessage } from "./errors.js";
 import { testConnection } from "./client.js";
 import { ensureDemoServer } from "./demo.js";
+import { addGoogleCalendarPreset, googleCalendarPresetState } from "./calendar-preset.js";
 import { addGoogleFormsPreset, googleFormsPresetState } from "./forms-preset.js";
 import { loadSpaceView } from "../console-flow.js";
 import { guardConsole } from "../console-auth.js";
@@ -65,6 +66,11 @@ export async function handleConnectorRoutes(ctx) {
           grants: ctx.workspace?.googleGrants,
           personId,
         }),
+        "google-calendar": await googleCalendarPresetState({
+          store,
+          tenantId,
+          env: ctx.env,
+        }),
       };
       sendJson(ctx, 200, { ok: true, connectors, demoUrl: demo?.url || "", presets });
       return true;
@@ -78,6 +84,27 @@ export async function handleConnectorRoutes(ctx) {
         grants: ctx.workspace?.googleGrants,
         personId: personIdFrom(gate, ctx.env),
         forms: ctx.workspace?.forms,
+      });
+      if (!result.ok) {
+        sendJson(ctx, result.code === "needs_access" ? 200 : 400, {
+          ok: false,
+          code: result.code || "protocol",
+          connectUrl: result.connectUrl || "",
+          message: result.message || "That could not be saved.",
+          detail: result.detail || "",
+        });
+        return true;
+      }
+      sendJson(ctx, 200, { ok: true, connector: result.connector });
+      return true;
+    }
+    if (req.method === "POST" && url.pathname === "/console/connectors/presets/google-calendar") {
+      const result = await addGoogleCalendarPreset({
+        store,
+        tenantId,
+        env: ctx.env,
+        req,
+        calendarMcp: ctx.workspace?.calendarMcp,
       });
       if (!result.ok) {
         sendJson(ctx, result.code === "needs_access" ? 200 : 400, {
@@ -210,6 +237,7 @@ async function readBody(ctx) {
 function formsInput(ctx) {
   return {
     forms: ctx.workspace?.forms,
+    calendarMcp: ctx.workspace?.calendarMcp,
     origin: requestOrigin(ctx.req, ctx.env),
   };
 }

@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { appendConnectorCall, ledgerMemory } from "./memory/ledger.js";
+import { createFakeCalendarMcp } from "./connectors/calendar-fake.js";
 import { createPersonGoogleStore } from "./connectors/google-person.js";
 import { createConnectorStore } from "./connectors/store.js";
 import { createFormsApp } from "./mcp-forms/http.js";
@@ -41,6 +42,7 @@ export function serveMcpStdio({ input, output, session, deps, memberId }) {
     env: process.env,
     personId: configured,
     forms: createFormsApp({ env: process.env }),
+    calendarMcp: createFakeCalendarMcp(),
     origin: String(process.env.SEDERUNT_PUBLIC_ORIGIN || "http://127.0.0.1").replace(/\/$/, ""),
     googleGrants: createPersonGoogleStore({ env: process.env }),
   };

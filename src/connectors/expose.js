@@ -3,6 +3,8 @@ import { loadSpaceView } from "../console-flow.js";
 import { authorize } from "../domain/allow.js";
 import { resolvePreference } from "../domain/preference.js";
 import { redact } from "../domain/redact.js";
+import { calendarAccessToken } from "../calendar/mcp.js";
+import { calendarFakeEnabled } from "../calendar/fake.js";
 import { formsFakeEnabled } from "../mcp-forms/api.js";
 import { callTool } from "./client.js";
 
@@ -106,12 +108,23 @@ export async function callCustomTool(input) {
       text: `Needs confirmation before ${name} runs.`,
     };
   }
-  const fakeForms = connector.authType === "google_oauth" && formsFakeEnabled(input.env);
+  const calendarPreset = connector.preset === "google-calendar";
+  const fakeCalendar = calendarPreset && calendarFakeEnabled(input.env);
+  const fakeForms = !calendarPreset && connector.authType === "google_oauth" && formsFakeEnabled(input.env);
   let token = "";
   let headerName = connector.headerName || "Authorization";
   try {
     if (connector.authType === "google_oauth") {
-      if (!fakeForms) {
+      if (calendarPreset) {
+        if (!fakeCalendar) {
+          const opened = await takeCalendarAccess(input);
+          token = opened.accessToken;
+          if (!token) {
+            if (opened.needsAccess) return failed(name, "Google needs you to sign in again.", "needs_access");
+            return failed(name, "unauthorized: Google needs you to sign in again.", "unauthorized");
+          }
+        }
+      } else if (!fakeForms) {
         const opened = await takeAccess(input);
         token = opened.accessToken;
         if (!token) {
@@ -143,13 +156,14 @@ export async function callCustomTool(input) {
     headerName,
     transport: connector.transport,
     forms: input.forms,
+    calendarMcp: input.calendarMcp,
     origin: input.origin,
-  }, tool.name, cleanArgs(input.args), { env: input.env, timeoutMs: 10000 });
+  }, tool.name, cleanArgs(input.args), { env: input.env, timeoutMs: 10000, fetch: input.fetch, calendarMcp: input.calendarMcp });
   let bearer = token;
   let called = await invoke(bearer);
-  if (!fakeForms && connector.authType === "google_oauth" && unauthorizedTool(called)) {
+  if (!fakeForms && !fakeCalendar && connector.authType === "google_oauth" && unauthorizedTool(called)) {
     try {
-      const refreshed = await takeAccess(input, true);
+      const refreshed = calendarPreset ? await takeCalendarAccess(input, true) : await takeAccess(input, true);
       if (!refreshed.accessToken && refreshed.needsAccess) {
         return failed(name, "Google needs you to sign in again.", "needs_access");
       }
@@ -230,6 +244,21 @@ function takeConfirmation(session, toolName, confirmId) {
   if (!found) return "";
   found.consumed = true;
   return found.id;
+}
+
+/**
+ * The calendar-edit access token. It is not logged or returned to the client.
+ *
+ * @param {{ env?: NodeJS.ProcessEnv | Record<string, string | undefined>, fetch?: typeof fetch, calendarSave?: Function }} input
+ * @param {boolean} [force]
+ */
+async function takeCalendarAccess(input, force = false) {
+  const accessToken = await calendarAccessToken(input.env, {
+    fetch: input.fetch,
+    save: input.calendarSave,
+    force,
+  });
+  return { accessToken, needsAccess: !accessToken };
 }
 
 /**

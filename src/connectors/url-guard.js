@@ -1,5 +1,6 @@
 import { lookup as dnsLookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { GOOGLE_CALENDAR_MCP_URL, isCalendarMcpUrl } from "./builtin-calendar.js";
 import { connectorError } from "./errors.js";
 
 const LOOKUP_MS = 2000;
@@ -22,6 +23,9 @@ export function loopbackFakeAllowed(env = process.env) {
  * @returns {Promise<URL>}
  */
 export async function guardConnectorUrl(raw, options = {}) {
+  if (options.allowCalendarPreset === true && isCalendarMcpUrl(raw)) {
+    return new URL(GOOGLE_CALENDAR_MCP_URL);
+  }
   if (typeof raw !== "string" || !raw.trim() || raw.length > 2048) throw connectorError("invalid-url");
   let url;
   try {

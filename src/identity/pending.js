@@ -3,6 +3,11 @@ import { openPayload, readCookie, sealPayload } from "../console-auth.js";
 /** Short-lived cookie holding the PKCE verifier and the post-login path. */
 export const OAUTH_COOKIE = "sederunt_oauth";
 
+/** @param {unknown} value */
+function oauthIntent(value) {
+  return value === "forms" || value === "calendar" ? value : "";
+}
+
 export const OAUTH_PENDING_MS = 10 * 60 * 1000;
 
 /**
@@ -16,7 +21,7 @@ export function sealPending(fields, secret, now = Date.now()) {
     challenge: fields.challenge,
     next: fields.next,
     provider: fields.provider,
-    intent: fields.intent === "forms" ? "forms" : "",
+    intent: oauthIntent(fields.intent),
     exp: now + OAUTH_PENDING_MS,
   }, secret);
 }
@@ -40,7 +45,7 @@ export function openPending(token, secret, now = Date.now()) {
     challenge: payload.challenge,
     next: typeof payload.next === "string" ? payload.next : "/console",
     provider: typeof payload.provider === "string" ? payload.provider : "",
-    intent: payload.intent === "forms" ? "forms" : "",
+    intent: oauthIntent(payload.intent),
     exp: payload.exp,
   };
 }

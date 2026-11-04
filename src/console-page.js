@@ -368,6 +368,11 @@ ${slack}
             <span class="preset-detail">Uses this person's Google account.</span>
             <span class="badge" data-preset-badge>Add</span>
           </button>
+          <button type="button" class="preset-card" data-preset="google-calendar" data-state="add">
+            <span class="preset-head">${calendarIcon}<span class="preset-name">Google Calendar</span></span>
+            <span class="preset-detail">Uses this person's Google account.</span>
+            <span class="badge" data-preset-badge>Add</span>
+          </button>
         </div>
       </div>
       <div id="mcp-list" class="mcp-list"></div>
@@ -6393,8 +6398,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
     return "Write";
   }
 
-  function paintPreset(preset) {
-    var card = document.querySelector("[data-preset='google-forms']");
+  function paintPreset(id, preset, accessDetail) {
+    var card = document.querySelector("[data-preset='" + id + "']");
     if (!card) return;
     var state = preset && preset.state ? preset.state : "add";
     if (card.getAttribute("data-state") === "connecting" && state !== "connected") return;
@@ -6404,7 +6409,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var detail = card.querySelector(".preset-detail");
     if (state === "needs_access") {
       if (badge) badge.textContent = "Needs Google access";
-      if (detail) detail.textContent = preset && preset.message ? preset.message : "Connect Google Forms";
+      if (detail) detail.textContent = preset && preset.message ? preset.message : accessDetail;
     } else if (state === "connected") {
       if (badge) badge.textContent = "Connected";
       if (detail) detail.textContent = "Uses this person's Google account.";
@@ -6418,7 +6423,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
 
   function paintMcp(data) {
     if (data && data.presets) mcpPresets = data.presets;
-    paintPreset(mcpPresets["google-forms"]);
+    paintPreset("google-forms", mcpPresets["google-forms"], "Connect Google Forms");
+    paintPreset("google-calendar", mcpPresets["google-calendar"], "Connect Google Calendar");
     var connectors = Array.isArray(data.connectors) ? data.connectors : [];
     mcpRows = connectors;
     mcpDemoUrl = typeof data.demoUrl === "string" ? data.demoUrl : "";
@@ -6717,29 +6723,33 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
   }
 
-  function addGoogleForms() {
-    var card = document.querySelector("[data-preset='google-forms']");
+  function addPreset(id) {
+    var card = document.querySelector("[data-preset='" + id + "']");
     if (!card) return;
     var state = card.getAttribute("data-state") || "add";
     if (state === "connecting" || state === "connected") return;
-    var preset = mcpPresets["google-forms"] || {};
+    var preset = mcpPresets[id] || {};
+    var accessDetail = id === "google-calendar" ? "Connect Google Calendar" : "Connect Google Forms";
+    var fallback = id === "google-calendar"
+      ? "/console/auth/google?intent=calendar&next=/console/connectors"
+      : "/console/auth/google?intent=forms&next=/console/connectors";
     if (state === "needs_access") {
-      window.location.assign(preset.connectUrl || "/console/auth/google?intent=forms&next=/console/connectors");
+      window.location.assign(preset.connectUrl || fallback);
       return;
     }
     card.setAttribute("data-state", "connecting");
     card.disabled = true;
     var badge = card.querySelector("[data-preset-badge]");
     if (badge) badge.textContent = "Connecting";
-    mcpPost("/console/connectors/presets/google-forms", {}).then(function (result) {
+    mcpPost("/console/connectors/presets/" + id, {}).then(function (result) {
       if (result && result.code === "needs_access") {
-        mcpPresets["google-forms"] = {
+        mcpPresets[id] = {
           state: "needs_access",
           connectUrl: result.connectUrl || "",
           message: result.detail || "",
         };
         card.setAttribute("data-state", "add");
-        paintPreset(mcpPresets["google-forms"]);
+        paintPreset(id, mcpPresets[id], accessDetail);
         if (result.connectUrl) window.location.assign(result.connectUrl);
         return;
       }
@@ -6756,7 +6766,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   var formsPreset = document.querySelector("[data-preset='google-forms']");
-  if (formsPreset) formsPreset.addEventListener("click", addGoogleForms);
+  if (formsPreset) formsPreset.addEventListener("click", function () { addPreset("google-forms"); });
+  var calendarPreset = document.querySelector("[data-preset='google-calendar']");
+  if (calendarPreset) calendarPreset.addEventListener("click", function () { addPreset("google-calendar"); });
   var mcpAdd = document.getElementById("mcp-add");
   var mcpAddHead = document.getElementById("mcp-add-head");
   if (mcpAdd) mcpAdd.addEventListener("click", openMcpDialog);

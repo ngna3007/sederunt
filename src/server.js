@@ -7,6 +7,7 @@ import { redact } from "./domain/redact.js";
 import { handleCalendarEvent } from "./calendar/route.js";
 import { handleConnectorRoutes } from "./connectors/route.js";
 import { createFormsApp, handleNodeForms } from "./mcp-forms/http.js";
+import { createFakeCalendarMcp } from "./connectors/calendar-fake.js";
 import { createConnectorStore } from "./connectors/store.js";
 import { createPersonGoogleStore } from "./connectors/google-person.js";
 import { calendarPresentedConnected, calendarTimeZone, createCalendarAdapter } from "./calendar/mcp.js";
@@ -311,6 +312,8 @@ export function createApp(options = {}) {
   const identity = options.identity ?? (identityConfigured(env) ? createIdentity(env) : null);
   workspace.forms = createFormsApp({ env, fetchImpl: options.fetch });
   workspace.googleGrants = options.googleGrants || createPersonGoogleStore({ env, fetchImpl: options.fetch });
+  workspace.calendarMcp = createFakeCalendarMcp();
+  workspace.calendarSave = typeof options.calendarSave === "function" ? options.calendarSave : null;
   async function mcpCallContext(req) {
     const gate = guardConsole(req, env);
     const tenantId = await resolveMcpSpace(gate, identity, workspace.deps.connectors);
@@ -321,6 +324,9 @@ export function createApp(options = {}) {
       personId,
       googleGrants: workspace.googleGrants,
       forms: workspace.forms,
+      calendarMcp: workspace.calendarMcp,
+      calendarSave: workspace.calendarSave,
+      fetch: options.fetch,
       origin: requestOrigin(req, env),
     };
   }
@@ -381,7 +387,7 @@ export function createApp(options = {}) {
       return;
     }
     if (url.pathname === "/console/auth" || url.pathname.startsWith("/console/auth/")) {
-      await handleAuthRoute({ req, res, url, env, identity, send, redirect, googleGrants: workspace.googleGrants });
+      await handleAuthRoute({ req, res, url, env, identity, send, redirect, googleGrants: workspace.googleGrants, calendarSave: workspace.calendarSave });
       return;
     }
     if (req.method === "GET" && url.pathname === "/console/sign-in") {
@@ -1243,7 +1249,11 @@ let publicServer;
 if (isDirectRun() || process.env.VERCEL) {
   loadLocalEnv();
   loadCompanyEnv();
-  publicServer = createApp({ liveLinear: true, calendar: createCalendarAdapter(process.env, { save: saveCalendarEnv }) });
+  publicServer = createApp({
+    liveLinear: true,
+    calendar: createCalendarAdapter(process.env, { save: saveCalendarEnv }),
+    calendarSave: saveCalendarEnv,
+  });
 }
 if (isDirectRun() && !process.env.VERCEL && publicServer) {
   publicServer.listen(port, "127.0.0.1", () => {

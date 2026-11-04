@@ -18,6 +18,7 @@ import {
 } from "./pending.js";
 import { codeChallengeFor, createCodeVerifier } from "./pkce.js";
 import { displayNameFromUser, identityConfigured, providerFromUser } from "./shared.js";
+import { CALENDAR_SCOPES, applyCalendarConnection } from "../calendar/mcp.js";
 import { FORMS_SCOPES } from "../connectors/google-person.js";
 
 const PROVIDERS = new Set(["google", "github"]);
@@ -77,7 +78,7 @@ async function startProvider(ctx, provider) {
   const verifier = createCodeVerifier();
   const challenge = codeChallengeFor(verifier);
   const next = safeConsoleNext(url.searchParams.get("next") || "/console");
-  const intent = provider === "google" && url.searchParams.get("intent") === "forms" ? "forms" : "";
+  const intent = googleIntent(provider, url.searchParams.get("intent"));
   const sealed = sealPending({ verifier, challenge, next, provider, intent }, sessionSecret(env));
   const cookie = oauthPendingCookie(sealed, req, Math.floor(OAUTH_PENDING_MS / 1000));
   const authorizeInput = {
@@ -85,8 +86,8 @@ async function startProvider(ctx, provider) {
     redirectTo: `${requestOrigin(req, env)}/console/auth/callback`,
     codeChallenge: challenge,
   };
-  if (intent === "forms") {
-    authorizeInput.scopes = FORMS_SCOPES.join(" ");
+  if (intent === "forms" || intent === "calendar") {
+    authorizeInput.scopes = (intent === "calendar" ? CALENDAR_SCOPES : FORMS_SCOPES).join(" ");
     authorizeInput.queryParams = {
       access_type: "offline",
       prompt: "consent",
@@ -162,6 +163,18 @@ async function finishCallback(ctx) {
     const tokens = await identity.exchangeCode({ code, codeVerifier: pending.verifier });
     const user = await identity.getUser(tokens.accessToken);
     if (!user?.id) throw new Error("unverified");
+    if (pending.intent === "calendar" && pending.provider === "google") {
+      try {
+        applyCalendarConnection(env, {
+          accessToken: tokens.providerAccessToken || "",
+          refreshToken: tokens.providerRefreshToken || "",
+          expiresAt: tokens.expiresAt,
+          scopes: grantedScopeList(tokens.scope),
+        }, ctx.calendarSave);
+      } catch {
+        // Sign-in still completes. Calendar stays disconnected until a full grant is stored.
+      }
+    }
     let formsTenant = "";
     if (pending.intent === "forms" && pending.provider === "google" && tokens.providerRefreshToken && ctx.googleGrants) {
       try {
@@ -233,8 +246,18 @@ async function formsTenantId(ctx, accessToken) {
 }
 
 /**
- * Scopes Google actually returned. An empty list is a declined Forms consent,
- * not a grant of every Forms scope.
+ * @param {string} provider
+ * @param {string | null} raw
+ */
+function googleIntent(provider, raw) {
+  if (provider !== "google") return "";
+  if (raw === "forms" || raw === "calendar") return raw;
+  return "";
+}
+
+/**
+ * Scopes Google actually returned. An empty list is a declined consent,
+ * not a grant of every requested scope.
  *
  * @param {unknown} scope
  */

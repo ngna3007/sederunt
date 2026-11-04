@@ -1,6 +1,8 @@
 import { Client, InMemoryTransport, SSEClientTransport, StreamableHTTPClientTransport, UnauthorizedError } from "@modelcontextprotocol/client";
+import { calendarFakeEnabled } from "../calendar/fake.js";
 import { runWithFormsContext } from "../mcp-forms/context.js";
 import { createFormsMcpServer } from "../mcp-forms/server.js";
+import { isGoogleCalendarPreset } from "./builtin-calendar.js";
 import { isBuiltinGoogleForms } from "./builtin-forms.js";
 import { connectorError, connectorMessage } from "./errors.js";
 import { guardConnectorUrl } from "./url-guard.js";
@@ -35,7 +37,26 @@ export async function testConnection(input) {
         message: "",
       };
     }
-    const url = await guardConnectorUrl(input?.url, { env: input?.env, lookup: input?.lookup });
+    if (useFakeCalendar(input)) {
+      let payload;
+      await withTimeout(timeoutMs, async () => {
+        payload = await withCalendarClient(input, timeoutMs, async ({ client, transport }) => ({
+          serverInfo: readServerInfo(client),
+          protocolVersion: transport.protocolVersion || null,
+          tools: await listPages(client, timeoutMs),
+        }));
+      });
+      return {
+        ok: true,
+        serverInfo: payload.serverInfo,
+        protocolVersion: payload.protocolVersion,
+        tools: payload.tools,
+        latencyMs: Date.now() - started,
+        code: "",
+        message: "",
+      };
+    }
+    const url = await guardConnectorUrl(input?.url, guardOptions(input));
     const auth = authFrom(input);
     const tools = [];
     let serverInfo = null;
@@ -110,6 +131,13 @@ export async function listTools(input) {
     });
     return tools;
   }
+  if (useFakeCalendar(input)) {
+    let tools = [];
+    await withTimeout(timeoutMs, async () => {
+      tools = await withCalendarClient(input, timeoutMs, ({ client }) => listPages(client, timeoutMs));
+    });
+    return tools;
+  }
   const tested = await testConnection(input);
   if (!tested.ok) throw connectorError(tested.code || "protocol");
   return tested.tools;
@@ -122,6 +150,7 @@ export async function callTool(connector, name, args = {}, options = {}) {
     preset: connector?.preset || options.preset,
     token: connector?.token || options.token || "",
     forms: options.forms || connector?.forms,
+    calendarMcp: options.calendarMcp || connector?.calendarMcp,
     origin: options.origin || connector?.origin,
     env: options.env,
   };
@@ -136,7 +165,17 @@ export async function callTool(connector, name, args = {}, options = {}) {
       });
       return describedCall(result);
     }
-    const url = await guardConnectorUrl(connector?.url, { env: options.env, lookup: options.lookup });
+    if (useFakeCalendar(target)) {
+      let result = null;
+      await withTimeout(timeoutMs, async () => {
+        result = await withCalendarClient(target, timeoutMs, ({ client }) => client.callTool({
+          name,
+          arguments: args && typeof args === "object" ? args : {},
+        }, { timeout: timeoutMs }));
+      });
+      return describedCall(result);
+    }
+    const url = await guardConnectorUrl(connector?.url, guardOptions({ ...connector, ...options, preset: target.preset }));
     const auth = authFrom({ ...connector, ...options, token: connector?.token || "" });
     let result = null;
     await withTimeout(timeoutMs, async (signal) => {
@@ -144,7 +183,7 @@ export async function callTool(connector, name, args = {}, options = {}) {
       let last;
       for (const kind of kinds) {
         try {
-          const opened = await openClient(url, auth, { ...options, env: options.env }, signal, kind, timeoutMs);
+          const opened = await openClient(url, auth, { ...options, env: options.env, preset: target.preset }, signal, kind, timeoutMs);
           try {
             result = await opened.client.callTool({ name, arguments: args && typeof args === "object" ? args : {} }, { timeout: timeoutMs });
             return;
@@ -163,6 +202,18 @@ export async function callTool(connector, name, args = {}, options = {}) {
     const code = classify(error);
     return { ok: false, text: "", isError: true, code, message: connectorMessage(code) };
   }
+}
+
+function useFakeCalendar(input) {
+  return isGoogleCalendarPreset(input) && calendarFakeEnabled(input?.env);
+}
+
+function guardOptions(input) {
+  return {
+    env: input?.env,
+    lookup: input?.lookup,
+    allowCalendarPreset: isGoogleCalendarPreset(input),
+  };
 }
 
 function formsServiceOf(input) {
@@ -184,6 +235,20 @@ function tokenFrom(input) {
  * @param {number} timeoutMs
  * @param {(opened: { client: Client, transport: InMemoryTransport }) => Promise<unknown>} run
  */
+/**
+ * Fake Calendar MCP. This does not open a socket.
+ *
+ * @param {object} input
+ * @param {number} timeoutMs
+ * @param {(opened: { client: Client, transport: InMemoryTransport }) => Promise<unknown>} run
+ */
+async function withCalendarClient(input, timeoutMs, run) {
+  const factory = input?.calendarMcp;
+  if (!factory || typeof factory.server !== "function") throw connectorError("protocol");
+  const server = factory.server();
+  return withLinkedServer(server, timeoutMs, run);
+}
+
 async function withBuiltinClient(input, timeoutMs, run) {
   const service = formsServiceOf(input);
   if (!service) throw connectorError("protocol");
@@ -198,8 +263,17 @@ async function withBuiltinClient(input, timeoutMs, run) {
     listResponses: (args) => runWithFormsContext(context, () => service.listResponses(args)),
     publishForm: (args) => runWithFormsContext(context, () => service.publishForm(args)),
   };
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = createFormsMcpServer(bound);
+  return withLinkedServer(server, timeoutMs, run);
+}
+
+/**
+ * @param {{ connect: Function, close: Function }} server
+ * @param {number} timeoutMs
+ * @param {(opened: { client: Client, transport: InMemoryTransport }) => Promise<unknown>} run
+ */
+async function withLinkedServer(server, timeoutMs, run) {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client(
     { name: "sederunt", version: "0.0.0" },
     { versionNegotiation: { mode: "legacy" } },
@@ -326,7 +400,7 @@ function guardedFetch(input, timeoutSignal) {
     let method = init.method || "GET";
     let body = init.body;
     for (let hop = 0; hop <= MAX_HOPS; hop += 1) {
-      await guardConnectorUrl(current.href, { env: input?.env, lookup: input?.lookup });
+      await guardConnectorUrl(current.href, guardOptions(input));
       const signals = [timeoutSignal, init.signal].filter(Boolean);
       const signal = signals.length > 1 && typeof AbortSignal.any === "function" ? AbortSignal.any(signals) : signals[0];
       const response = await base(current, { ...init, method, body, redirect: "manual", signal });

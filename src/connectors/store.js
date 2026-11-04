@@ -11,6 +11,8 @@ import {
   validToolName,
   withEnabled,
 } from "./tools.js";
+import { CALENDAR_SCOPES } from "../calendar/mcp.js";
+import { GOOGLE_CALENDAR_MCP_URL, isGoogleCalendarPreset } from "./builtin-calendar.js";
 import { BUILTIN_GOOGLE_FORMS_URL, isBuiltinGoogleForms } from "./builtin-forms.js";
 import { guardConnectorUrl } from "./url-guard.js";
 import { FORMS_SCOPES } from "./google-person.js";
@@ -185,23 +187,30 @@ export function createMemoryConnectorStore(env = process.env) {
 }
 
 /**
- * The Forms preset keeps a marker. Every other connector still goes through the URL guard.
+ * Forms keeps a marker. Calendar stores the fixed Google MCP URL and skips DNS.
+ * Every other connector still goes through the URL guard.
  *
  * @param {{ url?: string, preset?: string, lookup?: Function }} input
  * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
  */
 async function resolveConnectorUrl(input, env) {
   if (isBuiltinGoogleForms(input)) return BUILTIN_GOOGLE_FORMS_URL;
+  if (isGoogleCalendarPreset(input)) return GOOGLE_CALENDAR_MCP_URL;
   const url = await guardConnectorUrl(input?.url, { env, lookup: input?.lookup });
   return url.href;
 }
 
 function storedPreset(input) {
-  return input?.preset === "google-forms" ? "google-forms" : null;
+  if (input?.preset === "google-forms") return "google-forms";
+  if (input?.preset === "google-calendar") return "google-calendar";
+  return null;
 }
 
 function storedAuthType(input) {
-  if (storedPreset(input) === "google-forms" && input?.authType === "google_oauth" && !input?.token) return "google_oauth";
+  const preset = storedPreset(input);
+  if ((preset === "google-forms" || preset === "google-calendar") && input?.authType === "google_oauth" && !input?.token) {
+    return "google_oauth";
+  }
   if (input?.token) return "bearer";
   return "none";
 }
@@ -209,7 +218,8 @@ function storedAuthType(input) {
 function storedScopes(input) {
   if (storedAuthType(input) !== "google_oauth") return [];
   const given = Array.isArray(input?.scopes) ? input.scopes : [];
-  return FORMS_SCOPES.filter((scope) => given.includes(scope));
+  const allowed = storedPreset(input) === "google-calendar" ? CALENDAR_SCOPES : FORMS_SCOPES;
+  return allowed.filter((scope) => given.includes(scope));
 }
 
 function bytea(buffer) {

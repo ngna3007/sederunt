@@ -70,7 +70,9 @@ test("connector page is reachable and keeps tokens out of HTML", async (t) => {
   assert.match(page.raw, /id="mcp-add"/);
   assert.match(page.raw, /Add a connector/);
   assert.match(page.raw, /data-preset="google-forms"/);
+  assert.match(page.raw, /data-preset="google-calendar"/);
   assert.match(page.raw, /Google Forms/);
+  assert.match(page.raw, /Google Calendar/);
   assert.match(page.raw, /Uses this person's Google account/);
   assert.doesNotMatch(page.raw, /Coming soon/);
   assert.equal(page.raw.includes(TOKEN), false);

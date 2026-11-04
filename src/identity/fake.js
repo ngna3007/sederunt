@@ -133,7 +133,7 @@ export function createFakeIdentity(env = {}) {
       store.codes.set(code, {
         provider,
         challenge: codeChallenge,
-        intent: intent === "forms" ? "forms" : "",
+        intent: intent === "forms" || intent === "calendar" ? intent : "",
         scope: typeof scope === "string" ? scope : "",
       });
       return code;
@@ -151,7 +151,7 @@ export function createFakeIdentity(env = {}) {
       }
       const user = ensureUser(pending.provider);
       const tokens = issueTokens(user.id);
-      if (pending.intent === "forms") {
+      if (pending.intent === "forms" || pending.intent === "calendar") {
         tokens.providerAccessToken = `fa.google.${user.id}`;
         tokens.providerRefreshToken = `fr.google.${user.id}`;
         const override = String(env.SEDERUNT_AUTH_FAKE_SCOPE || "").trim();

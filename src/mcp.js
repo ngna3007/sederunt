@@ -209,6 +209,9 @@ export async function handleMcpRequest(message, deps, context) {
       personId: context?.personId || "",
       googleGrants: context?.googleGrants,
       forms: context?.forms,
+      calendarMcp: context?.calendarMcp,
+      calendarSave: context?.calendarSave,
+      fetch: context?.fetch,
       origin: context?.origin,
     });
   }

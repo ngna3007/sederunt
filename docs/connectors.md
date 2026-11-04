@@ -19,6 +19,16 @@ A successful custom tool call passes the upstream `structuredContent` through un
 
 The Connectors page adds a Google Forms preset for the current space. The connector is the built-in Forms server, called in-process. Its stored URL is `builtin:google-forms`, and the card shows **Built in**. Calls use the signed-in person's Google access token inside that process. The token stays on the server. When Forms scopes are missing, the card says Connect Google Forms and starts incremental Google consent. A declined Forms scope leaves the card on Needs Google access and explains that Forms access was not granted. Fake mode (`SEDERUNT_FORMS_FAKE=1`, or `SEDERUNT_AUTH_FAKE=1` unless Forms fake is `0`) connects without a Google grant.
 
+## Google Calendar
+
+The Connectors page adds a Google Calendar preset next to Google Forms. It uses the signed-in person's Google account and the same Calendar grant as calendar-edit. If that grant is already present, the card can be added with no second consent. If it is not, the card says **Needs Google access** and **Connect Google Calendar**, and the link is the existing incremental consent flow (`access_type=offline`, `prompt=consent`, `include_granted_scopes=true`). After that grant, calendar-edit and this preset share it. A declined Calendar scope leaves the card on Needs Google access and explains that Calendar access was not granted. The refresh token is not stored for a partial grant.
+
+The stored URL is `https://calendarmcp.googleapis.com/mcp/v1`. That host is fixed for this preset. It is not a URL the person typed, and the URL guard does not look it up. The connector card shows that URL. Calls use the calendar-edit token and its refresh. The token stays on the server and is not returned.
+
+Tools come from the upstream `tools/list`. Each tool is Read, Write, or Delete from its annotations, or from the name when those hints are absent: `list_`, `get_`, and `search_` are read; `create_`, `update_`, and `respond_` are write; `delete_` is delete. Exposed names are `google-calendar__<tool>`. Read runs. Write is held for confirmation on `/mcp` unless the space preference `mcp:google-calendar:<tool>` is do. Delete always asks, and delete tools stay off until someone turns them on. Confirm with `arguments._confirm` or `params._meta`. A successful call passes `structuredContent` through.
+
+Fake mode (`SEDERUNT_CALENDAR_FAKE=1`, or `SEDERUNT_AUTH_FAKE=1` unless Calendar fake is `0`) serves `list_events`, `get_event`, `create_event`, `update_event`, and `delete_event` in-process. `SEDERUNT_CALENDAR_FAKE_CONNECTED=0` keeps that server but presents Calendar as not connected. The stored URL stays the Google host.
+
 The refresh grant is sealed with `MCP_SECRETS_KEY_V1` and stored per space and person. With `SUPABASE_URL` and `SUPABASE_SECRET_KEY` (or `SUPABASE_SERVICE_ROLE_KEY`) that row is `public.person_google_grants`. Otherwise it is in memory. Access tokens are not stored.
 
 ## Environment
@@ -30,7 +40,8 @@ The refresh grant is sealed with `MCP_SECRETS_KEY_V1` and stored per space and p
 | `SUPABASE_URL` | Project URL. With the service-role key, Forms grants are written to `person_google_grants`. |
 | `SEDERUNT_MCP_FAKE` | `1` allows the loopback fake MCP server (`http://127.0.0.1` or `http://localhost` only). `0` turns that off even when `SEDERUNT_AUTH_FAKE=1`. The Forms preset does not fetch a URL, so this flag does not apply to it. |
 | `SEDERUNT_MCP_FAKE_PORT` | Port for the demo server. Empty uses a random loopback port. The add dialog shows that URL as "Use demo server". |
-| `SEDERUNT_AUTH_FAKE_SCOPE` | Fake Google consent only. Overrides the scope string returned to the Forms callback. |
+| `SEDERUNT_AUTH_FAKE_SCOPE` | Fake Google consent only. Overrides the scope string returned to the Forms or Calendar callback. |
+| `SEDERUNT_CALENDAR_FAKE` | `1` serves the Calendar preset in-process. `0` turns that off even when `SEDERUNT_AUTH_FAKE=1`. |
 | `SEDERUNT_TENANT_ID` | Space id used by the stdio MCP process when it is not implied by the only in-memory tenant. |
 
 Tokens are write-only. The console shows "Token set" and the last four characters. They are not written to the activity log or returned by the API.
