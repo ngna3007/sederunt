@@ -1,6 +1,6 @@
 # Design: Files on Walrus
 
-**Status:** draft (proposal, not built)
+**Status:** draft (decisions recorded 2026-11-04; not built)
 **Owner:** @ngna3007
 **Last updated:** 2026-11-04
 **Scope:** Feature-level. How a file sent in a Sederunt channel is stored, shown, deleted, and forgotten.
@@ -23,7 +23,7 @@ A file sent in a channel belongs to the person who sent it, can be seen by the p
 
 ## How this fits ADR 0005
 
-ADR 0005 says Walrus is the record and Postgres is only a rebuildable index. `files` follows that: the bytes and the Blob object are on Walrus/Sui, and the row is an index of them plus access state. To keep it rebuildable, each Blob object gets attributes `sederunt:file_id`, `sederunt:tenant_id`, `sederunt:channel_id` (Walrus blob attributes, [managing blobs](https://docs.wal.app/docs/walrus-client/managing-blobs#set-blob-attributes)). Walking the service address's Blob objects rebuilds the index. Two things are new and need an ADR amendment (open question 1): access state (who may read, delete requests) lives only in Postgres, and Sederunt now holds a funded testnet wallet and pays for storage, which ADR 0005 avoided by using Console.
+ADR 0005 says Walrus is the record and Postgres is only a rebuildable index. `files` follows that: the bytes and the Blob object are on Walrus/Sui, and the row is an index of them plus access state. To keep it rebuildable, each Blob object gets attributes `sederunt:file_id`, `sederunt:tenant_id`, `sederunt:channel_id` (Walrus blob attributes, [managing blobs](https://docs.wal.app/docs/walrus-client/managing-blobs#set-blob-attributes)). Walking the service address's Blob objects rebuilds the index. Two things are new, and ADR 0005 is amended for them (decided): access state (who may read, delete requests) lives only in Postgres, and Sederunt holds its own funded testnet wallet that owns and pays for file blobs.
 
 ## Today's code (what this builds on)
 
@@ -38,7 +38,7 @@ ADR 0005 says Walrus is the record and Postgres is only a rebuildable index. `fi
 | Seal | `src/console/upload.js` already uses `@mysten/seal` (`SealClient`, `SessionKey`) for Console private folders, on mainnet | Reuse the pattern, but point it at testnet and our own policy. |
 | Memory | `src/memory/company.js` uses `@mysten-incubation/memwal`, namespace `sederunt`, delegate key | Memory link + cleanup. |
 
-Note: `messages_select` today requires `invite_user_ids @> [me]` (ADR 0003: you see what you were present for). Files deliberately use **current channel membership** instead, per the agreed design ("leaving the channel revokes access"). That means someone who joins later can see older files but not the older messages they came with. Open question 2.
+Note: `messages_select` today requires `invite_user_ids @> [me]` (ADR 0003: you see what you were present for). Files deliberately use **current channel membership** instead, per the agreed design ("leaving the channel revokes access"). **Decided:** files follow current channel membership. People who leave lose access; people who join later can see older files (but not the older messages they came with, which still follow ADR 0003).
 
 ## Storage and encryption
 
@@ -73,7 +73,7 @@ Seal encrypts to an identity; key servers release the key only if a `seal_approv
 | Wallet/gas UX | None for users | Users need a Sui address; sign a SessionKey; key-server rate limits |
 | Cost | Service pays everything | Same storage cost; plus allowlist gas |
 
-**Recommendation: A for v1.** It matches how Sederunt already works (the server holds the Slack bot token and reads message bodies), keeps one access model (RLS), and revokes instantly. Seal's job in A is narrow and important: anyone who pulls the blob straight from Walrus gets ciphertext. B is the end-to-end option for later if "the server can't read files" becomes a requirement (open question 3). The service key lives only in server env (never in the repo, never logged), and the AES data key is never stored in Postgres; only the Seal-encrypted envelope header travels with the blob.
+**Recommendation: A for v1.** It matches how Sederunt already works (the server holds the Slack bot token and reads message bodies), keeps one access model (RLS), and revokes instantly. Seal's job in A is narrow and important: anyone who pulls the blob straight from Walrus gets ciphertext. B is the end-to-end option for later if "the server can't read files" becomes a requirement (default kept: A for v1). The service key lives only in server env (never in the repo, never logged), and the AES data key is never stored in Postgres; only the Seal-encrypted envelope header travels with the blob.
 
 ### Who owns the Blob object
 
@@ -82,7 +82,7 @@ Only the owner of the Blob object can delete or extend an owned blob ([managing 
 ### Who pays and how blobs are renewed
 
 - **Testnet (now):** the service address is funded from the Sui testnet faucet and testnet WAL (`walrus get-wal`). Cost is zero real money.
-- **Mainnet (later, needs the user):** the workspace pays, and Sederunt fronts WAL/SUI. Per-workspace quota: `tenants.storage_quota_bytes` (sum of active `files.size_bytes`), default small; reject uploads over quota. Billing is out of scope until the user decides (open question 4).
+- **Mainnet (later, needs the user):** the workspace pays, and Sederunt fronts WAL/SUI. Per-workspace quota: `tenants.storage_quota_bytes` (sum of active `files.size_bytes`), default small; reject uploads over quota. Billing is out of scope for now (default kept: Sederunt fronts testnet cost; mainnet payment decided before leaving testnet).
 - **Lifetime:** store for `EPOCHS` (configurable; testnet epochs are short, read the current epoch length with `walrus info`). A blob expires at the start of its end epoch, and can be extended only before it expires, only by the owner for owned blobs, and `extend` needs an explicit `--epochs-extended` ([managing blobs](https://docs.wal.app/docs/walrus-client/managing-blobs#extend-the-lifetime-of-a-blob)).
 - **Renewal job:** daily, select `active` files whose `end_epoch - current_epoch <= RENEW_MARGIN`, extend by `EPOCHS`, update `end_epoch`. Files in a channel archived longer than the workspace retention, or over quota, are not renewed; the job marks them `expired` in the UI ahead of time and tells the owner.
 - **Delete reclaims storage:** deleting a deletable blob returns its storage resource for reuse ([managing blobs](https://docs.wal.app/docs/walrus-client/managing-blobs#how-to-delete-blobs)), so deletes lower cost.
@@ -252,7 +252,7 @@ Admins' "unanswered requests" view: `file_delete_requests where status='open' an
 | See unanswered requests | own files | own requests | ✅ whole workspace | ✅ whole workspace | ❌ | ❌ |
 | Delete source message → hides file | ✅ (via chat app) | ❌ | via chat app moderation | via chat app moderation | ❌ | ❌ |
 
-\* `visible_channel_ids()` gives `invited` channels only to their members. Whether Owners/Admins should see files in invited channels they are not in is open question 5; the matrix assumes not, and they moderate via a report link instead.
+\* `visible_channel_ids()` gives `invited` channels only to their members. Whether Owners/Admins should see files in invited channels they are not in uses the default: they don't, and they moderate via reports and the unanswered-requests list instead.
 
 A Slack sender who has not signed up is a guest: the file row gets `owner_guest_id`, and ownership moves to them when the guest merges on signup (extend `private.merge_guests_for_user`). Until then only Admins can delete it.
 
@@ -397,7 +397,7 @@ sequenceDiagram
   Job->>DB: status=deleted; audit row in activity log
 ```
 
-Agreed wording was "remove for everyone without deleting the owner's copy". Because the service address owns the only Blob object, there is no separate owner copy on Walrus; the owner's copy is the one on their own device or in Slack. If the user wants moderation to only hide (not delete the blob), that is a one-line change: set `status='hidden'` and skip the blob job (open question 6).
+Agreed wording was "remove for everyone without deleting the owner's copy". Because the service address owns the only Blob object, there is no separate owner copy on Walrus; the owner's copy is the one on their own device or in Slack. **Decided:** admin removal deletes the blob (no hide-only mode).
 
 ### 7. Memory cleanup
 
@@ -411,7 +411,7 @@ So the design:
 
 1. Every memory about a file is written in its own namespace `sederunt-file-<file_id>` and recorded in `file_memory_links` (blob id from the `remember` result).
 2. On delete, step one (with the delegate key) is `forget` on that namespace: the memory is unrecallable at once.
-3. Step two is Security Delete of the linked blob ids, signed by the **account owner** wallet. On testnet, Sederunt can create its own MemWal account whose owner is a server-held testnet key, making this fully automatic. On the user's real account it needs the owner key, which Sederunt does not hold (open question 7); until then step two stays `forgotten` and is listed for the owner to confirm in the Walrus Memory dashboard.
+3. Step two is Security Delete of the linked blob ids, signed by the **account owner** wallet. **Decided:** Sederunt uses its own testnet Walrus Memory account whose owner is a server-held testnet key, so permanent deletion runs automatically. One namespace per file stays. Later option: let a workspace link its own personal Walrus Memory account; then Sederunt holds only a delegate key, `forget` still works, and permanent deletion becomes a step the account owner confirms in the Walrus Memory dashboard.
 4. Seal keeps leftover memory blobs unreadable to anyone not the owner or a current delegate. Keys a removed delegate already fetched stay usable for memories under the old counter ([ownership and permissions](https://docs.wal.app/walrus-memory/contract/ownership-and-permissions#the-rotation-counter)).
 
 ```mermaid
@@ -459,16 +459,16 @@ Also: when `messages.memory_blob_id` is set on the message that carried the file
 - Memory `forget` is instant but not permanent; permanent memory deletion needs the memory account owner's signature.
 - Walrus Console is a separate personal file manager ("An account belongs to one person"), so files here do not appear in anyone's Console, and Console deletions don't touch Sederunt ([Console overview](https://docs.wal.app/docs/console/overview)).
 
-## Open questions for the user
+## Decisions (2026-11-04)
 
-1. **ADR change.** OK to amend ADR 0005 so Sederunt holds a funded testnet service wallet that owns and pays for file blobs (instead of relying on Console)?
-2. **Late joiners.** Files follow current channel membership (leavers lose access, joiners see older files), but messages follow "present when sent". Keep that split, or make files follow the message rule too?
-3. **Server-side Seal (A) for v1**, with client-side (B, user Sui addresses) later only if "Sederunt can't read your files" becomes a requirement?
-4. **Mainnet payment.** When we leave testnet, who pays WAL/SUI (Sederunt, per workspace plan, or the user's own wallet), and what default quota and retention?
-5. **Admins and invited channels.** Should Owners/Admins see files in invited channels they are not members of, or only act on reports?
-6. **Moderation = delete or hide?** Admin removal deletes the blob in this draft. Prefer hide-only (reversible)?
-7. **Memory owner key.** Permanent memory deletion needs the MemWal account owner's signature. Use a Sederunt-owned testnet MemWal account (fully automatic), or keep the user's account and leave permanent deletion as a dashboard step?
-8. **Request timeout.** 72 hours before an unanswered delete request shows to admins?
+1. **Wallet:** Sederunt holds its own funded testnet wallet that owns and pays for file blobs. ADR 0005 is amended ([0005](../decisions/0005-walrus-is-the-record.md#amendment-2026-11-04-file-blobs)).
+2. **Membership:** files follow current channel membership. Leavers lose access; new joiners see older files.
+3. **Encryption:** server-side Seal (option A) for v1 (default).
+4. **Mainnet payment:** deferred; testnet only for now (default).
+5. **Admins and invited channels:** admins don't see files in invited channels they aren't in; they act on reports (default).
+6. **Admin removal deletes the blob.**
+7. **Memory:** a Sederunt-owned testnet Walrus Memory account, so permanent deletion is automatic; one namespace per file. Linking a personal Walrus Memory account is a later option.
+8. **Request timeout:** 72 hours before an unanswered request shows to admins (default).
 
 ## Build plan (testnet, free)
 
