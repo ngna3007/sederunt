@@ -540,11 +540,11 @@ ${slack}
             <button type="button" id="file-id-chip" class="id-chip"><span id="file-id" class="mono"></span></button>
             <span class="meta-item header-only" hidden><span class="meta-label">Status</span><span id="file-status-badge" class="badge"></span></span>
             <span class="meta-item header-only" hidden><span class="meta-label">Platform</span><span id="file-platform-pill"></span></span>
-            <span class="meta-item"><span class="meta-label">Started</span><span id="file-started" class="meta"></span></span>
+            <span class="meta-item" id="file-started-item" hidden><span class="meta-label">Started</span><span id="file-started" class="meta"></span></span>
             <span class="meta-item header-only" id="file-usage-item" hidden><span class="meta-label">Usage</span><span id="file-usage" class="usage-chip"></span></span>
             <p id="file-lead" class="page-lede" hidden></p>
             <p id="file-lead-status" class="meta"></p>
-            <p id="file-proof" class="meta" hidden></p>
+            <a id="file-proof" class="badge ok proof-chip" href="#proof-panel" hidden></a>
           </div>
         </div>
         <div class="room-body">
@@ -3076,9 +3076,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
       status.textContent = "";
       status.hidden = true;
     }
-    var proof = lead && typeof lead.checkpoint === "number" ? proofExplain(lead) : "";
-    var ticket = lead ? ticketLine(lead) : "";
-    showLine("file-proof", [proof, ticket].filter(Boolean).join(" "));
+    var chip = document.getElementById("file-proof");
+    if (chip) {
+      var kept = lead && typeof lead.checkpoint === "number";
+      chip.textContent = kept ? "On Walrus" : "";
+      chip.title = kept ? proofExplain(lead) : "";
+      chip.hidden = !kept;
+    }
   }
 
   function fileMark(name) {
@@ -3741,7 +3745,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (platformName) pill.append(platformBadge(platformName));
     }
     var startedAt = (room && (room.startedAt || room.recordingStart)) || "";
-    text("file-started", startedAt ? (relativeWhen(startedAt) || whenLabel(startedAt) || blankMark()) : blankMark());
+    if (!startedAt && fileRoom) {
+      var spokenTimes = decisionsFor(fileRoom).map(function (row) { return row.spokenAt; }).filter(function (v) { return !isNaN(Date.parse(v || "")); }).sort();
+      startedAt = spokenTimes[0] || "";
+    }
+    var startedLabel = startedAt ? (relativeWhen(startedAt) || whenLabel(startedAt) || "") : "";
+    text("file-started", startedLabel);
+    var startedItem = document.getElementById("file-started-item");
+    if (startedItem) startedItem.hidden = !startedLabel;
     document.querySelectorAll("#file-meta .header-only").forEach(function (node) {
       if (node.id === "file-usage-item") return;
       node.hidden = !knownRoom;
@@ -4090,10 +4101,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (video.getAttribute("src") !== media.videoUrl) video.src = media.videoUrl;
       video.hidden = false;
       if (fallback) fallback.hidden = true;
+      var leftOn = document.getElementById("room-left");
+      if (leftOn) leftOn.classList.remove("no-recording");
     } else if (video) {
       video.removeAttribute("src");
       video.hidden = true;
       if (fallback) fallback.hidden = false;
+      var leftOff = document.getElementById("room-left");
+      if (leftOff) leftOff.classList.add("no-recording");
     }
   }
 
@@ -4373,6 +4388,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
         }
         var stamp = relativeWhen(media.startedAt) || whenLabel(media.startedAt) || blankMark();
         text("file-started", stamp);
+        var startedRow = document.getElementById("file-started-item");
+        if (startedRow) startedRow.hidden = !stamp || stamp === blankMark();
         renderFacts(roomLive || room || {}, { when: media.startedAt }, fileRoom ? decisionsFor(fileRoom) : []);
       }
       renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
@@ -6203,6 +6220,15 @@ if (sessionWhen && sessionWhen.dataset.at) {
       seekTo((playing && playing.currentTime ? playing.currentTime : 0) + 10);
     }
   });
+  var proofChip = document.getElementById("file-proof");
+  if (proofChip) proofChip.addEventListener("click", function (event) {
+    var panel = document.getElementById("proof-panel");
+    if (!panel) return;
+    event.preventDefault();
+    var overviewTab = document.querySelector('[data-right-tab="overview"]');
+    if (overviewTab && overviewTab.getAttribute("aria-selected") !== "true") overviewTab.click();
+    panel.scrollIntoView({ block: "start", behavior: "smooth" });
+  });
   var transcriptSearch = document.getElementById("transcript-search");
   if (transcriptSearch) transcriptSearch.addEventListener("input", function () {
     transcriptQuery = transcriptSearch.value || "";
@@ -7074,6 +7100,7 @@ export function speakerLabel(speaker, displayName, memberId) {
   if (/^ROW-\d+$/i.test(value)) return "";
   if (/^U[A-Z0-9_]{2,}$/.test(value)) return "";
   if (/^0x[0-9a-fA-F]+$/.test(value)) return "";
+  if (/^[a-z][a-z0-9]*([._-][a-z0-9]+)*$/.test(value)) return value.split(/[._-]+/).map(function (part) { return part.charAt(0).toUpperCase() + part.slice(1); }).join(" ");
   return value;
 }
 
