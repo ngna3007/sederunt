@@ -12,7 +12,7 @@ export const CALENDAR_PARTIAL_MESSAGE = "Google did not grant Calendar access. C
 
 /**
  * The preset shares the calendar-edit grant. A row is Connected.
- * An existing grant is ready ("Add · already connected"), with no second consent.
+ * An existing grant is ready ("Connected"), with no second consent.
  * Otherwise the card needs access.
  *
  * @param {{

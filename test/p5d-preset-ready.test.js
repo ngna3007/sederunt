@@ -91,9 +91,9 @@ test("an existing preset row is connected", async () => {
   assert.equal(state.state, "connected");
 });
 
-test("the connectors page can paint Add · already connected", () => {
+test("the connectors page paints a ready preset as Connected", () => {
   const html = renderConsolePage({});
-  assert.match(html, /Add · already connected/);
+  assert.doesNotMatch(html, /already connected/);
   assert.match(html, /state === "ready"/);
   const calendarStart = html.indexOf('data-preset="google-calendar"');
   const calendar = html.slice(calendarStart, html.indexOf("</button>", calendarStart));
@@ -134,7 +134,7 @@ test("the ready card adds the preset with no consent", async (t) => {
 
   const page = await call(port, "GET", "/console/connectors", null, { accept: "text/html" });
   assert.equal(page.status, 200);
-  assert.match(page.raw, /Add · already connected/);
+  assert.doesNotMatch(page.raw, /already connected/);
   assert.match(page.raw, /data-preset="google-calendar"/);
 
   const added = JSON.parse((await call(port, "POST", "/console/connectors/presets/google-calendar", {})).raw);

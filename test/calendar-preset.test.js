@@ -539,7 +539,7 @@ test("google calendar preset layout", { timeout: 180000 }, async (t) => {
     return forms && calendar && forms.getAttribute("data-state") === "add" && calendar.getAttribute("data-state") === "ready";
   });
   const readyBadge = (await page.locator("[data-preset='google-calendar'] [data-preset-badge]").innerText()).replace(/\s+/g, " ").trim();
-  assert.equal(readyBadge, "Add · already connected");
+  assert.equal(readyBadge, "Connected");
   await page.click("[data-preset='google-calendar']");
   await page.waitForFunction(() => {
     const card = document.querySelector("[data-preset='google-calendar']");

@@ -1231,6 +1231,9 @@ button.secondary {
 }
 .badge.warn { background: #fff6e0; color: var(--warning-text); }
 .badge.ok { background: #e7f6ec; color: var(--success-text); }
+.badge.accent { background: #e8edfb; color: #1e3a8a; }
+.badge.info { background: #e6f1fb; color: #0b4f8a; }
+.preset-card .badge.ok, .preset-card .badge.bad { border: 1px solid currentColor; border-color: color-mix(in srgb, currentColor 30%, transparent); }
 .avatar-stack { display: flex; align-items: center; }
 .avatar-stack .face { margin-left: -8px; box-shadow: 0 0 0 2px #fff; }
 .avatar-stack .face:first-child { margin-left: 0; }

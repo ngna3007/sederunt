@@ -367,12 +367,12 @@ ${slack}
           <button type="button" class="preset-card" data-preset="google-forms" data-state="add">
             <span class="preset-head">${formsIcon}<span class="preset-name">Google Forms</span></span>
             <span class="preset-detail">Uses this person's Google account.</span>
-            <span class="badge" data-preset-badge>Add</span>
+            <span class="badge accent" data-preset-badge>Add</span>
           </button>
           <button type="button" class="preset-card" data-preset="google-calendar" data-state="add">
             <span class="preset-head">${calendarIcon}<span class="preset-name">Google Calendar</span></span>
             <span class="preset-detail">Uses this person's Google account.</span>
-            <span class="badge" data-preset-badge>Add</span>
+            <span class="badge accent" data-preset-badge>Add</span>
           </button>
         </div>
       </div>
@@ -6399,6 +6399,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
     return "Write";
   }
 
+  function presetTone(state) {
+    if (state === "connected" || state === "ready") return "ok";
+    if (state === "error") return "bad";
+    if (state === "needs_access") return "warn";
+    if (state === "connecting") return "neutral";
+    return "accent";
+  }
+
   function paintPreset(id, preset, accessDetail) {
     var card = document.querySelector("[data-preset='" + id + "']");
     if (!card) return;
@@ -6408,16 +6416,19 @@ if (sessionWhen && sessionWhen.dataset.at) {
     card.disabled = state === "connected";
     var badge = card.querySelector("[data-preset-badge]");
     var detail = card.querySelector(".preset-detail");
+    if (badge) badge.className = "badge " + presetTone(state);
     if (state === "needs_access") {
       if (badge) badge.textContent = "Needs Google access";
       if (detail) detail.textContent = preset && preset.message ? preset.message : accessDetail;
     } else if (state === "connected") {
       if (badge) badge.textContent = "Connected";
       if (detail) detail.textContent = "Uses this person's Google account.";
+    } else if (state === "error") {
+      if (badge) badge.textContent = "Couldn't add";
     } else if (state === "connecting") {
       if (badge) badge.textContent = "Connecting";
     } else if (state === "ready") {
-      if (badge) badge.textContent = "Add · already connected";
+      if (badge) badge.textContent = "Connected";
       if (detail) detail.textContent = "Uses this person's Google account.";
     } else {
       if (badge) badge.textContent = "Add";
@@ -6532,7 +6543,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var badges = document.createElement("p");
     badges.className = "mcp-tool-badges";
     var action = document.createElement("span");
-    action.className = tool.actionClass === "delete" ? "badge bad" : tool.actionClass === "read" ? "badge ok" : "badge warn";
+    action.className = tool.actionClass === "delete" ? "badge bad" : tool.actionClass === "read" ? "badge info" : "badge warn";
     action.textContent = mcpActionLabel(tool.actionClass);
     badges.append(action);
     if (tool.changed) {
@@ -6761,7 +6772,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (!result || result.ok !== true) {
         card.disabled = false;
         card.setAttribute("data-state", "add");
-        paintPreset(id, { state: previous === "ready" ? "ready" : "add" }, accessDetail);
+        paintPreset(id, { state: "error" }, accessDetail);
         toast((result && result.message) || "That could not be saved.");
         return;
       }
