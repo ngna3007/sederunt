@@ -15,6 +15,8 @@ export const CONSOLE_API_BASE = "https://api.console.walrus.xyz/api/v1";
  * Names only. `CONSOLE_SPACE_ID` defaults to the key's own space.
  * `CONSOLE_FOLDER_ID`, when set, is an existing folder and is never created.
  * `CONSOLE_FILES_FOLDER_NAME` is used only when `CONSOLE_FOLDER_ID` is unset.
+ * `MCP_SECRETS_KEY_V1` opens an isolated workspace's child key. The management
+ * key (`hbradm_`) is not in this list and is not loaded by the runtime.
  */
 export const FILE_ENV_NAMES = [
   "CONSOLE_API_KEY",
@@ -22,6 +24,7 @@ export const FILE_ENV_NAMES = [
   "CONSOLE_SPACE_ID",
   "CONSOLE_FOLDER_ID",
   "CONSOLE_FILES_FOLDER_NAME",
+  "MCP_SECRETS_KEY_V1",
   "SEDERUNT_MEMWAL_KEY",
   "SEDERUNT_MEMWAL_ACCOUNT_ID",
   "SEDERUNT_MEMWAL_OWNER_KEY",

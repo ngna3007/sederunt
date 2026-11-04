@@ -23,6 +23,8 @@ export function createFileStore({ clock = () => new Date() } = {}) {
   const guests = new Map();
   const ciphertext = new Map();
   const consoleFolders = new Map();
+  const consoleCredentials = new Map();
+  const consoleTenants = new Map();
   const jobs = [];
   let jobSeq = 1;
 
@@ -284,6 +286,48 @@ export function createFileStore({ clock = () => new Date() } = {}) {
       consoleFolders.set(`${row.spaceId}:${row.name}`, { ...row });
       return { ...row };
     },
+    saveConsoleCredential(input) {
+      const row = {
+        id: input.id || randomUUID(),
+        folderId: String(input.folderId || ""),
+        ciphertext: Buffer.from(input.ciphertext),
+        nonce: Buffer.from(input.nonce),
+        keyVersion: Number(input.keyVersion || 1),
+      };
+      consoleCredentials.set(row.id, row);
+      return copyCredential(row);
+    },
+    findConsoleCredential(id) {
+      const row = consoleCredentials.get(id);
+      return row ? copyCredential(row) : null;
+    },
+    findConsoleCredentialByFolder(folderId) {
+      for (const row of consoleCredentials.values()) {
+        if (row.folderId === folderId) return copyCredential(row);
+      }
+      return null;
+    },
+    saveConsoleTenant(input) {
+      const row = {
+        tenantId: input.tenantId,
+        spaceId: input.spaceId,
+        folderId: input.folderId,
+        sealPolicyId: input.sealPolicyId || null,
+        credentialId: input.credentialId,
+      };
+      consoleTenants.set(row.tenantId, { ...row });
+      return { ...row };
+    },
+    findConsoleTenant(tenantId) {
+      const row = consoleTenants.get(tenantId);
+      return row ? { ...row } : null;
+    },
+    findConsoleTenantByFolder(folderId) {
+      for (const row of consoleTenants.values()) {
+        if (row.folderId === folderId) return { ...row };
+      }
+      return null;
+    },
     getFile(id) {
       const file = files.get(id);
       return file ? copyFile(file) : null;
@@ -503,6 +547,16 @@ export function backoffDelayMs(attempts) {
 
 function copyFile(file) {
   return { ...file, sha256: file.sha256 ? Buffer.from(file.sha256) : null };
+}
+
+function copyCredential(row) {
+  return {
+    id: row.id,
+    folderId: row.folderId,
+    ciphertext: Buffer.from(row.ciphertext),
+    nonce: Buffer.from(row.nonce),
+    keyVersion: row.keyVersion,
+  };
 }
 
 function copyRequest(request) {

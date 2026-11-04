@@ -332,6 +332,31 @@ begin
     r := r || jsonb_build_object('t','authenticated cannot read console_folders','pass', ok);
     execute 'reset role';
     perform set_config('request.jwt.claims', '', true);
+
+    insert into public.console_folder_credentials (folder_id, ciphertext, nonce)
+      values ('folder-isolated', decode('aa', 'hex'), decode('00112233445566778899aabb', 'hex'));
+    insert into public.console_tenant_folders (
+      tenant_id, console_space_id, console_folder_id, seal_policy_id, credential_id
+    )
+      values (
+        acme, 'space-1', 'folder-isolated', '0xpolicy',
+        (select id from public.console_folder_credentials where folder_id = 'folder-isolated')
+      );
+    perform set_config('role', 'authenticated', true);
+    perform set_config('request.jwt.claims', json_build_object('sub', alice, 'role', 'authenticated',
+                       'email', 'alice@example.test')::text, true);
+    begin
+      perform 1 from public.console_folder_credentials;
+      ok := false;
+    exception when insufficient_privilege then ok := true; end;
+    r := r || jsonb_build_object('t','authenticated cannot read console_folder_credentials','pass', ok);
+    begin
+      perform 1 from public.console_tenant_folders;
+      ok := false;
+    exception when insufficient_privilege then ok := true; end;
+    r := r || jsonb_build_object('t','authenticated cannot read console_tenant_folders','pass', ok);
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '', true);
   end;
 
   ---------------------------------------------------------------- anon
@@ -342,6 +367,16 @@ begin
     ok := false;
   exception when insufficient_privilege then ok := true; end;
   r := r || jsonb_build_object('t','anon has no table access','pass', ok);
+  begin
+    perform 1 from public.console_folder_credentials;
+    ok := false;
+  exception when insufficient_privilege then ok := true; end;
+  r := r || jsonb_build_object('t','anon cannot read console_folder_credentials','pass', ok);
+  begin
+    perform 1 from public.console_tenant_folders;
+    ok := false;
+  exception when insufficient_privilege then ok := true; end;
+  r := r || jsonb_build_object('t','anon cannot read console_tenant_folders','pass', ok);
 
   execute 'reset role';
   raise exception 'RLS_RESULTS %', r::text;

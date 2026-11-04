@@ -1,7 +1,9 @@
--- Channel files move from a testnet Walrus blob to one Walrus Console folder.
+-- Channel files move from a testnet Walrus blob to Walrus Console.
 -- Postgres stays the visibility index. 20261104210000_files.sql is already
--- applied; this follow-up only adds the Console columns and the folder map.
--- The folder map is server-only. A pinned CONSOLE_FOLDER_ID is not inserted here.
+-- applied; this follow-up adds the Console columns, the shared folder map,
+-- and the optional per-workspace folder map. Those maps are server-only.
+-- A pinned CONSOLE_FOLDER_ID is not inserted here.
+-- Isolated child keys are ciphertext only. The runtime does not mint them.
 
 alter table public.files drop constraint if exists files_active_has_blob;
 drop index if exists public.files_renew_idx;
@@ -59,3 +61,38 @@ revoke all on public.console_folders from public, anon, authenticated;
 
 -- file_jobs.kind still allows 'renew'. The worker skips that kind: Console
 -- renews storage on its own.
+
+-- One child key per isolated folder. Plaintext never lands in this table.
+-- Sealed with MCP_SECRETS_KEY_V1, same AES-256-GCM layout as mcp_connector_secrets.
+create table public.console_folder_credentials (
+  id uuid primary key default gen_random_uuid(),
+  folder_id text not null unique,
+  ciphertext bytea not null,
+  nonce bytea not null,
+  key_version integer not null default 1,
+  created_at timestamptz not null default now()
+);
+
+-- Optional isolated workspace. Absent row means the shared folder.
+create table public.console_tenant_folders (
+  tenant_id uuid primary key references public.tenants (id) on delete cascade,
+  console_space_id text not null,
+  console_folder_id text not null,
+  seal_policy_id text,
+  credential_id uuid not null references public.console_folder_credentials (id),
+  created_at timestamptz not null default now()
+);
+
+alter table public.console_folder_credentials enable row level security;
+alter table public.console_tenant_folders enable row level security;
+
+create policy console_folder_credentials_no_client_access on public.console_folder_credentials
+  as restrictive for all to anon, authenticated
+  using (false) with check (false);
+
+create policy console_tenant_folders_no_client_access on public.console_tenant_folders
+  as restrictive for all to anon, authenticated
+  using (false) with check (false);
+
+revoke all on public.console_folder_credentials from public, anon, authenticated;
+revoke all on public.console_tenant_folders from public, anon, authenticated;

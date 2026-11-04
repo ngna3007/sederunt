@@ -17,13 +17,15 @@ import {
   signConsoleReserve,
 } from "../console/upload.js";
 import { configuredFolderId, configuredSpaceId, filesFolderName } from "./config.js";
+import { credentialUnreadable, openConsoleCredential } from "./credentials.js";
 
 /**
  * Live Walrus Console storage for channel files.
- * `resolveFolder({ tenantId, channelId })` is the seam a later workspace uses
- * to point at its own space. The default is one private folder for the environment.
+ * `resolveFolder({ tenantId, channelId })` reads a per-workspace mapping when
+ * one exists and otherwise returns the shared private folder. An isolated
+ * mapping whose credential cannot be opened fails closed.
  *
- * @param {{ fetch?: typeof fetch, env?: NodeJS.ProcessEnv, store?: { findConsoleFolder?: Function, saveConsoleFolder?: Function }, encrypt?: Function, decrypt?: Function, sign?: Function, wait?: (ms: number) => Promise<void>, resolveFolder?: Function }} options
+ * @param {{ fetch?: typeof fetch, env?: NodeJS.ProcessEnv, store?: { findConsoleFolder?: Function, saveConsoleFolder?: Function, findConsoleTenant?: Function, findConsoleCredential?: Function, findConsoleCredentialByFolder?: Function, findConsoleTenantByFolder?: Function }, encrypt?: Function, decrypt?: Function, sign?: Function, wait?: (ms: number) => Promise<void>, resolveFolder?: Function }} options
  */
 export function createConsoleFiles(options = {}) {
   const fetchImpl = options.fetch || fetch;
@@ -47,16 +49,58 @@ export function createConsoleFiles(options = {}) {
     return spacePromise;
   }
 
-  async function loadPolicy(folderId) {
-    return folderPolicy(fetchImpl, apiKey, folderId, wait);
+  async function loadPolicy(folderId, key) {
+    return folderPolicy(fetchImpl, key, folderId, wait);
   }
 
-  async function sharedFolder({ tenantId, channelId }) {
+  function openCredential(record) {
+    try {
+      return openConsoleCredential(record, env);
+    } catch (error) {
+      if (error?.code === "credential_unreadable") throw error;
+      throw credentialUnreadable();
+    }
+  }
+
+  /**
+   * A file keeps the folder id stored on its row. That folder's credential
+   * is the key for download, finish, and delete. A mapping with no readable
+   * credential does not fall back to the shared account.
+   */
+  function keysForFolder(folderId) {
+    const mapping = store?.findConsoleTenantByFolder?.(folderId) || null;
+    const credential = store?.findConsoleCredentialByFolder?.(folderId)
+      || (mapping?.credentialId ? store?.findConsoleCredential?.(mapping.credentialId) : null)
+      || null;
+    if (mapping && !credential) throw credentialUnreadable();
+    if (!credential) return { apiKey, serviceKey };
+    return openCredential(credential);
+  }
+
+  function keysFrom(folder) {
+    if (folder?.apiKey && folder?.serviceKey) {
+      return { apiKey: folder.apiKey, serviceKey: folder.serviceKey };
+    }
+    return keysForFolder(folder?.folderId);
+  }
+
+  async function sharedFolder({ tenantId, channelId } = {}) {
     const pinned = configuredFolderId(env);
     const space = await spaceId();
     if (pinned) {
-      const sealPolicyId = await loadPolicy(pinned);
-      return { spaceId: space, folderId: pinned, sealPolicyId, name: null, created: false, tenantId, channelId };
+      const sealPolicyId = await loadPolicy(pinned, apiKey);
+      return {
+        spaceId: space,
+        folderId: pinned,
+        sealPolicyId,
+        name: null,
+        created: false,
+        isolated: false,
+        apiKey,
+        serviceKey,
+        tenantId,
+        channelId,
+      };
     }
     const name = filesFolderName(env);
     const saved = store?.findConsoleFolder?.(space, name);
@@ -64,9 +108,12 @@ export function createConsoleFiles(options = {}) {
       return {
         spaceId: space,
         folderId: saved.folderId,
-        sealPolicyId: saved.sealPolicyId || await loadPolicy(saved.folderId),
+        sealPolicyId: saved.sealPolicyId || await loadPolicy(saved.folderId, apiKey),
         name,
         created: false,
+        isolated: false,
+        apiKey,
+        serviceKey,
         tenantId,
         channelId,
       };
@@ -78,7 +125,39 @@ export function createConsoleFiles(options = {}) {
       folderId: opened.folderId,
       sealPolicyId: opened.sealPolicyId,
     });
-    return { spaceId: space, name, ...opened, tenantId, channelId };
+    return {
+      spaceId: space,
+      name,
+      folderId: opened.folderId,
+      sealPolicyId: opened.sealPolicyId,
+      created: opened.created,
+      isolated: false,
+      apiKey,
+      serviceKey,
+      tenantId,
+      channelId,
+    };
+  }
+
+  async function isolatedFolder(mapping, { tenantId, channelId } = {}) {
+    const credential = mapping.credentialId
+      ? store?.findConsoleCredential?.(mapping.credentialId)
+      : store?.findConsoleCredentialByFolder?.(mapping.folderId);
+    if (!credential) throw credentialUnreadable();
+    const opened = openCredential(credential);
+    const sealPolicyId = mapping.sealPolicyId || await loadPolicy(mapping.folderId, opened.apiKey);
+    return {
+      spaceId: mapping.spaceId,
+      folderId: mapping.folderId,
+      sealPolicyId,
+      name: null,
+      created: false,
+      isolated: true,
+      apiKey: opened.apiKey,
+      serviceKey: opened.serviceKey,
+      tenantId,
+      channelId,
+    };
   }
 
   async function ensureFolder(space, name) {
@@ -93,29 +172,36 @@ export function createConsoleFiles(options = {}) {
       ? await options.sign(reserved.bytes)
       : await signConsoleReserve(serviceKey, reserved.bytes);
     const finalized = await finalizeConsoleFolder(fetchImpl, apiKey, reserved.folderId, signature, wait);
-    const sealPolicyId = finalized.sealPolicyId || await loadPolicy(finalized.folderId);
+    const sealPolicyId = finalized.sealPolicyId || await loadPolicy(finalized.folderId, apiKey);
     return { folderId: finalized.folderId, sealPolicyId, created: true };
   }
 
-  const resolveFolder = options.resolveFolder || sharedFolder;
+  async function resolveFolderForTenant(input = {}) {
+    const mapping = input.tenantId ? store?.findConsoleTenant?.(input.tenantId) : null;
+    if (mapping) return isolatedFolder(mapping, input);
+    return sharedFolder(input);
+  }
 
-  async function finishUpload({ folderId, fileId, tags }) {
+  const resolveFolder = options.resolveFolder || resolveFolderForTenant;
+
+  async function finishUpload({ folderId, fileId, tags, apiKey: key }) {
     if (Array.isArray(tags) && tags.length) {
-      await patchConsoleFileTags(fetchImpl, apiKey, fileId, tags, wait);
+      await patchConsoleFileTags(fetchImpl, key, fileId, tags, wait);
     }
-    const state = await pollFile(fetchImpl, apiKey, folderId, fileId, wait);
+    const state = await pollFile(fetchImpl, key, folderId, fileId, wait);
     if (state !== "completed") throw new Error("Console upload did not complete");
   }
 
   return {
     resolveFolder,
     async put({ name, plain, metadata, tags, folder, onAccepted }) {
-      const policyId = folder.sealPolicyId || await loadPolicy(folder.folderId);
+      const keys = keysFrom(folder);
+      const policyId = folder.sealPolicyId || await loadPolicy(folder.folderId, keys.apiKey);
       const bytes = plain instanceof Uint8Array ? plain : Buffer.from(plain);
       const ciphertext = options.encrypt
-        ? await options.encrypt(bytes, { policyId, apiKey })
-        : await encryptForFolder(bytes, policyId, apiKey);
-      const fileId = await postCiphertext(fetchImpl, apiKey, folder.folderId, {
+        ? await options.encrypt(bytes, { policyId, apiKey: keys.apiKey })
+        : await encryptForFolder(bytes, policyId, keys.apiKey);
+      const fileId = await postCiphertext(fetchImpl, keys.apiKey, folder.folderId, {
         name,
         ciphertext,
         metadata,
@@ -124,24 +210,27 @@ export function createConsoleFiles(options = {}) {
       if (onAccepted) {
         await onAccepted({ spaceId: folder.spaceId, folderId: folder.folderId, fileId });
       }
-      await finishUpload({ folderId: folder.folderId, fileId, tags });
+      await finishUpload({ folderId: folder.folderId, fileId, tags, apiKey: keys.apiKey });
       return { spaceId: folder.spaceId, folderId: folder.folderId, fileId, state: "active" };
     },
     async finish({ folderId, fileId, tags }) {
-      await finishUpload({ folderId, fileId, tags });
+      const keys = keysForFolder(folderId);
+      await finishUpload({ folderId, fileId, tags, apiKey: keys.apiKey });
       return { state: "active" };
     },
     async download({ folderId, fileId, policyId }) {
-      const policy = policyId || await loadPolicy(folderId);
-      const ciphertext = await downloadCiphertext(fetchImpl, apiKey, folderId, fileId, wait);
+      const keys = keysForFolder(folderId);
+      const policy = policyId || await loadPolicy(folderId, keys.apiKey);
+      const ciphertext = await downloadCiphertext(fetchImpl, keys.apiKey, folderId, fileId, wait);
       const plain = options.decrypt
-        ? await options.decrypt(ciphertext, { policyId: policy, apiKey, serviceKey })
-        : await decryptForFolder(ciphertext, policy, apiKey, serviceKey);
+        ? await options.decrypt(ciphertext, { policyId: policy, apiKey: keys.apiKey, serviceKey: keys.serviceKey })
+        : await decryptForFolder(ciphertext, policy, keys.apiKey, keys.serviceKey);
       return Buffer.from(plain);
     },
     async remove({ folderId, fileId }) {
-      await deleteConsoleFile(fetchImpl, apiKey, folderId, fileId, wait);
-      const record = await readConsoleFile(fetchImpl, apiKey, folderId, fileId, wait);
+      const keys = keysForFolder(folderId);
+      await deleteConsoleFile(fetchImpl, keys.apiKey, folderId, fileId, wait);
+      const record = await readConsoleFile(fetchImpl, keys.apiKey, folderId, fileId, wait);
       if (!record || metadataReady(record) === "deleted") return { deleted: true };
       return { deleted: false, status: record.status || record.state || "" };
     },

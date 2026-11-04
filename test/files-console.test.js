@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import test from "node:test";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import {
@@ -10,6 +11,7 @@ import {
   signConsoleReserve,
 } from "../src/console/upload.js";
 import { createConsoleFiles } from "../src/files/console-files.js";
+import { openConsoleCredential, sealConsoleCredential } from "../src/files/credentials.js";
 import { FileError } from "../src/files/errors.js";
 import { createMemoryCleaner } from "../src/files/memory.js";
 import { assertFileMetadata, fileTags, fitTag } from "../src/files/meta.js";
@@ -19,8 +21,13 @@ import { runFileWorker } from "../src/files/worker.js";
 
 const API = "https://api.console.walrus.xyz";
 const TENANT = "00000000-0000-4000-a000-00000000acme";
+const ISOLATED = "00000000-0000-4000-a000-00000000iso1";
 const CHANNEL = "00000000-0000-4000-a000-00000000c001";
 const ALICE = "00000000-0000-4000-a000-00000000a11c";
+const CHILD_KEY = "hbr_child_test";
+const CHILD_SERVICE = "suiprivkey1childtest";
+const SHARED_BEARER = "Bearer hbr_test_key";
+const CHILD_BEARER = `Bearer ${CHILD_KEY}`;
 
 function json(body, status = 200, headers = {}) {
   const lower = Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
@@ -234,6 +241,34 @@ function storageFor(fake, env, store, extra = {}) {
     sign: extra.sign || (async () => "sig-test"),
     ...extra,
   });
+}
+
+function secretsEnv() {
+  return { MCP_SECRETS_KEY_V1: randomBytes(32).toString("hex") };
+}
+
+function isolate(store, env, tenantId = ISOLATED, extra = {}) {
+  const sealed = sealConsoleCredential({ apiKey: CHILD_KEY, serviceKey: CHILD_SERVICE }, env);
+  const saved = store.saveConsoleCredential({
+    folderId: extra.folderId || "folder-iso",
+    ciphertext: sealed.ciphertext,
+    nonce: sealed.nonce,
+    keyVersion: sealed.keyVersion,
+  });
+  store.saveConsoleTenant({
+    tenantId,
+    spaceId: extra.spaceId || "space-1",
+    folderId: saved.folderId,
+    sealPolicyId: extra.sealPolicyId === undefined ? "0xiso" : extra.sealPolicyId,
+    credentialId: saved.id,
+  });
+  return saved;
+}
+
+function apiAuths(calls) {
+  return calls
+    .filter((call) => call.href.includes("/api/v1/"))
+    .map((call) => call.authorization);
 }
 
 test("metadata treats an active file as stored and a failed file as failed", () => {
@@ -519,4 +554,207 @@ test("an accepted upload is finished on retry instead of posted again", async ()
   assert.equal(store.getFile(id).status, "active");
   const posts = fake.calls.filter((call) => call.method === "POST" && call.href.endsWith("/files"));
   assert.equal(posts.length, 1);
+});
+
+test("an isolated workspace uses its own folder and child key", async () => {
+  const env = filesEnv({ ...secretsEnv(), CONSOLE_FOLDER_ID: "folder-shared" });
+  const store = createFileStore();
+  isolate(store, env);
+  const seen = { encrypt: null, decrypt: null, serviceKey: null };
+  const fake = createFakeConsole();
+  const storage = storageFor(fake, env, store, {
+    encrypt: async (plain, ctx) => {
+      seen.encrypt = ctx.apiKey;
+      return plain;
+    },
+    decrypt: async (cipher, ctx) => {
+      seen.decrypt = ctx.apiKey;
+      seen.serviceKey = ctx.serviceKey;
+      return cipher;
+    },
+  });
+  const folder = await storage.resolveFolder({ tenantId: ISOLATED, channelId: CHANNEL });
+  assert.equal(folder.isolated, true);
+  assert.equal(folder.folderId, "folder-iso");
+  assert.equal(folder.spaceId, "space-1");
+  assert.equal(folder.created, false);
+  assert.equal(folder.apiKey, CHILD_KEY);
+  assert.equal(folder.serviceKey, CHILD_SERVICE);
+  assert.equal(fake.calls.length, 0);
+
+  await storage.put({
+    name: "iso.txt",
+    plain: Buffer.from("isolated"),
+    metadata: { sederunt_file_id: "iso-1" },
+    tags: ["tenant:abc", "channel:def"],
+    folder,
+  });
+  await storage.finish({ folderId: "folder-iso", fileId: "file-1", tags: ["tenant:abc"] });
+  const plain = await storage.download({ folderId: "folder-iso", fileId: "file-1", policyId: "0xiso" });
+  assert.equal(Buffer.from(plain).toString(), "isolated");
+  await storage.remove({ folderId: "folder-iso", fileId: "file-1" });
+
+  const auths = apiAuths(fake.calls);
+  assert.equal(auths.length > 0, true);
+  assert.deepEqual([...new Set(auths)], [CHILD_BEARER]);
+  assert.equal(auths.includes(SHARED_BEARER), false);
+  assert.equal(fake.calls.some((call) => call.method === "POST" && /\/buckets$/.test(new URL(call.href).pathname)), false);
+  const follow = fake.calls.find((call) => call.href === "https://files.example/file-1");
+  assert.equal(follow.initPassed, false);
+  assert.equal(follow.authorization, null);
+  assert.equal(seen.encrypt, CHILD_KEY);
+  assert.equal(seen.decrypt, CHILD_KEY);
+  assert.equal(seen.serviceKey, CHILD_SERVICE);
+});
+
+test("a workspace without a mapping uses the shared folder and shared key", async () => {
+  const env = filesEnv({ ...secretsEnv(), CONSOLE_FOLDER_ID: "folder-shared" });
+  const store = createFileStore();
+  isolate(store, env);
+  const fake = createFakeConsole();
+  const storage = storageFor(fake, env, store);
+  const folder = await storage.resolveFolder({ tenantId: TENANT, channelId: CHANNEL });
+  assert.equal(folder.isolated, false);
+  assert.equal(folder.folderId, "folder-shared");
+  assert.equal(folder.apiKey, "hbr_test_key");
+  assert.deepEqual([...new Set(apiAuths(fake.calls))], [SHARED_BEARER]);
+  await storage.put({
+    name: "shared.txt",
+    plain: Buffer.from("shared"),
+    metadata: { sederunt_file_id: "shared-1" },
+    tags: ["tenant:abc"],
+    folder,
+  });
+  assert.equal(apiAuths(fake.calls).includes(CHILD_BEARER), false);
+  assert.equal(apiAuths(fake.calls).every((auth) => auth === SHARED_BEARER), true);
+});
+
+test("a file keeps the folder id recorded on its row", async () => {
+  const env = filesEnv({ ...secretsEnv(), CONSOLE_FOLDER_ID: "folder-shared" });
+  const store = createFileStore();
+  isolate(store, env);
+  const fake = createFakeConsole();
+  const storage = storageFor(fake, env, store);
+  fake.files.set("file-old", { cipher: Buffer.from("old"), status: "active" });
+  await storage.download({ folderId: "folder-shared", fileId: "file-old", policyId: "0xpolicy" });
+  const shared = fake.calls.filter((call) => call.href.includes("/api/v1/"));
+  assert.equal(shared.every((call) => call.authorization === SHARED_BEARER), true);
+  fake.calls.length = 0;
+  fake.files.set("file-new", { cipher: Buffer.from("new"), status: "active" });
+  await storage.download({ folderId: "folder-iso", fileId: "file-new", policyId: "0xiso" });
+  assert.deepEqual([...new Set(apiAuths(fake.calls))], [CHILD_BEARER]);
+});
+
+test("a missing isolated credential fails closed before any Console call", async () => {
+  const env = filesEnv({ ...secretsEnv(), CONSOLE_FOLDER_ID: "folder-shared" });
+  const store = createFileStore();
+  store.saveConsoleTenant({
+    tenantId: ISOLATED,
+    spaceId: "space-1",
+    folderId: "folder-iso",
+    sealPolicyId: "0xiso",
+    credentialId: "00000000-0000-4000-a000-00000000miss",
+  });
+  const fake = createFakeConsole();
+  const storage = storageFor(fake, env, store);
+  await assert.rejects(
+    () => storage.resolveFolder({ tenantId: ISOLATED, channelId: CHANNEL }),
+    (error) => error.code === "credential_unreadable",
+  );
+  await assert.rejects(
+    () => storage.download({ folderId: "folder-iso", fileId: "file-1", policyId: "0xiso" }),
+    (error) => error.code === "credential_unreadable",
+  );
+  assert.equal(fake.calls.length, 0);
+});
+
+test("an undecryptable isolated credential fails closed and does not use the shared key", async () => {
+  const env = filesEnv({ ...secretsEnv(), CONSOLE_FOLDER_ID: "folder-shared" });
+  const store = createFileStore();
+  const sealed = sealConsoleCredential(
+    { apiKey: CHILD_KEY, serviceKey: CHILD_SERVICE },
+    { MCP_SECRETS_KEY_V1: randomBytes(32).toString("hex") },
+  );
+  const saved = store.saveConsoleCredential({
+    folderId: "folder-iso",
+    ciphertext: sealed.ciphertext,
+    nonce: sealed.nonce,
+    keyVersion: sealed.keyVersion,
+  });
+  store.saveConsoleTenant({
+    tenantId: ISOLATED,
+    spaceId: "space-1",
+    folderId: "folder-iso",
+    sealPolicyId: "0xiso",
+    credentialId: saved.id,
+  });
+  const fake = createFakeConsole();
+  const storage = storageFor(fake, env, store);
+  await assert.rejects(
+    () => storage.resolveFolder({ tenantId: ISOLATED, channelId: CHANNEL }),
+    (error) => error.code === "credential_unreadable",
+  );
+  assert.equal(fake.calls.length, 0);
+
+  const garbage = createFileStore();
+  const row = garbage.saveConsoleCredential({
+    folderId: "folder-iso",
+    ciphertext: Buffer.from("not-a-seal"),
+    nonce: Buffer.from("123456789012"),
+    keyVersion: 1,
+  });
+  garbage.saveConsoleTenant({
+    tenantId: ISOLATED,
+    spaceId: "space-1",
+    folderId: "folder-iso",
+    sealPolicyId: "0xiso",
+    credentialId: row.id,
+  });
+  const other = createFakeConsole();
+  const blocked = storageFor(other, env, garbage);
+  await assert.rejects(
+    () => blocked.remove({ folderId: "folder-iso", fileId: "file-1" }),
+    (error) => error.code === "credential_unreadable",
+  );
+  assert.equal(other.calls.length, 0);
+  assert.equal(other.calls.some((call) => call.authorization === SHARED_BEARER), false);
+});
+
+test("isolated credentials round trip as ciphertext and the store keeps no plaintext", () => {
+  const env = secretsEnv();
+  const sealed = sealConsoleCredential({ apiKey: CHILD_KEY, serviceKey: CHILD_SERVICE }, env);
+  const encoded = Buffer.concat([sealed.ciphertext, sealed.nonce]).toString("utf8");
+  assert.equal(encoded.includes(CHILD_KEY), false);
+  assert.equal(encoded.includes(CHILD_SERVICE), false);
+  assert.deepEqual(openConsoleCredential(sealed, env), { apiKey: CHILD_KEY, serviceKey: CHILD_SERVICE });
+
+  const store = createFileStore();
+  const saved = store.saveConsoleCredential({
+    folderId: "folder-iso",
+    ciphertext: sealed.ciphertext,
+    nonce: sealed.nonce,
+    keyVersion: sealed.keyVersion,
+  });
+  const loaded = store.findConsoleCredential(saved.id);
+  assert.equal(loaded.apiKey, undefined);
+  assert.equal(loaded.serviceKey, undefined);
+  assert.equal(Buffer.concat([loaded.ciphertext, loaded.nonce]).toString("utf8").includes(CHILD_KEY), false);
+  assert.deepEqual(openConsoleCredential(loaded, env), { apiKey: CHILD_KEY, serviceKey: CHILD_SERVICE });
+  assert.equal(store.findConsoleCredentialByFolder("folder-iso").id, saved.id);
+  const wrong = { MCP_SECRETS_KEY_V1: randomBytes(32).toString("hex") };
+  assert.throws(() => openConsoleCredential(loaded, wrong), (error) => error.code === "credential_unreadable");
+  assert.throws(() => openConsoleCredential(loaded, {}), (error) => error.code === "credential_unreadable");
+});
+
+test("an isolated folder without a stored policy is read with the child key", async () => {
+  const env = filesEnv(secretsEnv());
+  const store = createFileStore();
+  isolate(store, env, ISOLATED, { sealPolicyId: null });
+  const fake = createFakeConsole({ policyId: "0xiso-live" });
+  const storage = storageFor(fake, env, store);
+  const folder = await storage.resolveFolder({ tenantId: ISOLATED, channelId: CHANNEL });
+  assert.equal(folder.sealPolicyId, "0xiso-live");
+  assert.equal(folder.isolated, true);
+  assert.deepEqual([...new Set(apiAuths(fake.calls))], [CHILD_BEARER]);
+  assert.equal(fake.calls.some((call) => call.method === "POST"), false);
 });
