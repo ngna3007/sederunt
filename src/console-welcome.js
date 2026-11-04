@@ -119,7 +119,7 @@ function calendarStep(state) {
   const upcoming = !connected ? "" : meetings.length
     ? `<div class="ob-upcoming" id="calendar-upcoming">
         <p class="ob-label">Coming up</p>
-        <ul class="ob-meetings">${meetings.map((row) => `<li><span class="ob-when">${escapeText(row.when)}</span><span class="ob-what">${escapeText(row.title)}</span></li>`).join("")}</ul>
+        <ul class="ob-meetings">${meetings.map((row) => `<li><span class="ob-when">${escapeText(row.when)}</span><span class="ob-time">${escapeText(row.time || "")}</span><span class="ob-what">${escapeText(row.title)}</span></li>`).join("")}</ul>
       </div>`
     : `<p class="ob-empty-line" id="calendar-upcoming">${cal.unavailable ? "Calendar is connected, but it could not be read just now." : "Nothing on your calendar today or tomorrow."}</p>`;
   const toggle = connected ? `<label class="ob-toggle" for="auto-join">

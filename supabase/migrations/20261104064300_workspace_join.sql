@@ -1,6 +1,7 @@
 -- Sederunt workspaces, part 5: one reusable join link per workspace and joining
 -- by an approved email domain. Personal tenants stay single-owner (guard_membership).
--- Not applied to a live project by this change; apply with `supabase db push`.
+-- RLS is on for the new table and every helper lives in the private schema as a
+-- security definer with an empty search_path; the public functions are invoker wrappers.
 
 create table public.tenant_join_links (
   tenant_id uuid primary key references public.tenants (id) on delete cascade,
@@ -12,7 +13,10 @@ create table public.tenant_join_links (
 );
 alter table public.tenant_join_links enable row level security;
 revoke all on public.tenant_join_links from anon, authenticated;
--- No policies: the table is read and written only by the functions below.
+-- Read and written only by the private functions below. The explicit deny keeps
+-- that intent visible (and the linter quiet) if a grant is ever added by mistake.
+create policy tenant_join_links_no_client_access on public.tenant_join_links
+  as restrictive for all to anon, authenticated using (false) with check (false);
 
 -- Return the workspace link, creating it on first use. p_reset makes a new one.
 create or replace function private.workspace_join_link(p_tenant_id uuid, p_reset boolean)
@@ -65,6 +69,9 @@ returns table (id uuid, name text) language sql stable security definer set sear
   where t.kind <> 'personal'
     and t.allowed_domain is not null
     and t.allowed_domain = lower(split_part(u.email, '@', 2))
+    -- Shared webmail domains never open a workspace to everyone on them.
+    and t.allowed_domain not in ('gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com',
+      'yahoo.com', 'icloud.com', 'me.com', 'proton.me', 'protonmail.com', 'aol.com', 'gmx.com', 'mail.com')
     and not exists (select 1 from public.memberships m where m.tenant_id = t.id and m.user_id = u.id)
   order by t.name
   limit 20

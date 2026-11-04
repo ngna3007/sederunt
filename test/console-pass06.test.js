@@ -254,7 +254,12 @@ serial("empty home and chat offer a next step", async (t) => {
       const connect = document.getElementById("home-connect-tools");
       const counts = [...document.querySelectorAll("#counts .count")];
       const doc = document.documentElement;
+      const scope = empty.closest(".home-tools")?.parentElement || document.body;
+      const primaries = [...scope.querySelectorAll(".primary")]
+        .filter((node) => node.getClientRects().length > 0)
+        .map((node) => node.textContent.trim());
       return {
+        primaries,
         empty: !empty.hidden && empty.getClientRects().length > 0,
         add: add.textContent.trim(),
         connect: connect.textContent.trim(),
@@ -267,6 +272,8 @@ serial("empty home and chat offer a next step", async (t) => {
     });
     assert.equal(home.empty, true, `empty card ${width}`);
     assert.equal(home.add, "Add Sederunt to a meeting");
+    // One primary on an empty Home: the card's button, not the header's New room.
+    assert.deepEqual(home.primaries, ["Add Sederunt to a meeting"], `primaries ${width}`);
     assert.equal(home.connect, "Connect tools");
     assert.equal(home.connectHref, "/console/setup");
     assert.equal(home.statsHidden, true, `stats ${width}`);
