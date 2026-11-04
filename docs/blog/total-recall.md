@@ -14,7 +14,7 @@ Walrus Memory is the write. The company account talks to the managed relayer at 
 
 Tatum is the read. Every Sui mainnet call in the app is a native gRPC unary RPC to `https://sui-mainnet-grpc.gateway.tatum.io`, with the API key in `x-api-key`. The client is `SuiGrpcClient` from `@mysten/sui`. The gateway does not accept the SDK's default grpc-web transport, so the app sends `application/grpc` frames over HTTP/2 itself.
 
-Finding a memory on chain is a short walk. `remember` returns the owner address. `ListOwnedObjects` asks for that owner's Walrus Blob objects. The blob id is a 32-byte value inside the object. `GetObject` reads it, and `GetTransaction` reads the checkpoint of the certifying transaction. The next time, the object id is already stored, so the walk is one `GetObject`. `GetServiceInfo` supplies the latest checkpoint so the panel has a live tip to stand next to the proof.
+Finding a memory on chain is a short walk. `remember` returns the owner address; a recalled memory does not, so the reader reads the MemWalAccount object once through Tatum and takes its `owner`. `ListOwnedObjects` asks for that owner's Walrus Blob objects. The blob id is a 32-byte value inside the object. `GetObject` reads it, and `GetTransaction` reads the checkpoint of the certifying transaction. The next time, the object id is already stored, so the walk is one `GetObject`. `GetServiceInfo` supplies the latest checkpoint so the panel has a live tip to stand next to the proof.
 
 If the key is missing, or the read fails, the proof stays unknown. There is no quiet hop to a public fullnode.
 
@@ -22,7 +22,7 @@ If the key is missing, or the read fails, the proof stays unknown. There is no q
 
 Search is not the same as learning. Before Sederunt answers, it recalls a few memories from the `sederunt` namespace and lets them change the words.
 
-The first time someone asks where the offsite is, the answer is the decision from the room: Da Nang. Later someone says the offsite is in Lisbon. That correction is itself a memory. The next time the question is asked, the answer is Lisbon, and Why opens to the correction, when it was said, and whether Tatum has verified that blob.
+The first time someone asks where the offsite is, the answer is the decision from the room: Da Nang. Later someone says the offsite is in Da Lat, not Da Nang. That correction is itself a memory. The next time the question is asked, the answer is Da Lat, and Why opens to the correction, when it was said, and whether Tatum has verified that blob.
 
 A preference works the same way. "Post minutes to #sederunt-demo" is remembered. The minutes drafted when the meeting ends include that delivery. An action item remembers who owned the banner last time, so the next draft does not invent a new owner.
 

@@ -51,7 +51,7 @@ A proof is `verified` when the Blob exists, its blob id matches, it is certified
 
 The same path runs for a typed recall, chat, and a Slack reply. Minutes drafted at the end of a meeting include a remembered preference about where to post them.
 
-Say `correction: The offsite is in Lisbon.` or `prefer post minutes to #sederunt-demo.` The next answer changes. The write uses an idempotency key `learned:<kind>:<hash>`, so a retry does not store a second blob.
+Say `correction: The offsite is in Da Lat, not Da Nang.` or `prefer post minutes to #sederunt-demo.` The next answer changes. The write uses an idempotency key `learned:<kind>:<hash>`, so a retry does not store a second blob.
 
 ## Meeting outcomes
 
