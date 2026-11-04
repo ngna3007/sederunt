@@ -6,19 +6,57 @@
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 const DOMAIN = /^[a-z0-9.-]+\.[a-z]{2,}$/;
 
+/** Mailbox providers. A workspace is never named after one or auto-joined by one. */
+export const PUBLIC_DOMAINS = new Set([
+  "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com", "msn.com",
+  "yahoo.com", "ymail.com", "icloud.com", "me.com", "mac.com", "aol.com",
+  "proton.me", "protonmail.com", "pm.me", "gmx.com", "gmx.net", "mail.com",
+  "zoho.com", "yandex.com", "yandex.ru", "qq.com", "163.com", "126.com",
+  "hey.com", "fastmail.com", "tutanota.com", "example.com", "example.org", "example.net",
+]);
+
 /**
- * Welcome is for a signed-in person who still has only a Personal space
- * and has not finished or skipped the first-run question.
+ * Every person works in one workspace. Welcome runs until they own or
+ * belong to one that is not the hidden personal tenant.
  *
- * @param {{ user_metadata?: Record<string, unknown> } | null | undefined} user
+ * @param {unknown} _user
  * @param {Array<{ kind?: string }> | null | undefined} tenants
  */
-export function needsOnboarding(user, tenants) {
-  const meta = user && typeof user.user_metadata === "object" && user.user_metadata ? user.user_metadata : {};
-  if (meta.sederunt_onboarded === true) return false;
+export function needsOnboarding(_user, tenants) {
   const rows = Array.isArray(tenants) ? tenants : [];
-  if (rows.some((row) => row && row.kind && row.kind !== "personal")) return false;
-  return true;
+  return !rows.some((row) => row && row.kind && row.kind !== "personal");
+}
+
+/**
+ * The part after @, lowercased, or "" for a public mailbox provider.
+ *
+ * @param {unknown} email
+ */
+export function workDomain(email) {
+  const at = String(email || "").trim().toLowerCase().split("@");
+  if (at.length !== 2 || !DOMAIN.test(at[1])) return "";
+  return PUBLIC_DOMAINS.has(at[1]) ? "" : at[1];
+}
+
+/**
+ * "Acme" for rowan@acme.com, else "Rowan's workspace".
+ *
+ * @param {{ name?: string, email?: string }} who
+ */
+export function suggestedWorkspaceName(who = {}) {
+  const domain = workDomain(who.email);
+  if (domain) {
+    const parts = domain.split(".");
+    const root = parts.length > 2 && /^(co|com|org|net|ac|gov)$/.test(parts[parts.length - 2])
+      ? parts[parts.length - 3]
+      : parts[parts.length - 2];
+    const word = String(root || "").replace(/[-_]+/g, " ").trim();
+    if (word) return word.replace(/\b\w/g, (c) => c.toUpperCase()).slice(0, 120);
+  }
+  const first = String(who.name || "").trim().split(/\s+/)[0]
+    || String(who.email || "").split("@")[0].split(/[._+-]/)[0];
+  const clean = first ? first.charAt(0).toUpperCase() + first.slice(1) : "";
+  return clean ? `${clean}'s workspace`.slice(0, 120) : "My workspace";
 }
 
 /**
@@ -34,13 +72,13 @@ export function validateSpaceName(value) {
 }
 
 /**
- * Comma or newline separated. Empty is allowed. Duplicates are dropped.
+ * Comma, semicolon, space or newline separated. Empty is allowed. Duplicates are dropped.
  *
  * @param {unknown} value
  * @returns {{ emails: string[], error: string }}
  */
 export function parseInviteEmails(value) {
-  const parts = String(value || "").split(/[,;\n\r]+/).map((part) => part.trim().toLowerCase()).filter(Boolean);
+  const parts = String(value || "").split(/[,;\s]+/).map((part) => part.trim().toLowerCase()).filter(Boolean);
   const emails = [];
   const seen = new Set();
   for (const part of parts) {
@@ -84,7 +122,6 @@ export function identityMessage(error) {
   if (code === "conflict" || /already has an open invite|duplicate key/i.test(message)) {
     return "That email already has an open invite.";
   }
-  if (/team or company/i.test(message)) return "Choose a team or a company.";
   if (code === "invalid_tenant" || /1 to 120/.test(message)) return "Enter a name, from 1 to 120 characters.";
   if (code === "invalid_invite" && /email/i.test(message)) return "One of those emails is not valid.";
   if (code === "invalid_invite" || /invalid or expired/i.test(message)) return "That invite is invalid or expired.";
@@ -100,14 +137,14 @@ export function identityMessage(error) {
 }
 
 /**
- * Personal first, then the others by name.
+ * Workspaces by name. The hidden personal tenant sorts last.
  *
  * @param {Array<{ id?: string, kind?: string, name?: string, role?: string }>} rows
  */
 export function sortSpaces(rows) {
   return [...(Array.isArray(rows) ? rows : [])].sort((a, b) => {
-    const aPersonal = a?.kind === "personal" ? 0 : 1;
-    const bPersonal = b?.kind === "personal" ? 0 : 1;
+    const aPersonal = a?.kind === "personal" ? 1 : 0;
+    const bPersonal = b?.kind === "personal" ? 1 : 0;
     if (aPersonal !== bPersonal) return aPersonal - bPersonal;
     return String(a?.name || "").localeCompare(String(b?.name || ""));
   });
@@ -120,16 +157,20 @@ export function sortSpaces(rows) {
 export function activeSpace(rows, tenantId) {
   const sorted = sortSpaces(rows);
   const wanted = tenantId ? sorted.find((row) => row.id === tenantId) : null;
-  if (wanted) return wanted;
-  return sorted.find((row) => row.kind === "personal") || sorted[0] || null;
+  if (wanted && (wanted.kind !== "personal" || !sorted.some((row) => row.kind !== "personal"))) return wanted;
+  return sorted.find((row) => row.kind !== "personal") || sorted[0] || null;
 }
 
-/** @param {string} kind */
-export function kindLabel(kind) {
-  if (kind === "personal") return "Personal";
-  if (kind === "team") return "Team";
-  if (kind === "company") return "Company";
-  return "Space";
+/**
+ * The switcher lists workspaces. The personal tenant shows only when it is
+ * the one space left, and it is called a workspace too.
+ *
+ * @param {Array<{ kind?: string }>} rows
+ */
+export function visibleSpaces(rows) {
+  const sorted = sortSpaces(rows);
+  const shared = sorted.filter((row) => row?.kind !== "personal");
+  return shared.length ? shared : sorted;
 }
 
 /** @param {string} role */

@@ -16,7 +16,7 @@ A room is a meeting or a channel the bot was in. The operator does not name it a
 - The title, the kind, and the people present are facts from the room. The dialog does not edit them.
 - A decision is stored only when the bot was in the room. The invite set is the people present at that moment. Later joins are not added. Leavers stay.
 - The bot stays quiet until someone addresses it.
-- A personal workspace has no control for a new room. A private note is not a room.
+- A personal workspace has no control for a new room. Its empty list says private notes stay in that workspace and are never shared as rooms.
 - A Slack huddle is not a meeting and not a channel.
 
 ## Architecture
@@ -44,7 +44,7 @@ Each room is one row in a full-width table. The columns are Room, Platform, Spea
 
 The types are Google Meet, Zoom, Teams, Webex, and Slack. A channel block names the channel, such as #design. A meeting block has no channel, because a meeting is not a channel. The page line "Present while the bot was there" is what the names on the bottom line mean.
 
-A company workspace shows New room. A personal workspace does not. An empty company list says to bring the bot into a meeting or a channel. An empty personal list says a private note is not a room.
+A company workspace shows New room. A personal workspace does not. An empty company list says to bring the bot into a meeting or a channel. An empty personal list says private notes stay in that workspace and are never shared as rooms.
 
 A row opens the room page. The list does not grow a side pane.
 

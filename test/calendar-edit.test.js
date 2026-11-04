@@ -517,8 +517,11 @@ test("console edit dialog, ask, and layout", { timeout: 180000 }, async (t) => {
     await route.continue();
   });
   await offPage.goto(`${offOrigin}/console/auth/google?next=/console`, { waitUntil: "domcontentloaded" });
-  await offPage.waitForSelector("#choice-personal", { timeout: 45000 });
-  await offPage.click("#choice-personal");
+  // First sign-in names a workspace, then the calendar step. Leave the rest for later and open Home.
+  await offPage.waitForSelector("#workspace-name", { timeout: 45000 });
+  await offPage.click("#ob-continue");
+  await offPage.waitForSelector("#calendar-status", { timeout: 45000 });
+  await offPage.goto(`${offOrigin}/console`, { waitUntil: "domcontentloaded" });
   await offPage.waitForSelector("body:not(.is-reading) #home-add-to-meeting", { timeout: 45000 });
   await offPage.waitForSelector("#tool-ask-calendar:not([hidden])", { timeout: 45000 });
   await offPage.waitForSelector("#meeting-list [data-edit-event='launch-review']", { timeout: 45000 });

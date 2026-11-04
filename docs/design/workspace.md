@@ -47,7 +47,7 @@ The company tile is the brand blue. The personal tile is solid `#171a24`. The tw
 - A room row opens the room page. The page is two panes: the transcript on the left, and overview, decisions, waiting, and settings on the right.
 - Close is the X at the top right, the shade, or Escape.
 - A control that cannot do its action is not drawn.
-- A private note is not a room, and it never appears in the company workspace.
+- A private note is never shared as a room, and it never appears in the company workspace.
 
 ## Architecture
 
@@ -91,7 +91,7 @@ Four counts share one bordered row, because they are one record split four ways,
 
 When Waiting on you is above zero, that cell is tinted and it is a button. It opens History on You, with every kind shown, so the waiting changes are in the list. The line on the cell says "Confirm one change". The other three counts stay quiet. When the count is zero, the cell is not a button, and it says nothing is waiting.
 
-Under the counts, the rooms use the same blocks as the Rooms page in [rooms.md](./rooms.md): the platform mark beside the title, where the room is, who was present, and the bot name. The last decision opens with the dialog. A block opens the room dialog. When the company workspace has no rooms, the list says so and offers New room. A personal workspace says a private note is not a room, and offers no such button.
+Under the counts, the rooms use the same blocks as the Rooms page in [rooms.md](./rooms.md): the platform mark beside the title, where the room is, who was present, and the bot name. The last decision opens with the dialog. A block opens the room dialog. When the company workspace has no rooms, the list says so and offers New room. A personal workspace says private notes stay there and are never shared as rooms, and offers no such button.
 
 ### History
 
@@ -116,7 +116,7 @@ Chat can repeat a question about what is already kept in the open workspace. The
 | State | What the operator sees |
 |---|---|
 | Ready | The counts and the room blocks of the open workspace |
-| Empty | Why it is empty, and the one action that fills it. A personal workspace says a private note is not a room |
+| Empty | Why it is empty, and the one action that fills it. A personal workspace says private notes stay there and are never shared as rooms |
 | Loading | "Loading this workspace." No skeleton of a layout the record will not have |
 | Error | What failed, and a way to try the read again |
 | Sample | The sentence "Sample record. This preview does not write." Counts then belong to that sample, and they are labeled as such |
