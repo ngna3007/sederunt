@@ -596,6 +596,7 @@ serial("polish keeps the logo, rows, sign-in, and palette inside the page", asyn
         const nameBox = name.getBoundingClientRect();
         const rowBox = row.getBoundingClientRect();
         const chips = row.querySelector(".room-chips");
+        const chipsStyle = chips ? getComputedStyle(chips) : null;
         return {
           height: rowBox.height,
           count: num.textContent,
@@ -603,7 +604,7 @@ serial("polish keeps the logo, rows, sign-in, and palette inside the page", asyn
           sameLine: Math.abs((numBox.top + numBox.bottom) - (heardBox.top + heardBox.bottom)) <= 4,
           underName: numBox.top >= nameBox.bottom - 2,
           heardInside: heardBox.top >= rowBox.top - 1 && heardBox.bottom <= rowBox.bottom + 1,
-          chipsUnder: !!(chips && getComputedStyle(chips).display !== "none" && chips.getBoundingClientRect().top >= nameBox.bottom - 2),
+          chipsHidden: !chips || chipsStyle.display === "none" || chips.getClientRects().length === 0,
           clipped: row.scrollHeight > row.clientHeight + 1,
         };
       });
@@ -613,7 +614,7 @@ serial("polish keeps the logo, rows, sign-in, and palette inside the page", asyn
       assert.equal(people.sameLine, true);
       assert.equal(people.underName, true);
       assert.equal(people.heardInside, true);
-      assert.equal(people.chipsUnder, true);
+      assert.equal(people.chipsHidden, true);
       assert.equal(people.clipped, false);
     }
 

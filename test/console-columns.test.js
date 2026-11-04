@@ -170,7 +170,8 @@ test("table headers and cells share an x at 1920, 1024, 768, and 640", async (t)
       for (const key of ["name", "rooms", "count"]) {
         const pair = people[key];
         if (width <= 700) {
-          assert.ok(pair.cell, `${width} people ${key} cell is visible`);
+          if (key === "rooms" && width <= 480) assert.equal(pair.cell, null, `${width} room chips stay hidden`);
+          else assert.ok(pair.cell, `${width} people ${key} cell is visible`);
           continue;
         }
         assert.ok(pair.head && pair.cell, `${width} people ${key} header and cell are visible`);
@@ -184,7 +185,8 @@ test("table headers and cells share an x at 1920, 1024, 768, and 640", async (t)
       }
       assert.deepEqual(people.overflow, [], `${width} chip overflow ${people.overflow.join(",")}`);
       assert.deepEqual(people.clipped, [], `${width} chip clipped ${people.clipped.join(",")}`);
-      if (width <= 1200) assert.equal(people.named, 1, `${width} shows ${people.named} room chips`);
+      if (width <= 480) assert.equal(people.named, 0, `${width} hides room chips`);
+      else if (width <= 1200) assert.equal(people.named, 1, `${width} shows ${people.named} room chips`);
 
       await page.goto(`http://127.0.0.1:${port}/console/rooms`, { waitUntil: "networkidle" });
       await page.waitForSelector("#room-list a.room", { timeout: 45000 });

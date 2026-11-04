@@ -215,3 +215,75 @@ serial("stacked history meta is a clock, a spaced dot, and the room", async (t) 
   assert.equal(wide.sep, "none");
   assert.deepEqual(errors, []);
 });
+
+function peopleSession() {
+  const session = createSession();
+  session.rooms.push(
+    { id: "quarter", name: "Quarterly planning session", platform: "Google Meet", startedAt: "2026-11-03T11:00:00.000Z" },
+    { id: "hire", name: "hiring", platform: "Google Meet", startedAt: "2026-11-03T10:00:00.000Z" },
+    { id: "booth", name: "Booth planning", platform: "Google Meet", startedAt: "2026-11-03T09:00:00.000Z" },
+  );
+  const rows = [
+    ["d-q", "quarter", "Quang keeps the booth plan.", "Quang", "2026-11-03T11:20:00.000Z"],
+    ["d-h", "hire", "Hana keeps the hiring bar.", "Hana", "2026-11-03T10:20:00.000Z"],
+    ["d-m", "booth", "Mina keeps the launch.", "Mina", "2026-11-03T09:20:00.000Z"],
+    ["d-m2", "quarter", "Mina keeps the budget.", "Mina", "2026-11-03T09:40:00.000Z"],
+  ];
+  for (const [id, roomId, text, speaker, spokenAt] of rows) {
+    session.decisions.push({
+      id,
+      account: "company",
+      kind: "decision",
+      text,
+      speakerMemberId: speaker,
+      inviteMemberIds: ["mina", speaker],
+      roomId,
+      spokenAt,
+      contradicts: [],
+      fileNames: [],
+    });
+  }
+  return session;
+}
+
+serial("phone people rows hide narrow room chips and line up the count", async (t) => {
+  const opened = await openConsole(t, peopleSession(), 4722);
+  if (!opened) return;
+  const { page, errors } = opened;
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto(`http://127.0.0.1:${opened.port}/console/people`, { waitUntil: "networkidle" });
+  await page.waitForSelector("#people-table .people-row .num", { timeout: 45000 });
+  const people = await page.evaluate(() => {
+    const visible = (node) => {
+      if (!node) return false;
+      const style = getComputedStyle(node);
+      const rect = node.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+    };
+    const rows = [...document.querySelectorAll("#people-table .people-row")];
+    const chips = [...document.querySelectorAll("#people-table .room-chips .mini-chip")].filter(visible);
+    return {
+      count: rows.length,
+      heights: rows.map((row) => Math.round(row.getBoundingClientRect().height)),
+      xs: rows.map((row) => Math.round(row.querySelector(".num").getBoundingClientRect().x)),
+      lines: rows.map((row) => {
+        const num = row.querySelector(".num").getBoundingClientRect();
+        const heard = row.querySelector(".heard").getBoundingClientRect();
+        const name = row.querySelector(".person").getBoundingClientRect();
+        return {
+          sameLine: Math.abs((num.top + num.bottom) - (heard.top + heard.bottom)) <= 4,
+          underName: num.top >= name.bottom - 2,
+          heard: visible(row.querySelector(".heard")),
+        };
+      }),
+      chipWidths: chips.map((chip) => Math.round(chip.getBoundingClientRect().width)),
+    };
+  });
+  assert.ok(people.count >= 2, `rows ${people.count}`);
+  assert.deepEqual([...new Set(people.heights)], [people.heights[0]], `heights ${people.heights.join(",")}`);
+  const firstX = people.xs[0];
+  for (const x of people.xs) assert.ok(Math.abs(x - firstX) <= 1, `count x ${people.xs.join(",")}`);
+  assert.ok(people.lines.every((line) => line.sameLine && line.underName && line.heard), JSON.stringify(people.lines));
+  assert.ok(people.chipWidths.every((width) => width >= 48), `chip widths ${people.chipWidths.join(",")}`);
+  assert.deepEqual(errors, []);
+});

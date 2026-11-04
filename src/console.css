@@ -4337,14 +4337,16 @@ body.is-reading #rooms .explorer { display: none !important; }
   justify-self: stretch !important;
 }
 
-@media (max-width: 390px) {
+@media (max-width: 480px) {
   #people-table .people-row {
     display: flex !important;
     flex-flow: row wrap !important;
     align-items: center !important;
-    height: auto !important;
-    min-height: 64px !important;
-    max-height: 72px !important;
+    align-content: flex-start !important;
+    justify-content: flex-start !important;
+    height: 68px !important;
+    min-height: 68px !important;
+    max-height: 68px !important;
     padding: 6px 16px !important;
     gap: 2px 8px !important;
     overflow: hidden;
@@ -4359,21 +4361,17 @@ body.is-reading #rooms .explorer { display: none !important; }
     width: 0;
     height: 0;
   }
-  #people-table .people-row > .room-chips {
-    order: 4;
-    display: flex !important;
-    flex: 1 1 0;
-    width: auto !important;
-    max-width: 46%;
-    min-width: 0;
-    overflow: hidden;
-    align-items: center;
+  #people-table .people-row > .room-chips,
+  #people-table .people-row .mini-chip {
+    display: none !important;
   }
   #people-table .people-row > .num {
     order: 5;
     display: inline !important;
     flex: 0 0 auto;
     width: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
     text-align: left !important;
   }
   #people-table .people-row > .num::after {
