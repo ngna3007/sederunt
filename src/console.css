@@ -5909,12 +5909,12 @@ body.ob-page {
 .menu button[aria-checked="true"]:focus-visible { box-shadow: var(--focus-ring-inset); }
 =======
 .proof-panel { margin: 12px 0 16px; }
-.proof-panel h2 { margin: 0 0 6px; font-size: 14px; }
+.proof-panel h2 { margin: 0 0 6px; font-size: var(--text-base); }
 .proof-id { overflow-wrap: anywhere; word-break: break-all; font-variant-numeric: tabular-nums; }
 .proof-links { display: flex; flex-wrap: wrap; gap: 8px 12px; margin: 8px 0; }
 .proof-links a { color: var(--foreground); text-decoration: underline; text-underline-offset: 2px; }
-.why-panel { margin-top: 8px; font-size: 13px; color: var(--muted-foreground); }
-.why-panel summary { cursor: pointer; color: var(--foreground); font-weight: 500; }
+.why-panel { margin-top: 8px; font-size: var(--text-sm); color: var(--muted-foreground); }
+.why-panel summary { cursor: pointer; color: var(--foreground); font-weight: var(--weight-medium); }
 .why-panel p { margin: 6px 0 0; overflow-wrap: anywhere; }
 #decision-dialog .panel { min-height: 0; max-height: calc(100dvh - 48px); }
 #decision-dialog .panel-body { flex: 1 1 auto; min-height: 0; }
