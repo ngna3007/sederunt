@@ -44,6 +44,9 @@ import { handleToolPref, loadAccountProfile, loadToolAsk } from "./console-accou
 import { handleInvite, handleJoinLink, handleSpaceSwitch, handleWelcome, loadChecklist, loadSpaceView, welcomeLocation } from "./console-flow.js";
 import { roleLabel } from "./identity/onboarding.js";
 import { renderLanding } from "./landing.js";
+import { handleFileRequest } from "./files/routes.js";
+import { createFileRuntime } from "./files/runtime.js";
+import { hideDeletedSlackMessages, ingestSlackFile } from "./files/slack.js";
 import { loadCompanyEnv, loadLocalEnv } from "./local-env.js";
 import { looksLikeOpenQuestion } from "./parse.js";
 import { createSession } from "./session.js";
@@ -330,10 +333,17 @@ export function createApp(options = {}) {
       origin: requestOrigin(req, env),
     };
   }
+  const filesRuntime = options.files === false
+    ? null
+    : (options.files || (attachFiles(options, env) ? createFileRuntime({
+      env,
+      demo: env.FILES_DEMO === "1",
+    }) : null));
   const server = createServer(async (req, res) => {
   try {
     if (identity) rememberRefreshCookie(res, await refreshOAuthSession(req, identity, env));
     const url = new URL(req.url || "/", `http://127.0.0.1:${port}`);
+    if (filesRuntime && await handleFileRequest(req, res, url, filesRuntime, { send })) return;
     if (await handleNodeForms(req, res, { forms: workspace.forms, env, url })) return;
     if (req.method === "GET" && url.pathname.startsWith("/media/")) {
       if (await sendMedia(res, url.pathname)) return;
@@ -660,7 +670,8 @@ export function createApp(options = {}) {
         || url.pathname === "/console/account"
         || url.pathname === "/console/status"
         || url.pathname === "/console/setup"
-        || url.pathname === "/console/connectors";
+        || url.pathname === "/console/connectors"
+        || url.pathname === "/console/files";
       let status = roomPath || consolePage ? 200 : 404;
       if (roomPath) {
         const current = workspace.session?.readReport ? workspace.session : await prepareWorkspace(workspace, "", false, 0);
@@ -981,6 +992,9 @@ export function createApp(options = {}) {
       const current = await prepareWorkspace(workspace, companyId);
       try {
         const delivery = slackDelivery(event);
+        if (filesRuntime && delivery.intent === "delete") {
+          try { hideDeletedSlackMessages(filesRuntime, delivery.forgetIds); } catch { /* the event still acks */ }
+        }
         const question = delivery.intent !== "delete" && slackQuestion(delivery.text);
         const huddle = delivery.room?.kind === "huddle" || delivery.room?.source === "slack-huddle";
         let storedFile = null;
@@ -1015,6 +1029,21 @@ export function createApp(options = {}) {
               return;
             }
             delivery.file = loaded;
+            if (filesRuntime && loaded?.bytes) {
+              try {
+                await ingestSlackFile(filesRuntime, {
+                  externalChannelId: channel,
+                  slackUserId: delivery.memberId,
+                  slackName: delivery.memberId,
+                  name: loaded.name,
+                  mimeType: loaded.mimeType || "application/octet-stream",
+                  bytes: loaded.bytes,
+                  externalMessageId: delivery.deliveryId,
+                });
+              } catch {
+                // The Slack reply still goes out. A stashed upload retries from the worker.
+              }
+            }
           }
         }
         const result = await handleUtterance({
@@ -1237,6 +1266,12 @@ function saveCalendarEnv(env) {
   } catch {
     return;
   }
+}
+
+function attachFiles(options, env) {
+  const explicit = options.env;
+  if (explicit && (explicit.FILES_DEMO === "1" || explicit.WALRUS_SERVICE_KEY)) return true;
+  return isDirectRun() && (env.FILES_DEMO === "1" || Boolean(env.WALRUS_SERVICE_KEY));
 }
 
 function isDirectRun() {
