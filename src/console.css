@@ -1499,6 +1499,80 @@ button.tile {
   background: var(--muted);
 }
 .auth-card button[aria-busy="true"] { opacity: 0.7; }
+body.welcome-page { height: auto; min-height: 100dvh; overflow: auto; }
+.welcome { place-items: start center; }
+.welcome-card { width: min(52rem, 100%); }
+.welcome-card form { display: flex; flex-direction: column; gap: 12px; }
+.welcome-card label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 500; }
+.choice-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+button.choice-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 132px;
+  height: auto;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--card);
+  color: var(--foreground);
+  text-align: left;
+  white-space: normal;
+}
+button.choice-card:hover { background: var(--muted); }
+button.choice-card[aria-checked="true"] {
+  border-color: var(--primary);
+  background: var(--primary-subtle);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+.choice-title { font-size: 16px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.3; }
+.choice-copy { color: var(--muted-foreground); font-size: 13px; font-weight: 400; line-height: 1.45; }
+.welcome-skip { margin: 14px 0 0; text-align: center; }
+form.welcome-skip { align-items: center; }
+button.text-link {
+  width: auto;
+  align-self: center;
+  min-height: 32px;
+  height: auto;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  font-weight: 500;
+}
+button.text-link:hover { background: transparent; color: var(--foreground); }
+.welcome-skip a { color: var(--muted-foreground); font-size: 13px; font-weight: 500; }
+a.welcome-go {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  margin-top: 16px;
+  min-height: var(--control-h);
+  padding: 0 14px;
+  border-radius: var(--radius);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-weight: 500;
+  text-decoration: none;
+}
+a.welcome-go:hover { background: var(--primary-hover); color: var(--primary-foreground); }
+.invite-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.invite-row { display: grid; gap: 6px; min-width: 0; }
+.invite-email { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.invite-row input { min-width: 0; }
+@media (max-width: 768px) {
+  .choice-grid { grid-template-columns: 1fr; }
+  button.choice-card, button.text-link, a.welcome-go { min-height: 44px; }
+}
 
 #join-ready.off { color: var(--muted-foreground); }
 #meet-form, #channel-door { display: flex; flex-direction: column; gap: 8px; }

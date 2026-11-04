@@ -105,6 +105,8 @@ export function sealSession(fields, secret) {
     payload.accessToken = typeof fields.accessToken === "string" ? fields.accessToken : "";
     payload.refreshToken = typeof fields.refreshToken === "string" ? fields.refreshToken : "";
     payload.accessExp = typeof fields.accessExp === "number" ? fields.accessExp : payload.exp;
+    if (typeof fields.tenantId === "string" && fields.tenantId) payload.tenantId = fields.tenantId.slice(0, 80);
+    if (fields.onboarded === true) payload.onboarded = true;
   }
   return sealPayload(payload, secret);
 }
@@ -134,6 +136,8 @@ export function openSession(token, secret, now = Date.now()) {
     session.accessToken = typeof payload.accessToken === "string" ? payload.accessToken : "";
     session.refreshToken = typeof payload.refreshToken === "string" ? payload.refreshToken : "";
     session.accessExp = typeof payload.accessExp === "number" ? payload.accessExp : 0;
+    session.tenantId = typeof payload.tenantId === "string" ? payload.tenantId : "";
+    session.onboarded = payload.onboarded === true;
   }
   return session;
 }

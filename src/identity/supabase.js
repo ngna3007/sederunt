@@ -172,6 +172,25 @@ export function createSupabaseIdentity(env, options = {}) {
       return token;
     },
 
+    async updateUser(accessToken, data) {
+      const user = await call("/auth/v1/user", {
+        method: "PUT",
+        token: accessToken,
+        body: { data },
+      });
+      if (!user || typeof user.id !== "string") throw new IdentityError("upstream", "Profile could not be saved.");
+      return user;
+    },
+
+    async setAllowedDomain(accessToken, tenantId, domain) {
+      await call(`/rest/v1/tenants?id=eq.${encodeURIComponent(tenantId)}`, {
+        method: "PATCH",
+        token: accessToken,
+        profile: true,
+        body: { allowed_domain: domain },
+      });
+    },
+
     async acceptInvite(accessToken, token) {
       const id = await call("/rest/v1/rpc/accept_invite", {
         method: "POST",

@@ -46,6 +46,8 @@ export async function refreshOAuthSession(req, identity, env, now = Date.now()) 
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken || gate.session.refreshToken,
       accessExp: tokens.expiresAt,
+      tenantId: gate.session.tenantId || "",
+      onboarded: gate.session.onboarded === true,
     }, sessionSecret(env));
     req.headers.cookie = replaceCookie(req.headers.cookie, CONSOLE_COOKIE, sealed);
     const maxAge = Math.max(0, Math.floor((gate.session.exp - now) / 1000));

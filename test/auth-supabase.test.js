@@ -391,6 +391,9 @@ test("supabase sign-in stays on localhost", async (t) => {
         assert.match(cookieList(done.cookie).join("\n"), /sederunt_session=/);
         assert.match(cookieList(done.cookie).join("\n"), /HttpOnly/);
         assert.match(cookieList(done.cookie).join("\n"), /SameSite=Lax/);
+        const welcome = await call(port, "GET", "/console", { cookie: header(jar) });
+        assert.equal(welcome.status, 302);
+        assert.equal(welcome.location, "/console/welcome");
         const home = await call(port, "GET", "/console/history", { cookie: header(jar) });
         assert.equal(home.status, 200);
         assert.match(home.raw, /id="account-name">Ada Lovelace</);

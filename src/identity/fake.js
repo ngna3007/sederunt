@@ -222,6 +222,37 @@ export function createFakeIdentity(env = {}) {
       return token;
     },
 
+    async updateUser(accessToken, data) {
+      const user = requireUser(accessToken);
+      if (!data || typeof data !== "object" || Array.isArray(data)) {
+        throw new IdentityError("upstream", "Profile could not be saved.");
+      }
+      const next = { ...(user.user_metadata || {}) };
+      if ("sederunt_onboarded" in data) next.sederunt_onboarded = data.sederunt_onboarded === true;
+      if ("sederunt_tool_prefs" in data && data.sederunt_tool_prefs && typeof data.sederunt_tool_prefs === "object") {
+        next.sederunt_tool_prefs = { ...data.sederunt_tool_prefs };
+      }
+      user.user_metadata = next;
+      return { ...user, user_metadata: { ...next } };
+    },
+
+    async setAllowedDomain(accessToken, tenantId, domain) {
+      const user = requireUser(accessToken);
+      const tenant = store.tenants.get(tenantId);
+      const membership = roleOn(tenantId, user.id);
+      if (!tenant || (membership !== "owner" && membership !== "admin")) {
+        throw new IdentityError("forbidden", "Only an owner or admin can change the space.");
+      }
+      if (tenant.kind !== "company") {
+        throw new IdentityError("invalid_tenant", "Only a company has a verified email domain.");
+      }
+      const normalized = String(domain || "").trim().toLowerCase();
+      if (normalized && !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(normalized)) {
+        throw new IdentityError("invalid_tenant", "That email domain is not valid.");
+      }
+      tenant.allowed_domain = normalized || null;
+    },
+
     async acceptInvite(accessToken, token) {
       const user = requireUser(accessToken);
       if (!user.email_confirmed_at) throw new IdentityError("forbidden", "Confirm the email first.");

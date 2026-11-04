@@ -32,6 +32,7 @@ import { createIdentity, identityConfigured } from "./identity/client.js";
 import { clearOAuthCookie } from "./identity/pending.js";
 import { handleAuthRoute } from "./identity/routes.js";
 import { refreshOAuthSession, rememberRefreshCookie } from "./identity/session.js";
+import { handleInvite, handleWelcome, welcomeLocation } from "./console-flow.js";
 import { renderLanding } from "./landing.js";
 import { loadCompanyEnv, loadLocalEnv } from "./local-env.js";
 import { looksLikeOpenQuestion } from "./parse.js";
@@ -541,6 +542,17 @@ export function createApp(options = {}) {
       send(res, status, "application/json; charset=utf-8", JSON.stringify(result));
       return;
     }
+    if ((req.method === "GET" || req.method === "POST") && url.pathname === "/console/welcome") {
+      await handleWelcome({ req, res, url, env, identity, send, redirect, readPosted });
+      return;
+    }
+    const invitePath = /^\/console\/invite\/([^/]+)$/.exec(url.pathname);
+    if (invitePath && (req.method === "GET" || req.method === "POST")) {
+      let token = invitePath[1];
+      try { token = decodeURIComponent(token); } catch { token = invitePath[1]; }
+      await handleInvite({ req, res, url, env, identity, send, redirect, token });
+      return;
+    }
     if (req.method === "GET" && (url.pathname === "/console" || url.pathname.startsWith("/console/"))) {
       const gate = guardConsole(req, env);
       if (gate.required && !gate.session) {
@@ -548,6 +560,13 @@ export function createApp(options = {}) {
         const reason = gate.reason === "expired" || gate.reason === "invalid" ? `&reason=${gate.reason}` : "";
         redirect(res, `/console/sign-in?next=${next}${reason}`);
         return;
+      }
+      if (req.method === "GET" && url.pathname === "/console") {
+        const welcome = await welcomeLocation(req, env, identity);
+        if (welcome) {
+          redirect(res, welcome);
+          return;
+        }
       }
       const doors = doorReport(env, false);
       const roomPath = /^\/console\/rooms\/([^/]+)$/.exec(url.pathname);

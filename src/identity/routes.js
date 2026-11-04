@@ -203,7 +203,7 @@ function page(ctx, extras) {
   });
 }
 
-function requestOrigin(req, env) {
+export function requestOrigin(req, env) {
   const configured = String(env.SEDERUNT_PUBLIC_ORIGIN || "").trim().replace(/\/$/, "");
   if (configured) return configured;
   const forwarded = req.headers?.["x-forwarded-proto"];
