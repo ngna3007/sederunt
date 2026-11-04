@@ -548,14 +548,13 @@ serial("polish keeps the logo, rows, sign-in, and palette inside the page", asyn
   for (const width of WIDTHS) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto(`http://127.0.0.1:${opened.port}/console`, { waitUntil: "networkidle" });
-    await page.waitForSelector("p.brand .tile-mark", { timeout: 45000 });
+    await page.waitForSelector("p.brand svg.sederunt-mark", { timeout: 45000 });
     const logo = await page.evaluate(() => {
-      const tile = document.querySelector("p.brand .tile-mark.brand-mark");
-      const range = document.createRange();
-      range.selectNodeContents(tile);
-      const glyph = range.getBoundingClientRect();
-      const box = tile.getBoundingClientRect();
-      const logoBg = getComputedStyle(tile).backgroundColor;
+      const mark = document.querySelector("p.brand svg.sederunt-mark");
+      const word = document.querySelector("p.brand .brand-word");
+      const box = mark.getBoundingClientRect();
+      const text = word.getBoundingClientRect();
+      const logoBg = "rgb(8, 20, 40)";
       const tiles = [...document.querySelectorAll("#chip-mark, #workspace-menu .tile-mark")].map((node) => {
         const style = getComputedStyle(node);
         return {
@@ -565,16 +564,14 @@ serial("polish keeps the logo, rows, sign-in, and palette inside the page", asyn
       });
       const doc = document.documentElement;
       return {
-        dx: Math.abs((glyph.left + glyph.right) / 2 - (box.left + box.right) / 2),
-        dy: Math.abs((glyph.top + glyph.bottom) / 2 - (box.top + box.bottom) / 2),
-        glyph: glyph.width,
+        size: [box.width, box.height],
+        dy: Math.abs((text.top + text.bottom) / 2 - (box.top + box.bottom) / 2),
         logoBg,
         tiles,
         overflow: doc.scrollWidth > doc.clientWidth + 1,
       };
     });
-    assert.ok(logo.glyph > 4, `glyph ${width}`);
-    assert.ok(logo.dx <= 2, `logo dx ${width} ${logo.dx}`);
+    assert.deepEqual(logo.size, [28, 28], `logo size ${width}`);
     assert.ok(logo.dy <= 2, `logo dy ${width} ${logo.dy}`);
     assert.ok(logo.tiles.length >= 2, `workspace tiles ${width}`);
     for (const tile of logo.tiles) {
