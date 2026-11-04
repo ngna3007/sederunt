@@ -85,6 +85,7 @@ export async function handleConnectorRoutes(ctx) {
           code: result.code || "protocol",
           connectUrl: result.connectUrl || "",
           message: result.message || "That could not be saved.",
+          detail: result.detail || "",
         });
         return true;
       }

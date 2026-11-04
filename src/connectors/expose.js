@@ -112,8 +112,12 @@ export async function callCustomTool(input) {
   try {
     if (connector.authType === "google_oauth") {
       if (!fakeForms) {
-        token = await input.googleGrants?.accessToken(input.personId) || "";
-        if (!token) return failed(name, "unauthorized: Google needs you to sign in again.", "unauthorized");
+        const opened = await takeAccess(input);
+        token = opened.accessToken;
+        if (!token) {
+          if (opened.needsAccess) return failed(name, "Google needs you to sign in again.", "needs_access");
+          return failed(name, "unauthorized: Google needs you to sign in again.", "unauthorized");
+        }
       }
       headerName = "Authorization";
     } else if (connector.hasToken && store.openToken) {
@@ -145,9 +149,12 @@ export async function callCustomTool(input) {
   let called = await invoke(bearer);
   if (!fakeForms && connector.authType === "google_oauth" && unauthorizedTool(called)) {
     try {
-      const refreshed = await input.googleGrants?.accessToken(input.personId, { force: true }) || "";
-      if (refreshed) {
-        bearer = refreshed;
+      const refreshed = await takeAccess(input, true);
+      if (!refreshed.accessToken && refreshed.needsAccess) {
+        return failed(name, "Google needs you to sign in again.", "needs_access");
+      }
+      if (refreshed.accessToken) {
+        bearer = refreshed.accessToken;
         called = await invoke(bearer);
       }
     } catch {
@@ -215,6 +222,25 @@ function takeConfirmation(session, toolName, confirmId) {
   if (!found) return "";
   found.consumed = true;
   return found.id;
+}
+
+/**
+ * @param {{ personId?: string, tenantId?: string, googleGrants?: { openAccess?: Function, accessToken?: Function } }} input
+ * @param {boolean} [force]
+ */
+async function takeAccess(input, force = false) {
+  const grants = input.googleGrants;
+  const personId = input.personId;
+  const tenantId = input.tenantId || "";
+  if (grants && typeof grants.openAccess === "function") {
+    const opened = await grants.openAccess(personId, { tenantId, force });
+    return {
+      accessToken: typeof opened?.accessToken === "string" ? opened.accessToken : "",
+      needsAccess: opened?.needsAccess === true,
+    };
+  }
+  const token = await grants?.accessToken(personId, { tenantId, force }) || "";
+  return { accessToken: token, needsAccess: !token };
 }
 
 function unauthorizedTool(called) {

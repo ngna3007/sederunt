@@ -84,6 +84,7 @@ export function createSupabaseIdentity(env, options = {}) {
       expiresAt: now + seconds * 1000,
       providerAccessToken: typeof data?.provider_token === "string" ? data.provider_token : "",
       providerRefreshToken: typeof data?.provider_refresh_token === "string" ? data.provider_refresh_token : "",
+      scope: typeof data?.scope === "string" ? data.scope : "",
     };
   }
 

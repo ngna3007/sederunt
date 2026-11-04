@@ -1,12 +1,14 @@
 import {
   CONSOLE_SESSION_MS,
   consoleSecret,
+  guardConsole,
   safeConsoleNext,
   sealSession,
   sessionCookie,
   sessionSecret,
 } from "../console-auth.js";
 import { renderSignInPage } from "../console-sign-in.js";
+import { activeSpace } from "./onboarding.js";
 import {
   OAUTH_PENDING_MS,
   clearOAuthCookie,
@@ -120,7 +122,12 @@ async function fakeConsent(ctx, provider) {
   }
   let code = "";
   try {
-    code = identity.issueConsentCode({ provider, codeChallenge: pending.challenge, intent: pending.intent });
+    code = identity.issueConsentCode({
+      provider,
+      codeChallenge: pending.challenge,
+      intent: pending.intent,
+      scope: ctx.url.searchParams.get("scope") || "",
+    });
   } catch {
     send(res, 200, "text/html; charset=utf-8", page(ctx, {
       notice: "Sign-in didn't complete. Try again.",
@@ -155,14 +162,16 @@ async function finishCallback(ctx) {
     const tokens = await identity.exchangeCode({ code, codeVerifier: pending.verifier });
     const user = await identity.getUser(tokens.accessToken);
     if (!user?.id) throw new Error("unverified");
+    let formsTenant = "";
     if (pending.intent === "forms" && pending.provider === "google" && tokens.providerRefreshToken && ctx.googleGrants) {
       try {
+        formsTenant = await formsTenantId(ctx, tokens.accessToken);
         await ctx.googleGrants.save(user.id, {
           refreshToken: tokens.providerRefreshToken,
           accessToken: tokens.providerAccessToken || "",
           expiresAt: tokens.expiresAt,
-          scopes: FORMS_SCOPES,
-        });
+          scopes: grantedScopeList(tokens.scope),
+        }, { tenantId: formsTenant });
       } catch {
         // Sign-in still completes. The Forms card stays on Connect until a grant is stored.
       }
@@ -186,6 +195,7 @@ async function finishCallback(ctx) {
       refreshToken: tokens.refreshToken,
       accessExp: tokens.expiresAt,
       provider: providerFromUser(user),
+      ...(formsTenant ? { tenantId: formsTenant } : {}),
     }, sessionSecret(env));
     redirect(res, safeConsoleNext(pending.next), {
       "set-cookie": [
@@ -198,6 +208,39 @@ async function finishCallback(ctx) {
       notice: "Sign-in didn't complete. Try again.",
     }), { "set-cookie": clearOAuthCookie(req) });
   }
+}
+
+/**
+ * The space the Forms grant belongs to. Matches the console's active space,
+ * including a tenant already chosen on the session.
+ *
+ * @param {{ req: import("node:http").IncomingMessage, env: NodeJS.ProcessEnv | Record<string, string | undefined>, identity: { myTenants?: Function } }} ctx
+ * @param {string} accessToken
+ */
+async function formsTenantId(ctx, accessToken) {
+  const gate = guardConsole(ctx.req, ctx.env);
+  const hinted = typeof gate.session?.tenantId === "string" ? gate.session.tenantId : "";
+  if (ctx.identity && typeof ctx.identity.myTenants === "function" && accessToken) {
+    try {
+      const tenants = await ctx.identity.myTenants(accessToken);
+      const active = activeSpace(Array.isArray(tenants) ? tenants : [], hinted);
+      if (active?.id) return String(active.id);
+    } catch {
+      // The hinted space is the fallback when the tenant list cannot be read.
+    }
+  }
+  return hinted;
+}
+
+/**
+ * Scopes Google actually returned. An empty list is a declined Forms consent,
+ * not a grant of every Forms scope.
+ *
+ * @param {unknown} scope
+ */
+function grantedScopeList(scope) {
+  if (Array.isArray(scope)) return scope.map((item) => String(item || "").trim()).filter(Boolean);
+  return String(scope || "").split(/[\s,]+/).map((item) => item.trim()).filter(Boolean);
 }
 
 function providerNotice(provider) {

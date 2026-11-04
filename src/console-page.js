@@ -6404,7 +6404,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var detail = card.querySelector(".preset-detail");
     if (state === "needs_access") {
       if (badge) badge.textContent = "Needs Google access";
-      if (detail) detail.textContent = "Connect Google Forms";
+      if (detail) detail.textContent = preset && preset.message ? preset.message : "Connect Google Forms";
     } else if (state === "connected") {
       if (badge) badge.textContent = "Connected";
       if (detail) detail.textContent = "Uses this person's Google account.";
@@ -6733,7 +6733,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (badge) badge.textContent = "Connecting";
     mcpPost("/console/connectors/presets/google-forms", {}).then(function (result) {
       if (result && result.code === "needs_access") {
-        mcpPresets["google-forms"] = { state: "needs_access", connectUrl: result.connectUrl || "" };
+        mcpPresets["google-forms"] = {
+          state: "needs_access",
+          connectUrl: result.connectUrl || "",
+          message: result.detail || "",
+        };
         card.setAttribute("data-state", "add");
         paintPreset(mcpPresets["google-forms"]);
         if (result.connectUrl) window.location.assign(result.connectUrl);

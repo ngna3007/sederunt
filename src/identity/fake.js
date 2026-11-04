@@ -122,7 +122,7 @@ export function createFakeIdentity(env = {}) {
       return query ? `${base}?${query}` : base;
     },
 
-    issueConsentCode({ provider, codeChallenge, intent }) {
+    issueConsentCode({ provider, codeChallenge, intent, scope }) {
       if (store.providers[provider] !== true) {
         throw new IdentityError("provider_disabled", "That sign-in provider is not turned on.");
       }
@@ -130,7 +130,12 @@ export function createFakeIdentity(env = {}) {
         throw new IdentityError("invalid_challenge", "Missing code challenge.");
       }
       const code = randomBytes(24).toString("base64url");
-      store.codes.set(code, { provider, challenge: codeChallenge, intent: intent === "forms" ? "forms" : "" });
+      store.codes.set(code, {
+        provider,
+        challenge: codeChallenge,
+        intent: intent === "forms" ? "forms" : "",
+        scope: typeof scope === "string" ? scope : "",
+      });
       return code;
     },
 
@@ -149,6 +154,8 @@ export function createFakeIdentity(env = {}) {
       if (pending.intent === "forms") {
         tokens.providerAccessToken = `fa.google.${user.id}`;
         tokens.providerRefreshToken = `fr.google.${user.id}`;
+        const override = String(env.SEDERUNT_AUTH_FAKE_SCOPE || "").trim();
+        tokens.scope = override || String(pending.scope || "");
       }
       return tokens;
     },
