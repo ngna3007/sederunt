@@ -1,0 +1,76 @@
+{
+  "network": "testnet",
+  "at": "2026-11-04T15:36:16.184Z",
+  "encryption": "seal",
+  "sealError": null,
+  "plaintextSha256": "d3cfaf983cebe0546d917035ba52af986f0f4f560c8a3d92c4474293c9f11d72",
+  "decryptedSha256": "d3cfaf983cebe0546d917035ba52af986f0f4f560c8a3d92c4474293c9f11d72",
+  "sha256Match": true,
+  "readPath": "aggregator",
+  "deletable": true,
+  "epochs": 1,
+  "blobId": "J8QjAf4bLbyNmJcwyWPvjMt-23nfdKe9ABZLSV-nSMM",
+  "objectId": "0x4fcab5199d911715bc52307b2f2d72dd4a893372091808391701771773786f87",
+  "endEpoch": 572,
+  "registerDigest": "6r7JjkmdBTc2yczr7cxvobxCGuNLjFR26dZ4iBVjHUDE",
+  "certifyDigest": "56NLD2KVpam5FrhKTqNpvTHNRe6SE88p7CKX12PkBzzV",
+  "certifyNote": "Object previous transaction after certify, distinct from the register digest.",
+  "deleteDigest": "5mQV4FduZ3DhvQUEXjZzfzuLVigSt2JErmqYxV8Uzro2",
+  "deleteAlreadyGone": false,
+  "links": {
+    "object": "https://suiscan.xyz/testnet/object/0x4fcab5199d911715bc52307b2f2d72dd4a893372091808391701771773786f87",
+    "registerTx": "https://suiscan.xyz/testnet/tx/6r7JjkmdBTc2yczr7cxvobxCGuNLjFR26dZ4iBVjHUDE",
+    "certifyTx": "https://suiscan.xyz/testnet/tx/56NLD2KVpam5FrhKTqNpvTHNRe6SE88p7CKX12PkBzzV",
+    "deleteTx": "https://suiscan.xyz/testnet/tx/5mQV4FduZ3DhvQUEXjZzfzuLVigSt2JErmqYxV8Uzro2"
+  },
+  "steps": [
+    {
+      "step": "encoded",
+      "blobId": "J8QjAf4bLbyNmJcwyWPvjMt-23nfdKe9ABZLSV-nSMM",
+      "blobObjectId": null,
+      "txDigest": null
+    },
+    {
+      "step": "registered",
+      "blobId": "J8QjAf4bLbyNmJcwyWPvjMt-23nfdKe9ABZLSV-nSMM",
+      "blobObjectId": "0x4fcab5199d911715bc52307b2f2d72dd4a893372091808391701771773786f87",
+      "txDigest": "6r7JjkmdBTc2yczr7cxvobxCGuNLjFR26dZ4iBVjHUDE"
+    },
+    {
+      "step": "uploaded",
+      "blobId": "J8QjAf4bLbyNmJcwyWPvjMt-23nfdKe9ABZLSV-nSMM",
+      "blobObjectId": "0x4fcab5199d911715bc52307b2f2d72dd4a893372091808391701771773786f87",
+      "txDigest": "6r7JjkmdBTc2yczr7cxvobxCGuNLjFR26dZ4iBVjHUDE"
+    },
+    {
+      "step": "certified",
+      "blobId": "J8QjAf4bLbyNmJcwyWPvjMt-23nfdKe9ABZLSV-nSMM",
+      "blobObjectId": "0x4fcab5199d911715bc52307b2f2d72dd4a893372091808391701771773786f87",
+      "txDigest": null
+    }
+  ],
+  "objectBeforeDelete": {
+    "found": true,
+    "objectId": "0x4fcab5199d911715bc52307b2f2d72dd4a893372091808391701771773786f87",
+    "version": "1078505003",
+    "type": "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66::blob::Blob",
+    "previousTransaction": "56NLD2KVpam5FrhKTqNpvTHNRe6SE88p7CKX12PkBzzV"
+  },
+  "objectAfterDelete": {
+    "found": false,
+    "error": "Object 0x4fcab5199d911715bc52307b2f2d72dd4a893372091808391701771773786f87 not found"
+  },
+  "blobStatusBefore": {
+    "code": 1,
+    "stdout": "",
+    "stderr": "2026-11-04T15:36:09.957013Z  INFO walrus: client version: 1.59.0-c68b530e0b1e\n2026-11-04T15:36:09.958785Z  INFO walrus_sdk::config: using Walrus configuration from '/workspace/sederunt-secrets/walrus-wallet/client_config.yaml' with 'testnet' context\n2026-11-04T15:36:09.958861Z  INFO walrus_sui::config: using Sui wallet configuration from '/workspace/sederunt-secrets/walrus-wallet/client.yaml'\n2026-11-04T15:36:09.961059Z  INFO run{command=\"blob-status\"}: walrus_service::client::cli: using RPC URLs set in client configuration: https://fullnode.testnet.sui.io:443\n2026-11-04T15:36:12.150710Z  WARN run{command=\"blob-status\"}:get_verified_blob_status{blob_id=J8QjAf4bLbyNmJcwyWPvjMt-23nfdKe9ABZLSV-nSMM}: walrus_sdk::node_client: error=did not receive a valid blob status from the quorum of nodes\n\u001b[1;31mError:\u001b[0m did not receive a valid blob status from the quorum of nodes\n"
+  },
+  "blobStatusAfter": {
+    "code": 0,
+    "stdout": "{\n  \"blobId\": \"J8QjAf4bLbyNmJcwyWPvjMt-23nfdKe9ABZLSV-nSMM\",\n  \"status\": \"nonexistent\"\n}",
+    "stderr": "2026-11-04T15:36:13.741515Z  INFO walrus: client version: 1.59.0-c68b530e0b1e\n2026-11-04T15:36:13.742462Z  INFO walrus_sdk::config: using Walrus configuration from '/workspace/sederunt-secrets/walrus-wallet/client_config.yaml' with 'testnet' context\n2026-11-04T15:36:13.742536Z  INFO walrus_sui::config: using Sui wallet configuration from '/workspace/sederunt-secrets/walrus-wallet/client.yaml'\n2026-11-04T15:36:13.743891Z  INFO run{command=\"blob-status\"}: walrus_service::client::cli: using RPC URLs set in client configuration: https://fullnode.testnet.sui.io:443\n"
+  },
+  "aggregatorAfterDelete": {
+    "status": 200
+  }
+}

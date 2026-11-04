@@ -1,12 +1,55 @@
 # Design: Files on Walrus
 
-**Status:** draft (decisions recorded 2026-11-04; not built)
+**Status:** building
 **Owner:** @ngna3007
 **Last updated:** 2026-11-04
 **Scope:** Feature-level. How a file sent in a Sederunt channel is stored, shown, deleted, and forgotten.
 
 Upstream: [system.md](./system.md), [rooms.md](./rooms.md), [access.md](./access.md), ADR [0003 room membership](../decisions/0003-room-membership.md), ADR [0005 Walrus is the record](../decisions/0005-walrus-is-the-record.md).
 Code it builds on: `supabase/migrations/2026110319*` (tenants, memberships, channels, channel_members, messages, `private.*` helpers), `src/slack/reply.js` (`slackFileBytes`), `src/server.js` (`/api/slack`, `file_share` and `message_deleted` subtypes), `src/console/upload.js` (Seal + Console), `src/memory/company.js` (Walrus Memory).
+
+## What was built
+
+Testnet only. The service wallet owns every blob (`deletable: true`, never permanent or shared). Files follow current channel membership. An admin who removes a file deletes the blob. Unanswered delete requests show to admins after 72 hours.
+
+**Seal (option A).** `move/sederunt_files` publishes `policy::seal_approve`, which accepts only the service address stored on the shared `Service` object. Published on Sui testnet:
+
+- Package `0x35f30738d39af36248cc2cd6bea82be2d5840df760d7f53e63bc46ba5cbb4c34` — https://suiscan.xyz/testnet/object/0x35f30738d39af36248cc2cd6bea82be2d5840df760d7f53e63bc46ba5cbb4c34
+- Service `0x80f305b6fcbd3a931404ae472ad31bb4b1af391dfae1b0432a92290d2f635a2e` — https://suiscan.xyz/testnet/object/0x80f305b6fcbd3a931404ae472ad31bb4b1af391dfae1b0432a92290d2f635a2e
+- Publish transaction `9L7YKB3Eneua2aT4DwuSXVxrUrebgBrwREXSbevRX9Ps` — https://suiscan.xyz/testnet/tx/9L7YKB3Eneua2aT4DwuSXVxrUrebgBrwREXSbevRX9Ps
+
+The file bytes are AES-256-GCM. Seal encrypts only the 32-byte AES key, using the Mysten open-mode testnet key servers at threshold 1. The AES key is not written to Postgres. Demo and tests pass no Seal client, so they wrap that key with a server secret instead. A live Seal encrypt and decrypt against the key servers succeeded before the Walrus upload.
+
+**Walrus.** `@mysten/walrus` on testnet, upload relay `https://upload-relay.testnet.walrus.space`, `writeBlob` with `deletable: true`, and attributes `sederunt:file_id`, `sederunt:tenant_id`, `sederunt:channel_id`. Retryable Walrus errors reset the client and try again. Direct storage-node reads from this host do not get a quorum, so a read falls back to the testnet aggregator `https://aggregator.walrus-testnet.walrus.space`. Already-deleted blobs count as a successful delete.
+
+**App.** `src/files/` uploads, downloads, and deletes through an injectable store. A non-member gets 404. The owner or an admin hides the row immediately and queues `delete_blob` and `delete_memory`. Another member can ask the owner to delete. The worker backs off from 1 minute to 6 hours and stops after 12 failures. Slack `file_share` is ingested when the channel is bound, and `message_deleted` hides the file.
+
+**Memory.** One namespace per file, `sederunt-file-<id>`. Forget and Security Delete run only when a Sederunt Walrus Memory account is configured. Without `SEDERUNT_MEMWAL_KEY`, `SEDERUNT_MEMWAL_ACCOUNT_ID`, and `SEDERUNT_MEMWAL_OWNER_KEY`, the worker records the link and marks that step skipped. It does not report the namespace as forgotten.
+
+**Database.** `supabase/migrations/20261104210000_files.sql` adds `files`, `file_delete_requests`, `file_memory_links`, and `file_jobs`, plus RLS and the private definer RPCs. It is not applied. Until it is, the Node process uses its in-memory store. The SQL job claim uses `for update skip locked` and is not granted to `authenticated`. `supabase/tests/rls_tests.sql` covers member read, ex-member, other tenant, owner delete, admin delete, member denial, request and approve, the 72 hour admin list, and pending rows hidden from other people.
+
+**Console.** Files is a nav item. The page groups files by channel and shows owner, size, and date. The menu is Download, Delete for the owner or an admin, and Ask owner to delete for anyone else. A pending file shows Deleting…. The owner sees incoming requests. An admin sees Unanswered delete requests older than 72 hours. Screenshots: `docs/pr-screens/files-*.png`.
+
+### Environment names
+
+Values stay in the server environment. The names are:
+
+`WALRUS_NETWORK`, `WALRUS_SERVICE_KEY`, `WALRUS_SERVICE_ADDRESS`, `WALRUS_FILE_EPOCHS`, `SEAL_PACKAGE_ID`, `SEAL_SERVICE_OBJECT_ID`, `FILES_WRAP_KEY`, `SEDERUNT_MEMWAL_KEY`, `SEDERUNT_MEMWAL_ACCOUNT_ID`, `SEDERUNT_MEMWAL_OWNER_KEY`, `SEDERUNT_MEMWAL_SERVER`, `FILES_DEMO`.
+
+`WALRUS_NETWORK` must be `testnet`. `FILES_DEMO=1` uses the in-memory store and never spends gas.
+
+### Live proof
+
+`scripts/walrus-live-proof.mjs` sealed a small text file, stored it with `writeBlob` (`deletable: true`, 1 epoch) through the upload relay, read it back, and deleted it. SHA-256 matched. The full record is `docs/files-live-proof.json`.
+
+- Blob `J8QjAf4bLbyNmJcwyWPvjMt-23nfdKe9ABZLSV-nSMM`
+- Object `0x4fcab5199d911715bc52307b2f2d72dd4a893372091808391701771773786f87` — https://suiscan.xyz/testnet/object/0x4fcab5199d911715bc52307b2f2d72dd4a893372091808391701771773786f87
+- Register `6r7JjkmdBTc2yczr7cxvobxCGuNLjFR26dZ4iBVjHUDE` — https://suiscan.xyz/testnet/tx/6r7JjkmdBTc2yczr7cxvobxCGuNLjFR26dZ4iBVjHUDE
+- Certify `56NLD2KVpam5FrhKTqNpvTHNRe6SE88p7CKX12PkBzzV` — https://suiscan.xyz/testnet/tx/56NLD2KVpam5FrhKTqNpvTHNRe6SE88p7CKX12PkBzzV
+- Delete `5mQV4FduZ3DhvQUEXjZzfzuLVigSt2JErmqYxV8Uzro2` — https://suiscan.xyz/testnet/tx/5mQV4FduZ3DhvQUEXjZzfzuLVigSt2JErmqYxV8Uzro2
+- End epoch 572
+
+The read used the testnet aggregator after storage nodes returned no metadata. `walrus blob-status` before delete did not get a node quorum. After delete it reported `"status": "nonexistent"`, and the Sui object was not found. The aggregator still returned HTTP 200, which is its cache (`max-age=86400`), not the Blob object.
 
 ## Mission
 
