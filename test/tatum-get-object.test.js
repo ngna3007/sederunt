@@ -156,3 +156,40 @@ function get(port, path) {
     req.end();
   });
 }
+
+test("a blob with no stored owner uses the company account owner once and keeps the location", async () => {
+  const { encodeBlobContent } = await import("../src/memory/blob.js");
+  const ACCOUNT = "0x" + "12".repeat(32);
+  const OWNER = "0x" + "34".repeat(32);
+  const counts = { owner: 0, list: 0, get: 0, tx: 0 };
+  const content = encodeBlobContent({ blobId: BLOB_ID, certified: true });
+  const client = {
+    log: [],
+    async getAccountOwner(id) {
+      counts.owner += 1;
+      assert.equal(id, ACCOUNT);
+      return OWNER;
+    },
+    async listOwnedObjects({ owner }) {
+      counts.list += 1;
+      assert.equal(owner, OWNER);
+      return { objects: [{ objectId: OBJECT_ID, content, previousTransaction: "HMNM1usyR6SbipnmP2d7Ds7NpcmqQE4cEA83QiAMYKfs" }], hasNextPage: false };
+    },
+    async getObject(id) {
+      counts.get += 1;
+      return { objectId: id, ownerAddress: OWNER, content, checkpoint: 338404221, checkpointTime: "2026-10-26T17:40:03.000Z", certifyingDigest: "HMNM1usyR6SbipnmP2d7Ds7NpcmqQE4cEA83QiAMYKfs" };
+    },
+    async getTransaction() {
+      counts.tx += 1;
+      return { checkpoint: 338404221, timestampMs: 0 };
+    },
+  };
+  const reader = createTatumReader({ TATUM_API_KEY: "k", COMPANY_MEMWAL_ACCOUNT_ID: ACCOUNT }, { client });
+  const first = await reader.getObject(BLOB_ID, { blobId: BLOB_ID });
+  const second = await reader.getObject(BLOB_ID, { blobId: BLOB_ID });
+  assert.equal(first.proof.status, "verified");
+  assert.equal(second.proof.status, "verified");
+  assert.equal(second.checkpoint, 338404221);
+  assert.equal(counts.owner, 1);
+  assert.equal(counts.list, 1);
+});

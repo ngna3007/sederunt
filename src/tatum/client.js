@@ -37,6 +37,7 @@ export function createTatumClient(options = {}) {
       getTransaction: missing,
       getCheckpoint: missing,
       getServiceInfo: missing,
+      getAccountOwner: missing,
       refreshChain: missing,
     };
   }
@@ -108,6 +109,13 @@ export function createTatumClient(options = {}) {
         sequence: Number.isSafeInteger(height) ? height : null,
         timestamp: timestampIso(checkpoint?.summary?.timestamp),
       };
+    },
+    async getAccountOwner(accountId) {
+      // The MemWalAccount object names the owner wallet. Blobs written through
+      // the relayer for this account are owned by that wallet.
+      const found = await sui.getObject({ objectId: accountId, include: { json: true } });
+      const owner = found?.object?.json?.owner;
+      return typeof owner === "string" && /^0x[0-9a-fA-F]{64}$/.test(owner) ? owner : null;
     },
     async getServiceInfo() {
       const finished = await sui.ledgerService.getServiceInfo({});

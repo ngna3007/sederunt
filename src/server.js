@@ -879,7 +879,9 @@ export function createApp(options = {}) {
         }));
         return;
       }
-      await readProofs(current, { decisions: [row] }, workspace.deps?.tatum);
+      // Verify again is one decision the person asked for, so it may take the
+      // few throttled gateway calls a first locate needs.
+      await readProofs(current, { decisions: [row] }, workspace.deps?.tatum, { timeoutMs: 6000 });
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({
         id,
         status: row.proofStatus || "unknown",

@@ -2325,7 +2325,8 @@ function restoreMeetingConfirms() {
  * @param {{ decisions?: Array<{ id?: string, text?: string, checkpoint?: number | null }> }} board
  * @param {{ getObject?: (blobId: string) => Promise<{ text?: string, checkpoint?: number | null }> }} [tatum]
  */
-export async function readProofs(session, board, tatum) {
+export async function readProofs(session, board, tatum, options = {}) {
+  const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : 1200;
   const rows = Array.isArray(board?.decisions) ? board.decisions : [];
   const byId = new Map((session?.decisions ?? []).map((item) => [item.id, item]));
   if (typeof tatum?.refreshChain === "function") {
@@ -2346,7 +2347,7 @@ export async function readProofs(session, board, tatum) {
     }
     const target = typeof source?.objectId === "string" && /^0x[0-9a-fA-F]{64}$/.test(source.objectId) ? source.objectId : blobId;
     try {
-      const object = await readObjectWithin(tatum, target, 1200, {
+      const object = await readObjectWithin(tatum, target, timeoutMs, {
         blobId,
         owner: source?.blobOwner,
         digest: source?.digest,

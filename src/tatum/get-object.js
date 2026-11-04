@@ -30,6 +30,22 @@ export function createTatumReader(env = process.env, options = {}) {
     }))
     : null;
   const locate = options.locate ?? null;
+  // A Blob object id never changes for a blob id, so a found location is
+  // kept for the life of the reader. A later read is one GetObject.
+  const located = new Map();
+  const accountId = typeof env?.COMPANY_MEMWAL_ACCOUNT_ID === "string" ? env.COMPANY_MEMWAL_ACCOUNT_ID : "";
+  let accountOwner = null;
+  const ownerFor = async (hints) => {
+    if (typeof hints.owner === "string" && hints.owner) return hints.owner;
+    if (!accountId || typeof client?.getAccountOwner !== "function") return null;
+    if (!accountOwner) {
+      accountOwner = client.getAccountOwner(accountId).catch(() => {
+        accountOwner = null;
+        return null;
+      });
+    }
+    return accountOwner;
+  };
   return {
     calls,
     client,
@@ -46,11 +62,15 @@ export function createTatumReader(env = process.env, options = {}) {
     async getObject(id, hints = {}) {
       calls.push(id);
       if (!client) throw new Error("Tatum key not set");
-      let target;
-      try {
-        target = await resolveTarget(id, locate, client, hints);
-      } catch (error) {
-        throw readerError(error);
+      let target = located.get(id) || null;
+      if (!target) {
+        try {
+          const owner = await ownerFor(hints);
+          target = { ...(await resolveTarget(id, locate, client, owner ? { ...hints, owner } : hints)), owner };
+        } catch (error) {
+          throw readerError(error);
+        }
+        if (target.objectId && target.blobId) located.set(id, target);
       }
       let object;
       try {
@@ -64,7 +84,7 @@ export function createTatumReader(env = process.env, options = {}) {
       const proof = verifyMemory({
         object: viewed,
         blobId: target.blobId || hints.blobId || null,
-        owner: hints.owner || null,
+        owner: hints.owner || target.owner || null,
       });
       return {
         text: "",
