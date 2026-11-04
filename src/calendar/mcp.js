@@ -1,4 +1,8 @@
 import { toUtcIso } from "../instant.js";
+import { calendarFakeEnabled, calendarPresentedConnected, createFakeCalendarAdapter } from "./fake.js";
+import { CalendarError, asCalendarError, validateEventUpdate } from "./validate.js";
+
+export { CalendarError, calendarFakeEnabled, calendarPresentedConnected, validateEventUpdate };
 
 const CALENDAR_URL = "https://calendarmcp.googleapis.com/mcp/v1";
 
@@ -20,6 +24,7 @@ const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Frida
  * @param {{ fetch?: typeof fetch, save?: (env: NodeJS.ProcessEnv) => void }} [options]
  */
 export function createCalendarAdapter(env = process.env, options = {}) {
+  if (calendarFakeEnabled(env)) return createFakeCalendarAdapter(env, { timeZone: calendarTimeZone(env), now: options.now });
   const fetchImpl = options.fetch || fetch;
   const save = options.save;
   return {
@@ -64,6 +69,82 @@ export function createCalendarAdapter(env = process.env, options = {}) {
         return null;
       }
     },
+    async listUpcoming() {
+      const zone = zoneOf(env);
+      const now = options.now instanceof Date ? options.now : new Date();
+      const start = zonedBound(now, zone, 0, "00:00:00");
+      const end = zonedBound(now, zone, 2, "00:00:00");
+      return withCalendarToken(env, fetchImpl, save, async (token) => {
+        const listed = await toolsCall(fetchImpl, token, "list_events", {
+          startTime: start,
+          endTime: end,
+          timeZone: zone,
+          pageSize: 20,
+        });
+        return eventsFrom(listed).filter((event) => event.id).map((event) => ({
+          id: event.id,
+          title: event.summary || "Meeting",
+          start: toUtcIso(event.start),
+          end: toUtcIso(event.end),
+          readOnly: event.readOnly === true,
+        }));
+      });
+    },
+    async readEventDetails(id) {
+      const clean = String(id || "").trim();
+      if (!clean) throw new CalendarError("not-found", "That meeting was not found.");
+      const zone = zoneOf(env);
+      return withCalendarToken(env, fetchImpl, save, async (token) => {
+        try {
+          const result = await toolsCall(fetchImpl, token, "get_event", { eventId: clean, timeZone: zone });
+          const event = singleEvent(result);
+          if (event && (!event.id || event.id === clean) && (event.id || event.summary || event.start)) return toDetails(event, clean);
+        } catch {
+          /* list_events is the fallback when get_event is absent or refuses the id */
+        }
+        let listed;
+        try {
+          listed = await toolsCall(fetchImpl, token, "list_events", {
+            fullText: clean,
+            timeZone: zone,
+            pageSize: 20,
+          });
+        } catch (error) {
+          if (Number(error?.status) === 401) throw error;
+          throw asCalendarError(error);
+        }
+        const event = eventsFrom(listed).find((item) => item.id === clean);
+        if (!event) throw new CalendarError("not-found", "That meeting was not found.");
+        return toDetails(event, clean);
+      });
+    },
+    async updateEventDetails({ id, description, attendees, sendUpdates } = {}) {
+      const current = await this.readEventDetails(id);
+      if (current.readOnly) throw new CalendarError("read-only", "This meeting is read-only.");
+      const next = validateEventUpdate({ description, attendees, sendUpdates, current });
+      await withCalendarToken(env, fetchImpl, save, async (token) => {
+        try {
+          await toolsCall(fetchImpl, token, "update_event", {
+            eventId: current.id,
+            description: next.description,
+            attendees: next.attendees.map((guest) => ({ email: guest.email })),
+            sendUpdates: next.sendUpdates,
+          });
+        } catch (error) {
+          if (Number(error?.status) === 401) throw error;
+          throw asCalendarError(error);
+        }
+      });
+      return {
+        id: current.id,
+        title: current.title,
+        start: current.start,
+        end: current.end,
+        description: next.description,
+        attendees: next.attendees,
+        readOnly: false,
+      };
+    },
     async call(name, params) {
       const token = await currentToken(env, fetchImpl, save);
       if (!token || !name) return { id: "" };
@@ -81,6 +162,72 @@ export function calendarTimeZone(env = process.env) {
 
 function zoneOf(env) {
   return calendarTimeZone(env);
+}
+
+async function withCalendarToken(env, fetchImpl, save, run) {
+  let token = await currentToken(env, fetchImpl, save);
+  if (!token) throw new CalendarError("not-connected", "Calendar is not connected.");
+  try {
+    return await run(token);
+  } catch (error) {
+    if (error instanceof CalendarError) throw error;
+    const status = Number(error?.status) || 0;
+    if (status !== 401) throw asCalendarError(error);
+    const refreshed = await refreshAccessToken(env, fetchImpl, save);
+    if (!refreshed) throw new CalendarError("not-connected", "Calendar is not connected.");
+    try {
+      return await run(refreshed);
+    } catch (again) {
+      if (again instanceof CalendarError) throw again;
+      const againStatus = Number(again?.status) || 0;
+      if (againStatus === 401) throw new CalendarError("not-connected", "Calendar is not connected.");
+      throw asCalendarError(again);
+    }
+  }
+}
+
+function toDetails(event, id) {
+  const attendees = Array.isArray(event.attendees) ? event.attendees.map((guest) => ({ ...guest })) : [];
+  const orgEmail = String(event.organizerEmail || "").trim();
+  if (orgEmail) {
+    const found = attendees.find((guest) => guest.email.toLowerCase() === orgEmail.toLowerCase());
+    if (found) found.organizer = true;
+    else attendees.unshift({ email: orgEmail, ...(event.organizerName ? { name: event.organizerName } : {}), organizer: true });
+  }
+  return {
+    id: event.id || id,
+    title: event.summary || "Meeting",
+    start: toUtcIso(event.start),
+    end: toUtcIso(event.end),
+    description: event.description || "",
+    attendees,
+    readOnly: event.readOnly === true,
+  };
+}
+
+function zonedBound(now, timeZone, addDays, clock) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const bag = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const shifted = new Date(Date.UTC(Number(bag.year), Number(bag.month) - 1, Number(bag.day) + addDays));
+  const day = shifted.toISOString().slice(0, 10);
+  return `${day}T${clock}${zoneOffset(timeZone, now)}`;
+}
+
+function zoneOffset(timeZone, date) {
+  let label = "";
+  try {
+    label = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "longOffset" }).format(date);
+  } catch {
+    return "+07:00";
+  }
+  const match = /GMT([+-])(\d{1,2})(?::(\d{2}))?/.exec(label);
+  if (!match) return "+00:00";
+  return `${match[1]}${match[2].padStart(2, "0")}:${match[3] || "00"}`;
 }
 
 async function updateEvent(fetchImpl, token, params, fallbackZone) {
@@ -288,13 +435,40 @@ function singleEvent(result) {
 }
 
 function normalizeEvent(event) {
+  const organizer = event?.organizer && typeof event.organizer === "object" ? event.organizer : null;
   return {
     id: event?.id || "",
-    summary: event?.summary || "",
+    summary: event?.summary || event?.title || "",
     start: event?.start?.dateTime || event?.startTime || event?.start || "",
     end: event?.end?.dateTime || event?.endTime || event?.end || "",
     timeZone: event?.timeZone || event?.start?.timeZone || "",
+    description: typeof event?.description === "string" ? event.description : "",
+    attendees: normalizeAttendees(event?.attendees),
+    readOnly: event?.readOnly === true,
+    organizerEmail: typeof organizer?.email === "string" ? organizer.email : "",
+    organizerName: typeof organizer?.displayName === "string" ? organizer.displayName : (typeof organizer?.name === "string" ? organizer.name : ""),
   };
+}
+
+function normalizeAttendees(list) {
+  if (!Array.isArray(list)) return [];
+  const guests = [];
+  for (const item of list) {
+    if (typeof item === "string") {
+      const email = item.trim();
+      if (email) guests.push({ email });
+      continue;
+    }
+    const email = String(item?.email || "").trim();
+    if (!email) continue;
+    const guest = { email };
+    const name = item?.displayName || item?.name;
+    if (name) guest.name = String(name);
+    if (item?.responseStatus) guest.responseStatus = String(item.responseStatus);
+    if (item?.organizer === true) guest.organizer = true;
+    guests.push(guest);
+  }
+  return guests;
 }
 
 function eventIdFrom(result) {
