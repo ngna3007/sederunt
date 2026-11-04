@@ -16,11 +16,38 @@ import { createConsoleFiles } from "../src/files/console-files.js";
 import { consoleObjectName, fileMetadata, fileTags } from "../src/files/meta.js";
 
 const TEXT = "sederunt console live proof\n";
+const METADATA_FIELDS = ["sederunt_file_id", "tenant_id", "channel_id", "owner_person_id", "slack_file_id"];
 
 function redact(value) {
   return String(value || "")
     .replace(/suiprivkey1[a-z0-9]+/gi, "[redacted]")
     .replace(/\bhbr_[A-Za-z0-9_-]+/g, "[redacted]");
+}
+
+export function proofMetadata(record) {
+  let metadata = record?.metadata ?? null;
+  if (typeof metadata === "string") {
+    try {
+      metadata = JSON.parse(metadata);
+    } catch {
+      metadata = null;
+    }
+  }
+  const source = metadata && typeof metadata === "object" && !Array.isArray(metadata) ? metadata : {};
+  const picked = {};
+  for (const key of METADATA_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(source, key)) {
+      const value = source[key];
+      picked[key] = typeof value === "string" ? redact(value) : value;
+    }
+  }
+  const tags = Array.isArray(record?.tags) ? record.tags.map((tag) => redact(tag)) : [];
+  return { metadataKeys: Object.keys(source), metadata: picked, tags };
+}
+
+export function proofStatus(record) {
+  if (!record) return "404";
+  return redact(record.status || record.state || "");
 }
 
 function fail(message) {
@@ -74,6 +101,10 @@ async function main() {
   let placed;
   let deleted = false;
   let deleteReads = 0;
+  let metadataKeys = [];
+  let metadata = {};
+  let tags = [];
+  let deleteStatus = null;
   try {
     const t0 = Date.now();
     folder = await storage.resolveFolder({ tenantId: file.tenantId, channelId: file.channelId });
@@ -98,6 +129,8 @@ async function main() {
     timingsMs.download = Date.now() - t2;
     const got = createHash("sha256").update(Buffer.from(plain)).digest("hex");
     if (got !== sha256) throw new Error("sha256 mismatch");
+    const before = await readConsoleFile(fetchImpl, env.CONSOLE_API_KEY, placed.folderId, placed.fileId);
+    ({ metadataKeys, metadata, tags } = proofMetadata(before));
     const t3 = Date.now();
     let outcome = await storage.remove({ folderId: placed.folderId, fileId: placed.fileId });
     deleteReads = 1;
@@ -111,6 +144,8 @@ async function main() {
     }
     timingsMs.delete = Date.now() - t3;
     deleted = outcome.deleted === true;
+    const after = await readConsoleFile(fetchImpl, env.CONSOLE_API_KEY, placed.folderId, placed.fileId);
+    deleteStatus = proofStatus(after);
     if (!deleted) throw new Error("Console file was not deleted");
     const proof = {
       ok: true,
@@ -121,7 +156,11 @@ async function main() {
       fileId: placed.fileId,
       uploadState: placed.state,
       sha256,
+      metadataKeys,
+      metadata,
+      tags,
       deleted: true,
+      deleteStatus,
       deleteReads,
       timingsMs,
       elapsedMs: Date.now() - started,
@@ -139,7 +178,11 @@ async function main() {
       fileId: placed?.fileId || null,
       uploadState: placed?.state || null,
       sha256,
+      metadataKeys,
+      metadata,
+      tags,
       deleted,
+      deleteStatus,
       deleteReads,
       timingsMs,
       elapsedMs: Date.now() - started,
