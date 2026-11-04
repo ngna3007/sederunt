@@ -118,6 +118,7 @@ function visiblePhrases() {
   return {
     hits,
     homeEmpty: shown("#home-empty"),
+    line: ((document.getElementById("home-empty-line") || {}).textContent || "").trim(),
     explorer: shown("#rooms .explorer"),
     head: shown("#rooms .explorer-head"),
     roomEmpty: shown("#room-empty"),
@@ -152,7 +153,7 @@ function historySession() {
   return session;
 }
 
-serial("empty home shows one No rooms yet, and Rooms keeps its empty state", async (t) => {
+serial("empty home welcomes a new user, and Rooms keeps its empty state", async (t) => {
   const opened = await openConsole(t, createSession(), 4720, {
     env: { SLACK_SIGNING_SECRET: "slack-secret", SLACK_BOT_TOKEN: "slack-token" },
   });
@@ -167,8 +168,9 @@ serial("empty home shows one No rooms yet, and Rooms keeps its empty state", asy
     assert.equal(home.explorer, false, `room table ${width}`);
     assert.equal(home.head, false, `room header ${width}`);
     assert.equal(home.roomEmpty, false, `room empty ${width}`);
-    assert.equal(home.hits.length, 1, `${width} phrases ${JSON.stringify(home.hits)}`);
-    assert.match(home.hits[0].text, /^No rooms yet\.?$/);
+    // Home speaks to a brand-new user; "No rooms yet" stays on Rooms only.
+    assert.equal(home.hits.length, 0, `${width} phrases ${JSON.stringify(home.hits)}`);
+    assert.equal(home.line, "Your meetings will show up here");
     await page.goto(`http://127.0.0.1:${opened.port}/console/rooms`, { waitUntil: "networkidle" });
     await page.waitForSelector("#room-empty:not([hidden])", { timeout: 45000 });
     const rooms = await page.evaluate(visiblePhrases);

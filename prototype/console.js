@@ -617,7 +617,7 @@
   function roomBlocks(model) {
     if (!model.rooms.length) {
       var empty = model.workspaceKind === "personal"
-        ? "A private note is not a room."
+        ? "Private notes stay in this workspace. They are never shared as rooms."
         : "No rooms yet. Bring the bot into a meeting or a channel.";
       return '<p class="room-empty">' + empty + "</p>";
     }

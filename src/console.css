@@ -5420,7 +5420,9 @@ body.ob-page {
 .ob-upcoming { margin-top: 16px; }
 .ob-meetings li { display: flex; gap: 12px; align-items: baseline; padding: 7px 0; font-size: 13px; }
 .ob-meetings li + li { border-top: 1px dashed var(--border); }
-.ob-when { flex: none; width: 92px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; font-size: 12px; }
+.ob-when { flex: none; width: 64px; color: var(--muted-foreground); font-size: 12px; }
+.ob-time { flex: none; width: 64px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; font-size: 12px; }
+.ob-time:empty { display: none; }
 .ob-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ob-empty-line { margin: 14px 0 0; font-size: 13px; color: var(--muted-foreground); }
 .ob-toggle { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 16px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-xl); cursor: pointer; }
@@ -5464,7 +5466,7 @@ body.ob-page {
   .ob-page .ob-x { width: 44px; height: 44px; }
   .ob-page select.ob-select-sm { height: 44px; min-height: 44px; font-size: 13px; }
   .ob-muted { display: none; }
-  .ob-when { width: 76px; }
+  .ob-when { width: 60px; }
 }
 
 /* ---------- Home getting-started checklist ---------- */

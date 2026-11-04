@@ -6,6 +6,7 @@ import test from "node:test";
 import { openSession } from "../src/console-auth.js";
 import { createIdentity } from "../src/identity/client.js";
 import { createApp } from "../src/server.js";
+import { upcomingMeetings } from "../src/console-flow.js";
 
 const SECRET = "session-secret";
 const WIDTHS = [1920, 1097, 768, 390];
@@ -245,6 +246,7 @@ test("fake auth onboarding stays on localhost", async (t) => {
         assert.match(home.raw, /id="checklist-team"[^>]*>[\s\S]*?Team invited/);
         assert.match(home.raw, /id="checklist-add-meeting"/);
         assert.match(home.raw, /1 of 4 done/);
+        assert.match(home.raw, /id="home-connect-tools">Connect tools</);
         assert.match(home.raw, /id="people-invite"/);
         assert.match(home.raw, /id="members-card"/);
         assert.match(home.raw, /<input type="hidden" name="from" value="switcher">/);
@@ -391,6 +393,8 @@ test("fake auth onboarding stays on localhost", async (t) => {
         assert.match(calendar.raw, /id="calendar-upcoming"/);
         assert.match(calendar.raw, /Send Sederunt to my meetings automatically/);
         assert.match(calendar.raw, /id="auto-join"[^>]*checked/);
+        // Pretend meetings carry a clock time, not just a day.
+        assert.match(calendar.raw, /class="ob-when">(Today|Tomorrow)<\/span><span class="ob-time">\d{1,2}:\d{2}\s?[AP]M<\/span>/);
         const off = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=calendar&choice=continue" });
         assert.equal(off.location, "/console/welcome?step=chat");
         const again = await call(port, "GET", "/console/welcome?step=calendar", { cookie: header(jar) });
@@ -402,6 +406,8 @@ test("fake auth onboarding stays on localhost", async (t) => {
         assert.match(home.raw, /Calendar connected/);
         assert.match(home.raw, /Slack connected/);
         assert.match(home.raw, /2 of 4 done/);
+        // Everything Home asks for is connected, so its "Connect tools" link steps aside.
+        assert.match(home.raw, /id="home-connect-tools" hidden>/);
       });
     });
 
@@ -678,4 +684,46 @@ test("onboarding screens fit at desktop and phone widths", { timeout: 180000 }, 
 
   assert.deepEqual(errors, []);
   assert.deepEqual(outbound, []);
+});
+
+test("upcoming meetings show start times when the calendar lists them", async () => {
+  const now = Date.now();
+  const iso = (minutes) => new Date(now + minutes * 60_000).toISOString();
+  const env = { CALENDAR_TIME_ZONE: "UTC" };
+  const listed = {
+    async listUpcoming() {
+      return [
+        { id: "later", title: "Board readout", start: iso(240), end: iso(300) },
+        { id: "past", title: "Standup", start: iso(-120), end: iso(-90) },
+        { id: "soon", title: "Launch review", start: iso(30), end: iso(60) },
+      ];
+    },
+    async readDay() { throw new Error("listUpcoming should be used"); },
+  };
+  const read = await upcomingMeetings({ env, calendar: listed }, false);
+  assert.equal(read.unavailable, false);
+  assert.deepEqual(read.rows.map((row) => row.title), ["Launch review", "Board readout"]);
+  const clock = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: "UTC" }).format(new Date(iso(30)));
+  assert.equal(read.rows[0].time, clock);
+  assert.match(read.rows[0].when, /^(Today|Tomorrow)$/);
+
+  const titlesOnly = { async readDay() { return { events: ["Design crit"], unavailable: false }; } };
+  const old = await upcomingMeetings({ env, calendar: titlesOnly }, false);
+  assert.equal(old.rows[0].title, "Design crit");
+  assert.equal(old.rows[0].time, "");
+
+  const fake = await upcomingMeetings({ env, calendar: null }, true);
+  assert.equal(fake.rows.length, 3);
+  fake.rows.forEach((row) => assert.match(row.time, /^\d{1,2}:\d{2}\s?[AP]M$/));
+});
+
+test("the fake calendar's seeded meetings come through with their start times", async () => {
+  const { createFakeCalendarAdapter } = await import("../src/calendar/fake.js");
+  const env = { SEDERUNT_AUTH_FAKE: "1", CALENDAR_TIME_ZONE: "Asia/Ho_Chi_Minh" };
+  const calendar = createFakeCalendarAdapter(env, { timeZone: "Asia/Ho_Chi_Minh" });
+  const read = await upcomingMeetings({ env, calendar }, false);
+  const sync = read.rows.find((row) => row.title === "Customer sync");
+  assert.ok(sync, "tomorrow's seeded meeting is listed");
+  assert.equal(sync.when, "Tomorrow");
+  assert.match(sync.time, /^10:00\s?AM$/);
 });

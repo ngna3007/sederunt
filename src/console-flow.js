@@ -246,18 +246,65 @@ async function renderStep(ctx, session, active, step, extra = {}) {
 }
 
 const FAKE_MEETINGS = [
-  { when: "Today", title: "Weekly product sync" },
-  { when: "Today", title: "Design review: onboarding" },
-  { when: "Tomorrow", title: "Customer call with Northwind" },
+  { offset: 60, title: "Weekly product sync" },
+  { offset: 150, title: "Design review: onboarding" },
+  { offset: 24 * 60, title: "Customer call with Northwind" },
 ];
 
-async function upcomingMeetings(ctx, pretend) {
-  if (pretend) return { rows: FAKE_MEETINGS, unavailable: false };
-  const calendar = ctx.calendar;
-  if (!calendar || typeof calendar.readDay !== "function") return { rows: [], unavailable: true };
+function zoneDay(ms, zone) {
+  return new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: zone }).format(new Date(ms));
+}
+
+/** "Today", "Tomorrow", or a short weekday, in the calendar's zone. */
+function meetingDay(ms, zone, now) {
+  const day = zoneDay(ms, zone);
+  if (day === zoneDay(now, zone)) return "Today";
+  if (day === zoneDay(now + 86_400_000, zone)) return "Tomorrow";
+  return new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: zone }).format(new Date(ms));
+}
+
+function meetingClock(ms, zone) {
+  return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: zone }).format(new Date(ms));
+}
+
+function meetingRow(start, title, zone, now) {
+  return { when: meetingDay(start, zone, now), time: meetingClock(start, zone), title: String(title).trim().slice(0, 120) };
+}
+
+/** Pretend meetings for the harness, with times that are always ahead of now. */
+function fakeMeetings(zone, now) {
+  const base = Math.ceil(now / 1_800_000) * 1_800_000;
+  return FAKE_MEETINGS.map((row) => meetingRow(base + row.offset * 60_000, row.title, zone, now));
+}
+
+export async function upcomingMeetings(ctx, pretend) {
   const zone = calendarTimeZone(ctx.env);
+  const now = Date.now();
+  if (pretend) return { rows: fakeMeetings(zone, now), unavailable: false };
+  const calendar = ctx.calendar;
+  if (!calendar) return { rows: [], unavailable: true };
+  // Adapters that list events with start times show them; older ones only name the day's titles.
+  if (typeof calendar.listUpcoming === "function") {
+    try {
+      const listed = await calendar.listUpcoming();
+      if (Array.isArray(listed)) {
+        const rows = listed
+          .map((event) => ({ event, start: Date.parse(event?.start || ""), end: Date.parse(event?.end || "") }))
+          .filter((row) => row.event && typeof row.event.title === "string" && row.event.title.trim() && Number.isFinite(row.start))
+          .filter((row) => (Number.isFinite(row.end) ? row.end : row.start) > now)
+          .sort((x, y) => x.start - y.start)
+          .slice(0, 4)
+          .map((row) => meetingRow(row.start, row.event.title, zone, now));
+        return { rows, unavailable: false };
+      }
+      if (listed?.unavailable) return { rows: [], unavailable: true };
+    } catch {
+      /* fall back to the day read below */
+    }
+  }
+  if (typeof calendar.readDay !== "function") return { rows: [], unavailable: true };
   const day = (offset) => new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: zone })
-    .format(new Date(Date.now() + offset * 86_400_000)).toLowerCase();
+    .format(new Date(now + offset * 86_400_000)).toLowerCase();
   const rows = [];
   let unavailable = false;
   for (const [offset, when] of [[0, "Today"], [1, "Tomorrow"]]) {
@@ -265,7 +312,7 @@ async function upcomingMeetings(ctx, pretend) {
       const read = await calendar.readDay(day(offset));
       if (read?.unavailable) unavailable = true;
       for (const title of Array.isArray(read?.events) ? read.events : []) {
-        if (typeof title === "string" && title.trim()) rows.push({ when, title: title.trim().slice(0, 120) });
+        if (typeof title === "string" && title.trim()) rows.push({ when, time: "", title: title.trim().slice(0, 120) });
       }
     } catch {
       unavailable = true;

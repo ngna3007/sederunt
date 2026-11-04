@@ -81,6 +81,7 @@ export function renderConsolePage(state = {}) {
   const profile = state.accountProfile?.oauth ? state.accountProfile : null;
   const asks = state.toolAsk?.oauth === true;
   const calendarAsk = asks ? toolNeedCard("calendar", "Connect Calendar to add Sederunt to a meeting.") : "";
+  const toolsAllOn = state.toolAsk?.connected?.calendar === true && state.toolAsk?.connected?.slack === true;
   const slackAsk = asks ? toolNeedCard("slack", "Connect Slack to use a channel.", true) : "";
   const linearAsk = asks ? toolNeedCard("linear", "Connect Linear to file a ticket.") : "";
   const fileTicket = asks ? `<button type="button" id="file-ticket">File a ticket</button>` : "";
@@ -218,11 +219,11 @@ ${slack}
     ${renderChecklist(state.checklist, closeIcon)}
     <div id="home-empty" class="home-empty" hidden>
       <span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.6h10.8v8.8H2.6z"/><path d="M2.6 6.6h10.8"/></svg></span>
-      <p id="home-empty-line">No rooms yet.</p>
-      <p id="home-empty-aside" class="empty-aside">A meeting or a channel that keeps a decision adds the room.</p>
+      <p id="home-empty-line">Your meetings will show up here</p>
+      <p id="home-empty-aside" class="empty-aside">Add Sederunt to your next meeting. It keeps the decisions and follow-ups, and lists them here.</p>
       <div class="empty-actions">
         <button type="button" class="primary" id="home-add-meeting">Add Sederunt to a meeting</button>
-        <a class="secondary" href="/console/setup" id="home-connect-tools">Connect tools</a>
+        <a class="secondary" href="/console/setup" id="home-connect-tools"${toolsAllOn ? " hidden" : ""}>Connect tools</a>
       </div>
     </div>
     ${calendarAsk}
@@ -370,7 +371,7 @@ ${slack}
         <div id="room-foot" class="explorer-foot" hidden><span id="room-count"></span><span class="pager"><button id="room-prev" type="button" aria-label="Previous page">‹</button><button id="room-next" type="button" aria-label="Next page">›</button></span></div>
       </div>
       <div id="personal-notes" hidden>
-        <p id="personal-empty">A private note is not a room.</p>
+        <p id="personal-empty">Private notes stay in this workspace. They are never shared as rooms.</p>
         <div id="personal-list"></div>
       </div>
     </section>
@@ -971,13 +972,32 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (done === items.length && items.length) card.classList.add("complete");
   }
 
+  function emptyHomeNow() {
+    var pending = !state || state.reading === true;
+    return workspaceKind !== "personal" && !pending && roomTotal() === 0 && sectionName === "home";
+  }
+
+  function toolOn(name) {
+    var doors = (state && state.doors) || {};
+    if (name === "slack" && state && state.slack === "ready") return true;
+    if (doors[name] === true) return true;
+    return !!(toolAsk && toolAsk.connected && toolAsk.connected[name]);
+  }
+
   function syncHomeChrome() {
     var personal = workspaceKind === "personal";
     var pending = !state || state.reading === true;
-    var emptyHome = !personal && !pending && roomTotal() === 0 && sectionName === "home";
+    var emptyHome = emptyHomeNow();
     var homeEmpty = document.getElementById("home-empty");
     var blockedHome = !!(document.getElementById("meet-block") && document.getElementById("slack-block"));
     if (homeEmpty) homeEmpty.hidden = !emptyHome;
+    // One primary on an empty Home: the card's "Add Sederunt to a meeting".
+    var headerAdd = document.getElementById("home-add-to-meeting");
+    if (headerAdd) headerAdd.hidden = emptyHome;
+    var newRoom = document.getElementById("new-room");
+    if (newRoom && emptyHome) newRoom.hidden = true;
+    var connectTools = document.getElementById("home-connect-tools");
+    if (connectTools) connectTools.hidden = toolOn("calendar") && toolOn("slack");
     paintChecklist(!pending && roomTotal() > 0, emptyHome);
     var stats = document.getElementById("home-stats");
     if (stats) stats.hidden = sectionName !== "home" || emptyHome || (state && state.read === "failed");
@@ -987,8 +1007,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (explorer && !personal) explorer.hidden = pending || (sectionName === "home" && emptyHome);
     var line = document.getElementById("home-empty-line");
     var aside = document.getElementById("home-empty-aside");
-    if (line) line.textContent = blockedHome ? "No meeting or channel is in use." : "No rooms yet.";
-    if (aside) aside.textContent = blockedHome ? "Bring Sederunt into a meeting or a channel." : "A meeting or a channel that keeps a decision adds the room.";
+    // When the calendar already lists meetings below, the card must not claim there are none.
+    var listed = !!(state && state.read !== "failed" && Array.isArray(state.meetings) && state.meetings.length);
+    if (line) line.textContent = listed ? "Nothing kept yet" : "Your meetings will show up here";
+    if (aside) aside.textContent = listed
+      ? "Add Sederunt to one of your meetings below. Its decisions and follow-ups will show up here."
+      : blockedHome
+      ? "Add Sederunt to a meeting or a Slack channel. It keeps the decisions and follow-ups, and lists them here."
+      : "Add Sederunt to your next meeting. It keeps the decisions and follow-ups, and lists them here.";
   }
 
   function placeDoors(intoOnboard) {
@@ -2535,7 +2561,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var button = document.getElementById("new-room");
     if (!button) return;
     var onList = sectionName === "home" || sectionName === "rooms";
-    button.hidden = workspaceKind === "personal" || !onList || (state && state.read === "failed");
+    button.hidden = workspaceKind === "personal" || !onList || (state && state.read === "failed") || emptyHomeNow();
     button.disabled = !state || state.reading === true || (state && state.read === "failed");
     placeNewRoom();
   }

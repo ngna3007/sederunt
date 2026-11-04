@@ -155,7 +155,7 @@ test("the console is the workspace and the room page redirects", async () => {
     assert.match(home.raw, /id="workspace-chip"/);
     assert.match(home.raw, /id="workspace-menu"/);
     assert.match(home.raw, /Create a workspace/);
-    assert.match(home.raw, /A private note is not a room/);
+    assert.match(home.raw, /Private notes stay in this workspace. They are never shared as rooms./);
     assert.match(home.raw, /A second company is a delegate added outside this page/);
     assert.match(home.raw, /This page does not take a key/);
     assert.match(home.raw, /id="cal-connect"/);
