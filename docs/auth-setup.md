@@ -33,3 +33,15 @@ SEDERUNT_AUTH_FAKE=1 node src/server.js
 ```
 
 Open http://127.0.0.1:8787/console and continue with Google. GitHub stays off unless `SEDERUNT_AUTH_FAKE_GITHUB=1`.
+
+## Fake calendar
+
+`SEDERUNT_CALENDAR_FAKE=1` keeps Calendar in memory. The console can read and edit a few meetings for today and tomorrow. Each has a description and guests. Board readout is read-only and rejects writes. Nothing is sent to Google.
+
+Fake auth turns this on by itself. `SEDERUNT_AUTH_FAKE=1` implies a fake calendar unless `SEDERUNT_CALENDAR_FAKE=0`.
+
+`SEDERUNT_CALENDAR_FAKE_CONNECTED=0` still lists those meetings, but the console treats Calendar as not connected. Home then shows the Calendar tool ask when the account is allowed to ask.
+
+```sh
+SEDERUNT_AUTH_FAKE=1 SEDERUNT_CALENDAR_FAKE_CONNECTED=0 node src/server.js
+```
