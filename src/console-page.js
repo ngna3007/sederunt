@@ -1,4 +1,5 @@
 import { brandLogo, brandSprite } from "./brand-logos.js";
+import { sederuntMark, FAVICON_LINK } from "./sederunt-mark.js";
 
 export { rankDecisions } from "./room-match.js";
 
@@ -74,6 +75,7 @@ export function renderConsolePage(state = {}) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sederunt</title>
+${FAVICON_LINK}
 <link rel="stylesheet" href="/console.css">
 </head>
 <body class="is-reading"${state.calendarTimeZone ? ` data-calendar-zone="${escapeHtml(state.calendarTimeZone)}"` : ""}>
@@ -85,7 +87,7 @@ ${brandSprite()}
   <div class="rail-wrap">
     <div class="rail-head">
       <div class="brand-row">
-      <p class="brand"><span class="tile-mark brand-mark" aria-hidden="true">S</span>Sederunt</p>
+      <p class="brand">${sederuntMark({ size: 28 })}<span class="brand-word">Sederunt</span></p>
       <button id="rail-close" class="close rail-close" type="button" aria-label="Close the menu">${closeIcon}</button>
       <div id="chip-wrap" class="chip-wrap">
         <button id="workspace-chip" class="chip" type="button" aria-expanded="false" aria-haspopup="menu" aria-controls="workspace-menu">

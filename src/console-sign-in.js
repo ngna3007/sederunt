@@ -1,3 +1,5 @@
+import { sederuntMark, FAVICON_LINK } from "./sederunt-mark.js";
+
 /**
  * Console sign-in. The process has one member and, when configured, one
  * passphrase. This page does not create an account.
@@ -38,12 +40,13 @@ export function renderSignInPage(state = {}) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sign in · Sederunt</title>
+${FAVICON_LINK}
 <link rel="stylesheet" href="/console.css">
 </head>
 <body>
 <main class="auth">
   <section class="auth-card" aria-labelledby="sign-title">
-    <p class="auth-mark"><span class="tile-mark" aria-hidden="true">S</span> Sederunt</p>
+    <p class="auth-mark">${sederuntMark({ size: 32 })}<span class="brand-word">Sederunt</span></p>
     <h1 id="sign-title">Sign in</h1>
     <p class="page-lede">Enter your workspace passphrase.</p>
     ${alert}
