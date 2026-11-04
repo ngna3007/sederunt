@@ -5907,7 +5907,6 @@ body.ob-page {
    so focus never disappears into the selected state. */
 .menu-item[aria-checked="true"]:focus-visible,
 .menu button[aria-checked="true"]:focus-visible { box-shadow: var(--focus-ring-inset); }
-=======
 .proof-panel { margin: 12px 0 16px; }
 .proof-panel h2 { margin: 0 0 6px; font-size: var(--text-base); }
 .proof-id { overflow-wrap: anywhere; word-break: break-all; font-variant-numeric: tabular-nums; }
@@ -5927,3 +5926,100 @@ body.ob-page {
 }
 
 /* ============================================================
+/* Room polish: one container, one gutter, one divider. Later rules win. */
+body.room-open #file-dialog.room-screen {
+  padding: 0 !important;
+  background: var(--card);
+}
+body.room-open #file-head.bot-head {
+  padding: 16px 24px 12px !important;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+}
+body.room-open .room-body { border-top: 0 !important; background: var(--card); }
+body.room-open #file-meta.meta-strip { gap: 8px 20px; min-height: 24px; }
+body.room-open #file-meta .meta-item { gap: 8px; line-height: 1; }
+body.room-open #file-meta .meta-item[hidden] { display: none !important; }
+body.room-open #file-meta .meta-label { font-size: var(--text-xs); font-weight: var(--weight-regular); color: var(--muted-foreground); }
+body.room-open #file-meta .badge,
+body.room-open #file-meta .plat-badge {
+  min-height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--muted);
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  gap: 4px;
+}
+body.room-open #file-meta .badge.ok { background: var(--success-subtle); color: var(--success-text); }
+body.room-open #file-meta .badge.warn { background: var(--warning-subtle); color: var(--warning-text); }
+body.room-open #file-meta .badge.info { background: var(--info-subtle); color: var(--info-text); }
+body.room-open #file-meta .badge.bad { background: var(--danger-subtle); color: var(--danger-text); }
+body.room-open #file-meta .plat-badge { padding-left: 4px; }
+body.room-open #file-meta .plat-badge svg { width: 14px; height: 14px; }
+body.room-open #file-meta .proof-chip { text-decoration: none; margin: 0; }
+body.room-open #file-meta .proof-chip::before { content: ""; width: 6px; height: 6px; margin-right: 6px; border-radius: var(--radius-pill); background: currentColor; }
+body.room-open #file-meta .proof-chip:hover { text-decoration: underline; text-underline-offset: 2px; }
+body.room-open #file-meta .proof-chip[hidden] { display: none !important; }
+body.room-open .room-screen .room-left,
+body.room-open #room-left.room-left { padding: 16px 24px !important; background: var(--card); }
+body.room-open .room-screen .room-right,
+body.room-open #file-dialog.room-screen .detail-side.room-right { padding: 16px 24px !important; background: var(--card); }
+body.room-open .room-screen .room-left > .underline-tabs { margin: 0 !important; }
+body.room-open .room-left.no-recording .player-frame { flex: none !important; height: auto !important; max-height: none !important; aspect-ratio: auto !important; margin-bottom: 12px; }
+body.room-open .room-left.no-recording .player {
+  aspect-ratio: auto !important;
+  height: auto !important;
+  max-height: none !important;
+  background: var(--muted);
+  border-radius: var(--radius);
+}
+body.room-open .room-left.no-recording .player-fallback {
+  position: static;
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  background: transparent;
+  color: var(--muted-foreground);
+  text-align: left;
+}
+body.room-open .room-left.no-recording .player-fallback .empty-mark { width: 20px; height: 20px; background: transparent; color: var(--muted-foreground); }
+body.room-open .room-left.no-recording .player-fallback .empty-mark svg { width: 16px; height: 16px; }
+body.room-open .room-left.no-recording .player-fallback .empty-title { font-size: var(--text-sm); font-weight: var(--weight-medium); color: var(--muted-foreground); }
+body.room-open .room-left.no-recording #player-note:empty { display: none; }
+body.room-open #left-transcript.left-scroll { padding: 8px 0; }
+body.room-open #file-transcript .utter { padding: 8px 0; }
+body.room-open #file-transcript .utter-head { gap: 8px; margin-bottom: 4px; }
+body.room-open #file-transcript .utter-name { font-size: var(--text-sm); color: var(--foreground); }
+body.room-open #file-transcript .utter p,
+body.room-open #file-transcript .utter-text { display: block; font-size: var(--text-base); color: var(--foreground); line-height: 1.5; }
+body.room-open #left-transcript.left-scroll { flex: 0 1 auto !important; }
+body.room-open label.dock-search { padding: 0 !important; margin-top: 12px !important; border-top: 0; background: transparent; }
+body.room-open .proof-panel .kv,
+body.room-open .room-right .kv { column-gap: 0; }
+body.room-open .proof-panel .kv dt,
+body.room-open .room-right .kv dt { padding-right: 12px; }
+@media (max-width: 768px) {
+  body.room-open .room-left.no-recording .player-frame { margin: 12px 0 4px; }
+}
+@media (min-width: 1181px) {
+  body.room-open .room-resizer { width: 1px !important; background: var(--border); }
+  body.room-open .room-resizer:hover, body.room-open .room-resizer:focus-visible { width: 1px !important; background: var(--primary); }
+}
+@media (max-width: 1180px) {
+  body.room-open .room-split { gap: 0 !important; }
+  body.room-open .room-screen .room-right,
+  body.room-open #file-dialog.room-screen .detail-side.room-right { border-top: 1px solid var(--border); }
+  body.room-open #left-transcript.left-scroll { flex: none; min-height: 0; max-height: none; }
+}
+@media (max-width: 700px) {
+  body.room-open #file-head.bot-head { padding: 12px 16px !important; }
+  body.room-open .room-screen .room-left,
+  body.room-open #room-left.room-left,
+  body.room-open .room-screen .room-right,
+  body.room-open #file-dialog.room-screen .detail-side.room-right { padding: 16px !important; }
+  body.room-open #file-meta.meta-strip { gap: 8px 16px; }
+}
