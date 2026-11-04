@@ -5811,7 +5811,21 @@ body.ob-page {
   box-shadow: var(--shadow-md);
   box-sizing: border-box;
 }
-.file-menu button { width: 100%; justify-content: flex-start; text-align: left; }
+.file-menu { gap: 0; padding: 4px; }
+.file-menu button {
+  width: 100%;
+  min-height: 36px;
+  justify-content: flex-start;
+  text-align: left;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  box-shadow: none;
+  font-weight: 400;
+}
+.file-menu button:hover, .file-menu button:focus-visible { background: var(--muted); }
+.file-menu button.danger { color: var(--destructive); background: transparent; }
+.file-menu button.danger:hover, .file-menu button.danger:focus-visible { background: color-mix(in srgb, var(--destructive) 10%, transparent); }
 @media (max-width: 700px) {
   .file-row, .file-request, .file-unanswered { flex-wrap: wrap; }
   .file-actions { margin-left: auto; }
