@@ -34,7 +34,8 @@ test("focus rings and a skip link are in the console", () => {
   const block = css.slice(css.lastIndexOf("Fix pass 04"));
   assert.match(block, /\.rail a:focus-visible[\s\S]*box-shadow: var\(--focus-ring\) !important/);
   assert.match(block, /#room-list > a\.room:focus-visible/);
-  assert.match(block, /\.underline-tabs button:focus-visible[\s\S]*outline: 2px solid var\(--primary\)/);
+  // One focus ring across the design system (docs/design/design-system.md), tabs included.
+  assert.match(block, /\.underline-tabs button:focus-visible \{\s*outline: none;\s*box-shadow: var\(--focus-ring\);/);
   assert.match(block, /\.skip-link:focus-visible[\s\S]*box-shadow: var\(--focus-ring\)/);
 });
 
@@ -119,7 +120,8 @@ test("room status describes the meeting and failures are a separate chip", () =>
   assert.match(page, /failed action/);
   assert.doesNotMatch(page.slice(page.indexOf("function meetingWord"), page.indexOf("function failedActions")), /Failed/);
   const block = css.slice(css.lastIndexOf("Fix pass 04"));
-  assert.match(block, /\.count\.danger strong \{ color: #b42318; \}/);
+  assert.match(block, /\.count\.danger strong \{ color: var\(--danger-text\); \}/);
+  assert.match(css, /--danger-text: #b42318;/);
   assert.match(block, /\.count\.danger \{\s*background: var\(--card\)/);
   assert.match(block, /\.badge\.live/);
   assert.match(block, /\.fail-chip/);
@@ -170,7 +172,7 @@ test("list columns share a grid and cap avatar stacks", () => {
   assert.match(block, /--cols-status:/);
   assert.match(block, /grid-template-columns: subgrid !important/);
   assert.match(block, /margin-left: -6px/);
-  assert.match(block, /box-shadow: 0 0 0 2px #fff/);
+  assert.match(block, /box-shadow: var\(--ring-surface\)/);
   assert.match(css, /#ask-block \.conn \{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*auto/);
 });
 

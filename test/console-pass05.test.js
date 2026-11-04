@@ -35,7 +35,8 @@ test("meeting words separate live, ended, channel, and silence", () => {
   assert.match(page, /is-scrub/);
   assert.match(page, /placeRoomChrome/);
   assert.match(css, /--dock-pad/);
-  assert.match(css, /\.spk-0 \{ background: #3b6fd8/);
+  assert.match(css, /\.spk-0 \{ background: var\(--speaker-0\)/);
+  assert.match(css, /--speaker-0: #3b6fd8;/);
   assert.doesNotMatch(css.slice(css.indexOf(".spk-0"), css.indexOf("History: stable retry")), /#b42318|#9d174d|#146c34|#0f6e56|#3b6d11/);
   assert.match(page, /function dayHeading/);
   assert.match(page, /function clockOnly/);
