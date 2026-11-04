@@ -144,7 +144,7 @@ function calendarStep(state) {
           ${status}
         </li>
         <li class="ob-row soon" id="calendar-outlook">
-          <span class="ob-logo">${tile("O", "#0f6cbd")}</span>
+          <span class="ob-logo">${tile("O", "var(--brand-outlook)")}</span>
           <span class="ob-row-main"><span class="ob-row-title">Outlook Calendar</span></span>
           <span class="ob-soon">Coming soon</span>
         </li>
