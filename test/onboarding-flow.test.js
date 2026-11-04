@@ -122,9 +122,9 @@ test("fake auth onboarding stays on localhost", async (t) => {
   };
 
   try {
-    await t.test("first sign-in opens welcome and Just me lands in Personal", async () => {
+    await t.test("first sign-in creates a named workspace and walks the four steps", async () => {
       const env = { SEDERUNT_AUTH_FAKE: "1", SEDERUNT_SESSION_SECRET: SECRET, SEDERUNT_MEMBER: "Mina" };
-      await withServer(env, async (port) => {
+      await withServer(env, async (port, identity) => {
         const sign = await call(port, "GET", "/console/sign-in");
         assert.equal(sign.status, 200);
         assert.match(sign.raw, /class="auth-logo"/);
@@ -143,160 +143,264 @@ test("fake auth onboarding stays on localhost", async (t) => {
         assert.equal(welcome.status, 302);
         assert.equal(welcome.location, "/console/welcome");
         absorb(jar, welcome.cookie);
-        const choices = await call(port, "GET", "/console/welcome", { cookie: header(jar) });
-        assert.equal(choices.status, 200);
-        assert.match(choices.raw, /role="radiogroup"/);
-        assert.match(choices.raw, /id="choice-personal"/);
-        assert.match(choices.raw, /Just me/);
-        assert.match(choices.raw, /id="choice-team"/);
-        assert.match(choices.raw, /My team/);
-        assert.match(choices.raw, /id="choice-company"/);
-        assert.match(choices.raw, /My company/);
-        assert.match(choices.raw, /id="skip-onboarding"/);
-        assert.match(choices.raw, /Skip for now/);
 
-        const home = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "kind=personal" });
-        assert.equal(home.status, 302);
-        assert.equal(home.location, "/console");
-        absorb(jar, home.cookie);
-        const session = sessionOf(jar);
-        assert.equal(session.ok, true);
-        assert.equal(session.provider, "google");
-        assert.equal(session.onboarded, true);
-        const page = await call(port, "GET", "/console", { cookie: header(jar) });
-        assert.equal(page.status, 200);
-        assert.match(page.raw, /id="chip-name">Personal</);
-        assert.match(page.raw, /Personal · Owner/);
+        const first = await call(port, "GET", "/console/welcome", { cookie: header(jar) });
+        assert.equal(first.status, 200);
+        assert.match(first.raw, /Step 1 of 4/);
+        assert.match(first.raw, /role="progressbar"/);
+        assert.match(first.raw, /Create your workspace/);
+        // ada@example.com is a public-style domain, so the name falls back to the first name.
+        assert.match(first.raw, /id="workspace-name"[^>]*value="Ada(&#39;|&#x27;|')s workspace"/);
+        assert.match(first.raw, /class="sederunt-mark/);
+        assert.doesNotMatch(first.raw, /Just me|My team|My company|Personal/);
+        assert.doesNotMatch(first.raw, /id="ob-skip"/);
+
+        const blank = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=create&name=" });
+        assert.equal(blank.status, 400);
+        assert.match(blank.raw, /id="ob-error"/);
+        assert.match(blank.raw, /Enter a name, from 1 to 120 characters\./);
+        assert.match(blank.raw, /aria-invalid="true"/);
+
+        const created = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=create&name=Analytical+Engines" });
+        assert.equal(created.status, 302);
+        assert.equal(created.location, "/console/welcome?step=calendar");
+        absorb(jar, created.cookie);
+        const ada = sessionOf(jar);
+        assert.equal(ada.ok, true);
+        assert.equal(ada.onboarded, true);
+        const tenants = await identity.myTenants(ada.accessToken);
+        const team = tenants.find((row) => row.name === "Analytical Engines");
+        assert.equal(team.kind, "company");
+        assert.equal(team.role, "owner");
+        assert.equal(ada.tenantId, team.id);
+
+        const calendar = await call(port, "GET", "/console/welcome?step=calendar", { cookie: header(jar) });
+        assert.equal(calendar.status, 200);
+        assert.match(calendar.raw, /Step 2 of 4/);
+        assert.match(calendar.raw, /id="calendar-google"/);
+        assert.match(calendar.raw, /id="calendar-outlook"[\s\S]*Coming soon/);
+        assert.match(calendar.raw, /id="calendar-status">Not connected/);
+        assert.match(calendar.raw, /id="calendar-connect"[^>]*data-docs="https:/);
+        assert.doesNotMatch(calendar.raw, /id="auto-join"/);
+        const askedCalendar = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=calendar&choice=connect" });
+        assert.equal(askedCalendar.status, 302);
+        assert.equal(askedCalendar.location, "/console/welcome?step=calendar&asked=1");
+        const asked = await call(port, "GET", askedCalendar.location, { cookie: header(jar) });
+        assert.match(asked.raw, /Finish in Setup/);
+        const laterCalendar = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=calendar&choice=later" });
+        assert.equal(laterCalendar.location, "/console/welcome?step=chat");
+
+        const chat = await call(port, "GET", "/console/welcome?step=chat", { cookie: header(jar) });
+        assert.equal(chat.status, 200);
+        assert.match(chat.raw, /Step 3 of 4/);
+        assert.match(chat.raw, /Where should Sederunt post\?/);
+        for (const id of ["chat-slack", "chat-teams", "chat-gchat", "chat-discord", "chat-email"]) assert.match(chat.raw, new RegExp(`id="${id}"`));
+        assert.match(chat.raw, /Coming soon/);
+        assert.match(chat.raw, /id="ob-skip"[^>]*>Not now</);
+        const laterChat = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=chat&choice=later" });
+        assert.equal(laterChat.location, "/console/welcome?step=team");
+
+        const step = await call(port, "GET", "/console/welcome?step=team", { cookie: header(jar) });
+        assert.equal(step.status, 200);
+        assert.match(step.raw, /Step 4 of 4/);
+        assert.match(step.raw, /id="invite-add-row"/);
+        assert.match(step.raw, /id="invite-role"[\s\S]*Member[\s\S]*Admin/);
+        assert.doesNotMatch(step.raw, /Viewer/);
+        assert.match(step.raw, /Nobody added yet/);
+        assert.match(step.raw, /id="invite-link"[^>]*value="http:\/\/[^"]+\/console\/join\/[A-Za-z0-9_-]{16,}"/);
+        assert.doesNotMatch(step.raw, /id="domain-join"/);
+        assert.match(step.raw, /I'll do this later/);
+        assert.match(step.raw, /id="invite-send"[^>]*>Finish</);
+
+        const self = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=invite&emails=ada%40example.com&roles=member" });
+        assert.equal(self.status, 400);
+        assert.match(self.raw, /Remove your own address/);
+        const bad = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=invite&emails=not-an-email&roles=member" });
+        assert.equal(bad.status, 400);
+        assert.match(bad.raw, /id="invite-field-error"/);
+
+        const sent = await call(port, "POST", "/console/welcome", {
+          cookie: header(jar),
+          body: "action=invite&emails=grace%40example.com&roles=member&emails=charles%40example.com&roles=admin&emails=GRACE%40example.com&roles=admin",
+        });
+        assert.equal(sent.status, 200);
+        assert.match(sent.raw, /2 invites ready/);
+        assert.match(sent.raw, /doesn't email invites yet/);
+        assert.match(sent.raw, /grace@<wbr>example.com[\s\S]*Member/);
+        assert.match(sent.raw, /charles@<wbr>example.com[\s\S]*Admin/);
+        const tokens = [...sent.raw.matchAll(/\/console\/invite\/([a-f0-9]{20,})/g)].map((match) => match[1]);
+        assert.equal(new Set(tokens).size, 2);
+        assert.match(sent.raw, /id="ob-done">Go to Home</);
+
+        const home = await call(port, "GET", "/console", { cookie: header(jar) });
+        assert.equal(home.status, 200);
+        assert.match(home.raw, /id="chip-name">Analytical Engines</);
+        assert.match(home.raw, /id="chip-hint">Owner</);
+        assert.match(home.raw, /Create workspace/);
+        assert.doesNotMatch(home.raw, /Create a space|Team or company|>Personal<|Team · |Company · /);
+        assert.match(home.raw, /id="home-checklist" data-tenant="[^"]+"/);
+        assert.match(home.raw, /Connect your calendar/);
+        assert.match(home.raw, /Choose where Sederunt posts/);
+        assert.match(home.raw, /id="checklist-team"[^>]*>[\s\S]*?Team invited/);
+        assert.match(home.raw, /id="checklist-add-meeting"/);
+        assert.match(home.raw, /1 of 4 done/);
+        assert.match(home.raw, /id="people-invite"/);
+        assert.match(home.raw, /id="members-card"/);
+        assert.match(home.raw, /<input type="hidden" name="from" value="switcher">/);
+        assert.doesNotMatch(home.raw, /id="space-kind"/);
+        assertNoSecrets(home, ada);
+
         const account = await call(port, "GET", "/console/account", { cookie: header(jar) });
         assert.equal(account.status, 200);
         assert.match(account.raw, /id="account-page-name"[^>]*>Ada Lovelace</);
         assert.match(account.raw, /id="account-detail-email">ada@example.com</);
         assert.match(account.raw, /id="account-detail-provider">Signed in with Google</);
-        assert.match(account.raw, /id="account-detail-workspace">Personal</);
+        assert.match(account.raw, /id="account-detail-workspace">Analytical Engines</);
         assert.match(account.raw, /id="account-detail-role">Owner</);
         assert.match(account.raw, /id="account-page-avatar"[^>]*>AL</);
         assert.match(account.raw, /data-member=""/);
-        assertNoSecrets(account, session);
-        assertNoSecrets(page, session);
-        const stayed = await call(port, "GET", "/console", { cookie: header(jar) });
-        assert.equal(stayed.status, 200);
-        assert.equal(stayed.location, "");
+        assertNoSecrets(account, ada);
+        const back = await call(port, "GET", "/console/welcome", { cookie: header(jar) });
+        assert.equal(back.status, 302);
+        assert.equal(back.location, "/console");
       });
     });
 
-    await t.test("skip finishes onboarding in the Personal space", async () => {
-      const env = { SEDERUNT_AUTH_FAKE: "1", SEDERUNT_SESSION_SECRET: SECRET };
-      await withServer(env, async (port, identity) => {
-        const jar = {};
-        await followProvider(port, jar, "google", "/console");
-        const skipped = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=skip" });
-        assert.equal(skipped.status, 302);
-        assert.equal(skipped.location, "/console");
-        absorb(jar, skipped.cookie);
-        const session = sessionOf(jar);
-        assert.equal(session.onboarded, true);
-        const tenants = await identity.myTenants(session.accessToken);
-        const personal = tenants.find((row) => row.kind === "personal");
-        assert.equal(session.tenantId, personal.id);
-        const home = await call(port, "GET", "/console", { cookie: header(jar) });
-        assert.equal(home.status, 200);
-        assert.match(home.raw, /id="chip-name">Personal</);
-        assert.doesNotMatch(home.raw, /How will you use Sederunt/);
-      });
-    });
-
-    await t.test("a team with two invites can be switched to and accepted", async () => {
+    await t.test("an invite link and a domain join both add a Member", async () => {
       const env = {
         SEDERUNT_AUTH_FAKE: "1",
         SEDERUNT_AUTH_FAKE_GITHUB: "1",
+        SEDERUNT_AUTH_FAKE_EMAIL: "rowan@northwind.io",
+        SEDERUNT_AUTH_FAKE_NAME: "Rowan Pierce",
         SEDERUNT_SESSION_SECRET: SECRET,
       };
       await withServer(env, async (port, identity) => {
         const jar = {};
         await followProvider(port, jar, "google", "/console");
-        const invalid = await call(port, "POST", "/console/welcome", {
-          cookie: header(jar),
-          body: "action=create&kind=team&name=&emails=not-an-email",
-        });
-        assert.equal(invalid.status, 400);
-        assert.match(invalid.raw, /<!DOCTYPE html>/);
-        assert.match(invalid.raw, /id="space-error"/);
-        assert.match(invalid.raw, /Enter a name, from 1 to 120 characters\./);
-        assert.doesNotMatch(invalid.raw, /"error"\s*:/);
-
-        const emails = encodeURIComponent("grace@example.com\ncharles@example.com");
-        const created = await call(port, "POST", "/console/welcome", {
-          cookie: header(jar),
-          body: `action=create&kind=team&name=Analytical+Engines&emails=${emails}`,
-        });
-        assert.equal(created.status, 200);
-        assert.match(created.raw, /Analytical Engines is ready/);
-        assert.match(created.raw, /does not send email yet/);
-        assert.match(created.raw, /grace@example.com/);
-        assert.match(created.raw, /charles@example.com/);
-        const tokens = [...created.raw.matchAll(/\/console\/invite\/([a-f0-9]{20,})/g)].map((match) => match[1]);
-        assert.equal(new Set(tokens).size, 2);
+        const first = await call(port, "GET", "/console/welcome", { cookie: header(jar) });
+        assert.match(first.raw, /id="workspace-name"[^>]*value="Northwind"/);
+        const created = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=create&name=Northwind" });
         absorb(jar, created.cookie);
-        const ada = sessionOf(jar);
-        assert.equal(ada.onboarded, true);
-        const tenants = await identity.myTenants(ada.accessToken);
-        const team = tenants.find((row) => row.name === "Analytical Engines");
-        const personal = tenants.find((row) => row.kind === "personal");
-        assert.equal(team.kind, "team");
-        assert.equal(team.role, "owner");
-        assert.equal(ada.tenantId, team.id);
+        const rowan = sessionOf(jar);
+        const team = (await identity.myTenants(rowan.accessToken)).find((row) => row.name === "Northwind");
 
-        const listed = await call(port, "GET", "/console", { cookie: header(jar) });
-        assert.equal(listed.status, 200);
-        assert.match(listed.raw, /id="chip-name">Analytical Engines</);
-        assert.match(listed.raw, /Team · Owner/);
-        assert.match(listed.raw, />Personal</);
-        assert.match(listed.raw, /Create a space/);
-        assert.match(listed.raw, new RegExp(`name="tenant" value="${personal.id}"`));
-        assert.match(listed.raw, new RegExp(`name="tenant" value="${team.id}"`));
-        assertNoSecrets(listed, ada);
-
-        const switched = await call(port, "POST", "/console/space", {
+        const step = await call(port, "GET", "/console/welcome?step=team", { cookie: header(jar) });
+        assert.match(step.raw, /id="domain-join"/);
+        assert.match(step.raw, /Anyone with an @northwind\.io email can join/);
+        const link = step.raw.match(/\/console\/join\/([A-Za-z0-9_-]{16,})/)[1];
+        const skipped = await call(port, "POST", "/console/welcome", {
           cookie: header(jar),
-          body: `tenant=${encodeURIComponent(personal.id)}`,
+          body: "action=skip&domain_present=1&domain_join=on",
         });
-        assert.equal(switched.status, 302);
-        assert.equal(switched.location, "/console");
-        absorb(jar, switched.cookie);
-        assert.equal(sessionOf(jar).tenantId, personal.id);
-        const personalHome = await call(port, "GET", "/console", { cookie: header(jar) });
-        assert.equal(personalHome.status, 200);
-        assert.match(personalHome.raw, /id="chip-name">Personal</);
-        assert.match(personalHome.raw, new RegExp(`data-tenant="${personal.id}"[^>]*aria-checked="true"`));
+        assert.equal(skipped.status, 302);
+        assert.equal(skipped.location, "/console");
+        const stats = await identity.workspaceStats(rowan.accessToken, team.id);
+        assert.equal(stats.allowedDomain, "northwind.io");
 
-        const anon = await call(port, "GET", `/console/invite/${tokens[0]}`);
+        const manage = await call(port, "GET", "/console/welcome?step=team&mode=manage", { cookie: header(jar) });
+        assert.equal(manage.status, 200);
+        assert.match(manage.raw, /Invite people/);
+        assert.match(manage.raw, /Back to People/);
+        assert.match(manage.raw, /id="domain-join"[^>]*checked/);
+        assert.match(manage.raw, /id="invite-send"[^>]*>Done</);
+        assert.doesNotMatch(manage.raw, /Step 4 of 4/);
+
+        const anon = await call(port, "GET", `/console/join/${link}`);
         assert.equal(anon.status, 302);
-        assert.match(anon.location, new RegExp(`/console/sign-in\\?next=${encodeURIComponent(`/console/invite/${tokens[0]}`).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-
+        assert.match(anon.location, /^\/console\/sign-in\?next=/);
         const graceJar = {};
-        const graceIn = await followProvider(port, graceJar, "github", `/console/invite/${tokens[0]}`);
-        assert.equal(graceIn.location, `/console/invite/${tokens[0]}`);
-        const invite = await call(port, "GET", `/console/invite/${tokens[0]}`, { cookie: header(graceJar) });
-        assert.equal(invite.status, 200);
-        assert.match(invite.raw, /id="accept-invite"/);
-        const accepted = await call(port, "POST", `/console/invite/${tokens[0]}`, { cookie: header(graceJar) });
-        assert.equal(accepted.status, 302);
-        assert.equal(accepted.location, "/console");
-        absorb(graceJar, accepted.cookie);
+        await followProvider(port, graceJar, "github", `/console/join/${link}`);
+        const joined = await call(port, "POST", `/console/join/${link}`, { cookie: header(graceJar) });
+        assert.equal(joined.status, 302);
+        assert.equal(joined.location, "/console");
+        absorb(graceJar, joined.cookie);
         const grace = sessionOf(graceJar);
         assert.equal(grace.tenantId, team.id);
-        assert.equal(grace.provider, "github");
-        const joined = await call(port, "GET", "/console/account", { cookie: header(graceJar) });
-        assert.equal(joined.status, 200);
-        assert.match(joined.raw, /id="chip-name">Analytical Engines</);
-        assert.match(joined.raw, /Team · Member/);
-        assert.match(joined.raw, /id="account-page-name"[^>]*>Grace Hopper</);
-        assert.match(joined.raw, /id="account-detail-email">grace@example.com</);
-        assert.match(joined.raw, /Signed in with GitHub/);
-        assert.match(joined.raw, /id="account-detail-role">Member</);
-        assertNoSecrets(joined, grace);
+        const graceHome = await call(port, "GET", "/console/account", { cookie: header(graceJar) });
+        assert.equal(graceHome.status, 200);
+        assert.match(graceHome.raw, /id="chip-name">Northwind</);
+        assert.match(graceHome.raw, /id="chip-hint">Member</);
+        assert.match(graceHome.raw, /id="account-detail-role">Member</);
+        assert.doesNotMatch(graceHome.raw, /id="people-invite"/);
+        assertNoSecrets(graceHome, grace);
         const membership = await identity.myTenants(grace.accessToken);
         assert.equal(membership.find((row) => row.id === team.id).role, "member");
+        const bogus = await call(port, "GET", "/console/join/short", { cookie: header(graceJar) });
+        assert.notEqual(bogus.status, 500);
+      });
+    });
+
+    await t.test("an emailed invite is accepted as its role, and switcher creation lands on invites", async () => {
+      const env = { SEDERUNT_AUTH_FAKE: "1", SEDERUNT_AUTH_FAKE_GITHUB: "1", SEDERUNT_SESSION_SECRET: SECRET };
+      await withServer(env, async (port, identity) => {
+        const jar = {};
+        await followProvider(port, jar, "google", "/console");
+        const created = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=create&name=Analytical+Engines" });
+        absorb(jar, created.cookie);
+        const sent = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=invite&emails=grace%40example.com&roles=admin" });
+        assert.match(sent.raw, /1 invite ready/);
+        const token = sent.raw.match(/\/console\/invite\/([a-f0-9]{20,})/)[1];
+
+        const second = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=create&from=switcher&name=Side+Project" });
+        assert.equal(second.status, 302);
+        assert.equal(second.location, "/console/welcome?step=team&mode=manage");
+        absorb(jar, second.cookie);
+        const ada = sessionOf(jar);
+        const tenants = await identity.myTenants(ada.accessToken);
+        const side = tenants.find((row) => row.name === "Side Project");
+        const first = tenants.find((row) => row.name === "Analytical Engines");
+        assert.equal(ada.tenantId, side.id);
+        const listed = await call(port, "GET", "/console", { cookie: header(jar) });
+        assert.match(listed.raw, /id="chip-name">Side Project</);
+        assert.match(listed.raw, new RegExp(`name="tenant" value="${first.id}"`));
+        assert.match(listed.raw, new RegExp(`name="tenant" value="${side.id}"`));
+        const switched = await call(port, "POST", "/console/space", { cookie: header(jar), body: `tenant=${encodeURIComponent(first.id)}` });
+        assert.equal(switched.status, 302);
+        absorb(jar, switched.cookie);
+        assert.equal(sessionOf(jar).tenantId, first.id);
+
+        const graceJar = {};
+        await followProvider(port, graceJar, "github", `/console/invite/${token}`);
+        const invite = await call(port, "GET", `/console/invite/${token}`, { cookie: header(graceJar) });
+        assert.equal(invite.status, 200);
+        assert.match(invite.raw, /id="accept-invite"/);
+        const accepted = await call(port, "POST", `/console/invite/${token}`, { cookie: header(graceJar) });
+        assert.equal(accepted.status, 302);
+        absorb(graceJar, accepted.cookie);
+        const grace = sessionOf(graceJar);
+        assert.equal(grace.tenantId, first.id);
+        const page = await call(port, "GET", "/console", { cookie: header(graceJar) });
+        assert.equal(page.status, 200);
+        assert.match(page.raw, /id="chip-hint">Admin</);
+        assert.match(page.raw, /id="people-invite"/);
+      });
+    });
+
+    await t.test("fake tools connect on the calendar and chat steps and fill the checklist", async () => {
+      const env = { SEDERUNT_AUTH_FAKE: "1", SEDERUNT_TOOLS_FAKE: "1", SEDERUNT_SESSION_SECRET: SECRET };
+      await withServer(env, async (port) => {
+        const jar = {};
+        await followProvider(port, jar, "google", "/console");
+        const created = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=create&name=Engines" });
+        absorb(jar, created.cookie);
+        const connect = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=calendar&choice=connect" });
+        assert.equal(connect.location, "/console/welcome?step=calendar");
+        const calendar = await call(port, "GET", connect.location, { cookie: header(jar) });
+        assert.match(calendar.raw, /id="calendar-status">[\s\S]*?Connected/);
+        assert.match(calendar.raw, /id="calendar-upcoming"/);
+        assert.match(calendar.raw, /Send Sederunt to my meetings automatically/);
+        assert.match(calendar.raw, /id="auto-join"[^>]*checked/);
+        const off = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=calendar&choice=continue" });
+        assert.equal(off.location, "/console/welcome?step=chat");
+        const again = await call(port, "GET", "/console/welcome?step=calendar", { cookie: header(jar) });
+        assert.doesNotMatch(again.raw, /id="auto-join"[^>]*checked/);
+        await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=chat&choice=connect" });
+        const chat = await call(port, "GET", "/console/welcome?step=chat", { cookie: header(jar) });
+        assert.match(chat.raw, /id="slack-status">[\s\S]*?Connected/);
+        const home = await call(port, "GET", "/console", { cookie: header(jar) });
+        assert.match(home.raw, /Calendar connected/);
+        assert.match(home.raw, /Slack connected/);
+        assert.match(home.raw, /2 of 4 done/);
       });
     });
 
@@ -305,7 +409,7 @@ test("fake auth onboarding stays on localhost", async (t) => {
       await withServer(env, async (port, identity) => {
         const jar = {};
         await followProvider(port, jar, "google", "/console");
-        const ready = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "kind=personal" });
+        const ready = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=create&name=Engines" });
         absorb(jar, ready.cookie);
         const postPref = (body) => call(port, "POST", "/console/tool-prefs", {
           cookie: header(jar),
@@ -455,8 +559,9 @@ test("onboarding screens fit at desktop and phone widths", { timeout: 180000 }, 
   }
 
   const signSelectors = [".auth-card h1", "#auth-google span", "#auth-github span", ".auth-mark"];
-  const choiceSelectors = ["#welcome-title", ".page-lede", ".choice-title", ".choice-copy", "#skip-onboarding"];
-  const nameSelectors = ["#welcome-title", ".page-lede", "#space-form label", "#space-name", "#space-emails", "#space-domain", "#space-submit", "#skip-onboarding"];
+  const stepSelectors = ["#ob-title", ".ob-sub", ".ob-count", ".ob-row-title", ".ob-row-meta", ".ob-soon", "#ob-continue", "#ob-skip", "#workspace-name"];
+  const teamSelectors = [...stepSelectors, "#invite-email", "#invite-role", "#invite-add", "#invite-send", ".ob-person-email", "#invite-link", "#copy-invite-link"];
+  const homeSelectors = ["#checklist-title", "#checklist-count", ".check-title", ".check-go", "#checklist-dismiss"];
   const menuSelectors = ["#chip-name", "#chip-hint", "#workspace-menu .ws-copy span", "#create-workspace .ws-copy span"];
   const accountSelectors = [
     "#account-page-name",
@@ -489,24 +594,41 @@ test("onboarding screens fit at desktop and phone widths", { timeout: 180000 }, 
 
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.click("#auth-google");
-  await page.waitForSelector("#choice-personal", { timeout: 20000 });
+  await page.waitForSelector("#workspace-name", { timeout: 20000 });
 
   for (const width of WIDTHS) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto(`${origin}/console/welcome`, { waitUntil: "domcontentloaded" });
-    await page.waitForSelector("#choice-company");
-    await fit(`welcome choice ${width}`, choiceSelectors);
-    await page.goto(`${origin}/console/welcome?kind=team`, { waitUntil: "domcontentloaded" });
-    await page.waitForSelector("#space-name");
-    await fit(`welcome team ${width}`, nameSelectors);
-    await page.goto(`${origin}/console/welcome?kind=company`, { waitUntil: "domcontentloaded" });
-    await page.waitForSelector("#space-domain");
-    await fit(`welcome company ${width}`, nameSelectors);
+    await page.waitForSelector("#workspace-name");
+    await fit(`welcome workspace ${width}`, stepSelectors);
   }
-
-  await page.click("#skip-onboarding");
+  await page.fill("#workspace-name", "Analytical Engines");
+  await page.click("#ob-continue");
+  await page.waitForSelector("#calendar-google", { timeout: 20000 });
+  for (const width of WIDTHS) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`${origin}/console/welcome?step=calendar`, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector("#calendar-google");
+    await fit(`welcome calendar ${width}`, stepSelectors);
+    await page.goto(`${origin}/console/welcome?step=chat`, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector("#chat-slack");
+    await fit(`welcome chat ${width}`, stepSelectors);
+    await page.goto(`${origin}/console/welcome?step=team`, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector("#invite-email");
+    await fit(`welcome team ${width}`, teamSelectors);
+  }
+  await page.fill("#invite-email", "grace@example.com, charles.babbage-difference-engine@example.com");
+  await page.click("#invite-add");
+  await page.waitForFunction(() => document.querySelectorAll("#invitee-list .ob-person").length === 2);
+  for (const width of WIDTHS) {
+    await page.setViewportSize({ width, height: 900 });
+    await fit(`welcome team added ${width}`, teamSelectors);
+  }
+  await page.click("#invite-send");
+  await page.waitForSelector("#ob-done", { timeout: 20000 });
+  await page.click("#ob-done");
   await page.waitForSelector("#chip-name", { timeout: 20000 });
-  await page.waitForFunction(() => document.getElementById("chip-name").textContent.trim() === "Personal");
+  await page.waitForFunction(() => document.getElementById("chip-name").textContent.trim() === "Analytical Engines");
 
   for (const width of WIDTHS) {
     await page.setViewportSize({ width, height: 900 });
@@ -514,8 +636,10 @@ test("onboarding screens fit at desktop and phone widths", { timeout: 180000 }, 
     await page.waitForFunction(() => {
       const loading = document.getElementById("loading");
       const name = document.getElementById("chip-name");
-      return name && name.textContent.trim() === "Personal" && (!loading || loading.hidden);
+      return name && name.textContent.trim() === "Analytical Engines" && (!loading || loading.hidden);
     }, { timeout: 20000 });
+    await page.waitForSelector("#home-checklist");
+    await fit(`home checklist ${width}`, homeSelectors);
     if (width <= 1100) {
       await page.click("#rail-toggle");
       await page.waitForSelector("body.nav-open");
@@ -526,10 +650,12 @@ test("onboarding screens fit at desktop and phone widths", { timeout: 180000 }, 
     const menuBox = await page.evaluate(() => {
       const menu = document.getElementById("workspace-menu");
       const rect = menu.getBoundingClientRect();
-      return { right: rect.right, bottom: rect.bottom, width: rect.width };
+      return { right: rect.right, bottom: rect.bottom, width: rect.width, text: menu.textContent };
     });
     assert.ok(menuBox.right <= width + 1, `switcher menu past the right edge at ${width}`);
     assert.ok(menuBox.width > 0 && menuBox.width <= width, `switcher menu width at ${width}`);
+    assert.match(menuBox.text, /Create workspace/);
+    assert.doesNotMatch(menuBox.text, /Personal|Company|Team or/);
 
     await page.goto(`${origin}/console/account`, { waitUntil: "domcontentloaded" });
     await page.waitForSelector("#account-page:not([hidden]) #account-page-name", { timeout: 20000 });
@@ -544,7 +670,7 @@ test("onboarding screens fit at desktop and phone widths", { timeout: 180000 }, 
     assert.equal(profile.name, "Ada Lovelace");
     assert.equal(profile.email, "ada@example.com");
     assert.equal(profile.provider, "Signed in with Google");
-    assert.equal(profile.space, "Personal");
+    assert.equal(profile.space, "Analytical Engines");
     assert.equal(profile.role, "Owner");
     await fit(`account ${width}`, accountSelectors);
   }

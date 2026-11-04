@@ -6,25 +6,28 @@ import {
   sessionCookie,
   sessionSecret,
 } from "./console-auth.js";
+import { fakeToolsOn, saveToolChoice, toolsConnected } from "./console-account.js";
+import { calendarTimeZone } from "./calendar/mcp.js";
 import { renderFlowMessage, renderInvitePage, renderWelcomePage } from "./console-welcome.js";
 import { requestOrigin } from "./identity/routes.js";
 import {
   activeSpace,
   identityMessage,
-  kindLabel,
   needsOnboarding,
   parseInviteEmails,
   roleLabel,
   sortSpaces,
-  validateDomain,
+  suggestedWorkspaceName,
   validateSpaceName,
+  visibleSpaces,
+  workDomain,
 } from "./identity/onboarding.js";
 
 const TENANT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
- * Send a first-run OAuth user from Home to the welcome question.
- * Passphrase sessions and a finished onboarding stay on Home.
+ * Send an OAuth user with no workspace from Home to the welcome steps.
+ * Passphrase sessions stay on Home.
  * A failed identity read stays on Home rather than a raw error page.
  *
  * @param {import("node:http").IncomingMessage} req
@@ -33,11 +36,10 @@ const TENANT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[
  */
 export async function welcomeLocation(req, env, identity) {
   const session = oauthSession(req, env);
-  if (!identity || !session || session.onboarded === true) return "";
+  if (!identity || !session) return "";
   try {
-    const user = await identity.getUser(session.accessToken);
     const tenants = await identity.myTenants(session.accessToken);
-    if (!needsOnboarding(user, tenants)) return "";
+    if (!needsOnboarding(null, tenants)) return "";
     return "/console/welcome";
   } catch {
     return "";
@@ -57,61 +59,441 @@ export async function welcomeLocation(req, env, identity) {
  * }} ctx
  */
 export async function handleWelcome(ctx) {
-  const { req, res, url, send, redirect } = ctx;
-  const session = oauthSession(req, ctx.env);
-  if (!ctx.identity) {
+  const { req, res, url, send, redirect, identity, env } = ctx;
+  const session = oauthSession(req, env);
+  const manage = url.searchParams.get("mode") === "manage";
+  if (!identity) {
     redirect(res, "/console");
     return;
   }
   if (!session) {
-    redirect(res, `/console/sign-in?next=${encodeURIComponent("/console/welcome")}`);
+    redirect(res, `/console/sign-in?next=${encodeURIComponent(`/console/welcome${url.search || ""}`)}`);
     return;
   }
-  if (req.method === "GET" && url.searchParams.get("action") === "skip") {
-    await finishPersonal(ctx, session);
+  if (req.method !== "GET" && req.method !== "POST") {
+    send(res, 405, "text/plain; charset=utf-8", "Method not allowed");
     return;
   }
+  let tenants = [];
+  try {
+    tenants = sortSpaces(await identity.myTenants(session.accessToken));
+  } catch (error) {
+    sendWelcome(ctx, 200, { step: "workspace", email: session.email, name: "", error: identityMessage(error) });
+    return;
+  }
+  const shared = tenants.filter((row) => row?.kind !== "personal");
+  const active = shared.find((row) => row.id === session.tenantId) || shared[0] || null;
   if (req.method === "GET") {
-    const kind = url.searchParams.get("kind");
-    if (kind === "team" || kind === "company") {
-      send(res, 200, "text/html; charset=utf-8", renderWelcomePage({ step: "name", kind }));
+    const asked = url.searchParams.get("step") || "";
+    if (!active || asked === "workspace") {
+      if (active && asked === "workspace" && !manage) {
+        redirect(res, "/console/welcome?step=calendar");
+        return;
+      }
+      await renderWorkspaceStep(ctx, session, {});
       return;
     }
-    send(res, 200, "text/html; charset=utf-8", renderWelcomePage({ step: "choose" }));
-    return;
-  }
-  if (req.method !== "POST") {
-    send(res, 405, "text/plain; charset=utf-8", "Method not allowed");
+    if (asked === "calendar" || asked === "chat" || asked === "team") {
+      await renderStep(ctx, session, active, asked, { manage, asked: url.searchParams.get("asked") === "1" });
+      return;
+    }
+    redirect(res, "/console");
     return;
   }
   let body = {};
   try {
     body = await ctx.readPosted(req);
   } catch {
-    send(res, 400, "text/html; charset=utf-8", renderWelcomePage({
-      step: "choose",
-      error: "That could not be saved. Try again.",
-    }));
+    sendWelcome(ctx, 400, { step: "workspace", email: session.email, error: "That could not be saved. Try again." });
     return;
   }
-  const action = String(body.action || "");
-  const kind = body.kind === "company" || body.kind === "team" || body.kind === "personal" ? body.kind : "";
-  if (action === "skip" || kind === "personal") {
-    await finishPersonal(ctx, session);
+  const action = one(body.action);
+  if (typeof body.join === "string" && body.join) {
+    await joinWorkspace(ctx, session, body.join);
     return;
   }
-  if ((kind === "team" || kind === "company") && action !== "create") {
-    send(res, 200, "text/html; charset=utf-8", renderWelcomePage({ step: "name", kind }));
+  if (action === "create" || !active) {
+    await createWorkspace(ctx, session, body);
     return;
   }
-  if (action === "create" && (kind === "team" || kind === "company")) {
-    await createSpace(ctx, session, body, kind);
+  if (action === "calendar") {
+    await chooseTool(ctx, session, active, "calendar", body);
     return;
   }
-  send(res, 400, "text/html; charset=utf-8", renderWelcomePage({
-    step: "choose",
-    error: "Choose Just me, a team, or a company.",
-  }));
+  if (action === "chat") {
+    await chooseTool(ctx, session, active, "slack", body);
+    return;
+  }
+  if (action === "invite" || action === "skip") {
+    await sendInvites(ctx, session, active, body, action === "skip", manage);
+    return;
+  }
+  redirect(res, "/console");
+}
+
+function one(value) {
+  return Array.isArray(value) ? String(value[value.length - 1] || "") : String(value || "");
+}
+
+function many(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item ?? ""));
+  return value === undefined ? [] : [String(value)];
+}
+
+function sendWelcome(ctx, status, state, headers = {}) {
+  ctx.send(ctx.res, status, "text/html; charset=utf-8", renderWelcomePage({ fakeTools: fakeToolsOn(ctx.env), ...state }), headers);
+}
+
+async function renderWorkspaceStep(ctx, session, extra) {
+  let joinable = [];
+  if (typeof ctx.identity.joinableTenants === "function") {
+    try {
+      joinable = await ctx.identity.joinableTenants(session.accessToken);
+    } catch {
+      joinable = [];
+    }
+  }
+  sendWelcome(ctx, extra.status || 200, {
+    step: "workspace",
+    email: session.email,
+    name: typeof extra.name === "string" ? extra.name : suggestedWorkspaceName({ name: session.name, email: session.email }),
+    joinable,
+    error: extra.error || "",
+  });
+}
+
+async function renderStep(ctx, session, active, step, extra = {}) {
+  const { identity, env } = ctx;
+  let user = null;
+  try {
+    user = await identity.getUser(session.accessToken);
+  } catch {
+    user = null;
+  }
+  const doors = ctx.doors || {};
+  const live = toolsConnected(env, doors, user);
+  const meta = user?.user_metadata || {};
+  const prefs = meta.sederunt_tool_prefs && typeof meta.sederunt_tool_prefs === "object" ? meta.sederunt_tool_prefs : {};
+  if (step === "calendar") {
+    const meetings = live.calendar ? await upcomingMeetings(ctx, doors.calendar !== true) : { rows: [], unavailable: false };
+    sendWelcome(ctx, 200, {
+      step,
+      error: extra.error || "",
+      notice: extra.asked || (!live.calendar && prefs.calendar === "connect")
+        ? "Google Calendar connects for the whole workspace in Setup → Tools. Your choice is saved, so Home will remind you."
+        : "",
+      calendar: {
+        connected: live.calendar,
+        meetings: meetings.rows,
+        unavailable: meetings.unavailable,
+        autoJoin: meta.sederunt_auto_join !== false,
+        asked: !live.calendar && prefs.calendar === "connect",
+      },
+    });
+    return;
+  }
+  if (step === "chat") {
+    sendWelcome(ctx, 200, {
+      step,
+      error: extra.error || "",
+      notice: extra.asked || (!live.slack && prefs.slack === "connect")
+        ? "Slack connects for the whole workspace in Setup → Tools. Your choice is saved, so Home will remind you."
+        : "",
+      chat: { slack: live.slack, channel: live.slack ? (ctx.slackChannel || (doors.slack ? "" : "sederunt")) : "", asked: !live.slack && prefs.slack === "connect" },
+    });
+    return;
+  }
+  const canManage = active.role === "owner" || active.role === "admin";
+  if (!canManage) {
+    sendWelcome(ctx, 200, {
+      step: "team",
+      manage: extra.manage,
+      error: "Only an owner or admin can invite people to this workspace.",
+      team: { workspaceName: active.name, invites: [] },
+    });
+    return;
+  }
+  let link = "";
+  let allowedDomain = "";
+  if (typeof identity.workspaceJoinLink === "function") {
+    try {
+      link = `${requestOrigin(ctx.req, env)}/console/join/${await identity.workspaceJoinLink(session.accessToken, active.id)}`;
+    } catch {
+      link = "";
+    }
+  }
+  if (typeof identity.workspaceStats === "function") {
+    try {
+      allowedDomain = (await identity.workspaceStats(session.accessToken, active.id)).allowedDomain || "";
+    } catch {
+      allowedDomain = "";
+    }
+  }
+  const domain = workDomain(session.email);
+  sendWelcome(ctx, extra.status || 200, {
+    step: "team",
+    manage: extra.manage,
+    error: extra.error || "",
+    inviteError: extra.inviteError || "",
+    team: {
+      workspaceName: active.name,
+      domain,
+      domainOn: Boolean(domain && allowedDomain === domain),
+      link,
+      invites: extra.invites || [],
+    },
+  });
+}
+
+const FAKE_MEETINGS = [
+  { when: "Today", title: "Weekly product sync" },
+  { when: "Today", title: "Design review: onboarding" },
+  { when: "Tomorrow", title: "Customer call with Northwind" },
+];
+
+async function upcomingMeetings(ctx, pretend) {
+  if (pretend) return { rows: FAKE_MEETINGS, unavailable: false };
+  const calendar = ctx.calendar;
+  if (!calendar || typeof calendar.readDay !== "function") return { rows: [], unavailable: true };
+  const zone = calendarTimeZone(ctx.env);
+  const day = (offset) => new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: zone })
+    .format(new Date(Date.now() + offset * 86_400_000)).toLowerCase();
+  const rows = [];
+  let unavailable = false;
+  for (const [offset, when] of [[0, "Today"], [1, "Tomorrow"]]) {
+    try {
+      const read = await calendar.readDay(day(offset));
+      if (read?.unavailable) unavailable = true;
+      for (const title of Array.isArray(read?.events) ? read.events : []) {
+        if (typeof title === "string" && title.trim()) rows.push({ when, title: title.trim().slice(0, 120) });
+      }
+    } catch {
+      unavailable = true;
+    }
+  }
+  return { rows: rows.slice(0, 4), unavailable: unavailable && rows.length === 0 };
+}
+
+async function createWorkspace(ctx, session, body) {
+  const { req, res, redirect, identity, env } = ctx;
+  const named = validateSpaceName(one(body.name));
+  if (named.error) {
+    await renderWorkspaceStep(ctx, session, { status: 400, name: one(body.name), error: named.error });
+    return;
+  }
+  try {
+    const tenantId = await identity.createTenant(session.accessToken, "company", named.name);
+    try {
+      await identity.updateUser(session.accessToken, { sederunt_onboarded: true });
+    } catch {
+      // The workspace exists, which is what Home checks.
+    }
+    const cookie = resealOAuth(req, env, session, { onboarded: true, tenantId });
+    const from = one(body.from);
+    redirect(res, from === "switcher" ? "/console/welcome?step=team&mode=manage" : "/console/welcome?step=calendar", { "set-cookie": cookie });
+  } catch (error) {
+    await renderWorkspaceStep(ctx, session, { status: 400, name: named.name, error: identityMessage(error) });
+  }
+}
+
+async function joinWorkspace(ctx, session, tenantId) {
+  const { req, res, redirect, identity, env } = ctx;
+  if (!TENANT_ID.test(tenantId) || typeof identity.joinByDomain !== "function") {
+    await renderWorkspaceStep(ctx, session, { status: 400, error: "That workspace is not open to your email domain." });
+    return;
+  }
+  try {
+    await identity.joinByDomain(session.accessToken, tenantId);
+    try {
+      await identity.updateUser(session.accessToken, { sederunt_onboarded: true });
+    } catch {
+      // Membership is what Home checks.
+    }
+    const cookie = resealOAuth(req, env, session, { onboarded: true, tenantId });
+    redirect(res, "/console/welcome?step=calendar", { "set-cookie": cookie });
+  } catch (error) {
+    await renderWorkspaceStep(ctx, session, { status: 400, error: identityMessage(error) });
+  }
+}
+
+async function chooseTool(ctx, session, active, tool, body) {
+  const { res, redirect, identity, env } = ctx;
+  const choice = one(body.choice);
+  const here = tool === "calendar" ? "calendar" : "chat";
+  const next = tool === "calendar" ? "/console/welcome?step=chat" : "/console/welcome?step=team";
+  try {
+    if (choice === "later") {
+      await saveToolChoice(identity, session, tool, "later");
+      redirect(res, next);
+      return;
+    }
+    if (choice === "connect") {
+      await saveToolChoice(identity, session, tool, "connect");
+      if (fakeToolsOn(env)) {
+        const user = await identity.getUser(session.accessToken);
+        const fake = { ...(user?.user_metadata?.sederunt_fake_tools || {}), [tool]: true };
+        await identity.updateUser(session.accessToken, { sederunt_fake_tools: fake });
+        redirect(res, `/console/welcome?step=${here}`);
+        return;
+      }
+      redirect(res, `/console/welcome?step=${here}&asked=1`);
+      return;
+    }
+    if (tool === "calendar") {
+      await identity.updateUser(session.accessToken, { sederunt_auto_join: body.auto_join === "on" || body.auto_join === "true" });
+    }
+    redirect(res, next);
+  } catch (error) {
+    await renderStep(ctx, session, active, here, { error: identityMessage(error) });
+  }
+}
+
+async function sendInvites(ctx, session, active, body, skip, manage) {
+  const { req, res, redirect, identity, env } = ctx;
+  const done = manage ? "/console/people" : "/console";
+  const emails = many(body.emails);
+  const roles = many(body.roles);
+  const wanted = [];
+  const seen = new Set();
+  let inviteError = "";
+  if (!skip) {
+    emails.forEach((value, index) => {
+      if (!value.trim()) return;
+      const parsed = parseInviteEmails(value);
+      if (parsed.error) {
+        inviteError = inviteError || parsed.error;
+        return;
+      }
+      const role = roles[index] === "admin" ? "admin" : "member";
+      for (const email of parsed.emails) {
+        if (seen.has(email)) continue;
+        seen.add(email);
+        wanted.push({ email, role });
+      }
+    });
+    if (wanted.length > 50) inviteError = "Invite up to 50 people at a time.";
+    if (wanted.some((row) => row.email === String(session.email || "").toLowerCase())) {
+      inviteError = "You're already in this workspace. Remove your own address.";
+    }
+    if (inviteError) {
+      await renderStep(ctx, session, active, "team", { status: 400, manage, inviteError, invites: wanted });
+      return;
+    }
+  }
+  try {
+    const domain = workDomain(session.email);
+    if (body.domain_present && domain && typeof identity.setAllowedDomain === "function") {
+      const on = body.domain_join === "on" || body.domain_join === "true";
+      const stats = typeof identity.workspaceStats === "function"
+        ? await identity.workspaceStats(session.accessToken, active.id).catch(() => null)
+        : null;
+      const was = stats ? stats.allowedDomain === domain : false;
+      if (on !== was) await identity.setAllowedDomain(session.accessToken, active.id, on ? domain : null);
+    }
+  } catch (error) {
+    await renderStep(ctx, session, active, "team", { status: 400, manage, error: identityMessage(error), invites: wanted });
+    return;
+  }
+  if (skip || wanted.length === 0) {
+    redirect(res, done);
+    return;
+  }
+  const origin = requestOrigin(req, env);
+  const made = [];
+  const failed = [];
+  for (const row of wanted) {
+    try {
+      const token = await identity.createInvite(session.accessToken, active.id, row.email, row.role);
+      made.push({ ...row, href: `${origin}/console/invite/${token}` });
+    } catch (error) {
+      failed.push(`${row.email}: ${identityMessage(error)}`);
+    }
+  }
+  if (!made.length) {
+    await renderStep(ctx, session, active, "team", { status: 400, manage, inviteError: failed[0] || "Those invites could not be created.", invites: wanted });
+    return;
+  }
+  sendWelcome(ctx, 200, {
+    step: "sent",
+    manage,
+    error: failed.length ? `Not invited: ${failed.join("; ")}` : "",
+    sent: { workspaceName: active.name, invites: made },
+  });
+}
+
+/**
+ * The reusable workspace link. Anyone signed in joins as a Member.
+ *
+ * @param {{
+ *   req: import("node:http").IncomingMessage,
+ *   res: import("node:http").ServerResponse,
+ *   env: NodeJS.ProcessEnv | Record<string, string | undefined>,
+ *   identity: object | null,
+ *   send: Function,
+ *   redirect: Function,
+ *   token: string,
+ * }} ctx
+ */
+export async function handleJoinLink(ctx) {
+  const { req, res, send, redirect, token, identity, env } = ctx;
+  if (!identity || typeof identity.acceptJoinLink !== "function") {
+    redirect(res, "/console");
+    return;
+  }
+  const session = oauthSession(req, env);
+  if (!session) {
+    redirect(res, `/console/sign-in?next=${encodeURIComponent(safeConsoleNext(`/console/join/${token}`))}`);
+    return;
+  }
+  if (!/^[A-Za-z0-9_-]{16,256}$/.test(token)) {
+    send(res, 400, "text/html; charset=utf-8", renderInvitePage({ join: true, error: "That link is invalid or was reset." }));
+    return;
+  }
+  if (req.method === "GET") {
+    send(res, 200, "text/html; charset=utf-8", renderInvitePage({ join: true }));
+    return;
+  }
+  try {
+    const tenantId = await identity.acceptJoinLink(session.accessToken, token);
+    try {
+      await identity.updateUser(session.accessToken, { sederunt_onboarded: true });
+    } catch {
+      // Membership is what Home checks.
+    }
+    const cookie = resealOAuth(req, env, session, { onboarded: true, tenantId: String(tenantId || "") });
+    redirect(res, "/console", { "set-cookie": cookie });
+  } catch (error) {
+    send(res, 400, "text/html; charset=utf-8", renderInvitePage({ join: true, error: identityMessage(error) }));
+  }
+}
+
+/**
+ * Home's getting-started card. Every item reads real state.
+ *
+ * @param {object | null} identity
+ * @param {object | null | undefined} session
+ * @param {{ activeId?: string, activeRole?: string } | null} spaces
+ * @param {{ connected?: { calendar?: boolean, slack?: boolean }, prefs?: Record<string, string> } | null} toolAsk
+ */
+export async function loadChecklist(identity, session, spaces, toolAsk) {
+  if (!identity || session?.kind !== "oauth" || !spaces?.activeId) return null;
+  const admin = spaces.activeRole === "owner" || spaces.activeRole === "admin";
+  let team = false;
+  if (typeof identity.workspaceStats === "function") {
+    try {
+      const stats = await identity.workspaceStats(session.accessToken, spaces.activeId);
+      team = stats.members > 1 || stats.openInvites > 0;
+    } catch {
+      team = false;
+    }
+  }
+  return {
+    tenantId: spaces.activeId,
+    calendar: toolAsk?.connected?.calendar === true,
+    chat: toolAsk?.connected?.slack === true,
+    team,
+    canInvite: admin,
+  };
 }
 
 /**
@@ -187,86 +569,6 @@ export function resealOAuth(req, env, session, patch = {}) {
   return sessionCookie(sealed, req, maxAge);
 }
 
-async function finishPersonal(ctx, session) {
-  const { req, res, send, redirect, identity, env } = ctx;
-  try {
-    const tenants = await identity.myTenants(session.accessToken);
-    const personal = activeSpace(tenants, "");
-    const tenantId = personal?.kind === "personal" ? personal.id : "";
-    await identity.updateUser(session.accessToken, { sederunt_onboarded: true });
-    const cookie = resealOAuth(req, env, session, { onboarded: true, tenantId: tenantId || "" });
-    redirect(res, "/console", { "set-cookie": cookie });
-  } catch (error) {
-    send(res, 200, "text/html; charset=utf-8", renderWelcomePage({
-      step: "choose",
-      error: identityMessage(error),
-    }));
-  }
-}
-
-async function createSpace(ctx, session, body, kind) {
-  const { req, res, send, identity, env } = ctx;
-  const named = validateSpaceName(body.name);
-  const mailed = parseInviteEmails(body.emails);
-  const domained = kind === "company" ? validateDomain(body.domain) : { domain: "", error: "" };
-  const error = named.error || mailed.error || domained.error;
-  if (error) {
-    send(res, 400, "text/html; charset=utf-8", renderWelcomePage({
-      step: "name",
-      kind,
-      name: String(body.name || ""),
-      emails: String(body.emails || ""),
-      domain: String(body.domain || ""),
-      error,
-    }));
-    return;
-  }
-  let tenantId = "";
-  const invites = [];
-  try {
-    tenantId = await identity.createTenant(session.accessToken, kind, named.name);
-    if (domained.domain && typeof identity.setAllowedDomain === "function") {
-      await identity.setAllowedDomain(session.accessToken, tenantId, domained.domain);
-    }
-    const origin = requestOrigin(req, env);
-    for (const email of mailed.emails) {
-      const token = await identity.createInvite(session.accessToken, tenantId, email, "member");
-      invites.push({ email, href: `${origin}/console/invite/${token}` });
-    }
-    await identity.updateUser(session.accessToken, { sederunt_onboarded: true });
-    const cookie = resealOAuth(req, env, session, { onboarded: true, tenantId });
-    send(res, 200, "text/html; charset=utf-8", renderWelcomePage({
-      step: "ready",
-      spaceName: named.name,
-      invites,
-    }), { "set-cookie": cookie });
-  } catch (error) {
-    const status = tenantId ? 200 : 400;
-    if (tenantId) {
-      try {
-        await identity.updateUser(session.accessToken, { sederunt_onboarded: true });
-      } catch {
-        // The space exists. The page still explains what failed.
-      }
-    }
-    const cookie = tenantId ? resealOAuth(req, env, session, { onboarded: true, tenantId }) : "";
-    const page = renderWelcomePage(tenantId ? {
-      step: "ready",
-      spaceName: named.name,
-      invites,
-      error: identityMessage(error),
-    } : {
-      step: "name",
-      kind,
-      name: named.name,
-      emails: String(body.emails || ""),
-      domain: String(body.domain || ""),
-      error: identityMessage(error),
-    });
-    send(res, status, "text/html; charset=utf-8", page, cookie ? { "set-cookie": cookie } : {});
-  }
-}
-
 function oauthSession(req, env) {
   const gate = guardConsole(req, env);
   if (gate.session?.kind !== "oauth") return null;
@@ -291,15 +593,15 @@ export async function loadSpaceView(identity, session) {
       activeKind: spaceKind(active?.kind),
       activeName: spaceName(active),
       activeRole: active?.role || "",
-      items: tenants.map(spaceItem),
+      items: visibleSpaces(tenants).map(spaceItem),
       error: "",
     };
   } catch {
     return {
       oauth: true,
       activeId: "",
-      activeKind: "personal",
-      activeName: "Personal",
+      activeKind: "company",
+      activeName: "Workspace",
       activeRole: "",
       items: [],
       error: "Spaces could not be loaded.",
@@ -335,25 +637,25 @@ export async function handleSpaceSwitch(ctx) {
   try {
     body = await ctx.readPosted(req);
   } catch {
-    send(res, 400, "text/html; charset=utf-8", renderFlowMessage("Choose a space", "That could not be saved. Try again."));
+    send(res, 400, "text/html; charset=utf-8", renderFlowMessage("Choose a workspace", "That could not be saved. Try again."));
     return;
   }
   const tenant = String(body.tenant || "");
   if (!TENANT_ID.test(tenant)) {
-    send(res, 400, "text/html; charset=utf-8", renderFlowMessage("Choose a space", "That space is not on this account."));
+    send(res, 400, "text/html; charset=utf-8", renderFlowMessage("Choose a workspace", "That workspace is not on this account."));
     return;
   }
   try {
     const tenants = await identity.myTenants(session.accessToken);
     const match = (Array.isArray(tenants) ? tenants : []).find((row) => row?.id === tenant);
     if (!match) {
-      send(res, 404, "text/html; charset=utf-8", renderFlowMessage("Choose a space", "That space is not on this account."));
+      send(res, 404, "text/html; charset=utf-8", renderFlowMessage("Choose a workspace", "That workspace is not on this account."));
       return;
     }
     const cookie = resealOAuth(req, env, session, { tenantId: tenant });
     redirect(res, "/console", { "set-cookie": cookie });
   } catch (error) {
-    send(res, 400, "text/html; charset=utf-8", renderFlowMessage("Choose a space", identityMessage(error)));
+    send(res, 400, "text/html; charset=utf-8", renderFlowMessage("Choose a workspace", identityMessage(error)));
   }
 }
 
@@ -364,22 +666,20 @@ function spaceKind(kind) {
 
 function spaceName(row) {
   const name = String(row?.name || "").replace(/\s+/g, " ").trim().slice(0, 120);
-  return name || kindLabel(spaceKind(row?.kind));
+  return name || "Workspace";
 }
 
 function spaceItem(row) {
   const kind = spaceKind(row?.kind);
   const name = spaceName(row);
   const role = roleLabel(row?.role || "");
-  const letter = kind === "personal"
-    ? "P"
-    : (name.replace(/[^A-Za-z0-9]/g, "").charAt(0).toUpperCase() || "S");
+  const letter = name.replace(/[^A-Za-z0-9]/g, "").charAt(0).toUpperCase() || "W";
   return {
     id: String(row?.id || ""),
     kind,
     name,
     role: typeof row?.role === "string" ? row.role : "",
-    hint: [kindLabel(kind), role].filter(Boolean).join(" · "),
+    hint: role,
     mark: letter,
   };
 }

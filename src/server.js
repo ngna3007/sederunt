@@ -33,7 +33,7 @@ import { clearOAuthCookie } from "./identity/pending.js";
 import { handleAuthRoute } from "./identity/routes.js";
 import { refreshOAuthSession, rememberRefreshCookie } from "./identity/session.js";
 import { handleToolPref, loadAccountProfile, loadToolAsk } from "./console-account.js";
-import { handleInvite, handleSpaceSwitch, handleWelcome, loadSpaceView, welcomeLocation } from "./console-flow.js";
+import { handleInvite, handleJoinLink, handleSpaceSwitch, handleWelcome, loadChecklist, loadSpaceView, welcomeLocation } from "./console-flow.js";
 import { roleLabel } from "./identity/onboarding.js";
 import { renderLanding } from "./landing.js";
 import { loadCompanyEnv, loadLocalEnv } from "./local-env.js";
@@ -545,7 +545,13 @@ export function createApp(options = {}) {
       return;
     }
     if ((req.method === "GET" || req.method === "POST") && url.pathname === "/console/welcome") {
-      await handleWelcome({ req, res, url, env, identity, send, redirect, readPosted });
+      await handleWelcome({
+        req, res, url, env, identity, send, redirect,
+        readPosted: readPostedAll,
+        calendar: workspace.deps.calendar,
+        doors: doorReport(env, workspace.linearReady === true),
+        slackChannel: workspace.deps.app?.slackChannel || "",
+      });
       return;
     }
     if (req.method === "POST" && url.pathname === "/console/space") {
@@ -554,6 +560,13 @@ export function createApp(options = {}) {
     }
     if (req.method === "POST" && url.pathname === "/console/tool-prefs") {
       await handleToolPref({ req, res, url, env, identity, send, readPosted });
+      return;
+    }
+    const joinPath = /^\/console\/join\/([^/]+)$/.exec(url.pathname);
+    if (joinPath && (req.method === "GET" || req.method === "POST")) {
+      let token = joinPath[1];
+      try { token = decodeURIComponent(token); } catch { token = joinPath[1]; }
+      await handleJoinLink({ req, res, url, env, identity, send, redirect, token });
       return;
     }
     const invitePath = /^\/console\/invite\/([^/]+)$/.exec(url.pathname);
@@ -603,7 +616,8 @@ export function createApp(options = {}) {
       const spaces = oauth ? await loadSpaceView(identity, gate.session) : null;
       const connectedDoors = oauth ? doorReport(env, workspace.linearReady === true) : null;
       const accountProfile = oauth ? await loadAccountProfile(identity, gate.session, spaces) : null;
-      const toolAsk = oauth ? await loadToolAsk(identity, gate.session, connectedDoors || {}) : null;
+      const toolAsk = oauth ? await loadToolAsk(identity, gate.session, connectedDoors || {}, env) : null;
+      const checklist = oauth && url.pathname === "/console" ? await loadChecklist(identity, gate.session, spaces, toolAsk) : null;
       send(res, status, "text/html; charset=utf-8", renderConsolePage({
         meeting: doors.meeting,
         meetingSetup: !env.SEDERUNT_PUBLIC_ORIGIN
@@ -624,6 +638,7 @@ export function createApp(options = {}) {
         accountExpiry: gate.session?.exp || 0,
         calendarTimeZone: calendarTimeZone(env),
         spaces,
+        checklist,
         accountProfile,
         toolAsk,
       }));
@@ -1579,6 +1594,23 @@ async function readPosted(req) {
     return JSON.parse(raw);
   }
   return Object.fromEntries(new URLSearchParams(raw).entries());
+}
+
+/** Form fields where a repeated name (emails, roles) becomes an array. */
+async function readPostedAll(req) {
+  const raw = await readBody(req);
+  const type = String(req.headers["content-type"] || "");
+  if (type.includes("application/json")) {
+    if (!raw.trim()) return {};
+    return JSON.parse(raw);
+  }
+  const out = {};
+  for (const [key, value] of new URLSearchParams(raw).entries()) {
+    if (!(key in out)) out[key] = value;
+    else if (Array.isArray(out[key])) out[key].push(value);
+    else out[key] = [out[key], value];
+  }
+  return out;
 }
 
 async function readRequest(req) {

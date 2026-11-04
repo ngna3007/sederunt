@@ -42,24 +42,70 @@ export async function loadAccountProfile(identity, session, spaces) {
  * @param {object | null | undefined} session
  * @param {{ calendar?: boolean, linear?: boolean, slack?: boolean }} connected
  */
-export async function loadToolAsk(identity, session, connected = {}) {
+export async function loadToolAsk(identity, session, connected = {}, env = {}) {
   if (!identity || session?.kind !== "oauth") return null;
   let prefs = {};
+  let user = null;
   try {
-    const user = await identity.getUser(session.accessToken);
+    user = await identity.getUser(session.accessToken);
     prefs = cleanPrefs(user?.user_metadata?.sederunt_tool_prefs);
   } catch {
     prefs = {};
   }
+  const live = toolsConnected(env, connected, user);
   return {
     oauth: true,
-    connected: {
-      calendar: connected.calendar === true,
-      linear: connected.linear === true,
-      slack: connected.slack === true,
-    },
+    connected: live,
     prefs,
+    autoJoin: user?.user_metadata?.sederunt_auto_join === true,
   };
+}
+
+/**
+ * The harness may pretend a tool is connected so the first-run journey can be
+ * walked and photographed without Google or Slack. Only with fake sign-in on.
+ *
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
+ */
+export function fakeToolsOn(env = {}) {
+  return env.SEDERUNT_AUTH_FAKE === "1" && env.SEDERUNT_TOOLS_FAKE === "1";
+}
+
+/**
+ * Connected tools: the server's own connections, plus harness pretend ones.
+ *
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
+ * @param {{ calendar?: boolean, linear?: boolean, slack?: boolean }} connected
+ * @param {{ user_metadata?: Record<string, unknown> } | null | undefined} user
+ */
+export function toolsConnected(env, connected = {}, user = null) {
+  const fake = fakeToolsOn(env) && user?.user_metadata?.sederunt_fake_tools && typeof user.user_metadata.sederunt_fake_tools === "object"
+    ? user.user_metadata.sederunt_fake_tools
+    : {};
+  return {
+    calendar: connected.calendar === true || fake.calendar === true,
+    linear: connected.linear === true || fake.linear === true,
+    slack: connected.slack === true || fake.slack === true,
+  };
+}
+
+/**
+ * Save one tool choice. Home's lazy asks, Setup, and welcome all call this.
+ *
+ * @param {object} identity
+ * @param {{ accessToken: string }} session
+ * @param {string} tool
+ * @param {string} choice
+ */
+export async function saveToolChoice(identity, session, tool, choice) {
+  if (!TOOLS.includes(tool) || (choice !== "later" && choice !== "connect" && !(tool === "slack" && choice === "never"))) {
+    throw new Error("That choice is not available.");
+  }
+  const user = await identity.getUser(session.accessToken);
+  const prefs = cleanPrefs(user?.user_metadata?.sederunt_tool_prefs);
+  prefs[tool] = choice;
+  await identity.updateUser(session.accessToken, { sederunt_tool_prefs: prefs });
+  return prefs;
 }
 
 /**
@@ -100,10 +146,7 @@ export async function handleToolPref(ctx) {
     return;
   }
   try {
-    const user = await identity.getUser(session.accessToken);
-    const prefs = cleanPrefs(user?.user_metadata?.sederunt_tool_prefs);
-    prefs[tool] = choice;
-    await identity.updateUser(session.accessToken, { sederunt_tool_prefs: prefs });
+    const prefs = await saveToolChoice(identity, session, tool, choice);
     send(res, 200, "application/json; charset=utf-8", JSON.stringify({ ok: true, prefs }));
   } catch (error) {
     send(res, 400, "text/html; charset=utf-8", renderFlowMessage("Tools", identityMessage(error)));
