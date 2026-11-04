@@ -700,7 +700,7 @@ ${slack}
         <p id="proof-plain" class="proof-plain"></p>
         <p id="proof-status" class="meta" aria-live="polite">Verifying on chain…</p>
         <details class="proof-tech" id="proof-tech">
-          <summary>Technical details</summary>
+          <summary>Show technical details</summary>
           <p id="proof-kept" class="meta" hidden></p>
           <p id="proof-reason" class="meta" hidden></p>
           <dl class="kv" id="proof-facts"></dl>
@@ -3793,10 +3793,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
     text("file-summary", "");
     var outcome = document.getElementById("file-outcome");
-    if (outcome) {
-      outcome.hidden = true;
-      outcome.textContent = "";
-    }
+    if (outcome) paintMeetingOutcome(outcome, leadRows, people);
     paintCallout(fileRoom);
     clear("file-overview-people");
     people.forEach(function (person) {
@@ -4372,6 +4369,53 @@ if (sessionWhen && sessionWhen.dataset.at) {
     }
     callout.hidden = callout.childElementCount === 0;
     placeRoomChrome();
+  }
+
+  function paintMeetingOutcome(box, rows, people) {
+    box.replaceChildren();
+    box.hidden = false;
+    var list = (rows || []).filter(function (row) { return row && String(row.text || "").trim(); });
+    var isAction = function (row) { return /action|todo|task/i.test(String(row.kind || row.type || "")); };
+    var decided = list.filter(function (row) { return !isAction(row); });
+    var actions = list.filter(isAction);
+    var head = document.createElement("h2");
+    head.textContent = "Summary";
+    var lede = document.createElement("p");
+    lede.className = "outcome-lede";
+    if (!list.length) {
+      lede.textContent = "Nothing decided in this meeting yet.";
+      box.append(head, lede);
+      return;
+    }
+    var names = (people || []).map(function (p) { return personLabel(p) || p; }).filter(Boolean);
+    var bits = [];
+    if (decided.length) bits.push(decided.length === 1 ? "1 decision" : decided.length + " decisions");
+    if (actions.length) bits.push(actions.length === 1 ? "1 action item" : actions.length + " action items");
+    lede.textContent = (names.length ? names.join(", ") + " met and agreed on " : "This meeting agreed on ") + bits.join(" and ") + ".";
+    box.append(head, lede);
+    function group(title, items) {
+      if (!items.length) return;
+      var h = document.createElement("h3");
+      h.className = "outcome-label";
+      h.textContent = title;
+      var ul = document.createElement("ul");
+      ul.className = "outcome-list";
+      items.forEach(function (row) {
+        var li = document.createElement("li");
+        li.textContent = String(row.text).trim();
+        var who = personLabel(row.speaker);
+        if (who) {
+          var by = document.createElement("span");
+          by.className = "meta";
+          by.textContent = " · " + who;
+          li.append(by);
+        }
+        ul.append(li);
+      });
+      box.append(h, ul);
+    }
+    group("Decisions", decided);
+    group("Action items", actions);
   }
 
   function placeRoomChrome() {
