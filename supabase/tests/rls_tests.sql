@@ -241,6 +241,50 @@ begin
   get diagnostics n = row_count;
   r := r || jsonb_build_object('t','member cannot update a workspace preference','pass', n = 0);
 
+  begin
+    insert into public.bot_preferences (tenant_id, user_id, pref_key, pref_value)
+      values (acme, bob, 'bot_name', 'Mai');
+    ok := false;
+  exception when check_violation then ok := true; end;
+  r := r || jsonb_build_object('t','member bot_name on their own row fails the check','pass', ok);
+  begin
+    insert into public.bot_preferences (tenant_id, user_id, pref_key, pref_value)
+      values (acme, bob, 'wake_phrases', '["Hey Mai","Mai"]');
+    ok := false;
+  exception when check_violation then ok := true; end;
+  r := r || jsonb_build_object('t','member wake_phrases on their own row fails the check','pass', ok);
+
+  perform set_config('request.jwt.claims', json_build_object('sub', alice, 'role', 'authenticated',
+                     'email', 'alice@example.test')::text, true);
+  begin
+    insert into public.bot_preferences (tenant_id, user_id, pref_key, pref_value)
+      values (acme, null, 'bot_name', 'Mai2');
+    ok := false;
+  exception when check_violation then ok := true; end;
+  r := r || jsonb_build_object('t','bot_name rejects a digit','pass', ok);
+  insert into public.bot_preferences (tenant_id, user_id, pref_key, pref_value)
+    values (acme, null, 'bot_name', 'Ngô');
+  insert into public.bot_preferences (tenant_id, user_id, pref_key, pref_value)
+    values (acme, null, 'wake_phrases', '["Ngô ơi","Hey Ngô"]');
+  select count(*) into n from public.bot_preferences
+    where pref_key = 'bot_name' and pref_value = 'Ngô' and user_id is null;
+  r := r || jsonb_build_object('t','admin can store a Vietnamese bot name','pass', n = 1);
+  select count(*) into n from public.bot_preferences
+    where pref_key = 'wake_phrases' and user_id is null;
+  r := r || jsonb_build_object('t','admin can store wake phrases','pass', n = 1);
+  begin
+    update public.bot_preferences set pref_value = '["Ngô ơi","ngô ơi"]'
+      where pref_key = 'wake_phrases' and user_id is null;
+    ok := false;
+  exception when check_violation then ok := true; end;
+  r := r || jsonb_build_object('t','wake phrases reject a case-insensitive duplicate','pass', ok);
+
+  perform set_config('request.jwt.claims', json_build_object('sub', bob, 'role', 'authenticated',
+                     'email', 'bob@example.test')::text, true);
+  update public.bot_preferences set pref_value = 'hacked' where user_id is null and pref_key = 'bot_name';
+  get diagnostics n = row_count;
+  r := r || jsonb_build_object('t','member cannot update the workspace bot name','pass', n = 0);
+
   ---------------------------------------------------------------- anon
   perform set_config('role', 'anon', true);
   perform set_config('request.jwt.claims', '{"role":"anon"}', true);
