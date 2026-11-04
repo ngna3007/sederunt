@@ -5091,14 +5091,8 @@ button.conn-manage { min-height: 32px; }
 }
 
 /* Pass 06 polish: logo, missing page, palette scroll, sign-in error. */
-p.brand .tile-mark.brand-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 1;
-  text-align: center;
-  padding: 0;
-}
+.sederunt-mark { display: block; flex: none; width: 28px; height: 28px; }
+.auth-mark .sederunt-mark { width: 32px; height: 32px; }
 #chip-mark.tile-mark,
 #workspace-menu .tile-mark {
   background: transparent;
@@ -5301,3 +5295,9 @@ button.row-edit {
 #home-head { min-width: 0; }
 #home-head .page-actions { flex-wrap: wrap; min-width: 0; max-width: 100%; }
 #home-add-to-meeting { max-width: 100%; }
+
+/* The mobile menu opens above the sticky top bar, so its logo and close button show. */
+@media (max-width: 1100px) {
+  body.nav-open .rail-wrap { z-index: 36; }
+  body.nav-open .nav-scrim { z-index: 34; }
+}
