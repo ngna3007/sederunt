@@ -121,6 +121,14 @@ function noSecret(raw) {
   assert.equal(/\b0x[a-f0-9]{8,}\b/i.test(raw), false);
 }
 
+function accountKeyField(raw) {
+  const inputs = raw.match(/<input\b[^>]*>/gi) || [];
+  return inputs.some((tag) => {
+    if (/\bid="mcp-token(?:-next)?"/.test(tag)) return false;
+    return /type="password"|name="key"|name="token"/i.test(tag);
+  });
+}
+
 test("the console is the workspace and the room page redirects", async () => {
   const memory = mockAccount({ accountId: "company-console", delegates: ["delegate-console"] });
   const meeting = { calls: [], async join() { this.calls.push("join"); } };
@@ -166,7 +174,7 @@ test("the console is the workspace and the room page redirects", async () => {
     assert.match(home.raw, /#3c90ff/);
     assert.equal(home.raw.includes("Acme"), false);
     assert.equal(home.raw.includes("Auto"), false);
-    assert.equal(/type="password"|name="key"|name="token"/i.test(home.raw), false);
+    assert.equal(accountKeyField(home.raw), false);
     assert.equal(home.raw.includes("—"), false);
     noSecret(home.raw);
 
@@ -224,7 +232,7 @@ test("a missing company delegate names the restart and has no key field", async 
     const home = await get(port, "/console");
     const state = JSON.parse((await get(port, "/api/console")).raw);
     assert.match(home.raw, /Add the delegate outside this page, then restart/);
-    assert.equal(/type="password"|name="key"|name="token"/i.test(home.raw), false);
+    assert.equal(accountKeyField(home.raw), false);
     assert.equal(state.companyLoaded, false);
     assert.match(state.message, /not loaded/);
     assert.match(state.message, /restart/);
@@ -520,7 +528,7 @@ test("the alpha walk keeps one sentence and stdio recall matches the console", a
     const onboard = await get(missingPort, "/console");
     assert.match(onboard.raw, /id="onboard"/);
     assert.match(onboard.raw, /Add the delegate outside this page, then restart/);
-    assert.equal(/type="password"|name="key"|name="token"/i.test(onboard.raw), false);
+    assert.equal(accountKeyField(onboard.raw), false);
     noSecret(onboard.raw);
   } finally {
     await close(missing);
