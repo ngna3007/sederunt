@@ -135,23 +135,38 @@ test("calendar event routes validate and save on the fake calendar", async (t) =
   assert.equal(quiet.event.description, "Ship checklist");
   const quietCall = calendar.calls.at(-1);
   assert.equal(quietCall.name, "update_event");
-  assert.equal(quietCall.arguments.sendUpdates, "none");
-  assert.equal(quietCall.arguments.startTime, undefined);
-  assert.deepEqual(quietCall.arguments.attendees, [
-    { email: "Ada@Example.com" },
-    { email: "grace@example.com" },
-    { email: "mina@example.com" },
-  ]);
+  // Calendar MCP update_event shape: only what changed, notificationLevel.
+  assert.deepEqual(quietCall.arguments, {
+    eventId: "launch-review",
+    description: "Ship checklist",
+    notificationLevel: "NONE",
+  });
+
+  const writes = calendar.calls.length;
+  const same = json(await call(port, "POST", "/console/calendar/events/launch-review", {
+    body: {
+      description: "Ship checklist",
+      attendees: ["ada@example.com", "GRACE@example.com", "mina@example.com"],
+      notify: true,
+    },
+  }));
+  assert.equal(same.ok, true);
+  assert.equal(calendar.calls.length, writes, "an unchanged save sends no update_event");
 
   const loud = json(await call(port, "POST", "/console/calendar/events/launch-review", {
     body: {
       description: "Ship checklist",
-      attendees: ["ada@example.com", "grace@example.com", "mina@example.com"],
+      attendees: ["ada@example.com", "grace@example.com", "quang@example.com"],
       notify: true,
     },
   }));
   assert.equal(loud.sendUpdates, "all");
-  assert.equal(calendar.calls.at(-1).arguments.sendUpdates, "all");
+  assert.deepEqual(calendar.calls.at(-1).arguments, {
+    eventId: "launch-review",
+    addedAttendees: [{ email: "quang@example.com" }],
+    removedAttendeeEmails: ["mina@example.com"],
+    notificationLevel: "ALL",
+  });
 
   const invalid = json(await call(port, "POST", "/console/calendar/events/launch-review", {
     body: { description: "x", attendees: ["not-an-email"], notify: true },
@@ -389,7 +404,13 @@ test("console edit dialog, ask, and layout", { timeout: 180000 }, async (t) => {
     const toast = document.getElementById("toast");
     return toast && !toast.hidden && toast.textContent.includes("Saved without notifying guests.");
   });
-  assert.equal(calendar.calls.at(-1).arguments.sendUpdates, "none");
+  assert.deepEqual(calendar.calls.at(-1).arguments, {
+    eventId: "launch-review",
+    description: "Ship checklist",
+    addedAttendees: [{ email: "new.guest@example.com" }],
+    removedAttendeeEmails: ["grace@example.com"],
+    notificationLevel: "NONE",
+  });
 
   await page.click("#meeting-list [data-edit-event='launch-review']");
   await page.waitForFunction(() => {
@@ -407,8 +428,11 @@ test("console edit dialog, ask, and layout", { timeout: 180000 }, async (t) => {
     const toast = document.getElementById("toast");
     return toast && !toast.hidden && toast.textContent.includes("Saved. Guests were notified.");
   });
-  assert.equal(calendar.calls.at(-1).arguments.sendUpdates, "all");
-  assert.equal(calendar.calls.at(-1).arguments.description, "Ship checklist tomorrow");
+  assert.deepEqual(calendar.calls.at(-1).arguments, {
+    eventId: "launch-review",
+    description: "Ship checklist tomorrow",
+    notificationLevel: "ALL",
+  });
 
   await page.click("#meeting-list [data-edit-event='board-readout']");
   await page.waitForSelector("#event-readonly:not([hidden])");
