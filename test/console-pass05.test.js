@@ -683,7 +683,7 @@ test("list columns share a gap and history rows stay compact", async (t) => {
     assert.equal(detail.overflow, false, `dialog ${width} overflows`);
     assert.equal(detail.sentenceClip, false, `sentence clipped at ${width}`);
     assert.equal(detail.otherClip, false, `clash clipped at ${width}`);
-    assert.match(detail.heard, new RegExp(opened.when.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(detail.heard, new RegExp(opened.when.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
     assert.match(detail.other, /Clashes with: The booth opens at nine.+\(rowan, \d{1,2}:\d{2} [AP]M\)/);
     assert.equal(detail.proofHidden, true, detail.proof);
     assert.equal(detail.proof, "");
