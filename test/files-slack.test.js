@@ -6,7 +6,7 @@ import test from "node:test";
 import { createRelayerMemoryClient } from "../src/files/memory.js";
 import { createFileRuntime } from "../src/files/runtime.js";
 import { createFileStore } from "../src/files/store.js";
-import { createMemoryWalrus } from "../src/files/walrus.js";
+import { createMemoryConsole } from "../src/files/memory-console.js";
 import { createApp, defaultDeps } from "../src/server.js";
 
 const secret = "slack-files-secret";
@@ -45,7 +45,7 @@ test("a bound Slack file is stored, and deleting the message hides it", async ()
   const files = createFileRuntime({
     env: {},
     store,
-    storage: createMemoryWalrus(),
+    storage: createMemoryConsole(),
     serverSecret: "test-secret",
     seal: null,
   });
@@ -96,7 +96,7 @@ test("a bound Slack file is stored, and deleting the message hides it", async ()
 
 test("an unbound Slack channel does not invent a file", async () => {
   const store = createFileStore();
-  const files = createFileRuntime({ env: {}, store, storage: createMemoryWalrus(), serverSecret: "test-secret", seal: null });
+  const files = createFileRuntime({ env: {}, store, storage: createMemoryConsole() });
   const env = { SLACK_SIGNING_SECRET: secret };
   const app = createApp({
     env,

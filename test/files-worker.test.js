@@ -3,7 +3,7 @@ import test from "node:test";
 import { createMemoryCleaner } from "../src/files/memory.js";
 import { createFileService } from "../src/files/service.js";
 import { backoffDelayMs, createFileStore } from "../src/files/store.js";
-import { createMemoryWalrus } from "../src/files/walrus.js";
+import { createMemoryConsole } from "../src/files/memory-console.js";
 import { runFileWorker } from "../src/files/worker.js";
 
 const TENANT = "00000000-0000-4000-a000-00000000acme";
@@ -13,7 +13,7 @@ const ALICE = "00000000-0000-4000-a000-00000000a11c";
 function runtime(extra = {}) {
   let now = new Date("2026-11-04T12:00:00.000Z");
   const store = createFileStore({ clock: () => now });
-  const storage = extra.storage || createMemoryWalrus();
+  const storage = extra.storage || createMemoryConsole();
   store.addChannel({ id: CHANNEL, tenantId: TENANT, name: "Product", visibility: "tenant" });
   store.addMember({ userId: ALICE, name: "Alice", tenantId: TENANT, role: "member", channelIds: [CHANNEL] });
   const memory = extra.memory || createMemoryCleaner({ account: { configured: false }, client: null });
@@ -38,9 +38,13 @@ test("backoff starts at one minute, doubles, and stops at six hours", () => {
 test("a delete retries until the twelfth failure, then the job is dead", async () => {
   const box = runtime({
     storage: {
-      async writeBlob() { return { blobId: "b", objectId: "0x1", endEpoch: 4 }; },
-      async deleteBlob() { throw new Error("rpc down"); },
-      async currentEpoch() { return 1; },
+      async resolveFolder() { return { spaceId: "s", folderId: "f", sealPolicyId: "p" }; },
+      async put({ onAccepted }) {
+        const placed = { spaceId: "s", folderId: "f", fileId: "file-1" };
+        if (onAccepted) await onAccepted(placed);
+        return { ...placed, state: "active" };
+      },
+      async remove() { throw new Error("rpc down"); },
     },
   });
   const saved = await box.service.upload({
@@ -98,7 +102,7 @@ test("a configured memory client forgets the namespace and marks the link delete
   assert.equal(memoryJob.status, "done");
 });
 
-test("an upload that is still missing its bytes after an hour is failed, and a near expiry is renewed", async () => {
+test("an upload that is still missing its bytes after an hour is failed", async () => {
   const box = runtime();
   const row = box.store.insertUploading({
     tenantId: TENANT,
@@ -113,8 +117,8 @@ test("an upload that is still missing its bytes after an hour is failed, and a n
   const active = await box.service.upload({
     actorUserId: ALICE, channelId: CHANNEL, name: "live.txt", bytes: Buffer.from("live"),
   });
-  box.store.setEndEpoch(active.id, box.storage.currentEpochValue);
-  await runFileWorker(box, { renew: true });
+  await runFileWorker(box);
   assert.equal(box.store.getFile(row.id).status, "failed");
-  assert.ok(box.store.getFile(active.id).endEpoch > box.storage.currentEpochValue);
+  assert.equal(box.store.jobsFor(active.id).some((job) => job.kind === "renew"), false);
+  assert.equal(box.store.getFile(active.id).status, "active");
 });

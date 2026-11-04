@@ -12,9 +12,10 @@ const MODE_WRAP = 2;
  * The AES key is not returned and is not written to Postgres. It lives only
  * inside this header, which travels with the Walrus blob.
  *
- * Mode 1 is Seal (testnet key servers, `move/sederunt_files`). Mode 2 wraps
- * the AES key with the server secret when no Seal client is passed (demo,
- * tests, or Seal not configured). The AES key is never stored.
+ * Mode 1 wraps the AES key with a Seal client passed by the caller. Mode 2
+ * wraps the AES key with the server secret when no Seal client is passed.
+ * The live file path encrypts the whole file for a Console folder policy.
+ * The AES key is never stored.
  *
  * @param {Uint8Array} plain
  * @param {{ seal?: { encryptKey: Function, decryptKey: Function } | null, serverSecret?: string, aad?: Buffer }} options

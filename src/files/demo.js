@@ -60,10 +60,10 @@ export function seedDemoFiles(store, now = new Date("2026-11-02T15:04:00.000Z"))
       sha256: Buffer.alloc(32),
     });
     store.markActive(row.id, {
-      blobId: `demo-${input.id.slice(0, 8)}`,
-      objectId: `0x${"ab".repeat(32)}`,
-      endEpoch: 40,
-      envelopeMode: "demo",
+      spaceId: "space-demo",
+      folderId: "folder-demo",
+      fileId: `demo-${input.id.slice(0, 8)}`,
+      state: "active",
     });
     store.patchFile(row.id, { createdAt: input.createdAt });
     return row.id;

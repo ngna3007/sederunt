@@ -4,7 +4,7 @@ import { request } from "node:http";
 import test from "node:test";
 import { createFileRuntime } from "../src/files/runtime.js";
 import { createFileStore } from "../src/files/store.js";
-import { createMemoryWalrus } from "../src/files/walrus.js";
+import { createMemoryConsole } from "../src/files/memory-console.js";
 import { createApp } from "../src/server.js";
 
 const TENANT = "00000000-0000-4000-a000-00000000acme";
@@ -16,7 +16,7 @@ const ADMIN = "00000000-0000-4000-a000-00000000ad11";
 function listen() {
   let now = new Date("2026-11-04T12:00:00.000Z");
   const store = createFileStore({ clock: () => now });
-  const storage = createMemoryWalrus();
+  const storage = createMemoryConsole();
   store.addChannel({ id: CHANNEL, tenantId: TENANT, name: "Product", visibility: "tenant" });
   store.addMember({ userId: ALICE, name: "Alice", tenantId: TENANT, role: "member", channelIds: [CHANNEL] });
   store.addMember({ userId: BOB, name: "Bob", tenantId: TENANT, role: "member", channelIds: [CHANNEL] });

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createFileService } from "../src/files/service.js";
 import { createFileStore } from "../src/files/store.js";
-import { createMemoryWalrus } from "../src/files/walrus.js";
+import { createMemoryConsole } from "../src/files/memory-console.js";
 
 const TENANT = "00000000-0000-4000-a000-00000000acme";
 const OTHER = "00000000-0000-4000-a000-00000000beef";
@@ -15,7 +15,7 @@ const ADMIN = "00000000-0000-4000-a000-00000000ad11";
 function world() {
   let now = new Date("2026-11-04T12:00:00.000Z");
   const store = createFileStore({ clock: () => now });
-  const storage = createMemoryWalrus();
+  const storage = createMemoryConsole();
   store.addChannel({ id: CHANNEL, tenantId: TENANT, name: "Product", visibility: "tenant" });
   store.addChannel({ id: INVITED, tenantId: TENANT, name: "Launch", visibility: "invited" });
   store.addChannel({ id: "secret", tenantId: OTHER, name: "Secret", visibility: "tenant" });
@@ -42,7 +42,8 @@ test("a member uploads and downloads, and someone outside the channel gets 404",
     bytes: Buffer.from("hello walrus"),
   });
   assert.equal(saved.status, "active");
-  assert.ok(saved.walrusBlobId);
+  assert.ok(saved.consoleFileId);
+  assert.equal(saved.consoleFolderId, "folder-demo");
   const downloaded = await service.download(BOB, saved.id);
   assert.equal(Buffer.from(downloaded.bytes).toString(), "hello walrus");
   await assert.rejects(() => service.download("outsider", saved.id), (error) => error.status === 404);

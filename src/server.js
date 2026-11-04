@@ -1028,6 +1028,7 @@ export function createApp(options = {}) {
               }));
               return;
             }
+            const slackFileId = loaded.id || delivery.file?.id || "";
             delivery.file = loaded;
             if (filesRuntime && loaded?.bytes) {
               try {
@@ -1035,6 +1036,7 @@ export function createApp(options = {}) {
                   externalChannelId: channel,
                   slackUserId: delivery.memberId,
                   slackName: delivery.memberId,
+                  slackFileId,
                   name: loaded.name,
                   mimeType: loaded.mimeType || "application/octet-stream",
                   bytes: loaded.bytes,
@@ -1270,8 +1272,12 @@ function saveCalendarEnv(env) {
 
 function attachFiles(options, env) {
   const explicit = options.env;
-  if (explicit && (explicit.FILES_DEMO === "1" || explicit.WALRUS_SERVICE_KEY)) return true;
-  return isDirectRun() && (env.FILES_DEMO === "1" || Boolean(env.WALRUS_SERVICE_KEY));
+  if (explicit && filesConfigured(explicit)) return true;
+  return isDirectRun() && filesConfigured(env);
+}
+
+function filesConfigured(env) {
+  return env.FILES_DEMO === "1" || Boolean(env.CONSOLE_API_KEY && env.CONSOLE_SERVICE_PRIVATE_KEY);
 }
 
 function isDirectRun() {

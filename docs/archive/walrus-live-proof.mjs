@@ -1,4 +1,8 @@
 /**
+ * HISTORY. Not runnable. The testnet writer and Move package this script
+ * called have been removed. See docs/archive/README.md.
+ *
+ *
  * Testnet proof: Seal (or server-wrap fallback) a small text file, store a
  * deletable Walrus blob, read it back, delete it, and record public ids.
  *

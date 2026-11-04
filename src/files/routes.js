@@ -97,8 +97,8 @@ function publicFile(file) {
     name: file.name,
     status: file.status,
     sizeBytes: file.sizeBytes,
-    blobId: file.walrusBlobId,
-    objectId: file.suiObjectId,
+    consoleFileId: file.consoleFileId,
+    consoleFolderId: file.consoleFolderId,
     channelId: file.channelId,
   };
 }

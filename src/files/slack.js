@@ -29,6 +29,7 @@ export async function ingestSlackFile(runtime, input) {
     mimeType: input.mimeType || "application/octet-stream",
     bytes,
     externalMessageId: input.externalMessageId || null,
+    slackFileId: input.slackFileId || null,
     ownerName: input.slackName || "",
   });
   return { skipped: false, file: saved };

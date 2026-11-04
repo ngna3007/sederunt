@@ -22,6 +22,7 @@ export function createFileStore({ clock = () => new Date() } = {}) {
   const identities = new Map();
   const guests = new Map();
   const ciphertext = new Map();
+  const consoleFolders = new Map();
   const jobs = [];
   let jobSeq = 1;
 
@@ -204,11 +205,11 @@ export function createFileStore({ clock = () => new Date() } = {}) {
         mimeType: input.mimeType,
         sizeBytes: input.sizeBytes,
         sha256: input.sha256,
-        walrusBlobId: null,
-        suiObjectId: null,
-        endEpoch: null,
-        sealId: null,
-        envelopeMode: null,
+        slackFileId: input.slackFileId || null,
+        consoleSpaceId: null,
+        consoleFolderId: null,
+        consoleFileId: null,
+        consoleState: null,
         status: "uploading",
         deleteReason: null,
         deletedBy: null,
@@ -222,14 +223,14 @@ export function createFileStore({ clock = () => new Date() } = {}) {
       queue(row.id, "upload");
       return copyFile(row);
     },
-    stashCiphertext(fileId, bytes) {
+    stashUpload(fileId, bytes) {
       ciphertext.set(fileId, Buffer.from(bytes));
     },
-    peekCiphertext(fileId) {
+    peekUpload(fileId) {
       const found = ciphertext.get(fileId);
       return found ? Buffer.from(found) : null;
     },
-    dropCiphertext(fileId) {
+    dropUpload(fileId) {
       ciphertext.delete(fileId);
     },
     saveUploadStep(fileId, step) {
@@ -241,14 +242,13 @@ export function createFileStore({ clock = () => new Date() } = {}) {
     loadUploadStep(fileId) {
       return files.get(fileId)?.uploadStep || null;
     },
-    markActive(fileId, blob) {
+    markActive(fileId, placed) {
       const file = files.get(fileId);
       if (!file) throw new FileError(404, "not_found", "Not found");
-      file.walrusBlobId = blob.blobId;
-      file.suiObjectId = blob.objectId;
-      file.endEpoch = blob.endEpoch ?? null;
-      file.sealId = blob.sealId || null;
-      file.envelopeMode = blob.envelopeMode || null;
+      file.consoleSpaceId = placed.spaceId || file.consoleSpaceId;
+      file.consoleFolderId = placed.folderId || file.consoleFolderId;
+      file.consoleFileId = placed.fileId || file.consoleFileId;
+      file.consoleState = placed.state || "active";
       file.status = "active";
       file.updatedAt = now();
       ciphertext.delete(fileId);
@@ -270,12 +270,19 @@ export function createFileStore({ clock = () => new Date() } = {}) {
       file.updatedAt = now();
       return copyFile(file);
     },
-    setEndEpoch(fileId, endEpoch) {
-      const file = files.get(fileId);
-      if (!file) return null;
-      file.endEpoch = endEpoch;
-      file.updatedAt = now();
-      return copyFile(file);
+    findConsoleFolder(spaceId, name) {
+      const row = consoleFolders.get(`${spaceId}:${name}`);
+      return row ? { ...row } : null;
+    },
+    saveConsoleFolder(input) {
+      const row = {
+        spaceId: input.spaceId,
+        name: input.name,
+        folderId: input.folderId,
+        sealPolicyId: input.sealPolicyId || null,
+      };
+      consoleFolders.set(`${row.spaceId}:${row.name}`, { ...row });
+      return { ...row };
     },
     getFile(id) {
       const file = files.get(id);
@@ -422,11 +429,6 @@ export function createFileStore({ clock = () => new Date() } = {}) {
         if (message.externalMessageId === externalMessageId) count += this.markMessageDeleted(message.id);
       }
       return count;
-    },
-    filesDueForRenew(currentEpoch, margin) {
-      return [...files.values()].filter((file) => {
-        return file.status === "active" && Number.isInteger(file.endEpoch) && file.endEpoch - currentEpoch <= margin;
-      }).map(copyFile);
     },
     failStuckUploads(maxAgeMs) {
       const cutoff = now().getTime() - maxAgeMs;

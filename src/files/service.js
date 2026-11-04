@@ -1,44 +1,16 @@
-import { randomUUID } from "node:crypto";
-import { fileEpochs, MAX_FILE_BYTES } from "./config.js";
-import { openEnvelope, sealEnvelope, sha256Bytes } from "./envelope.js";
+import { createHash, randomUUID } from "node:crypto";
+import { MAX_FILE_BYTES } from "./config.js";
 import { FileError } from "./errors.js";
 import { fileNamespace } from "./memory.js";
+import { assertFileMetadata, assertFileTags, consoleObjectName, fileMetadata, fileTags } from "./meta.js";
 
 const NAME_LIMIT = 255;
 
 /**
  * Upload, download, and delete. The store decides who can see a row.
- * Walrus and Seal are injected so tests never touch the network.
+ * Console is injected so tests never touch the network.
  */
-export function createFileService({ store, storage, seal, memory, env = {}, serverSecret = "" }) {
-  async function encrypt(plain) {
-    return sealEnvelope(plain, { seal: seal || null, serverSecret });
-  }
-
-  async function putBlob(file, envelopeBytes) {
-    if (!storage) throw new FileError(503, "paused", "Storage is paused, try later");
-    store.stashCiphertext(file.id, envelopeBytes);
-    const resume = store.loadUploadStep(file.id);
-    const written = await storage.writeBlob({
-      bytes: envelopeBytes,
-      deletable: true,
-      epochs: fileEpochs(env),
-      attributes: {
-        "sederunt:file_id": file.id,
-        "sederunt:tenant_id": file.tenantId,
-        "sederunt:channel_id": file.channelId,
-      },
-      resume: resume?.step ? resume : undefined,
-      onStep: (step) => store.saveUploadStep(file.id, step),
-    });
-    return store.markActive(file.id, {
-      blobId: written.blobId,
-      objectId: written.objectId,
-      endEpoch: written.endEpoch ?? null,
-      envelopeMode: file.envelopeMode,
-    });
-  }
-
+export function createFileService({ store, storage, memory }) {
   return {
     async upload(input) {
       const channel = store.channel(input.channelId);
@@ -52,6 +24,17 @@ export function createFileService({ store, storage, seal, memory, env = {}, serv
       const bytes = Buffer.from(input.bytes);
       if (bytes.length < 1) throw new FileError(400, "empty", "The file is empty");
       if (bytes.length > MAX_FILE_BYTES) throw new FileError(413, "too_large", "payload_too_large");
+      const draft = {
+        id: input.id || randomUUID(),
+        tenantId: channel.tenantId,
+        channelId: channel.id,
+        ownerUserId: input.actorUserId || null,
+        ownerGuestId: input.ownerGuestId || null,
+        slackFileId: input.slackFileId || null,
+        name,
+      };
+      assertFileMetadata(fileMetadata(draft));
+      assertFileTags(fileTags(draft));
       const message = input.messageId
         ? { id: input.messageId }
         : store.insertMessage({
@@ -60,40 +43,40 @@ export function createFileService({ store, storage, seal, memory, env = {}, serv
           externalMessageId: input.externalMessageId || null,
           authorUserId: input.actorUserId || null,
         });
-      const envelope = await encrypt(bytes);
       const row = store.insertUploading({
-        tenantId: channel.tenantId,
-        channelId: channel.id,
+        ...draft,
         messageId: message.id,
-        ownerUserId: input.actorUserId || null,
-        ownerGuestId: input.ownerGuestId || null,
         ownerName: input.ownerName || store.viewerName(input.actorUserId) || "",
-        name,
         mimeType,
         sizeBytes: bytes.length,
         sha256: sha256Bytes(bytes),
-        id: input.id || randomUUID(),
       });
-      row.envelopeMode = envelope.mode;
+      store.stashUpload(row.id, bytes);
       try {
-        return await putBlob(row, envelope.bytes);
+        return await placeStoredFile({ store, storage }, row, bytes);
       } catch (error) {
         if (error instanceof FileError) throw error;
+        if (error?.code === "plan_limit_exceeded" || error?.code === "payload_too_large" || error?.code === "metadata_too_large") {
+          throw new FileError(error.code === "payload_too_large" ? 413 : 422, error.code, "Storage is paused, try later");
+        }
         throw new FileError(502, "storage", "Storage is paused, try later");
       }
     },
 
     async download(userId, fileId) {
       const file = store.getVisible(userId, fileId);
-      if (!file || !file.walrusBlobId) throw new FileError(404, "not_found", "Not found");
-      if (!storage) throw new FileError(503, "paused", "Storage is paused, try later");
-      let ciphertext;
+      if (!file || !file.consoleFileId) throw new FileError(404, "not_found", "Not found");
+      if (!storage?.download) throw new FileError(503, "paused", "Storage is paused, try later");
+      let plain;
       try {
-        ciphertext = await storage.readBlob({ blobId: file.walrusBlobId });
-      } catch (error) {
+        plain = await storage.download({
+          spaceId: file.consoleSpaceId,
+          folderId: file.consoleFolderId,
+          fileId: file.consoleFileId,
+        });
+      } catch {
         throw new FileError(502, "storage", "The file could not be read");
       }
-      const plain = await openEnvelope(ciphertext, { seal: seal || null, serverSecret });
       return { file, bytes: plain };
     },
 
@@ -187,6 +170,57 @@ function presentRequest(store, userId, request) {
     canAnswer: owner && request.status === "open",
     canDismiss: admin && request.status === "open" && ageMs >= 72 * 60 * 60 * 1000,
   };
+}
+
+/**
+ * Send plaintext to Console and mark the row active.
+ * A file id saved by `onAccepted` lets a later pass finish the same upload.
+ */
+export async function placeStoredFile(runtime, file, plain) {
+  const { store, storage } = runtime;
+  if (!storage?.resolveFolder || !storage?.put) throw new Error("Storage is paused, try later");
+  const tags = assertFileTags(fileTags(file));
+  if (file.consoleFileId && storage.finish) {
+    await storage.finish({
+      folderId: file.consoleFolderId,
+      fileId: file.consoleFileId,
+      tags,
+    });
+    return commitStoredFile(store, file.id, {
+      spaceId: file.consoleSpaceId,
+      folderId: file.consoleFolderId,
+      fileId: file.consoleFileId,
+      state: "active",
+    });
+  }
+  const metadata = assertFileMetadata(fileMetadata(file));
+  const folder = await storage.resolveFolder({ tenantId: file.tenantId, channelId: file.channelId });
+  const placed = await storage.put({
+    name: consoleObjectName(file),
+    plain,
+    metadata,
+    tags,
+    folder,
+    onAccepted: async (accepted) => {
+      store.patchFile(file.id, {
+        consoleSpaceId: accepted.spaceId || folder.spaceId,
+        consoleFolderId: accepted.folderId || folder.folderId,
+        consoleFileId: accepted.fileId,
+        consoleState: "uploading",
+      });
+    },
+  });
+  return commitStoredFile(store, file.id, placed);
+}
+
+function commitStoredFile(store, fileId, placed) {
+  const current = store.getFile(fileId);
+  if (current && current.status !== "uploading" && current.status !== "active") return current;
+  return store.markActive(fileId, placed);
+}
+
+function sha256Bytes(bytes) {
+  return createHash("sha256").update(Buffer.from(bytes)).digest();
 }
 
 function cleanName(name) {

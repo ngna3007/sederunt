@@ -192,25 +192,34 @@ begin
       values (secretco, 'secret-room', 'invited') returning id into ch_secret;
     insert into public.channel_members (channel_id, tenant_id, user_id) values (ch_secret, secretco, alice);
 
-    insert into public.files (id, tenant_id, channel_id, owner_user_id, name, mime_type, size_bytes, sha256, walrus_blob_id, sui_object_id, status)
+    insert into public.files (
+      id, tenant_id, channel_id, owner_user_id, name, mime_type, size_bytes, sha256,
+      console_space_id, console_folder_id, console_file_id, console_state, status
+    )
       values
-        (fa, acme, ch, alice, 'roadmap.pdf', 'application/pdf', 12, digest, 'blob-fa', '0xfa', 'active'),
-        (fb, acme, ch, bob, 'notes.txt', 'text/plain', 8, digest, 'blob-fb', '0xfb', 'active'),
-        (fc, acme, ch, alice, 'plan.pdf', 'application/pdf', 9, digest, 'blob-fc', '0xfc', 'active'),
-        (fd, acme, ch, alice, 'stay.pdf', 'application/pdf', 10, digest, 'blob-fd', '0xfd', 'active'),
-        (fe, secretco, ch_secret, alice, 'secret.pdf', 'application/pdf', 11, digest, 'blob-fe', '0xfe', 'active'),
-        (ff, acme, ch, alice, 'old.pdf', 'application/pdf', 7, digest, 'blob-ff', '0xff', 'active');
+        (fa, acme, ch, alice, 'roadmap.pdf', 'application/pdf', 12, digest, 'space-1', 'folder-1', 'file-fa', 'active', 'active'),
+        (fb, acme, ch, bob, 'notes.txt', 'text/plain', 8, digest, 'space-1', 'folder-1', 'file-fb', 'active', 'active'),
+        (fc, acme, ch, alice, 'plan.pdf', 'application/pdf', 9, digest, 'space-1', 'folder-1', 'file-fc', 'active', 'active'),
+        (fd, acme, ch, alice, 'stay.pdf', 'application/pdf', 10, digest, 'space-1', 'folder-1', 'file-fd', 'active', 'active'),
+        (fe, secretco, ch_secret, alice, 'secret.pdf', 'application/pdf', 11, digest, 'space-1', 'folder-1', 'file-fe', 'active', 'active'),
+        (ff, acme, ch, alice, 'old.pdf', 'application/pdf', 7, digest, 'space-1', 'folder-1', 'file-ff', 'active', 'active');
     insert into public.messages (id, tenant_id, channel_id, author_user_id, body_redacted, category, invite_user_ids)
       values (gen_random_uuid(), acme, ch, alice, 'file message', 'file', array[alice, bob])
       returning id into msg;
-    insert into public.files (id, tenant_id, channel_id, message_id, owner_user_id, name, mime_type, size_bytes, sha256, walrus_blob_id, sui_object_id, status)
-      values (fg, acme, ch, msg, alice, 'attached.txt', 'text/plain', 4, digest, 'blob-fg', '0xfg', 'active');
+    insert into public.files (
+      id, tenant_id, channel_id, message_id, owner_user_id, name, mime_type, size_bytes, sha256,
+      console_space_id, console_folder_id, console_file_id, console_state, status
+    )
+      values (fg, acme, ch, msg, alice, 'attached.txt', 'text/plain', 4, digest, 'space-1', 'folder-1', 'file-fg', 'active', 'active');
 
     perform set_config('role', 'authenticated', true);
     perform set_config('request.jwt.claims', json_build_object('sub', bob, 'role', 'authenticated',
                        'email', 'bob@example.test')::text, true);
     select count(*) into n from public.files where id in (fa, fb, fc, fd);
     r := r || jsonb_build_object('t','member reads active files in a channel they are in','pass', n = 4);
+    select count(*) into n from public.files
+      where id = fb and console_space_id = 'space-1' and console_folder_id = 'folder-1' and console_file_id = 'file-fb';
+    r := r || jsonb_build_object('t','member can see console file ids','pass', n = 1);
     select count(*) into n from public.files where id = fe;
     r := r || jsonb_build_object('t','other tenant file is hidden','pass', n = 0);
     begin
@@ -284,8 +293,11 @@ begin
     perform set_config('request.jwt.claims', '', true);
     insert into public.guests (tenant_id, display_name, email)
       values (acme, 'Carol Slack', 'carol@example.test') returning id into guest_file;
-    insert into public.files (tenant_id, channel_id, owner_guest_id, name, mime_type, size_bytes, sha256, walrus_blob_id, sui_object_id, status)
-      values (acme, ch, guest_file, 'guest.txt', 'text/plain', 3, digest, 'blob-guest', '0xg1', 'active');
+    insert into public.files (
+      tenant_id, channel_id, owner_guest_id, name, mime_type, size_bytes, sha256,
+      console_space_id, console_folder_id, console_file_id, console_state, status
+    )
+      values (acme, ch, guest_file, 'guest.txt', 'text/plain', 3, digest, 'space-1', 'folder-1', 'file-guest', 'active', 'active');
     insert into auth.users (id, instance_id, aud, role, email, encrypted_password, email_confirmed_at,
                             raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
       values (carol, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
@@ -300,6 +312,26 @@ begin
     r := r || jsonb_build_object('t','deleting a message hides its file and queues deletion','pass', n = 1);
     select count(*) into n from public.file_jobs where file_id = fg and status = 'queued';
     r := r || jsonb_build_object('t','message delete queues two file jobs','pass', n = 2);
+
+    begin
+      insert into public.files (tenant_id, channel_id, owner_user_id, name, mime_type, size_bytes, sha256, status)
+        values (acme, ch, alice, 'bare.pdf', 'application/pdf', 4, digest, 'active');
+      ok := false;
+    exception when check_violation then ok := true; end;
+    r := r || jsonb_build_object('t','an active file needs console ids','pass', ok);
+
+    insert into public.console_folders (space_id, name, folder_id, seal_policy_id)
+      values ('space-1', 'sederunt-files', 'folder-1', '0xpolicy');
+    perform set_config('role', 'authenticated', true);
+    perform set_config('request.jwt.claims', json_build_object('sub', alice, 'role', 'authenticated',
+                       'email', 'alice@example.test')::text, true);
+    begin
+      perform 1 from public.console_folders;
+      ok := false;
+    exception when insufficient_privilege then ok := true; end;
+    r := r || jsonb_build_object('t','authenticated cannot read console_folders','pass', ok);
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '', true);
   end;
 
   ---------------------------------------------------------------- anon

@@ -512,7 +512,7 @@ ${slack}
       <a class="secondary" href="/console"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10 3.5 5.5 8 10 12.5"/></svg>Back to Home</a>
     </section>
     <section id="files" hidden>
-      <div class="page-head" id="files-head"><div><p class="page-title">Files</p><p class="page-lede">Files in the channels you can see.</p></div></div>
+      <div class="page-head" id="files-head"><div><p class="page-title">Files</p><p class="page-lede"><span>Files in the channels you can see.</span> <span>Stored on Walrus Console.</span></p></div></div>
       <div id="files-unanswered" hidden></div>
       <div id="files-requests" hidden></div>
       <div id="channel-files-empty" class="empty-state" hidden>

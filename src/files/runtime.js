@@ -1,15 +1,15 @@
-import { sealPackageId } from "./config.js";
-import { createMemoryCleaner, createRelayerMemoryClient, memoryAccountFromEnv } from "./memory.js";
+import { consoleReady } from "./config.js";
+import { createConsoleFiles } from "./console-files.js";
 import { seedDemoFiles, demoUserId } from "./demo.js";
-import { createLiveSeal } from "./seal.js";
+import { createMemoryConsole } from "./memory-console.js";
+import { createMemoryCleaner, createRelayerMemoryClient, memoryAccountFromEnv } from "./memory.js";
 import { createFileService } from "./service.js";
 import { createFileStore } from "./store.js";
-import { createLiveWalrus, createMemoryWalrus } from "./walrus.js";
 
 /**
- * Wires a store, a Walrus client, and the envelope secret.
+ * Wires a store and a Console client.
  * Tests pass their own store and storage. The demo page uses an in-memory
- * Walrus. A funded service key uses testnet. With neither, uploads pause.
+ * Console. A configured API key uses Walrus Console. With neither, uploads pause.
  */
 export function createFileRuntime(options = {}) {
   const env = options.env || {};
@@ -19,24 +19,24 @@ export function createFileRuntime(options = {}) {
   if (demo && options.store == null) seedDemoFiles(store, clock());
   const storage = options.storage !== undefined
     ? options.storage
-    : (env.WALRUS_SERVICE_KEY && !demo ? createLiveWalrus(env) : (demo ? createMemoryWalrus() : null));
+    : (demo
+      ? createMemoryConsole()
+      : (consoleReady(env) ? createConsoleFiles({
+        env,
+        store,
+        fetch: options.fetch,
+        wait: options.wait,
+        encrypt: options.encrypt,
+        decrypt: options.decrypt,
+        sign: options.sign,
+        resolveFolder: options.resolveFolder,
+      }) : null));
   const account = options.account || memoryAccountFromEnv(env);
   const memory = options.memory || createMemoryCleaner({
     account,
     client: options.memoryClient || (account.configured ? createRelayerMemoryClient() : null),
   });
-  const seal = options.seal !== undefined
-    ? options.seal
-    : (sealPackageId(env) && env.WALRUS_SERVICE_KEY ? createLiveSeal(env) : null);
-  const serverSecret = options.serverSecret || env.FILES_WRAP_KEY || env.WALRUS_SERVICE_KEY || (demo ? "demo-wrap" : "");
-  const service = options.service || createFileService({
-    store,
-    storage,
-    seal,
-    memory,
-    env,
-    serverSecret,
-  });
+  const service = options.service || createFileService({ store, storage, memory });
   return {
     env,
     store,

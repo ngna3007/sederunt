@@ -560,6 +560,9 @@ h1.page-title, .page-title {
   font-size: 13px;
   line-height: 1.45;
 }
+#files .page-lede span {
+  white-space: nowrap;
+}
 .page-head {
   display: flex;
   flex-wrap: wrap;
