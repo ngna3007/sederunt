@@ -33,7 +33,10 @@ export function decodeBlobContent(buffer) {
   if (bytes.length < 78) return { blobIdBytes: id, certified: null };
   const tag = bytes[77];
   if (tag === 0) return { blobIdBytes: id, certified: false };
-  if (tag === 1) return { blobIdBytes: id, certified: true };
+  if (tag === 1) {
+    const certifiedEpoch = bytes.length >= 82 ? bytes.readUInt32LE(78) : null;
+    return { blobIdBytes: id, certified: true, certifiedEpoch };
+  }
   return { blobIdBytes: id, certified: null };
 }
 

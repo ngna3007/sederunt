@@ -3927,7 +3927,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
         ["Object", proof.objectId || (decision && decision.objectId) || ""],
         ["Transaction", proof.digest || (decision && decision.digest) || ""],
         ["Checkpoint", proof.checkpoint != null ? String(proof.checkpoint) : (decision && typeof decision.checkpoint === "number" ? String(decision.checkpoint) : "")],
-        ["Checkpoint time", proof.checkpointTime || ""]
+        ["Checkpoint time", proof.checkpointTime || ""],
+        ["Certified in Walrus epoch", proof.certifiedEpoch != null ? String(proof.certifiedEpoch) : ""]
       ];
       rows.forEach(function (pair) {
         if (!pair[1]) return;

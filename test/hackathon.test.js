@@ -34,6 +34,7 @@ test("a certified blob with a matching id, owner, checkpoint, and time is verifi
   });
   assert.equal(proof.status, "verified");
   assert.equal(proof.reason, "The blob is certified on Sui.");
+  assert.equal(proof.certifiedEpoch, 1);
   const shown = publicProof(proof);
   assert.equal(shown.links.object, `https://suiscan.xyz/mainnet/object/${objectId}`);
   assert.equal(shown.links.tx, "https://suiscan.xyz/mainnet/tx/C1J2cwJJQyaXZYBWqaDY5LRJHALA8JrtobJgD9BoWFjq");
@@ -93,6 +94,7 @@ test("a missing object or a missing checkpoint is unknown", () => {
   });
   assert.equal(soft.status, "unknown");
   assert.match(soft.reason, /checkpoint/);
+  assert.equal(soft.certifiedEpoch, 1);
 });
 
 test("the room and the decision show a proof panel, and an answer can show why", () => {

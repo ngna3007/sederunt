@@ -1,10 +1,10 @@
 import { blobIdBytes, decodeBlobContent } from "../memory/blob.js";
 
 /**
- * A memory is verified when the Blob exists, its blob id matches, it is
- * certified, the owner matches when one was expected, and the certifying
- * checkpoint and time are known. A mismatch is unverified. A missing read
- * is unknown. The owner address is not part of the result.
+ * A memory is verified when the Blob object read through Tatum exists, its
+ * blob id matches, it is certified, the owner matches when one was expected,
+ * and the certifying checkpoint and time are known. A mismatch is unverified. A missing read is unknown. The owner address is not part of the
+ * result.
  *
  * @param {{ object?: object, blobId?: string, owner?: string }} input
  */
@@ -17,6 +17,7 @@ export function verifyMemory(input = {}) {
     digest: object?.certifyingDigest || object?.previousTransaction || null,
     checkpoint: Number.isInteger(object?.checkpoint) ? object.checkpoint : null,
     checkpointTime: typeof object?.checkpointTime === "string" ? object.checkpointTime : null,
+    certifiedEpoch: null,
   };
   if (!object?.objectId) {
     return { ...base, status: "unknown", reason: "The chain proof is incomplete." };
@@ -34,11 +35,12 @@ export function verifyMemory(input = {}) {
   if (input.owner && object.ownerAddress && object.ownerAddress.toLowerCase() !== String(input.owner).toLowerCase()) {
     hard.push("The owner does not match.");
   }
+  const proven = { ...base, certifiedEpoch: Number.isInteger(decoded.certifiedEpoch) ? decoded.certifiedEpoch : null };
   if (!Number.isInteger(object.checkpoint)) soft.push("The certifying checkpoint is unknown.");
   if (!object.checkpointTime) soft.push("The checkpoint time is unknown.");
-  if (hard.length) return { ...base, status: "unverified", reason: hard[0] };
-  if (soft.length) return { ...base, status: "unknown", reason: soft[0] };
-  return { ...base, status: "verified", reason: "The blob is certified on Sui." };
+  if (hard.length) return { ...proven, status: "unverified", reason: hard[0] };
+  if (soft.length) return { ...proven, status: "unknown", reason: soft[0] };
+  return { ...proven, status: "verified", reason: "The blob is certified on Sui." };
 }
 
 export function suiscanLinks(proof) {
@@ -68,6 +70,7 @@ export function publicProof(proof) {
     digest: typeof proof.digest === "string" ? proof.digest : null,
     checkpoint: Number.isInteger(proof.checkpoint) ? proof.checkpoint : null,
     checkpointTime: typeof proof.checkpointTime === "string" ? proof.checkpointTime : null,
+    certifiedEpoch: Number.isInteger(proof.certifiedEpoch) ? proof.certifiedEpoch : null,
   };
   view.links = suiscanLinks(view);
   return view;
