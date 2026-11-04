@@ -41,7 +41,8 @@ export function proofMetadata(record) {
       picked[key] = typeof value === "string" ? redact(value) : value;
     }
   }
-  const tags = Array.isArray(record?.tags) ? record.tags.map((tag) => redact(tag)) : [];
+  const rawTags = Array.isArray(record?.tags) ? record.tags : Array.isArray(source.tags) ? source.tags : [];
+  const tags = rawTags.map((tag) => redact(typeof tag === "string" ? tag : JSON.stringify(tag)));
   return { metadataKeys: Object.keys(source), metadata: picked, tags };
 }
 

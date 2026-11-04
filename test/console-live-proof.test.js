@@ -34,3 +34,9 @@ test("the live proof records metadata keys, the five values, tags, and the delet
   assert.deepEqual(parsed.metadataKeys, ["tenant_id", "channel_id"]);
   assert.deepEqual(parsed.metadata, { tenant_id: "t-1", channel_id: "c-1" });
 });
+
+test("proof metadata reads tags kept inside metadata", async () => {
+  const { proofMetadata } = await import("../scripts/console-live-proof.mjs");
+  const got = proofMetadata({ metadata: { tenant_id: "t", tags: ["tenant:t", "channel:c"] } });
+  assert.deepEqual(got.tags, ["tenant:t", "channel:c"]);
+});
