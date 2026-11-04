@@ -544,7 +544,7 @@ ${slack}
             <span class="meta-item header-only" id="file-usage-item" hidden><span class="meta-label">Usage</span><span id="file-usage" class="usage-chip"></span></span>
             <p id="file-lead" class="page-lede" hidden></p>
             <p id="file-lead-status" class="meta"></p>
-            <a id="file-proof" class="badge ok proof-chip" href="#proof-panel" hidden></a>
+            <button type="button" id="file-proof" class="badge proof-chip" hidden><svg class="proof-check" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg><span id="file-proof-label"></span></button>
           </div>
         </div>
         <div class="room-body">
@@ -569,13 +569,13 @@ ${slack}
               <button type="button" data-left-tab="config" aria-selected="false">Config</button>
               <button type="button" data-left-tab="raw" aria-selected="false">Raw</button>
             </div>
+            <label class="search dock-search">${searchIcon}<span class="sr">Search the transcript</span><input id="transcript-search" type="search" placeholder="Search transcript" autocomplete="off"></label>
             <div id="left-transcript" class="tab-pane left-scroll">
               <div id="file-transcript"></div>
               <h2 class="pane-label">Speakers</h2>
               <div id="file-heard" class="faces"></div>
               <p id="file-present">The meeting has not sent who is there.</p>
             </div>
-            <label class="search dock-search">${searchIcon}<span class="sr">Search the transcript</span><input id="transcript-search" type="search" placeholder="Search transcript" autocomplete="off"></label>
             <div id="left-config" class="tab-pane" hidden>
               <section class="detail-block" id="files-block">
                 <h2 id="files-heading" hidden>Files</h2>
@@ -604,14 +604,6 @@ ${slack}
                 <div id="file-overview-people" class="faces"></div>
               </div>
               <div id="file-callout" class="callout" hidden></div>
-              <section id="proof-panel" class="detail-block proof-panel">
-                <h2>Proof</h2>
-                <p id="proof-status" class="meta" aria-live="polite">Verifying on chain…</p>
-                <dl class="kv" id="proof-facts"></dl>
-                <p id="proof-links" class="proof-links"></p>
-                <p id="proof-chain" class="meta">Read via Tatum gRPC · 0 calls</p>
-                <button type="button" class="secondary" id="proof-again">Verify again</button>
-              </section>
               <div class="overview-facts" id="overview-facts"></div>
               <div class="outcome-card" id="file-outcome" hidden></div>
               <dl class="kv" id="file-facts"></dl>
@@ -696,6 +688,30 @@ ${slack}
     </div>
   </div>
 </div>
+<div id="proof-dialog" class="dialog" hidden role="dialog" aria-modal="true" aria-labelledby="proof-dialog-title">
+  <div class="shade" data-close="proof-dialog"></div>
+  <div class="panel">
+    <div class="panel-bar">
+      <h2 id="proof-dialog-title">Record</h2>
+      <button type="button" class="close" data-close="proof-dialog" aria-label="Close">${closeIcon}</button>
+    </div>
+    <div class="panel-body">
+      <section id="proof-panel" class="detail-block proof-panel">
+        <p id="proof-plain" class="proof-plain"></p>
+        <p id="proof-status" class="meta" aria-live="polite">Verifying on chain…</p>
+        <details class="proof-tech" id="proof-tech">
+          <summary>Technical details</summary>
+          <p id="proof-kept" class="meta" hidden></p>
+          <p id="proof-reason" class="meta" hidden></p>
+          <dl class="kv" id="proof-facts"></dl>
+          <p id="proof-links" class="proof-links"></p>
+          <p id="proof-chain" class="meta">Read via Tatum gRPC · 0 calls</p>
+          <button type="button" class="secondary" id="proof-again">Verify again</button>
+        </details>
+      </section>
+    </div>
+  </div>
+</div>
 <div id="create-dialog" class="dialog" hidden role="dialog" aria-modal="true" aria-labelledby="create-title">
   <div class="shade" data-close="create-dialog"></div>
   <div class="panel">
@@ -761,13 +777,18 @@ ${spaceDialog}
     <p id="decision-file" hidden></p>
     <p id="decision-ticket" hidden></p>
     <p id="decision-proof" hidden></p>
-    <section id="decision-proof-panel" class="detail-block proof-panel">
-      <h2>Proof</h2>
+    <section id="decision-proof-panel" class="detail-block proof-panel" hidden>
+      <p id="decision-proof-plain" class="proof-plain"></p>
       <p id="decision-proof-status" class="meta" aria-live="polite">Verifying on chain…</p>
-      <dl class="kv" id="decision-proof-facts"></dl>
-      <p id="decision-proof-links" class="proof-links"></p>
-      <p id="decision-proof-chain" class="meta">Read via Tatum gRPC · 0 calls</p>
-      <button type="button" class="secondary" id="decision-proof-again">Verify again</button>
+      <details class="proof-tech">
+        <summary>Show source</summary>
+        <p id="decision-proof-kept" class="meta" hidden></p>
+        <p id="decision-proof-reason" class="meta" hidden></p>
+        <dl class="kv" id="decision-proof-facts"></dl>
+        <p id="decision-proof-links" class="proof-links"></p>
+        <p id="decision-proof-chain" class="meta">Read via Tatum gRPC · 0 calls</p>
+        <button type="button" class="secondary" id="decision-proof-again">Verify again</button>
+      </details>
     </section>
     <p id="decision-epoch" hidden></p>
     <div id="decision-other"></div>
@@ -1037,9 +1058,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function proofExplain(decision) {
-    if (decision && typeof decision.checkpoint === "number") {
-      return "Kept at checkpoint " + decision.checkpoint + ".";
-    }
+    if (!decision) return "";
+    var status = (decision.proof && decision.proof.status) || decision.proofStatus || "";
+    if (status === "verified" || typeof decision.checkpoint === "number") return "Stored on Walrus.";
     return "";
   }
 
@@ -2986,7 +3007,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function dialogOpen() {
-    var ids = ["event-dialog", "profile-dialog", "decision-dialog", "create-dialog", "workspace-dialog", "space-dialog", "mcp-dialog", "mcp-manage-dialog", "mcp-token-dialog", "mcp-remove-dialog"];
+    var ids = ["proof-dialog", "event-dialog", "profile-dialog", "decision-dialog", "create-dialog", "workspace-dialog", "space-dialog", "mcp-dialog", "mcp-manage-dialog", "mcp-token-dialog", "mcp-remove-dialog"];
     for (var i = 0; i < ids.length; i += 1) {
       var node = document.getElementById(ids[i]);
       if (node && !node.hidden) return true;
@@ -3028,6 +3049,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
       return;
     }
     if (id === "file-dialog") {
+      var proofOpen = document.getElementById("proof-dialog");
+      if (proofOpen && !proofOpen.hidden) proofOpen.hidden = true;
       var decision = document.getElementById("decision-dialog");
       if (decision && !decision.hidden) closeDialog("decision-dialog");
       showSection(returnSection === "rooms" ? "rooms" : "home");
@@ -3092,13 +3115,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       status.textContent = "";
       status.hidden = true;
     }
-    var chip = document.getElementById("file-proof");
-    if (chip) {
-      var kept = lead && typeof lead.checkpoint === "number";
-      chip.textContent = kept ? "On Walrus" : "";
-      chip.title = kept ? proofExplain(lead) : "";
-      chip.hidden = !kept;
-    }
+    paintProofChip(lead);
   }
 
   function fileMark(name) {
@@ -3687,7 +3704,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     text("decision-heard", heardWho && heardWhen ? heardWho + " kept this on " + heardWhen + "." : heardWho ? heardWho + " kept this." : heardWhen ? "Kept on " + heardWhen + "." : "No one is recorded yet.");
     showLine("decision-file", fileLine(decision));
     showLine("decision-ticket", ticketLine(decision));
-    showLine("decision-proof", proofExplain(decision));
+    showLine("decision-proof", "");
     renderProofPanel("decision-proof", decision);
     showLine("decision-epoch", epochLine(decision));
     clear("decision-other");
@@ -3915,6 +3932,37 @@ if (sessionWhen && sessionWhen.dataset.at) {
     return "https://suiscan.xyz/mainnet/" + kind + "/" + id;
   }
 
+  function whySource(memory) {
+    if (!memory) return null;
+    var rows = [
+      ["Blob", memory.blobId || ""],
+      ["Object", memory.objectId || ""],
+      ["Transaction", memory.digest || ""],
+      ["Checkpoint", memory.checkpoint != null ? String(memory.checkpoint) : ""]
+    ].filter(function (pair) { return pair[1]; });
+    if (!rows.length) return null;
+    var details = document.createElement("details");
+    details.className = "why-source";
+    var summary = document.createElement("summary");
+    summary.textContent = "Show source";
+    details.append(summary);
+    rows.forEach(function (pair) {
+      var line = document.createElement("p");
+      line.className = "proof-id";
+      var kind = pair[0] === "Object" ? "object" : pair[0] === "Transaction" ? "tx" : pair[0] === "Checkpoint" ? "checkpoint" : "";
+      if (kind) {
+        var link = document.createElement("a");
+        link.href = suiscanHref(kind, pair[1]);
+        link.target = "_blank";
+        link.rel = "noopener";
+        link.textContent = pair[0] + " " + pair[1];
+        line.append(link);
+      } else line.textContent = pair[0] + " " + pair[1];
+      details.append(line);
+    });
+    return details;
+  }
+
   function proofStatusCopy(decision) {
     var proof = decision && decision.proof;
     var status = (proof && proof.status) || (decision && decision.proofStatus) || "unknown";
@@ -3922,6 +3970,69 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (status === "pending") return "Verifying on chain…";
     if (status === "unverified") return (proof && proof.reason) || (decision && decision.proofReason) || "Unverified.";
     return (proof && proof.reason) || (decision && decision.proofReason) || "Proof is unknown.";
+  }
+
+  function proofCheckpoint(decision) {
+    var proof = (decision && decision.proof) || {};
+    if (proof.checkpoint != null && proof.checkpoint !== "") return String(proof.checkpoint);
+    if (decision && typeof decision.checkpoint === "number") return String(decision.checkpoint);
+    return "";
+  }
+
+  function proofPlain(decision, noun) {
+    var proof = (decision && decision.proof) || {};
+    var status = (proof && proof.status) || (decision && decision.proofStatus) || "unknown";
+    var meeting = noun !== "decision";
+    var when = chainWhen(proof.checkpointTime);
+    if (status === "verified") {
+      var head = meeting ? "This meeting's record is stored on Walrus" : "This decision is stored on Walrus";
+      if (when) return head + " and was confirmed on the Sui network on " + when + ". Nobody can change it.";
+      return head + " and was confirmed on the Sui network. Nobody can change it.";
+    }
+    if (status === "pending") {
+      return meeting ? "We're checking that this meeting's record is stored on Walrus." : "We're checking that this decision is stored on Walrus.";
+    }
+    return meeting ? "We couldn't confirm this record on Walrus." : "We couldn't confirm this decision on Walrus.";
+  }
+
+  function proofWorthShowing(decision) {
+    if (!decision) return false;
+    var proof = decision.proof || {};
+    var status = proof.status || decision.proofStatus || "";
+    if (status === "verified" || status === "pending" || status === "unverified") return true;
+    if (proof.blobId || decision.blobId || proof.objectId || decision.objectId || proof.digest || decision.digest) return true;
+    if (proof.checkpoint != null || typeof decision.checkpoint === "number") return true;
+    return false;
+  }
+
+  function paintProofChip(decision) {
+    var chip = document.getElementById("file-proof");
+    var label = document.getElementById("file-proof-label");
+    if (!chip) return;
+    if (!decision) {
+      chip.hidden = true;
+      chip.className = "badge proof-chip";
+      if (label) label.textContent = "";
+      var idleTitle = document.getElementById("proof-dialog-title");
+      if (idleTitle) idleTitle.textContent = "Record";
+      return;
+    }
+    var proof = decision.proof || {};
+    var status = proof.status || decision.proofStatus || "unknown";
+    var word = "Couldn't verify";
+    var tone = "badge warn proof-chip";
+    if (status === "verified") {
+      word = "Verified on Walrus";
+      tone = "badge ok proof-chip is-verified";
+    } else if (status === "pending") {
+      word = "Verifying…";
+      tone = "badge info proof-chip";
+    }
+    chip.className = tone;
+    chip.hidden = false;
+    if (label) label.textContent = word;
+    var title = document.getElementById("proof-dialog-title");
+    if (title) title.textContent = word;
   }
 
   // A chain or memory time in the viewer's zone, with the zone named:
@@ -3939,9 +4050,30 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var facts = document.getElementById(prefix + "-facts");
     var links = document.getElementById(prefix + "-links");
     var chain = document.getElementById(prefix + "-chain");
+    var noun = prefix === "decision-proof" ? "decision" : "meeting";
     if (chain) chain.textContent = chainLine();
     if (status) status.textContent = decision ? proofStatusCopy(decision) : "Proof is unknown until the chain is read.";
     if (status) status.setAttribute("data-proof", decision ? ((decision.proof && decision.proof.status) || decision.proofStatus || "unknown") : "none");
+    var plain = document.getElementById(prefix + "-plain");
+    if (plain) plain.textContent = decision ? proofPlain(decision, noun) : "We couldn't confirm this record on Walrus.";
+    var panel = document.getElementById(prefix + "-panel");
+    if (prefix === "decision-proof" && panel) panel.hidden = !proofWorthShowing(decision);
+    if (prefix === "proof") paintProofChip(decision);
+    var kept = document.getElementById(prefix + "-kept");
+    if (kept) {
+      var checkpoint = proofCheckpoint(decision);
+      kept.textContent = checkpoint ? ("Checkpoint " + checkpoint + " on the Sui network.") : "";
+      kept.hidden = !kept.textContent;
+    }
+    var reasonNode = document.getElementById(prefix + "-reason");
+    if (reasonNode) {
+      var proof = (decision && decision.proof) || {};
+      var stateName = (proof && proof.status) || (decision && decision.proofStatus) || "unknown";
+      var reason = (proof && proof.reason) || (decision && decision.proofReason) || "";
+      var showReason = stateName !== "verified" && stateName !== "pending" && reason && reason !== "Verifying on chain…";
+      reasonNode.textContent = showReason ? reason : "";
+      reasonNode.hidden = !showReason;
+    }
     if (decision && proofPending(decision)) followProof(decision);
     if (facts) {
       facts.replaceChildren();
@@ -4008,7 +4140,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (lead && lead.id === decision.id) renderProofPanel("proof", decision);
     if (openDecisionRow && openDecisionRow.id === decision.id) {
       renderProofPanel("decision-proof", decision);
-      showLine("decision-proof", proofExplain(decision));
+      showLine("decision-proof", "");
     }
   }
 
@@ -4155,6 +4287,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
       empty.textContent = transcriptEmptyCopy(rows && rows.length);
       box.append(empty);
     }
+    placeTranscriptSearch((rows || []).length);
+  }
+
+  function placeTranscriptSearch(count) {
+    var search = document.querySelector("label.dock-search");
+    if (!search) return;
+    var lines = typeof count === "number" ? count : (fileRoom ? decisionsFor(fileRoom).length : 0);
+    search.hidden = leftTab !== "transcript" || lines < 2;
   }
 
   function applyRoomTabs() {
@@ -4170,8 +4310,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var button = document.querySelector('[data-right-tab="' + name + '"]');
       if (button) button.setAttribute("aria-selected", name === rightTab ? "true" : "false");
     });
-    var search = document.querySelector(".dock-search");
-    if (search) search.hidden = leftTab !== "transcript";
+    placeTranscriptSearch();
     var settings = document.querySelector(".room-settings");
     if (settings) settings.hidden = rightTab !== "overview";
   }
@@ -5800,6 +5939,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (!document.getElementById("account-menu").hidden) closeAccountMenu();
     else if (!document.getElementById("profile-dialog").hidden) closeDialog("profile-dialog");
     else if (!document.getElementById("palette").hidden) closePalette();
+    else if (document.getElementById("proof-dialog") && !document.getElementById("proof-dialog").hidden) closeDialog("proof-dialog");
     else if (!document.getElementById("decision-dialog").hidden) closeDialog("decision-dialog");
     else if (!document.getElementById("create-dialog").hidden) closeDialog("create-dialog");
     else if (!document.getElementById("file-dialog").hidden) closeDialog("file-dialog");
@@ -6051,14 +6191,21 @@ if (sessionWhen && sessionWhen.dataset.at) {
         summary.textContent = "Why";
         why.append(summary);
         result.why.forEach(function (memory) {
-          var row = document.createElement("p");
+          var row = document.createElement("div");
+          row.className = "why-row";
+          var sentence = document.createElement("p");
           var bits = [];
-          if (memory && memory.text) bits.push(memory.text);
-          if (memory && memory.kind) bits.push(memory.kind);
+          if (memory && memory.text) bits.push(String(memory.text).trim());
           if (memory && memory.at) bits.push(chainWhen(memory.at) || memory.at);
-          var badge = memory && memory.verified === "verified" ? "verified on chain" : (memory && memory.verified === "unverified" ? "unverified" : "unknown");
-          bits.push(badge);
-          row.textContent = bits.join(" · ");
+          var trust = memory && memory.verified === "verified" ? "Verified on Walrus." : (memory && memory.verified === "unverified" ? "Couldn't verify." : "");
+          var spoken = [];
+          if (bits[0]) spoken.push(bits[0]);
+          if (bits[1]) spoken.push("Kept on " + bits[1] + ".");
+          if (trust) spoken.push(trust);
+          sentence.textContent = spoken.join(" ");
+          row.append(sentence);
+          var source = whySource(memory);
+          if (source) row.append(source);
           why.append(row);
         });
         reading.parentNode.append(why);
@@ -6444,13 +6591,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
     }
   });
   var proofChip = document.getElementById("file-proof");
-  if (proofChip) proofChip.addEventListener("click", function (event) {
-    var panel = document.getElementById("proof-panel");
-    if (!panel) return;
-    event.preventDefault();
-    var overviewTab = document.querySelector('[data-right-tab="overview"]');
-    if (overviewTab && overviewTab.getAttribute("aria-selected") !== "true") overviewTab.click();
-    panel.scrollIntoView({ block: "start", behavior: "smooth" });
+  if (proofChip) proofChip.addEventListener("click", function () {
+    openDialog("proof-dialog");
   });
   var transcriptSearch = document.getElementById("transcript-search");
   if (transcriptSearch) transcriptSearch.addEventListener("input", function () {

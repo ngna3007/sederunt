@@ -43,6 +43,10 @@ export function shapeAnswer(input = {}) {
       at: typeof memory.at === "string" ? memory.at : "",
       kind: memory.kind || "memory",
       verified: memory.verified === "verified" || memory.verified === "unverified" ? memory.verified : "unknown",
+      blobId: typeof memory.blobId === "string" ? memory.blobId : "",
+      objectId: typeof memory.objectId === "string" ? memory.objectId : "",
+      digest: typeof memory.digest === "string" ? memory.digest : "",
+      checkpoint: typeof memory.checkpoint === "number" ? memory.checkpoint : null,
     });
     const memoryText = String(memory.text ?? "").trim();
     if (!memoryText) continue;
@@ -71,6 +75,10 @@ export function memoriesFor(session) {
       at: item.at || "",
       kind: item.kind || "memory",
       verified: item.verified || "unknown",
+      blobId: typeof item.blobId === "string" ? item.blobId : "",
+      objectId: typeof item.objectId === "string" ? item.objectId : "",
+      digest: typeof item.digest === "string" ? item.digest : "",
+      checkpoint: typeof item.checkpoint === "number" ? item.checkpoint : null,
     });
   }
   for (const decision of session?.decisions ?? []) {
@@ -80,6 +88,10 @@ export function memoriesFor(session) {
       at: decision.spokenAt || "",
       kind: "decision",
       verified: decision.proofStatus || "unknown",
+      blobId: typeof decision.blobId === "string" ? decision.blobId : "",
+      objectId: typeof decision.objectId === "string" ? decision.objectId : "",
+      digest: typeof decision.digest === "string" ? decision.digest : "",
+      checkpoint: typeof decision.checkpoint === "number" ? decision.checkpoint : null,
     });
   }
   return rows;
