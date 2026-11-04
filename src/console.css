@@ -5298,3 +5298,6 @@ button.row-edit {
   .meeting-row .secondary { align-self: flex-start; }
   .page-actions { flex-wrap: wrap; min-width: 0; }
 }
+#home-head { min-width: 0; }
+#home-head .page-actions { flex-wrap: wrap; min-width: 0; max-width: 100%; }
+#home-add-to-meeting { max-width: 100%; }

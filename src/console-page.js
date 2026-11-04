@@ -202,7 +202,9 @@ ${slack}
     <p id="home-title" class="page-title">Home</p>
     <p class="page-lede">Decisions this workspace kept, and the actions that followed.</p>
     </div>
-    <div class="page-actions"></div>
+    <div class="page-actions">
+      <button type="button" class="secondary" id="home-add-to-meeting">Add to a meeting</button>
+    </div>
     </div>
     <div class="home-tools">
     <div id="home-empty" class="home-empty" hidden>
@@ -836,6 +838,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   var eventLoaded = false;
   var eventForceClose = false;
   var eventLoadToken = 0;
+  var calendarAskPlaced = false;
 
   function text(id, value) {
     var node = document.getElementById(id);
@@ -2386,6 +2389,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     paintRooms();
     paintMeetings();
     paintCounts();
+    syncCalendarAsk();
     paintAttention();
     paintHistory();
     clear("record-list");
@@ -2734,6 +2738,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     closeNav();
     document.body.classList.toggle("room-open", name === "file");
     placeRoomChrome();
+    syncCalendarAsk();
   }
 
   function closeNav() {
@@ -4660,6 +4665,19 @@ if (sessionWhen && sessionWhen.dataset.at) {
     return true;
   }
 
+  function revealCalendarAsk() {
+    var card = document.getElementById("tool-ask-calendar");
+    if (!card) return false;
+    card.hidden = false;
+    calendarAskPlaced = true;
+    return true;
+  }
+
+  function syncCalendarAsk() {
+    if (calendarAskPlaced || sectionName !== "home" || !shouldAsk("calendar")) return;
+    revealCalendarAsk();
+  }
+
   function saveToolChoice(tool, choice) {
     return fetch("/console/tool-prefs", {
       method: "POST",
@@ -5217,17 +5235,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
     }
   });
 
-  var homeAdd = document.getElementById("home-add-meeting");
-  if (homeAdd) homeAdd.addEventListener("click", function () {
-    if (shouldAsk("calendar")) {
-      var card = document.getElementById("tool-ask-calendar");
-      if (card) {
-        card.hidden = false;
-        return;
-      }
-    }
+  function onHomeAddMeeting() {
+    if (shouldAsk("calendar") && revealCalendarAsk()) return;
     document.getElementById("new-room").click();
-  });
+  }
+  var homeAdd = document.getElementById("home-add-meeting");
+  if (homeAdd) homeAdd.addEventListener("click", onHomeAddMeeting);
+  var homeAddToMeeting = document.getElementById("home-add-to-meeting");
+  if (homeAddToMeeting) homeAddToMeeting.addEventListener("click", onHomeAddMeeting);
   var homeConnect = document.getElementById("home-connect-tools");
   if (homeConnect) homeConnect.addEventListener("click", function (event) {
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
