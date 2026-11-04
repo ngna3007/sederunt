@@ -257,10 +257,30 @@ button.chip .ic { margin-left: auto; color: var(--muted-foreground); }
   padding: 6px;
   display: grid;
   gap: 2px;
+  max-height: min(24rem, calc(100dvh - 14rem));
+  overflow: auto;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-md);
+}
+.space-form { margin: 0; display: block; min-width: 0; }
+.menu .space-form button,
+#workspace-menu #create-workspace {
+  height: auto;
+  min-height: 36px;
+  padding: 6px 8px;
+  border: 0;
+  justify-content: flex-start;
+  text-align: left;
+  white-space: normal;
+  min-width: 0;
+}
+.menu-note {
+  margin: 4px;
+  color: var(--foreground);
+  font-size: 12px;
+  line-height: 1.4;
 }
 .menu button {
   justify-content: flex-start;
@@ -1509,7 +1529,8 @@ body.welcome-page { height: auto; min-height: 100dvh; overflow: auto; }
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
-button.choice-card {
+button.choice-card,
+label.choice-card {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -1525,13 +1546,39 @@ button.choice-card {
   color: var(--foreground);
   text-align: left;
   white-space: normal;
+  min-width: 0;
+  cursor: pointer;
 }
-button.choice-card:hover { background: var(--muted); }
-button.choice-card[aria-checked="true"] {
+button.choice-card:hover,
+label.choice-card:hover { background: var(--muted); }
+button.choice-card[aria-checked="true"],
+label.choice-card:has(input:checked) {
   border-color: var(--primary);
   background: var(--primary-subtle);
   box-shadow: inset 0 0 0 1px var(--primary);
 }
+.choice-two {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+label.choice-card input[type="radio"] {
+  margin: 0 0 4px;
+  accent-color: var(--primary);
+}
+#space-dialog-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 0;
+}
+#space-dialog-form .choice-card { font-weight: 400; }
 .choice-title { font-size: 16px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.3; }
 .choice-copy { color: var(--muted-foreground); font-size: 13px; font-weight: 400; line-height: 1.45; }
 .welcome-skip { margin: 14px 0 0; text-align: center; }
@@ -1570,8 +1617,9 @@ a.welcome-go:hover { background: var(--primary-hover); color: var(--primary-fore
 .invite-email { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 .invite-row input { min-width: 0; }
 @media (max-width: 768px) {
-  .choice-grid { grid-template-columns: 1fr; }
-  button.choice-card, button.text-link, a.welcome-go { min-height: 44px; }
+  .choice-grid, .choice-two { grid-template-columns: 1fr; }
+  button.choice-card, label.choice-card, button.text-link, a.welcome-go { min-height: 44px; }
+  .menu .space-form button, #workspace-menu #create-workspace { min-height: 44px; }
 }
 
 #join-ready.off { color: var(--muted-foreground); }

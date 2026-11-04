@@ -11,13 +11,14 @@ export const DECISION_COLUMNS = ["Decision", "Room", "Status", ""];
  * The operator workspace. Onboard, home, rooms, history, chat, and record
  * read the process. The page has no key field.
  * The chip switches Company and Personal. Personal has no room.
+ * An OAuth sign-in lists that person's spaces instead, and can add a team or company.
  * The served console uses the Recall shell: one workspace switcher
  * sits at the top of the sidebar, and the breadcrumb sits over the content column.
  * The account block sits at the bottom of the rail. Its name is the session
  * label, or the process member when sign-in is not configured.
  * The room file pins the decision. Each setting is a row, label then control.
  *
- * @param {{ meeting?: boolean, meetingSetup?: string, slackReady?: boolean, signedIn?: boolean, accountName?: string, accountMember?: string, accountLine?: string }} [state]
+ * @param {{ meeting?: boolean, meetingSetup?: string, slackReady?: boolean, signedIn?: boolean, accountName?: string, accountMember?: string, accountLine?: string, spaces?: object | null }} [state]
  */
 export function renderConsolePage(state = {}) {
   const signedIn = state.signedIn === true;
@@ -68,6 +69,8 @@ export function renderConsolePage(state = {}) {
   const secretCard = signInOff
     ? `<div class="settings-card" id="console-secret"><p class="section-label">Console sign-in</p><p class="card-help">Sign-in is off. Anyone with this link can act as you. Set SEDERUNT_CONSOLE_SECRET outside this page, then restart. This page never shows the secret.</p></div>`
     : "";
+  const switcher = renderWorkspaceSwitcher(state.spaces, switchIcon);
+  const spaceDialog = state.spaces?.oauth ? renderSpaceDialog(closeIcon) : "";
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -88,17 +91,7 @@ ${brandSprite()}
       <p class="brand"><span class="tile-mark brand-mark" aria-hidden="true">S</span>Sederunt</p>
       <button id="rail-close" class="close rail-close" type="button" aria-label="Close the menu">${closeIcon}</button>
       <div id="chip-wrap" class="chip-wrap">
-        <button id="workspace-chip" class="chip" type="button" aria-expanded="false" aria-haspopup="menu" aria-controls="workspace-menu">
-          <span id="chip-mark" class="tile-mark co" aria-hidden="true">C</span>
-          <span class="ws-copy"><span id="chip-name">Company</span><span id="chip-hint"></span></span>
-          ${switchIcon}
-        </button>
-        <div id="workspace-menu" class="menu" role="menu" hidden>
-          <button type="button" role="menuitemradio" data-workspace="company" aria-checked="true"><span class="tile-mark co" aria-hidden="true">C</span><span class="ws-copy"><span>Company</span><span class="menu-hint"></span></span></button>
-          <button type="button" role="menuitemradio" data-workspace="personal" aria-checked="false"><span class="tile-mark pe" aria-hidden="true">P</span><span class="ws-copy"><span>Personal</span><span class="menu-hint">A separate workspace</span></span></button>
-          <div class="menu-rule" role="separator"></div>
-          <button id="create-workspace" type="button" role="menuitem"><span class="ws-copy"><span>About Company</span><span class="menu-hint">What Company is</span></span></button>
-        </div>
+        ${switcher}
       </div>
       <button id="goto" class="goto" type="button">Go to<span class="kbd" id="goto-kbd">Ctrl K</span></button>
       </div>
@@ -660,6 +653,7 @@ ${slack}
     </div>
   </div>
 </div>
+${spaceDialog}
 <div id="decision-dialog" class="dialog" hidden role="dialog" aria-modal="true" aria-labelledby="decision-sentence">
   <div class="shade" data-close="decision-dialog"></div>
   <div class="panel">
@@ -733,7 +727,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
   var peopleColumns = ${JSON.stringify(PEOPLE_COLUMNS)};
   var slowTimer = null;
   var toastTimer = null;
-  var workspaceKind = "company";
+  var consoleSpaces = ${jsonForScript(state.spaces || null)};
+  var workspaceKind = consoleSpaces && consoleSpaces.activeKind === "personal" ? "personal" : "company";
   var sectionName = "home";
   var returnSection = "home";
   var loadToken = 0;
@@ -1453,6 +1448,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function paintChip() {
+    if (consoleSpaces && consoleSpaces.oauth) {
+      paintSpaceChip();
+      return;
+    }
     var personal = workspaceKind === "personal";
     text("chip-name", personal ? "Personal" : "Company");
     text("chip-hint", personal ? "A separate workspace" : "");
@@ -1462,6 +1461,27 @@ if (sessionWhen && sessionWhen.dataset.at) {
     mark.className = personal ? "tile-mark pe" : "tile-mark co";
     document.querySelectorAll("[data-workspace]").forEach(function (button) {
       button.setAttribute("aria-checked", button.getAttribute("data-workspace") === workspaceKind ? "true" : "false");
+    });
+  }
+
+  function paintSpaceChip() {
+    var items = consoleSpaces.items || [];
+    var active = null;
+    for (var i = 0; i < items.length; i += 1) {
+      if (items[i].id === consoleSpaces.activeId) active = items[i];
+    }
+    if (!active && items.length) active = items[0];
+    var personal = active ? active.kind === "personal" : consoleSpaces.activeKind === "personal";
+    text("chip-name", active ? active.name : (consoleSpaces.activeName || "Personal"));
+    text("chip-hint", active ? (active.hint || "") : "");
+    var mark = document.getElementById("chip-mark");
+    if (mark) {
+      mark.textContent = active ? (active.mark || (personal ? "P" : "S")) : "P";
+      mark.className = personal ? "tile-mark pe" : "tile-mark";
+    }
+    document.querySelectorAll("#workspace-menu [data-tenant]").forEach(function (button) {
+      var on = !!(active && button.getAttribute("data-tenant") === active.id);
+      button.setAttribute("aria-checked", on ? "true" : "false");
     });
   }
 
@@ -2174,7 +2194,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function paint(next) {
     state = next;
     text("status", "");
-    if (next.workspace === "personal" || next.workspace === "company") workspaceKind = next.workspace;
+    if (consoleSpaces && consoleSpaces.oauth) {
+      workspaceKind = consoleSpaces.activeKind === "personal" ? "personal" : "company";
+    } else if (next.workspace === "personal" || next.workspace === "company") {
+      workspaceKind = next.workspace;
+    }
     paintChip();
     showHomeSkeleton(next.reading === true);
     document.body.classList.toggle("read-failed", next.read === "failed");
@@ -2617,7 +2641,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function dialogOpen() {
-    var ids = ["profile-dialog", "decision-dialog", "create-dialog", "workspace-dialog"];
+    var ids = ["profile-dialog", "decision-dialog", "create-dialog", "workspace-dialog", "space-dialog"];
     for (var i = 0; i < ids.length; i += 1) {
       var node = document.getElementById(ids[i]);
       if (node && !node.hidden) return true;
@@ -4244,6 +4268,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
     chip.setAttribute("aria-expanded", "true");
     chip.classList.add("open");
     syncWorkspaceMenu();
+    if (consoleSpaces && consoleSpaces.oauth) {
+      var current = menu.querySelector("[role='menuitemradio'][aria-checked='true']") || menu.querySelector("[role='menuitem']");
+      if (current) current.focus();
+      return;
+    }
     var next = menu.querySelector('[data-workspace="' + workspaceKind + '"]');
     if (next) next.focus();
   }
@@ -4257,6 +4286,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     closeDialog("create-dialog");
     closeDialog("file-dialog");
     closeDialog("workspace-dialog");
+    closeDialog("space-dialog");
     if (!home.hidden) showSection("home");
     paintChip();
     if (!changed) return;
@@ -4350,8 +4380,36 @@ if (sessionWhen && sessionWhen.dataset.at) {
   });
   document.getElementById("create-workspace").addEventListener("click", function () {
     closeMenu();
-    openDialog("workspace-dialog");
+    if (consoleSpaces && consoleSpaces.oauth) openDialog("space-dialog");
+    else openDialog("workspace-dialog");
   });
+  document.getElementById("workspace-menu").addEventListener("keydown", function (event) {
+    if (!consoleSpaces || !consoleSpaces.oauth) return;
+    var move = event.key === "ArrowDown" || event.key === "ArrowRight" || event.key === "ArrowUp" || event.key === "ArrowLeft" || event.key === "Home" || event.key === "End";
+    if (!move) return;
+    var items = Array.prototype.slice.call(document.querySelectorAll("#workspace-menu [role='menuitemradio'], #workspace-menu [role='menuitem']"));
+    if (!items.length) return;
+    var index = items.indexOf(document.activeElement);
+    if (index < 0) index = 0;
+    if (event.key === "Home") index = 0;
+    else if (event.key === "End") index = items.length - 1;
+    else if (event.key === "ArrowDown" || event.key === "ArrowRight") index = (index + 1) % items.length;
+    else index = (index + items.length - 1) % items.length;
+    event.preventDefault();
+    items.forEach(function (item, i) { item.tabIndex = i === index ? 0 : -1; });
+    items[index].focus();
+  });
+  var spaceKindBox = document.getElementById("space-kind");
+  if (spaceKindBox) {
+    spaceKindBox.addEventListener("change", function () {
+      var company = spaceKindBox.querySelector("input[value='company']");
+      var on = !!(company && company.checked);
+      var label = document.getElementById("space-domain-label");
+      var input = document.getElementById("space-domain");
+      if (label) label.hidden = !on;
+      if (input) input.disabled = !on;
+    });
+  }
   document.addEventListener("click", function () { closeMenu(); });
   document.getElementById("continue").addEventListener("click", function () {
     onboard.hidden = true;
@@ -4497,6 +4555,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     else if (!document.getElementById("create-dialog").hidden) closeDialog("create-dialog");
     else if (!document.getElementById("file-dialog").hidden) closeDialog("file-dialog");
     else if (!document.getElementById("workspace-dialog").hidden) closeDialog("workspace-dialog");
+    else if (document.getElementById("space-dialog") && !document.getElementById("space-dialog").hidden) closeDialog("space-dialog");
     else if (!document.getElementById("workspace-menu").hidden) closeMenu();
   });
   document.querySelectorAll("[data-scope]").forEach(function (button) {
@@ -5360,4 +5419,105 @@ function escapeHtml(value) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+/** JSON for a script tag. User-controlled names must not close the script. */
+function jsonForScript(value) {
+  return JSON.stringify(value)
+    .replace(/&/g, "\\u0026")
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+}
+
+function renderWorkspaceSwitcher(spaces, switchIcon) {
+  if (!spaces?.oauth) {
+    return `<button id="workspace-chip" class="chip" type="button" aria-expanded="false" aria-haspopup="menu" aria-controls="workspace-menu">
+          <span id="chip-mark" class="tile-mark co" aria-hidden="true">C</span>
+          <span class="ws-copy"><span id="chip-name">Company</span><span id="chip-hint"></span></span>
+          ${switchIcon}
+        </button>
+        <div id="workspace-menu" class="menu" role="menu" aria-labelledby="workspace-chip" hidden>
+          <button type="button" role="menuitemradio" data-workspace="company" aria-checked="true"><span class="tile-mark co" aria-hidden="true">C</span><span class="ws-copy"><span>Company</span><span class="menu-hint"></span></span></button>
+          <button type="button" role="menuitemradio" data-workspace="personal" aria-checked="false"><span class="tile-mark pe" aria-hidden="true">P</span><span class="ws-copy"><span>Personal</span><span class="menu-hint">A separate workspace</span></span></button>
+          <div class="menu-rule" role="separator"></div>
+          <button id="create-workspace" type="button" role="menuitem"><span class="ws-copy"><span>About Company</span><span class="menu-hint">What Company is</span></span></button>
+        </div>`;
+  }
+  const items = Array.isArray(spaces.items) ? spaces.items : [];
+  const active = items.find((item) => item.id && item.id === spaces.activeId) || items[0] || null;
+  const personal = (active?.kind || spaces.activeKind) === "personal";
+  const name = active?.name || spaces.activeName || "Personal";
+  const hint = active?.hint || "";
+  const mark = active?.mark || (personal ? "P" : "S");
+  const rows = items.map((item) => {
+    const on = !!(active && item.id === active.id);
+    const itemPersonal = item.kind === "personal";
+    return `<form class="space-form" method="post" action="/console/space">
+          <input type="hidden" name="tenant" value="${escapeHtml(item.id)}">
+          <button type="submit" role="menuitemradio" data-tenant="${escapeHtml(item.id)}" data-kind="${escapeHtml(item.kind)}" aria-checked="${on ? "true" : "false"}" tabindex="${on ? "0" : "-1"}">
+            <span class="${itemPersonal ? "tile-mark pe" : "tile-mark"}" aria-hidden="true">${escapeHtml(item.mark || "S")}</span>
+            <span class="ws-copy"><span>${escapeHtml(item.name)}</span><span class="menu-hint">${escapeHtml(item.hint || "")}</span></span>
+          </button>
+        </form>`;
+  }).join("");
+  const error = spaces.error
+    ? `<p class="menu-note" role="alert">${escapeHtml(spaces.error)}</p>`
+    : "";
+  return `<button id="workspace-chip" class="chip" type="button" aria-expanded="false" aria-haspopup="menu" aria-controls="workspace-menu">
+          <span id="chip-mark" class="${personal ? "tile-mark pe" : "tile-mark"}" aria-hidden="true">${escapeHtml(mark)}</span>
+          <span class="ws-copy"><span id="chip-name">${escapeHtml(name)}</span><span id="chip-hint">${escapeHtml(hint)}</span></span>
+          ${switchIcon}
+        </button>
+        <div id="workspace-menu" class="menu" role="menu" aria-labelledby="workspace-chip" hidden>
+          ${error}
+          ${rows}
+          <div class="menu-rule" role="separator"></div>
+          <button id="create-workspace" type="button" role="menuitem" tabindex="${items.length ? "-1" : "0"}"><span class="ws-copy"><span>Create a space</span><span class="menu-hint">Team or company</span></span></button>
+        </div>`;
+}
+
+function renderSpaceDialog(closeIcon) {
+  return `<div id="space-dialog" class="dialog" hidden role="dialog" aria-modal="true" aria-labelledby="space-dialog-title">
+  <div class="shade" data-close="space-dialog"></div>
+  <div class="panel">
+    <div class="panel-bar">
+      <h2 id="space-dialog-title">Create a space</h2>
+      <button type="button" class="close" data-close="space-dialog" aria-label="Close">${closeIcon}</button>
+    </div>
+    <form class="panel-body" method="post" action="/console/welcome" id="space-dialog-form">
+      <p class="page-lede">Name the team or company, then invite people if you want. Sederunt does not send email yet.</p>
+      <input type="hidden" name="action" value="create">
+      <fieldset class="choice-two" id="space-kind">
+        <legend class="sr">Kind of space</legend>
+        <label class="choice-card radio-card">
+          <input type="radio" name="kind" value="team" checked>
+          <span class="choice-title">Team</span>
+          <span class="choice-copy">A shared space for the people you work with.</span>
+        </label>
+        <label class="choice-card radio-card">
+          <input type="radio" name="kind" value="company">
+          <span class="choice-title">Company</span>
+          <span class="choice-copy">A space for the company, with an optional email domain.</span>
+        </label>
+      </fieldset>
+      <label>Name
+        <input id="space-name" name="name" required maxlength="120" minlength="1" autocomplete="organization">
+      </label>
+      <label id="space-domain-label" hidden>Email domain (optional)
+        <input id="space-domain" name="domain" autocomplete="off" maxlength="253" placeholder="example.com" disabled>
+        <span class="field-hint">Optional. Leave it blank if you don't want one saved.</span>
+      </label>
+      <label>Invite emails (optional)
+        <textarea id="space-emails" name="emails" rows="3" placeholder="one@example.com, two@example.com"></textarea>
+        <span class="field-hint">Optional. Separate addresses with commas or new lines.</span>
+      </label>
+      <div class="wait-actions">
+        <button type="button" class="secondary" data-close="space-dialog">Cancel</button>
+        <button class="primary" type="submit" id="space-submit">Create the space</button>
+      </div>
+    </form>
+  </div>
+</div>`;
 }

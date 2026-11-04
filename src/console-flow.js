@@ -6,16 +6,21 @@ import {
   sessionCookie,
   sessionSecret,
 } from "./console-auth.js";
-import { renderInvitePage, renderWelcomePage } from "./console-welcome.js";
+import { renderFlowMessage, renderInvitePage, renderWelcomePage } from "./console-welcome.js";
 import { requestOrigin } from "./identity/routes.js";
 import {
   activeSpace,
   identityMessage,
+  kindLabel,
   needsOnboarding,
   parseInviteEmails,
+  roleLabel,
+  sortSpaces,
   validateDomain,
   validateSpaceName,
 } from "./identity/onboarding.js";
+
+const TENANT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
  * Send a first-run OAuth user from Home to the welcome question.
@@ -265,4 +270,115 @@ function oauthSession(req, env) {
   const gate = guardConsole(req, env);
   if (gate.session?.kind !== "oauth") return null;
   return gate.session;
+}
+
+/**
+ * Spaces for the sidebar. Null keeps the Company / Personal switcher.
+ * Nothing here is a token or a user id.
+ *
+ * @param {object | null} identity
+ * @param {object | null | undefined} session
+ */
+export async function loadSpaceView(identity, session) {
+  if (!identity || session?.kind !== "oauth") return null;
+  try {
+    const tenants = sortSpaces(await identity.myTenants(session.accessToken));
+    const active = activeSpace(tenants, session.tenantId || "");
+    return {
+      oauth: true,
+      activeId: active?.id || "",
+      activeKind: spaceKind(active?.kind),
+      activeName: spaceName(active),
+      activeRole: active?.role || "",
+      items: tenants.map(spaceItem),
+      error: "",
+    };
+  } catch {
+    return {
+      oauth: true,
+      activeId: "",
+      activeKind: "personal",
+      activeName: "Personal",
+      activeRole: "",
+      items: [],
+      error: "Spaces could not be loaded.",
+    };
+  }
+}
+
+/**
+ * Store the active space on the session and return Home.
+ *
+ * @param {{
+ *   req: import("node:http").IncomingMessage,
+ *   res: import("node:http").ServerResponse,
+ *   env: NodeJS.ProcessEnv | Record<string, string | undefined>,
+ *   identity: object | null,
+ *   send: Function,
+ *   redirect: Function,
+ *   readPosted: Function,
+ * }} ctx
+ */
+export async function handleSpaceSwitch(ctx) {
+  const { req, res, send, redirect, identity, env } = ctx;
+  if (req.method !== "POST") {
+    send(res, 405, "text/plain; charset=utf-8", "Method not allowed");
+    return;
+  }
+  const session = oauthSession(req, env);
+  if (!identity || !session) {
+    redirect(res, `/console/sign-in?next=${encodeURIComponent("/console")}`);
+    return;
+  }
+  let body = {};
+  try {
+    body = await ctx.readPosted(req);
+  } catch {
+    send(res, 400, "text/html; charset=utf-8", renderFlowMessage("Choose a space", "That could not be saved. Try again."));
+    return;
+  }
+  const tenant = String(body.tenant || "");
+  if (!TENANT_ID.test(tenant)) {
+    send(res, 400, "text/html; charset=utf-8", renderFlowMessage("Choose a space", "That space is not on this account."));
+    return;
+  }
+  try {
+    const tenants = await identity.myTenants(session.accessToken);
+    const match = (Array.isArray(tenants) ? tenants : []).find((row) => row?.id === tenant);
+    if (!match) {
+      send(res, 404, "text/html; charset=utf-8", renderFlowMessage("Choose a space", "That space is not on this account."));
+      return;
+    }
+    const cookie = resealOAuth(req, env, session, { tenantId: tenant });
+    redirect(res, "/console", { "set-cookie": cookie });
+  } catch (error) {
+    send(res, 400, "text/html; charset=utf-8", renderFlowMessage("Choose a space", identityMessage(error)));
+  }
+}
+
+function spaceKind(kind) {
+  if (kind === "personal" || kind === "team" || kind === "company") return kind;
+  return "personal";
+}
+
+function spaceName(row) {
+  const name = String(row?.name || "").replace(/\s+/g, " ").trim().slice(0, 120);
+  return name || kindLabel(spaceKind(row?.kind));
+}
+
+function spaceItem(row) {
+  const kind = spaceKind(row?.kind);
+  const name = spaceName(row);
+  const role = roleLabel(row?.role || "");
+  const letter = kind === "personal"
+    ? "P"
+    : (name.replace(/[^A-Za-z0-9]/g, "").charAt(0).toUpperCase() || "S");
+  return {
+    id: String(row?.id || ""),
+    kind,
+    name,
+    role: typeof row?.role === "string" ? row.role : "",
+    hint: [kindLabel(kind), role].filter(Boolean).join(" · "),
+    mark: letter,
+  };
 }

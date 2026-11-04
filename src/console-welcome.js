@@ -92,6 +92,34 @@ export function renderWelcomePage(state = {}) {
 }
 
 /**
+ * A short HTML page for a switcher error. Never a raw JSON body.
+ *
+ * @param {string} title
+ * @param {string} message
+ */
+export function renderFlowMessage(title, message) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeText(title)} · Sederunt</title>
+<link rel="stylesheet" href="/console.css">
+</head>
+<body class="welcome-page">
+<main class="auth welcome">
+  <section class="auth-card welcome-card" aria-labelledby="flow-title">
+    <p class="auth-mark"><span class="tile-mark" aria-hidden="true">S</span> Sederunt</p>
+    <h1 id="flow-title">${escapeText(title)}</h1>
+    <p class="alert" role="alert">${escapeText(message)}</p>
+    <p class="welcome-skip"><a href="/console">Back to Home</a></p>
+  </section>
+</main>
+</body>
+</html>`;
+}
+
+/**
  * @param {{ error?: string, tokenHint?: string }} [state]
  */
 export function renderInvitePage(state = {}) {
