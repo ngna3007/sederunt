@@ -24,7 +24,8 @@ for (const [name, html] of [
   ["sign-in page", () => renderSignInPage({})],
   ["room page", () => renderRoomPage()],
   ["welcome page", () => renderWelcomePage({})],
-  ["invites step", () => renderWelcomePage({ step: "ready", kind: "team", name: "Booth" })],
+  ["team step", () => renderWelcomePage({ step: "team", email: "ada@northwind.io" })],
+  ["calendar step", () => renderWelcomePage({ step: "calendar" })],
   ["flow message", () => renderFlowMessage("Link expired", "Ask for a new invite.")],
   ["invite page", () => renderInvitePage({})],
 ]) {

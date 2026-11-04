@@ -329,7 +329,7 @@ test("a preset copies voice and clash onto one room, and history and empty paths
   fire({ "data-act": "close-detail" });
   fire({ "data-act": "open-workspace", "data-id": "rowan" });
   fire({ "data-act": "open-section", "data-section": "rooms" });
-  assert.equal(el.innerHTML.includes("A private note is not a room."), true);
+  assert.equal(el.innerHTML.includes("Private notes stay in this workspace. They are never shared as rooms."), true);
   assert.equal(el.innerHTML.includes("New room"), false);
   fire({ "data-act": "open-section", "data-section": "chat" });
   assert.equal(el.innerHTML.includes("Nothing has been asked here yet."), true);

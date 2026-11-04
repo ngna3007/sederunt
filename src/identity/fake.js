@@ -17,6 +17,13 @@ const INVITE_MS = 14 * 24 * 60 * 60 * 1000;
  * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
  */
 export function createFakeIdentity(env = {}) {
+  const fixtures = {
+    google: {
+      email: String(env.SEDERUNT_AUTH_FAKE_EMAIL || "").trim().toLowerCase() || FIXTURES.google.email,
+      full_name: String(env.SEDERUNT_AUTH_FAKE_NAME || "").trim() || FIXTURES.google.full_name,
+    },
+    github: FIXTURES.github,
+  };
   const store = {
     providers: {
       google: true,
@@ -28,6 +35,7 @@ export function createFakeIdentity(env = {}) {
     tenants: new Map(),
     memberships: [],
     invites: [],
+    joinLinks: new Map(),
     codes: new Map(),
     access: new Map(),
     refresh: new Map(),
@@ -53,7 +61,7 @@ export function createFakeIdentity(env = {}) {
   function ensureUser(provider, now = Date.now()) {
     const existing = store.byProvider.get(provider);
     if (existing) return store.users.get(existing);
-    const fixture = FIXTURES[provider];
+    const fixture = fixtures[provider];
     if (!fixture) throw new IdentityError("provider_disabled", "That sign-in provider is not available.");
     const id = randomUUID();
     const user = {
@@ -243,6 +251,10 @@ export function createFakeIdentity(env = {}) {
       }
       const next = { ...(user.user_metadata || {}) };
       if ("sederunt_onboarded" in data) next.sederunt_onboarded = data.sederunt_onboarded === true;
+      if ("sederunt_auto_join" in data) next.sederunt_auto_join = data.sederunt_auto_join === true;
+      if ("sederunt_fake_tools" in data && data.sederunt_fake_tools && typeof data.sederunt_fake_tools === "object") {
+        next.sederunt_fake_tools = { ...data.sederunt_fake_tools };
+      }
       if ("sederunt_tool_prefs" in data && data.sederunt_tool_prefs && typeof data.sederunt_tool_prefs === "object") {
         next.sederunt_tool_prefs = { ...data.sederunt_tool_prefs };
       }
@@ -257,8 +269,8 @@ export function createFakeIdentity(env = {}) {
       if (!tenant || (membership !== "owner" && membership !== "admin")) {
         throw new IdentityError("forbidden", "Only an owner or admin can change the space.");
       }
-      if (tenant.kind !== "company") {
-        throw new IdentityError("invalid_tenant", "Only a company has a verified email domain.");
+      if (tenant.kind === "personal") {
+        throw new IdentityError("invalid_tenant", "A personal tenant has no email domain.");
       }
       const normalized = String(domain || "").trim().toLowerCase();
       if (normalized && !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(normalized)) {
@@ -295,6 +307,62 @@ export function createFakeIdentity(env = {}) {
       invite.accepted_at = new Date().toISOString();
       invite.accepted_by = user.id;
       return invite.tenant_id;
+    },
+
+    async workspaceJoinLink(accessToken, tenantId, reset = false) {
+      const user = requireUser(accessToken);
+      const tenant = store.tenants.get(tenantId);
+      const membership = roleOn(tenantId, user.id);
+      if (!tenant || tenant.kind === "personal" || (membership !== "owner" && membership !== "admin")) {
+        throw new IdentityError("forbidden", "Only an owner or admin can share the workspace link.");
+      }
+      if (reset) store.joinLinks.delete(tenantId);
+      if (!store.joinLinks.has(tenantId)) store.joinLinks.set(tenantId, randomBytes(24).toString("hex"));
+      return store.joinLinks.get(tenantId);
+    },
+
+    async acceptJoinLink(accessToken, token) {
+      const user = requireUser(accessToken);
+      if (!user.email_confirmed_at) throw new IdentityError("forbidden", "Confirm the email first.");
+      const entry = [...store.joinLinks.entries()].find(([, value]) => value === String(token || ""));
+      if (!entry) throw new IdentityError("invalid_invite", "Invite is invalid or expired.");
+      const [tenantId] = entry;
+      if (!store.memberships.some((row) => row.tenant_id === tenantId && row.user_id === user.id)) {
+        store.memberships.push({ tenant_id: tenantId, user_id: user.id, role: "member", created_at: new Date().toISOString() });
+      }
+      return tenantId;
+    },
+
+    async joinableTenants(accessToken) {
+      const user = requireUser(accessToken);
+      const domain = String(user.email || "").toLowerCase().split("@")[1] || "";
+      if (!domain || !user.email_confirmed_at) return [];
+      return [...store.tenants.values()]
+        .filter((tenant) => tenant.kind !== "personal" && tenant.allowed_domain === domain)
+        .filter((tenant) => !store.memberships.some((row) => row.tenant_id === tenant.id && row.user_id === user.id))
+        .map((tenant) => ({ id: tenant.id, name: tenant.name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    },
+
+    async joinByDomain(accessToken, tenantId) {
+      const user = requireUser(accessToken);
+      const open = await this.joinableTenants(accessToken);
+      if (!open.some((row) => row.id === tenantId)) {
+        throw new IdentityError("forbidden", "That workspace is not open to your email domain.");
+      }
+      store.memberships.push({ tenant_id: tenantId, user_id: user.id, role: "member", created_at: new Date().toISOString() });
+      return tenantId;
+    },
+
+    async workspaceStats(accessToken, tenantId) {
+      const user = requireUser(accessToken);
+      const tenant = store.tenants.get(tenantId);
+      if (!tenant || !roleOn(tenantId, user.id)) throw new IdentityError("forbidden", "That workspace is not on this account.");
+      return {
+        members: store.memberships.filter((row) => row.tenant_id === tenantId).length,
+        openInvites: store.invites.filter((row) => row.tenant_id === tenantId && !row.accepted_at).length,
+        allowedDomain: tenant.allowed_domain || "",
+      };
     },
   };
 }

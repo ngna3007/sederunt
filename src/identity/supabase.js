@@ -210,5 +210,60 @@ export function createSupabaseIdentity(env, options = {}) {
       if (typeof id !== "string" || !id) throw new IdentityError("invalid_invite", "Invite was not accepted.");
       return id;
     },
+
+    async workspaceJoinLink(accessToken, tenantId, reset = false) {
+      const token = await call("/rest/v1/rpc/workspace_join_link", {
+        method: "POST",
+        token: accessToken,
+        profile: true,
+        body: { p_tenant_id: tenantId, p_reset: reset === true },
+      });
+      if (typeof token !== "string" || !token) throw new IdentityError("invalid_invite", "Invite link was not created.");
+      return token;
+    },
+
+    async acceptJoinLink(accessToken, token) {
+      const id = await call("/rest/v1/rpc/accept_join_link", {
+        method: "POST",
+        token: accessToken,
+        profile: true,
+        body: { p_token: token },
+      });
+      if (typeof id !== "string" || !id) throw new IdentityError("invalid_invite", "Invite was not accepted.");
+      return id;
+    },
+
+    async joinableTenants(accessToken) {
+      const rows = await call("/rest/v1/rpc/joinable_tenants", {
+        method: "POST",
+        token: accessToken,
+        profile: true,
+        body: {},
+      });
+      return Array.isArray(rows) ? rows.filter((row) => row && typeof row.id === "string").map((row) => ({ id: row.id, name: String(row.name || "") })) : [];
+    },
+
+    async joinByDomain(accessToken, tenantId) {
+      const id = await call("/rest/v1/rpc/join_by_domain", {
+        method: "POST",
+        token: accessToken,
+        profile: true,
+        body: { p_tenant_id: tenantId },
+      });
+      if (typeof id !== "string" || !id) throw new IdentityError("forbidden", "That workspace could not be joined.");
+      return id;
+    },
+
+    async workspaceStats(accessToken, tenantId) {
+      const id = encodeURIComponent(tenantId);
+      const members = await call(`/rest/v1/memberships?select=user_id&tenant_id=eq.${id}`, { token: accessToken, profile: true });
+      const invites = await call(`/rest/v1/invites?select=id&tenant_id=eq.${id}&accepted_at=is.null`, { token: accessToken, profile: true });
+      const tenant = await call(`/rest/v1/tenants?select=allowed_domain&id=eq.${id}`, { token: accessToken, profile: true });
+      return {
+        members: Array.isArray(members) ? members.length : 0,
+        openInvites: Array.isArray(invites) ? invites.length : 0,
+        allowedDomain: Array.isArray(tenant) && tenant[0]?.allowed_domain ? String(tenant[0].allowed_domain) : "",
+      };
+    },
   };
 }
