@@ -3701,7 +3701,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     text("decision-sentence", decision.text || "");
     var heardWho = personLabel(decision.speaker);
     var heardWhen = relativeWhen(decision.spokenAt) || whenLabel(decision.spokenAt);
-    text("decision-heard", heardWho && heardWhen ? heardWho + " kept this on " + heardWhen + "." : heardWho ? heardWho + " kept this." : heardWhen ? "Kept on " + heardWhen + "." : "No one is recorded yet.");
+    text("decision-heard", heardWho && heardWhen ? heardWho + " kept this " + whenInSentence(heardWhen) + "." : heardWho ? heardWho + " kept this." : heardWhen ? "Kept " + whenInSentence(heardWhen) + "." : "No one is recorded yet.");
     showLine("decision-file", fileLine(decision));
     showLine("decision-ticket", ticketLine(decision));
     showLine("decision-proof", "");
@@ -3976,6 +3976,17 @@ if (sessionWhen && sessionWhen.dataset.at) {
     return "";
   }
 
+  function whenInSentence(when) {
+    var text = String(when || "").trim();
+    if (/^(today|yesterday|tomorrow)( |$)/i.test(text)) return text.charAt(0).toLowerCase() + text.slice(1);
+    return "on " + text;
+  }
+
+  function countWords(n, one, many) {
+    var words = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
+    return (n <= 10 ? words[n] : String(n)) + " " + (n === 1 ? one : many);
+  }
+
   function proofPlain(decision, noun) {
     var proof = (decision && decision.proof) || {};
     var status = (proof && proof.status) || (decision && decision.proofStatus) || "unknown";
@@ -3983,7 +3994,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var when = chainWhen(proof.checkpointTime);
     if (status === "verified") {
       var head = meeting ? "This meeting's record is stored on Walrus" : "This decision is stored on Walrus";
-      if (when) return head + " and was confirmed on the Sui network on " + when + ". Nobody can change it.";
+      if (when) return head + " and was confirmed on the Sui network " + whenInSentence(when) + ". Nobody can change it.";
       return head + " and was confirmed on the Sui network. Nobody can change it.";
     }
     if (status === "pending") {
@@ -4389,9 +4400,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
     }
     var names = (people || []).map(function (p) { return personLabel(p) || p; }).filter(Boolean);
     var bits = [];
-    if (decided.length) bits.push(decided.length === 1 ? "1 decision" : decided.length + " decisions");
-    if (actions.length) bits.push(actions.length === 1 ? "1 action item" : actions.length + " action items");
-    lede.textContent = (names.length ? names.join(", ") + " met and agreed on " : "This meeting agreed on ") + bits.join(" and ") + ".";
+    if (decided.length) bits.push(countWords(decided.length, "decision", "decisions"));
+    if (actions.length) bits.push(countWords(actions.length, "action item", "action items"));
+    var who = names.length === 1 ? names[0] + " agreed on "
+      : names.length > 1 ? (names.length <= 10 ? countWords(names.length, "person", "people") : names.length + " people") + " met and agreed on "
+      : "This meeting agreed on ";
+    who = who.charAt(0).toUpperCase() + who.slice(1);
+    lede.textContent = who + bits.join(" and ") + ".";
     box.append(head, lede);
     function group(title, items) {
       if (!items.length) return;
@@ -6246,7 +6261,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
           var trust = memory && memory.verified === "verified" ? "Verified on Walrus." : (memory && memory.verified === "unverified" ? "Couldn't verify." : "");
           var spoken = [];
           if (bits[0]) spoken.push(bits[0]);
-          if (bits[1]) spoken.push("Kept on " + bits[1] + ".");
+          if (bits[1]) spoken.push("Kept " + whenInSentence(bits[1]) + ".");
           if (trust) spoken.push(trust);
           sentence.textContent = spoken.join(" ");
           row.append(sentence);
