@@ -49,7 +49,7 @@ import { looksLikeOpenQuestion } from "./parse.js";
 import { createSession } from "./session.js";
 import { postSlackReply, slackAnswer, slackChannelMembers, slackFileBytes, slackQuestion } from "./slack/reply.js";
 import { slackDelivery, verifySlackRequest } from "./slack/sign.js";
-import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded } from "./typed-path.js";
+import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded, warmProofs } from "./typed-path.js";
 import { wireCalls } from "./tatum/client.js";
 
 const port = Number(process.env.PORT || 8787);
@@ -316,6 +316,17 @@ export function createApp(options = {}) {
     linearReady: options.linearReady === true || (options.env ? false : linearReady()),
     recall: options.recall || null,
   };
+  if (proofWarmOn(env) && workspace.companyLoaded && deps.tatum) {
+    // Read the company proofs once at start so the first room load is
+    // already verified. Sequential, through the reader's shared throttle.
+    workspace.warm = Promise.resolve()
+      .then(() => prepareWorkspace(workspace, ""))
+      .then((current) => warmProofs(current, deps.tatum))
+      .then((report) => {
+        if (typeof deps.log === "function") deps.log({ kind: "proof-warm", ...report });
+        return report;
+      }, () => null);
+  }
   const identity = options.identity ?? (identityConfigured(env) ? createIdentity(env) : null);
   workspace.forms = createFormsApp({ env, fetchImpl: options.fetch });
   workspace.googleGrants = options.googleGrants || createPersonGoogleStore({ env, fetchImpl: options.fetch });
@@ -881,7 +892,9 @@ export function createApp(options = {}) {
       }
       // Verify again is one decision the person asked for, so it may take the
       // few throttled gateway calls a first locate needs.
-      await readProofs(current, { decisions: [row] }, workspace.deps?.tatum, { timeoutMs: 6000 });
+      // Verify again asks for a fresh read; a pending panel's follow-up
+      // joins the read already running.
+      await readProofs(current, { decisions: [row] }, workspace.deps?.tatum, { timeoutMs: 6000, fresh: body.fresh === true });
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({
         id,
         status: row.proofStatus || "unknown",
@@ -1254,6 +1267,8 @@ export function createApp(options = {}) {
       });
     }));
   };
+  /** The start-up proof warm, when it runs. Resolves to its report or null. */
+  server.proofWarm = workspace.warm || null;
   return server;
 }
 
@@ -1380,6 +1395,21 @@ function depsFor(workspace, companyId) {
   return { ...workspace.deps, memory: workspace.companies[companyKey(workspace, companyId)] };
 }
 
+const BOARD_PROOF_WAIT_MS = 400;
+
+/**
+ * Warm the proof cache at start when a real Tatum key is set, unless
+ * SEDERUNT_WARM_PROOFS=0. SEDERUNT_WARM_PROOFS=1 turns it on without a key.
+ *
+ * @param {Record<string, string | undefined>} env
+ */
+export function proofWarmOn(env) {
+  const flag = String(env?.SEDERUNT_WARM_PROOFS ?? "").trim();
+  if (flag === "1") return true;
+  if (flag === "0") return false;
+  return Boolean(env?.TATUM_API_KEY || env?.TATUM_MAINNET_API_KEY);
+}
+
 async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0) {
   const current = sessionFor(workspace, companyId);
   if (!workspace.companyLoaded) {
@@ -1485,7 +1515,9 @@ async function consolePayload(workspace, current, memberId, kind = "company") {
     };
   }
   const empty = report.empty && board.decisions.length === 0;
-  await readProofs(current, board, workspace.deps?.tatum);
+  // The board does not wait on a cold chain read. A proof still being read
+  // comes back pending and the page follows it up through /api/proof.
+  await readProofs(current, board, workspace.deps?.tatum, { timeoutMs: BOARD_PROOF_WAIT_MS });
   const payload = {
     companyLoaded: true,
     workspace: open,

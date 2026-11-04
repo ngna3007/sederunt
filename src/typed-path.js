@@ -2327,6 +2327,7 @@ function restoreMeetingConfirms() {
  */
 export async function readProofs(session, board, tatum, options = {}) {
   const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : 1200;
+  const fresh = options.fresh === true;
   const rows = Array.isArray(board?.decisions) ? board.decisions : [];
   const byId = new Map((session?.decisions ?? []).map((item) => [item.id, item]));
   if (typeof tatum?.refreshChain === "function") {
@@ -2345,43 +2346,143 @@ export async function readProofs(session, board, tatum, options = {}) {
       row.proofReason = "The chain proof is incomplete.";
       return;
     }
-    const target = typeof source?.objectId === "string" && /^0x[0-9a-fA-F]{64}$/.test(source.objectId) ? source.objectId : blobId;
+    let object;
     try {
-      const object = await readObjectWithin(tatum, target, timeoutMs, {
-        blobId,
-        owner: source?.blobOwner,
-        digest: source?.digest,
-        checkpoint: source?.checkpoint,
-      });
-      const text = typeof object?.text === "string" ? object.text.trim() : "";
-      if (text) row.text = redact(text);
-      row.checkpoint = Number.isInteger(object?.checkpoint) ? object.checkpoint : null;
-      const proof = object?.proof
-        ? publicProof({ ...object.proof, blobId: object.proof.blobId || blobId })
-        : publicProof({
-          status: "unknown",
-          reason: "The chain proof is incomplete.",
-          blobId,
-          objectId: typeof object?.objectId === "string" ? object.objectId : null,
-          digest: typeof object?.digest === "string" ? object.digest : null,
-          checkpoint: row.checkpoint,
-        });
-      row.proof = proof;
-      row.proofStatus = proof.status;
-      row.proofReason = proof.reason;
-      if (proof.blobId) row.blobId = proof.blobId;
-      if (proof.objectId) row.objectId = proof.objectId;
-      if (proof.digest) row.digest = proof.digest;
-      if (source) source.proofStatus = proof.status;
+      object = await settleWithin(lookupProof(tatum, source, { fresh }), timeoutMs);
     } catch {
       row.checkpoint = null;
       row.proofStatus = "unknown";
       row.proofReason = "The chain proof is incomplete.";
       row.proof = publicProof({ status: "unknown", reason: row.proofReason, blobId });
       if (blobId) row.blobId = blobId;
+      return;
     }
+    if (object === PROOF_PENDING) {
+      // The read keeps going on the server. The page shows a pending
+      // proof and asks again; it is not a failure.
+      row.checkpoint = Number.isInteger(source?.checkpoint) ? source.checkpoint : null;
+      row.proofStatus = "pending";
+      row.proofReason = PROOF_PENDING_REASON;
+      row.proof = { ...publicProof({ blobId }), status: "pending", reason: PROOF_PENDING_REASON };
+      if (blobId) row.blobId = blobId;
+      return;
+    }
+    applyProof(row, source, object, blobId);
   }));
   return board;
+}
+
+export const PROOF_PENDING_REASON = "Verifying on chain…";
+const PROOF_PENDING = Symbol("proof pending");
+
+function applyProof(row, source, object, blobId) {
+  const text = typeof object?.text === "string" ? object.text.trim() : "";
+  if (text) row.text = redact(text);
+  row.checkpoint = Number.isInteger(object?.checkpoint) ? object.checkpoint : null;
+  const proof = object?.proof
+    ? publicProof({ ...object.proof, blobId: object.proof.blobId || blobId })
+    : publicProof({
+      status: "unknown",
+      reason: "The chain proof is incomplete.",
+      blobId,
+      objectId: typeof object?.objectId === "string" ? object.objectId : null,
+      digest: typeof object?.digest === "string" ? object.digest : null,
+      checkpoint: row.checkpoint,
+    });
+  row.proof = proof;
+  row.proofStatus = proof.status;
+  row.proofReason = proof.reason;
+  if (proof.blobId) row.blobId = proof.blobId;
+  if (proof.objectId) row.objectId = proof.objectId;
+  if (proof.digest) row.digest = proof.digest;
+  if (source) source.proofStatus = proof.status;
+}
+
+// One proof cache per Tatum reader. A verified read is kept, so the second
+// load is instant. A read still running is shared, so a page load, a poll and
+// the start-up warm never ask the gateway twice for one blob. A failure or an
+// unverified read is not kept, so the next ask reads again.
+const proofCaches = new WeakMap();
+
+function proofCache(tatum) {
+  let cache = proofCaches.get(tatum);
+  if (!cache) {
+    cache = { settled: new Map(), running: new Map() };
+    proofCaches.set(tatum, cache);
+  }
+  return cache;
+}
+
+function lookupProof(tatum, source, { fresh = false } = {}) {
+  const blobId = source.blobId;
+  const cache = proofCache(tatum);
+  if (!fresh && cache.settled.has(blobId)) return Promise.resolve(cache.settled.get(blobId));
+  if (cache.running.has(blobId)) return cache.running.get(blobId);
+  const target = typeof source?.objectId === "string" && /^0x[0-9a-fA-F]{64}$/.test(source.objectId) ? source.objectId : blobId;
+  const running = Promise.resolve()
+    .then(() => tatum.getObject(target, {
+      blobId,
+      owner: source?.blobOwner,
+      digest: source?.digest,
+      checkpoint: source?.checkpoint,
+    }))
+    .then((object) => {
+      cache.running.delete(blobId);
+      if (object?.proof?.status === "verified") cache.settled.set(blobId, object);
+      else cache.settled.delete(blobId);
+      return object;
+    }, (error) => {
+      cache.running.delete(blobId);
+      throw error;
+    });
+  cache.running.set(blobId, running);
+  return running;
+}
+
+/**
+ * Read the chain proof for every company memory with a blob, one at a time,
+ * so the first room load finds them already verified. Runs in the background
+ * and goes through the reader's shared throttle; a failure is left for the
+ * page to retry.
+ *
+ * @param {{ decisions?: any[] }} session
+ * @param {{ getObject?: Function }} tatum
+ * @returns {Promise<{ verified: number, failed: number, ms: number }>}
+ */
+export async function warmProofs(session, tatum) {
+  const started = Date.now();
+  const out = { verified: 0, failed: 0, ms: 0 };
+  if (typeof tatum?.getObject !== "function") return out;
+  for (const decision of session?.decisions ?? []) {
+    if (!decision || decision.deleted || decision.account === "personal" || typeof decision.blobId !== "string" || !decision.blobId) continue;
+    try {
+      const object = await lookupProof(tatum, decision);
+      if (object?.proof?.status === "verified") {
+        out.verified += 1;
+        decision.proofStatus = "verified";
+      } else out.failed += 1;
+    } catch {
+      out.failed += 1;
+    }
+  }
+  out.ms = Date.now() - started;
+  return out;
+}
+
+function settleWithin(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(PROOF_PENDING), ms);
+    promise.then(
+      (object) => {
+        clearTimeout(timer);
+        resolve(object);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 /**
@@ -2404,22 +2505,6 @@ export async function endMeeting(session, deps, roomId) {
     actionItems,
     decisions,
     remember: (document) => remember(deps, document),
-  });
-}
-
-function readObjectWithin(tatum, blobId, ms, hints) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("Tatum read failed")), ms);
-    tatum.getObject(blobId, hints).then(
-      (object) => {
-        clearTimeout(timer);
-        resolve(object);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
   });
 }
 
