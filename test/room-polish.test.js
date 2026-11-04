@@ -10,10 +10,13 @@ test("a bare member id reads as a display name", () => {
   assert.equal(speakerLabel("0xabc"), "");
 });
 
-test("the room header hides an empty start and links the proof as a chip", async () => {
+test("the room header hides an empty start and opens proof from a chip", async () => {
   const page = renderConsolePage();
   assert.match(page, /id="file-started-item" hidden/);
-  assert.match(page, /<a id="file-proof" class="badge ok proof-chip" href="#proof-panel" hidden><\/a>/);
+  assert.match(page, /id="file-proof" class="badge proof-chip" hidden>/);
+  assert.match(page, /id="file-proof-label"/);
+  assert.match(page, /id="proof-dialog"/);
+  assert.match(page, /openDialog\("proof-dialog"\)/);
   assert.match(page, /classList\.add\("no-recording"\)/);
   const css = await readFile(new URL("../src/console.css", import.meta.url), "utf8");
   assert.doesNotMatch(css, /^(<<<<<<<|=======|>>>>>>>)/m);

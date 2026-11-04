@@ -53,7 +53,9 @@ test("meeting words separate live, ended, channel, and silence", () => {
   assert.match(page, /id="decision-room"/);
   assert.match(page, /id="decision-copy"/);
   assert.doesNotMatch(page, /No checkpoint was returned/);
-  assert.match(page, /Kept at checkpoint/);
+  assert.match(page, /Verified on Walrus/);
+  assert.match(page, /Technical details/);
+  assert.equal(page.slice(page.indexOf('id="right-overview"'), page.indexOf('id="right-decisions"')).includes('id="proof-panel"'), false);
   assert.match(page, /1 change did not go through/);
   assert.match(page, /changes did not go through/);
   assert.doesNotMatch(page, /No room yet\./);

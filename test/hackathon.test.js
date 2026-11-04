@@ -99,15 +99,22 @@ test("a missing object or a missing checkpoint is unknown", () => {
 
 test("the room and the decision show a proof panel, and an answer can show why", () => {
   const page = renderConsolePage({});
+  assert.match(page, /id="proof-dialog"/);
   assert.match(page, /id="proof-panel"/);
   assert.match(page, /id="decision-proof-panel"/);
   assert.match(page, /id="proof-again"/);
   assert.match(page, /id="decision-proof-again"/);
   assert.match(page, /Read via Tatum gRPC/);
   assert.match(page, /Verify again/);
+  assert.match(page, /Technical details/);
+  assert.match(page, /Show source/);
+  assert.match(page, /Nobody can change it/);
   assert.match(page, /why-panel/);
   assert.match(page, /result\.learned/);
-  assert.match(page, /Kept at checkpoint/);
+  assert.match(page, /Verified on Walrus/);
+  const overview = page.slice(page.indexOf('id="right-overview"'), page.indexOf('id="right-decisions"'));
+  assert.equal(overview.includes('id="proof-panel"'), false);
+  assert.equal(overview.includes(">Blob<"), false);
   assert.equal(page.includes("graphql.mainnet.sui.io"), false);
   assert.equal(page.includes("fullnode.mainnet.sui.io"), false);
 });
