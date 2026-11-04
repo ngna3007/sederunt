@@ -25,3 +25,11 @@ Google and GitHub are separate accounts. The first sign-in creates a personal te
 ## Fake mode
 
 `SEDERUNT_AUTH_FAKE=1` uses an in-process identity backend and makes no network calls. Google signs in as Ada Lovelace. GitHub starts off. It overrides a configured Supabase URL, which keeps tests from calling out. Unset it for a real project.
+
+Try the first-run flow locally:
+
+```sh
+SEDERUNT_AUTH_FAKE=1 node src/server.js
+```
+
+Open http://127.0.0.1:8787/console and continue with Google. GitHub stays off unless `SEDERUNT_AUTH_FAKE_GITHUB=1`.
