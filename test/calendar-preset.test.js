@@ -506,7 +506,7 @@ async function assertFits(page, width) {
       document.querySelector("[data-preset='google-calendar']"),
       document.querySelector("[data-preset='google-calendar'] .preset-name"),
       document.querySelector("[data-preset='google-calendar'] [data-preset-badge]"),
-      ...document.querySelectorAll("#mcp-list .mcp-card, #mcp-list .mcp-name, #mcp-list .mcp-url, #mcp-list .mcp-tool, #mcp-list .mcp-tool-name, #mcp-list .badge"),
+      ...document.querySelectorAll("#mcp-list .mcp-card, #mcp-list .mcp-name, #mcp-list .mcp-manage, #mcp-list .badge, #mcp-manage-dialog .panel, #mcp-manage-dialog .mcp-url, #mcp-manage-dialog .mcp-tool, #mcp-manage-dialog .mcp-tool-name, #mcp-manage-dialog .badge, #mcp-manage-dialog .close"),
     ].filter(Boolean);
     for (const el of nodes) {
       el.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -556,14 +556,70 @@ test("google calendar preset layout", { timeout: 180000 }, async (t) => {
   const formsLogo = await page.locator("[data-preset='google-forms'] use").getAttribute("href");
   assert.equal(formsLogo, "#logo-google-forms");
   await page.waitForSelector("#mcp-list .mcp-card");
-  const connectorText = await page.locator("#mcp-list .mcp-card").innerText();
+  const cardSummary = await page.locator("#mcp-list .mcp-card").innerText();
+  assert.match(cardSummary, /\d+ tools · \d+ on/);
+  assert.match(cardSummary, /Connected/);
+  assert.doesNotMatch(cardSummary, /Test again|Remove/);
+  await page.click("#mcp-list .mcp-manage");
+  await page.waitForSelector("#mcp-manage-dialog:not([hidden]) [data-tool]");
+  const connectorText = await page.locator("#mcp-manage-dialog").innerText();
   assert.match(connectorText, /Read/);
   assert.match(connectorText, /Write/);
   assert.match(connectorText, /Delete/);
   for (const width of WIDTHS) {
     await assertFits(page, width);
-    const urlText = (await page.locator("#mcp-list .mcp-url").first().innerText()).trim();
+    const urlText = (await page.locator("#mcp-manage-dialog .mcp-url").first().innerText()).trim();
     assert.match(urlText, /calendarmcp\.googleapis\.com\/mcp\/v1/, String(width));
     assert.doesNotMatch(urlText, /127\.0\.0\.1|localhost|Built in/);
   }
+});
+
+test("connector Manage modal is accessible and groups tools", { timeout: 180000 }, async (t) => {
+  const page = await openBrowser(t);
+  if (!page) return;
+  const app = appFor(createSession(), {
+    SEDERUNT_CALENDAR_FAKE: "1",
+    SEDERUNT_FORMS_FAKE: "1",
+    SEDERUNT_MCP_FAKE: "1",
+    SEDERUNT_MEMBER: "mina",
+    MCP_SECRETS_KEY_V1: KEY,
+  });
+  const port = await listen(app);
+  t.after(() => app.close());
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto(`http://127.0.0.1:${port}/console/connectors`, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => document.querySelector("[data-preset='google-calendar']")?.getAttribute("data-state") === "ready", null, { timeout: 45000 });
+  await page.click("[data-preset='google-calendar']");
+  await page.waitForSelector("#mcp-list .mcp-manage");
+  assert.equal(await page.locator("#mcp-list [data-tool]").count(), 0);
+  await page.click("#mcp-list .mcp-manage");
+  const dialog = page.locator("#mcp-manage-dialog");
+  await page.waitForSelector("#mcp-manage-dialog:not([hidden])");
+  assert.equal(await dialog.getAttribute("role"), "dialog");
+  assert.equal(await dialog.getAttribute("aria-modal"), "true");
+  assert.equal(await page.locator("#mcp-manage-title").innerText(), "Google Calendar");
+  assert.equal(await page.evaluate(() => document.activeElement.classList.contains("close")), true);
+  const groups = await page.locator("#mcp-manage-dialog [data-group]").evaluateAll((nodes) => nodes.map((n) => n.getAttribute("data-group")));
+  assert.deepEqual(groups, ["read", "write", "delete"]);
+  assert.match(await dialog.innerText(), /Uses this person's Google account/);
+  assert.match(await dialog.innerText(), /Last tested/);
+  assert.equal(await page.locator("#mcp-manage-dialog button.danger").innerText(), "Remove");
+  for (let i = 0; i < 40; i += 1) {
+    await page.keyboard.press("Tab");
+    assert.equal(await page.evaluate(() => document.getElementById("mcp-manage-dialog").contains(document.activeElement)), true, `tab ${i}`);
+  }
+  await page.click("#mcp-manage-dialog button.danger");
+  await page.waitForSelector("#mcp-remove-dialog:not([hidden])");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator("#mcp-remove-dialog").isHidden(), true);
+  assert.equal(await dialog.isVisible(), true);
+  await page.keyboard.press("Escape");
+  await page.waitForSelector("#mcp-manage-dialog", { state: "hidden" });
+  assert.equal(await page.evaluate(() => document.activeElement.classList.contains("mcp-manage")), true);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.click("#mcp-list .mcp-manage");
+  const box = await page.locator("#mcp-manage-dialog .panel").boundingBox();
+  assert.ok(box.x <= 1 && box.width >= 389 && box.height >= 843, JSON.stringify(box));
+  const scroll = await page.locator("#mcp-manage-body").evaluate((n) => getComputedStyle(n).overflowY);
+  assert.equal(scroll, "auto");
 });

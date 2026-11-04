@@ -426,7 +426,7 @@ async function assertFits(page, width) {
     const nodes = [
       document.querySelector("[data-preset='google-forms']"),
       document.querySelector("[data-preset-badge]"),
-      ...document.querySelectorAll("#mcp-list .mcp-card, #mcp-list .mcp-name, #mcp-list .mcp-url, #mcp-list .mcp-tool, #mcp-list .mcp-tool-name, #mcp-list .meta"),
+      ...document.querySelectorAll("#mcp-list .mcp-card, #mcp-list .mcp-name, #mcp-list .mcp-manage, #mcp-manage-dialog .panel, #mcp-manage-dialog .mcp-url, #mcp-manage-dialog .mcp-tool, #mcp-manage-dialog .mcp-tool-name, #mcp-manage-dialog .meta, #mcp-manage-dialog .close"),
     ].filter(Boolean);
     for (const el of nodes) {
       el.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -476,16 +476,22 @@ test("google forms preset layout", { timeout: 180000 }, async (t) => {
   assert.match(cardText, /Connected/);
   assert.match(cardText, /Uses this person's Google account/);
   await page.waitForSelector("#mcp-list .mcp-card");
-  const connectorText = await page.locator("#mcp-list .mcp-card").innerText();
+  const cardSummary = await page.locator("#mcp-list .mcp-card").innerText();
+  assert.match(cardSummary, /\d+ tools · \d+ on/);
+  assert.match(cardSummary, /Connected/);
+  assert.doesNotMatch(cardSummary, /Test again|Remove/);
+  await page.click("#mcp-list .mcp-manage");
+  await page.waitForSelector("#mcp-manage-dialog:not([hidden]) [data-tool]");
+  const connectorText = await page.locator("#mcp-manage-dialog").innerText();
   assert.match(connectorText, /Uses this person's Google account/);
   assert.doesNotMatch(connectorText, /Add token/);
-  const tested = await page.locator("#mcp-list .meta").first().innerText();
+  const tested = await page.locator("#mcp-manage-dialog .meta").first().innerText();
   assert.match(tested, /Last tested .+\d{1,2}:\d{2} (AM|PM) \S+/);
   assert.doesNotMatch(tested, /\d{4}-\d{2}-\d{2}T/);
   for (const width of WIDTHS) {
     await assertFits(page, width);
     if ([1920, 1097, 768, 390].includes(width)) {
-      const urlText = (await page.locator("#mcp-list .mcp-url").first().innerText()).trim();
+      const urlText = (await page.locator("#mcp-manage-dialog .mcp-url").first().innerText()).trim();
       assert.equal(urlText, "Built in", String(width));
       assert.doesNotMatch(urlText, /127\.0\.0\.1|localhost|builtin:google-forms/);
     }

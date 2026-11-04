@@ -283,7 +283,8 @@ test("connector page flow and layout", { timeout: 180000 }, async (t) => {
     return card && /refused the token/i.test(card.textContent);
   });
   assert.equal((await page.content()).includes(WRONG), false);
-  await page.click("#mcp-list .danger");
+  if (await page.locator("#mcp-manage-dialog").isHidden()) await page.click("#mcp-list .mcp-manage");
+  await page.click("#mcp-manage-dialog .danger");
   await page.waitForSelector("#mcp-remove-dialog:not([hidden])");
   await page.click("#mcp-remove-confirm");
   await page.waitForSelector("#mcp-add:not([hidden])");
@@ -296,7 +297,9 @@ test("connector page flow and layout", { timeout: 180000 }, async (t) => {
   await page.waitForSelector("#mcp-ok:not([hidden])");
   assert.match(await page.locator("#mcp-ok").innerText(), /Demo tools/);
   await page.click("#mcp-save");
-  await page.waitForSelector("#mcp-list [data-tool='lookup_customer']");
+  await page.waitForSelector("#mcp-list .mcp-manage");
+  await page.click("#mcp-list .mcp-manage");
+  await page.waitForSelector("#mcp-manage-dialog:not([hidden]) [data-tool='lookup_customer']");
   const disabled = await page.locator("[data-tool='lookup_customer'] input").isChecked();
   assert.equal(disabled, false);
   assert.equal((await page.content()).includes(TOKEN), false);
@@ -333,7 +336,8 @@ test("connector page flow and layout", { timeout: 180000 }, async (t) => {
     return response.json();
   });
   assert.equal(still.result.tools.some((tool) => tool.name === "demo__lookup_customer"), false);
-  await page.click("#mcp-list .danger");
+  if (await page.locator("#mcp-manage-dialog").isHidden()) await page.click("#mcp-list .mcp-manage");
+  await page.click("#mcp-manage-dialog .danger");
   await page.click("#mcp-remove-confirm");
   await page.waitForSelector("#mcp-empty:not([hidden]) #mcp-add");
   const after = await page.evaluate(async () => {

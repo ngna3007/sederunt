@@ -6474,7 +6474,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function mcpIcon(connector) {
-    var key = connector.preset || (connector.url === "builtin:google-forms" ? "google-forms" : /calendarmcp\.googleapis\.com/.test(connector.url || "") ? "google-calendar" : "");
+    var key = connector.preset || (connector.url === "builtin:google-forms" ? "google-forms" : /calendarmcp\\.googleapis\\.com/.test(connector.url || "") ? "google-calendar" : "");
     var source = key ? document.querySelector(".preset-card[data-preset='" + key + "'] .conn-mark") : null;
     if (source) {
       var copy = source.cloneNode(true);
