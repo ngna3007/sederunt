@@ -5,6 +5,8 @@ import { extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { redact } from "./domain/redact.js";
 import { handleCalendarEvent } from "./calendar/route.js";
+import { handleConnectorRoutes } from "./connectors/route.js";
+import { createConnectorStore } from "./connectors/store.js";
 import { calendarPresentedConnected, calendarTimeZone, createCalendarAdapter } from "./calendar/mcp.js";
 import { createConsoleAdapter } from "./console/upload.js";
 import { createLinearClient } from "./linear/mcp.js";
@@ -282,6 +284,7 @@ export function createApp(options = {}) {
     memwal: options.memwal,
   });
   if (!deps.app) deps.app = appConfig(env);
+  deps.connectors = options.connectors || deps.connectors || createConnectorStore(env);
   if (!options.deps && isDirectRun()) {
     deps.log = (event) => {
       process.stdout.write(`${JSON.stringify(event)}\n`);
@@ -557,6 +560,17 @@ export function createApp(options = {}) {
       await handleToolPref({ req, res, url, env, identity, send, readPosted });
       return;
     }
+    if (await handleConnectorRoutes({
+      req,
+      res,
+      url,
+      env,
+      send,
+      readJson,
+      workspace,
+      identity,
+      sameOrigin: activitySameOrigin,
+    })) return;
     const eventPath = /^\/console\/calendar\/events\/([^/]+)$/.exec(url.pathname);
     if (eventPath && (req.method === "GET" || req.method === "POST")) {
       let eventId = eventPath[1];
@@ -605,7 +619,8 @@ export function createApp(options = {}) {
         || url.pathname === "/console/people"
         || url.pathname === "/console/account"
         || url.pathname === "/console/status"
-        || url.pathname === "/console/setup";
+        || url.pathname === "/console/setup"
+        || url.pathname === "/console/connectors";
       let status = roomPath || consolePage ? 200 : 404;
       if (roomPath) {
         const current = workspace.session?.readReport ? workspace.session : await prepareWorkspace(workspace, "", false, 0);

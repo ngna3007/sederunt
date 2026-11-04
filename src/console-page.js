@@ -125,6 +125,7 @@ ${brandSprite()}
       <a href="/console/chat" data-show="chat" data-label="Chat">${chatIcon}Chat</a>
       <p class="rail-label">Setup</p>
       <a href="/console/setup" id="show-connectors" data-label="Setup">${plugIcon}Setup</a>
+      <a href="/console/connectors" id="show-mcp" data-show="mcp" data-label="Connectors">${plugIcon}Connectors</a>
       <p class="rail-label">Account</p>
       <a href="/console/account" data-show="account" data-label="Account">${userIcon}Account</a>
       <a href="/console/people" data-show="people" data-label="People">${peopleIcon}People</a>
@@ -332,6 +333,32 @@ ${slack}
       <p id="custom-how" class="sr">A tool other than Calendar, Linear, or Slack cannot be connected from this page.</p>
       <p id="prefs" class="sr">Calendar is on Ask. Linear is on Ask.</p>
     </div>
+    <section id="mcp-page" hidden>
+      <div class="page-head" id="mcp-head">
+        <div>
+          <p class="page-title">Connectors</p>
+          <p class="page-lede">MCP servers whose tools this space can call.</p>
+        </div>
+        <div class="page-actions">
+          <button type="button" class="primary" id="mcp-add-head" hidden>Add a connector</button>
+        </div>
+      </div>
+      <div id="mcp-empty" class="empty-state">
+        <p class="empty-title">No connectors yet.</p>
+        <p>Add an MCP server to use its tools in this space. New tools stay off until you enable them.</p>
+        <button type="button" class="primary" id="mcp-add">Add a connector</button>
+      </div>
+      <div id="mcp-presets">
+        <p class="section-label">Presets</p>
+        <div class="preset-row">
+          <button type="button" class="preset-card" data-preset="google-forms" disabled>
+            <span class="preset-name">Google Forms</span>
+            <span class="badge">Coming soon</span>
+          </button>
+        </div>
+      </div>
+      <div id="mcp-list" class="mcp-list"></div>
+    </section>
     <section id="rooms">
       <div class="page-head" id="rooms-head" hidden>
         <div>
@@ -768,6 +795,69 @@ ${spaceDialog}
         <button type="button" class="secondary" data-close="event-dialog">Cancel</button>
         <button type="button" class="secondary" id="event-retry" hidden>Try again</button>
         <button type="button" class="primary" id="event-save">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="mcp-dialog" class="dialog" hidden role="dialog" aria-modal="true" aria-labelledby="mcp-dialog-title">
+  <div class="shade" data-close="mcp-dialog"></div>
+  <div class="panel">
+    <div class="panel-bar">
+      <h2 id="mcp-dialog-title">Add a connector</h2>
+      <button type="button" class="close" data-close="mcp-dialog" aria-label="Close">${closeIcon}</button>
+    </div>
+    <form id="mcp-form" class="panel-body">
+      <p id="mcp-demo" class="mcp-demo" hidden>
+        <button type="button" class="secondary" id="mcp-use-demo">Use demo server</button>
+        <span id="mcp-demo-note" class="field-hint"></span>
+      </p>
+      <label>Name <input id="mcp-name" name="name" maxlength="120" autocomplete="off" required></label>
+      <label>Server URL <input id="mcp-url" name="url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://example.com/mcp" required></label>
+      <label>Auth token <input id="mcp-token" name="token" type="password" autocomplete="new-password" spellcheck="false"></label>
+      <p class="field-hint">Optional. Sent as Authorization: Bearer. The token is stored on the server and is not shown again.</p>
+      <label>Header name <input id="mcp-header" name="headerName" value="Authorization" autocomplete="off" spellcheck="false" maxlength="64"></label>
+      <p id="mcp-error" class="alert" role="alert" hidden></p>
+      <p id="mcp-ok" class="alert info" role="status" hidden></p>
+      <div class="wait-actions">
+        <button type="button" class="secondary" data-close="mcp-dialog">Cancel</button>
+        <button type="button" class="secondary" id="mcp-test">Test connection</button>
+        <button type="submit" class="primary" id="mcp-save">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+<div id="mcp-token-dialog" class="dialog" hidden role="dialog" aria-modal="true" aria-labelledby="mcp-token-title">
+  <div class="shade" data-close="mcp-token-dialog"></div>
+  <div class="panel">
+    <div class="panel-bar">
+      <h2 id="mcp-token-title">Replace token</h2>
+      <button type="button" class="close" data-close="mcp-token-dialog" aria-label="Close">${closeIcon}</button>
+    </div>
+    <form id="mcp-token-form" class="panel-body">
+      <p id="mcp-token-current" class="field-hint"></p>
+      <label>New token <input id="mcp-token-next" type="password" autocomplete="new-password" spellcheck="false"></label>
+      <label>Header name <input id="mcp-token-header" value="Authorization" autocomplete="off" maxlength="64"></label>
+      <p id="mcp-token-error" class="alert" role="alert" hidden></p>
+      <div class="wait-actions">
+        <button type="button" class="secondary" data-close="mcp-token-dialog">Cancel</button>
+        <button type="button" class="secondary" id="mcp-token-clear">Clear token</button>
+        <button type="submit" class="primary" id="mcp-token-save">Save token</button>
+      </div>
+    </form>
+  </div>
+</div>
+<div id="mcp-remove-dialog" class="dialog" hidden role="dialog" aria-modal="true" aria-labelledby="mcp-remove-title">
+  <div class="shade" data-close="mcp-remove-dialog"></div>
+  <div class="panel">
+    <div class="panel-bar">
+      <h2 id="mcp-remove-title">Remove connector</h2>
+      <button type="button" class="close" data-close="mcp-remove-dialog" aria-label="Close">${closeIcon}</button>
+    </div>
+    <div class="panel-body">
+      <p id="mcp-remove-copy">Remove this connector and its tools? This does not change the remote server.</p>
+      <div class="wait-actions">
+        <button type="button" class="secondary" data-close="mcp-remove-dialog">Cancel</button>
+        <button type="button" class="danger" id="mcp-remove-confirm">Remove</button>
       </div>
     </div>
   </div>
@@ -2474,6 +2564,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     else if (sectionName === "people") head = document.querySelector("#people .page-head");
     else if (sectionName === "account") head = document.querySelector("#account-page .page-head");
     else if (sectionName === "connectors") head = document.querySelector("#overview .page-head");
+    else if (sectionName === "mcp") head = document.getElementById("mcp-head");
     else if (sectionName === "file") head = document.getElementById("file-head");
     if (head && head.parentNode) head.parentNode.insertBefore(box, head.nextSibling);
   }
@@ -2486,6 +2577,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (name === "people") return "People";
     if (name === "account") return "Account";
     if (name === "connectors") return "Setup";
+    if (name === "mcp") return "Connectors";
     if (name === "missing") return "Not found";
     return "Home";
   }
@@ -2608,6 +2700,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (name === "people") return "/console/people";
     if (name === "account") return "/console/account";
     if (name === "connectors") return "/console/setup";
+    if (name === "mcp") return "/console/connectors";
     if (name === "missing") return location.pathname;
     return "/console";
   }
@@ -2627,6 +2720,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (path === "/console/people") return "people";
     if (path === "/console/account") return "account";
     if (path === "/console/status" || path === "/console/setup") return "connectors";
+    if (path === "/console/connectors") return "mcp";
     if (path === "/console" || path === "/console/") return "home";
     return "missing";
   }
@@ -2644,7 +2738,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (name !== "home" && name !== "rooms") showHomeSkeleton(false);
     var homeTitle = document.getElementById("home-title");
     if (homeTitle) homeTitle.hidden = name !== "home";
-    var panels = ["rooms", "history", "chat", "record", "people", "account-page", "page-missing"];
+    var panels = ["rooms", "history", "chat", "record", "people", "account-page", "page-missing", "mcp-page"];
     var onFile = name === "file";
     document.getElementById("overview").hidden = name !== "connectors";
     var crumbHome = document.getElementById("crumb-home");
@@ -2669,7 +2763,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       text("crumb-current", sectionLabel(name));
     }
     panels.forEach(function (id) {
-      var key = id === "account-page" ? "account" : id === "page-missing" ? "missing" : id;
+      var key = id === "account-page" ? "account" : id === "page-missing" ? "missing" : id === "mcp-page" ? "mcp" : id;
       var node = document.getElementById(id);
       if (!node) return;
       node.hidden = onFile ? true : (name === "home" ? id !== "rooms" : key !== name);
@@ -2739,6 +2833,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     document.body.classList.toggle("room-open", name === "file");
     placeRoomChrome();
     syncCalendarAsk();
+    if (name === "mcp") loadMcp();
   }
 
   function closeNav() {
@@ -2750,7 +2845,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function dialogOpen() {
-    var ids = ["event-dialog", "profile-dialog", "decision-dialog", "create-dialog", "workspace-dialog", "space-dialog"];
+    var ids = ["event-dialog", "profile-dialog", "decision-dialog", "create-dialog", "workspace-dialog", "space-dialog", "mcp-dialog", "mcp-token-dialog", "mcp-remove-dialog"];
     for (var i = 0; i < ids.length; i += 1) {
       var node = document.getElementById(ids[i]);
       if (node && !node.hidden) return true;
@@ -5317,6 +5412,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
       closeDialog("event-dialog");
       return;
     }
+    var mcpDialog = document.getElementById("mcp-dialog");
+    if (mcpDialog && !mcpDialog.hidden) { closeDialog("mcp-dialog"); return; }
+    var mcpTokenDialog = document.getElementById("mcp-token-dialog");
+    if (mcpTokenDialog && !mcpTokenDialog.hidden) { closeDialog("mcp-token-dialog"); return; }
+    var mcpRemoveDialog = document.getElementById("mcp-remove-dialog");
+    if (mcpRemoveDialog && !mcpRemoveDialog.hidden) { closeDialog("mcp-remove-dialog"); return; }
     if (!document.getElementById("account-menu").hidden) closeAccountMenu();
     else if (!document.getElementById("profile-dialog").hidden) closeDialog("profile-dialog");
     else if (!document.getElementById("palette").hidden) closePalette();
@@ -6073,7 +6174,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       list.append(button);
       count += 1;
     }
-    [["home", "Home"], ["rooms", "Rooms"], ["history", "History"], ["record", "Decisions"], ["chat", "Chat"], ["connectors", "Setup"], ["account", "Account"], ["people", "People"]].forEach(function (page) {
+    [["home", "Home"], ["rooms", "Rooms"], ["history", "History"], ["record", "Decisions"], ["chat", "Chat"], ["connectors", "Setup"], ["mcp", "Connectors"], ["account", "Account"], ["people", "People"]].forEach(function (page) {
       add("Navigate", page[1], function () {
         leaveOnboard();
         showSection(page[0]);
@@ -6147,6 +6248,381 @@ if (sessionWhen && sessionWhen.dataset.at) {
   if (!startRoom && (sectionName === "home" || sectionName === "rooms")) showHomeSkeleton(true);
   routed = true;
   reserveComposer();
+  var mcpDemoUrl = "";
+  var mcpRows = [];
+  var mcpTokenId = "";
+  var mcpRemoveId = "";
+  var mcpBusy = false;
+
+  function mcpPost(path, body) {
+    return fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify(body || {})
+    }).then(function (response) {
+      return response.json().then(function (data) {
+        var payload = data && typeof data === "object" ? data : {};
+        if (!response.ok) payload.ok = false;
+        if (!payload.message && payload.ok === false) payload.message = "That could not be saved.";
+        return payload;
+      }).catch(function () {
+        return { ok: false, message: "That could not be saved." };
+      });
+    }).catch(function () {
+      return { ok: false, message: "The connection failed." };
+    });
+  }
+
+  function loadMcp() {
+    var page = document.getElementById("mcp-page");
+    if (!page) return Promise.resolve();
+    return fetch("/console/connectors", { headers: { accept: "application/json" } }).then(function (response) {
+      return response.json();
+    }).then(function (data) {
+      paintMcp(data || {});
+    }).catch(function () {
+      toast("Connectors could not be loaded.");
+    });
+  }
+
+  function mcpWhen(value) {
+    var text = String(value || "");
+    if (!text) return "Not tested yet";
+    return "Last tested " + text.replace("T", " ").replace(/\\..*$/, "").replace("Z", " UTC");
+  }
+
+  function mcpStatusLabel(status) {
+    if (status === "connected") return "Connected";
+    if (status === "error") return "Error";
+    if (status === "needs_auth") return "Needs auth";
+    if (status === "disabled") return "Disabled";
+    return "Draft";
+  }
+
+  function mcpBadgeClass(status) {
+    if (status === "connected") return "badge ok";
+    if (status === "error" || status === "needs_auth") return "badge bad";
+    return "badge warn";
+  }
+
+  function mcpActionLabel(action) {
+    if (action === "read") return "Read";
+    if (action === "delete") return "Delete";
+    return "Write";
+  }
+
+  function paintMcp(data) {
+    var connectors = Array.isArray(data.connectors) ? data.connectors : [];
+    mcpRows = connectors;
+    mcpDemoUrl = typeof data.demoUrl === "string" ? data.demoUrl : "";
+    var demo = document.getElementById("mcp-demo");
+    var note = document.getElementById("mcp-demo-note");
+    if (demo) demo.hidden = !mcpDemoUrl;
+    if (note) note.textContent = mcpDemoUrl || "";
+    var empty = document.getElementById("mcp-empty");
+    var head = document.getElementById("mcp-add-head");
+    if (empty) empty.hidden = connectors.length > 0;
+    if (head) head.hidden = connectors.length === 0;
+    var list = document.getElementById("mcp-list");
+    if (!list) return;
+    list.replaceChildren();
+    connectors.forEach(function (connector) {
+      list.appendChild(mcpCard(connector));
+    });
+  }
+
+  function mcpCard(connector) {
+    var card = document.createElement("article");
+    card.className = "settings-card mcp-card";
+    card.setAttribute("data-connector", connector.id || "");
+    var head = document.createElement("div");
+    head.className = "mcp-card-head";
+    var title = document.createElement("h2");
+    title.className = "mcp-name";
+    title.textContent = connector.name || "Connector";
+    var pill = document.createElement("span");
+    pill.className = mcpBadgeClass(connector.status);
+    pill.setAttribute("data-status", connector.status || "draft");
+    pill.textContent = mcpStatusLabel(connector.status);
+    head.append(title, pill);
+    var url = document.createElement("p");
+    url.className = "mcp-url";
+    url.textContent = connector.url || "";
+    var tested = document.createElement("p");
+    tested.className = "meta";
+    tested.textContent = mcpWhen(connector.lastTestedAt);
+    card.append(head, url, tested);
+    if (connector.lastError) {
+      var error = document.createElement("p");
+      error.className = "alert";
+      error.setAttribute("role", "alert");
+      error.textContent = connector.lastError;
+      card.append(error);
+    }
+    var tokenLine = document.createElement("p");
+    tokenLine.className = "mcp-token-line";
+    var tokenButton = document.createElement("button");
+    tokenButton.type = "button";
+    tokenButton.className = "secondary";
+    tokenButton.setAttribute("data-token", connector.id || "");
+    if (connector.hasToken) tokenButton.textContent = "Set ••••" + String(connector.tokenLast4 || "") + " · Replace";
+    else tokenButton.textContent = "Add token";
+    tokenButton.addEventListener("click", function () { openMcpToken(connector); });
+    tokenLine.append(tokenButton);
+    var actions = document.createElement("div");
+    actions.className = "wait-actions";
+    var again = document.createElement("button");
+    again.type = "button";
+    again.className = "secondary";
+    again.textContent = "Test again";
+    again.addEventListener("click", function () { testMcpAgain(connector.id, again); });
+    var remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "danger";
+    remove.textContent = "Remove";
+    remove.addEventListener("click", function () { openMcpRemove(connector); });
+    actions.append(again, remove);
+    card.append(tokenLine, actions);
+    var tools = document.createElement("div");
+    tools.className = "mcp-tools";
+    (connector.tools || []).forEach(function (tool) {
+      tools.appendChild(mcpToolRow(connector, tool));
+    });
+    card.append(tools);
+    return card;
+  }
+
+  function mcpToolRow(connector, tool) {
+    var row = document.createElement("div");
+    row.className = "mcp-tool";
+    row.setAttribute("data-tool", tool.name || "");
+    var copy = document.createElement("div");
+    copy.className = "mcp-tool-copy";
+    var name = document.createElement("p");
+    name.className = "mcp-tool-name";
+    name.textContent = tool.name || "";
+    var description = document.createElement("p");
+    description.className = "mcp-tool-desc";
+    description.textContent = tool.description || "";
+    var badges = document.createElement("p");
+    badges.className = "mcp-tool-badges";
+    var action = document.createElement("span");
+    action.className = tool.actionClass === "delete" ? "badge bad" : tool.actionClass === "read" ? "badge ok" : "badge warn";
+    action.textContent = mcpActionLabel(tool.actionClass);
+    badges.append(action);
+    if (tool.changed) {
+      var changed = document.createElement("span");
+      changed.className = "badge warn";
+      changed.textContent = "Changed since approval";
+      badges.append(changed);
+    }
+    copy.append(name, description, badges);
+    var label = document.createElement("label");
+    label.className = "switch";
+    var input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = tool.enabled === true;
+    input.setAttribute("aria-label", "Enable " + (tool.name || "tool"));
+    input.addEventListener("change", function () {
+      var next = input.checked;
+      input.disabled = true;
+      mcpPost("/console/connectors/" + encodeURIComponent(connector.id) + "/tools/" + encodeURIComponent(tool.name), { enabled: next }).then(function (result) {
+        input.disabled = false;
+        if (!result.ok) {
+          input.checked = !next;
+          toast(result.message || "That could not be saved.");
+          return;
+        }
+        if (result.connector) paintMcp({ connectors: replaceMcp(result.connector), demoUrl: mcpDemoUrl });
+      });
+    });
+    var sr = document.createElement("span");
+    sr.className = "sr";
+    sr.textContent = "Enable " + (tool.name || "tool");
+    label.append(input, sr);
+    row.append(copy, label);
+    return row;
+  }
+
+  function replaceMcp(connector) {
+    var found = false;
+    var next = mcpRows.map(function (row) {
+      if (row.id === connector.id) { found = true; return connector; }
+      return row;
+    });
+    if (!found) next.push(connector);
+    return next;
+  }
+
+  function openMcpDialog() {
+    var form = document.getElementById("mcp-form");
+    if (form) form.reset();
+    var header = document.getElementById("mcp-header");
+    if (header) header.value = "Authorization";
+    var error = document.getElementById("mcp-error");
+    var ok = document.getElementById("mcp-ok");
+    if (error) { error.hidden = true; error.textContent = ""; }
+    if (ok) { ok.hidden = true; ok.textContent = ""; }
+    setMcpBusy(false);
+    openDialog("mcp-dialog");
+    var name = document.getElementById("mcp-name");
+    if (name) name.focus();
+  }
+
+  function mcpFields() {
+    var name = (document.getElementById("mcp-name").value || "").trim();
+    var url = (document.getElementById("mcp-url").value || "").trim();
+    var token = document.getElementById("mcp-token").value || "";
+    var headerName = (document.getElementById("mcp-header").value || "").trim() || "Authorization";
+    var error = "";
+    if (!name) error = "Enter a name.";
+    else if (!url || !/^https?:\\/\\//i.test(url)) error = "Enter a valid server URL.";
+    return { name: name, url: url, token: token, headerName: headerName, error: error };
+  }
+
+  function showMcpError(message) {
+    var error = document.getElementById("mcp-error");
+    var ok = document.getElementById("mcp-ok");
+    if (ok) ok.hidden = true;
+    if (!error) return;
+    error.hidden = !message;
+    error.textContent = message || "";
+  }
+
+  function showMcpOk(message) {
+    var ok = document.getElementById("mcp-ok");
+    var error = document.getElementById("mcp-error");
+    if (error) error.hidden = true;
+    if (!ok) return;
+    ok.hidden = !message;
+    ok.textContent = message || "";
+  }
+
+  function setMcpBusy(on) {
+    mcpBusy = on === true;
+    ["mcp-test", "mcp-save", "mcp-use-demo"].forEach(function (id) {
+      var node = document.getElementById(id);
+      if (node) node.disabled = id === "mcp-use-demo" ? !mcpDemoUrl || mcpBusy : mcpBusy;
+    });
+    var dialog = document.getElementById("mcp-dialog");
+    if (dialog) dialog.setAttribute("aria-busy", mcpBusy ? "true" : "false");
+  }
+
+  function testMcpConnection() {
+    if (mcpBusy) return;
+    var fields = mcpFields();
+    if (fields.error) { showMcpError(fields.error); return; }
+    setMcpBusy(true);
+    showMcpError("");
+    mcpPost("/console/connectors/probe", fields).then(function (result) {
+      setMcpBusy(false);
+      if (!result.ok) { showMcpError(result.message || "The connection failed."); return; }
+      var server = result.serverInfo && result.serverInfo.name ? result.serverInfo.name : "Server";
+      var count = Number(result.toolCount || 0);
+      showMcpOk(server + " · " + count + (count === 1 ? " tool" : " tools"));
+    });
+  }
+
+  function saveMcp(event) {
+    event.preventDefault();
+    if (mcpBusy) return;
+    var fields = mcpFields();
+    if (fields.error) { showMcpError(fields.error); return; }
+    setMcpBusy(true);
+    mcpPost("/console/connectors", fields).then(function (result) {
+      setMcpBusy(false);
+      if (!result.ok || !result.connector) { showMcpError(result.message || "That could not be saved."); return; }
+      closeDialog("mcp-dialog");
+      loadMcp().then(function () {
+        if (result.test && result.test.ok === false) toast(result.test.message || "The connection failed.");
+        else toast("Connector saved.");
+      });
+    });
+  }
+
+  function testMcpAgain(id, button) {
+    if (!id || (button && button.disabled)) return;
+    if (button) button.disabled = true;
+    mcpPost("/console/connectors/" + encodeURIComponent(id) + "/test", {}).then(function (result) {
+      if (button) button.disabled = false;
+      if (result.connector) paintMcp({ connectors: replaceMcp(result.connector), demoUrl: mcpDemoUrl });
+      else loadMcp();
+      if (result.test && result.test.ok === false) toast(result.test.message || "The connection failed.");
+      else if (result.ok) toast("Connection succeeded.");
+    });
+  }
+
+  function openMcpToken(connector) {
+    mcpTokenId = connector.id || "";
+    var current = document.getElementById("mcp-token-current");
+    if (current) {
+      current.textContent = connector.hasToken ? ("Set ••••" + String(connector.tokenLast4 || "")) : "No token is stored.";
+    }
+    var next = document.getElementById("mcp-token-next");
+    if (next) next.value = "";
+    var header = document.getElementById("mcp-token-header");
+    if (header) header.value = connector.headerName || "Authorization";
+    var error = document.getElementById("mcp-token-error");
+    if (error) { error.hidden = true; error.textContent = ""; }
+    openDialog("mcp-token-dialog");
+  }
+
+  function saveMcpToken(event, clear) {
+    if (event) event.preventDefault();
+    if (!mcpTokenId) return;
+    var token = clear ? "" : (document.getElementById("mcp-token-next").value || "");
+    var headerName = (document.getElementById("mcp-token-header").value || "").trim() || "Authorization";
+    mcpPost("/console/connectors/" + encodeURIComponent(mcpTokenId) + "/token", { token: token, headerName: headerName }).then(function (result) {
+      var error = document.getElementById("mcp-token-error");
+      if (!result.ok) {
+        if (error) { error.hidden = false; error.textContent = result.message || "That could not be saved."; }
+        return;
+      }
+      closeDialog("mcp-token-dialog");
+      loadMcp();
+      toast(clear ? "Token cleared." : "Token replaced.");
+    });
+  }
+
+  function openMcpRemove(connector) {
+    mcpRemoveId = connector.id || "";
+    var copy = document.getElementById("mcp-remove-copy");
+    if (copy) copy.textContent = "Remove " + (connector.name || "this connector") + " and its tools? This does not change the remote server.";
+    openDialog("mcp-remove-dialog");
+  }
+
+  function confirmMcpRemove() {
+    if (!mcpRemoveId) return;
+    var id = mcpRemoveId;
+    mcpPost("/console/connectors/" + encodeURIComponent(id) + "/remove", {}).then(function (result) {
+      if (!result.ok) { toast(result.message || "That could not be saved."); return; }
+      closeDialog("mcp-remove-dialog");
+      loadMcp();
+      toast("Connector removed.");
+    });
+  }
+
+  var mcpAdd = document.getElementById("mcp-add");
+  var mcpAddHead = document.getElementById("mcp-add-head");
+  if (mcpAdd) mcpAdd.addEventListener("click", openMcpDialog);
+  if (mcpAddHead) mcpAddHead.addEventListener("click", openMcpDialog);
+  var mcpForm = document.getElementById("mcp-form");
+  if (mcpForm) mcpForm.addEventListener("submit", saveMcp);
+  var mcpTest = document.getElementById("mcp-test");
+  if (mcpTest) mcpTest.addEventListener("click", testMcpConnection);
+  var mcpUseDemo = document.getElementById("mcp-use-demo");
+  if (mcpUseDemo) mcpUseDemo.addEventListener("click", function () {
+    if (!mcpDemoUrl) return;
+    var url = document.getElementById("mcp-url");
+    if (url) url.value = mcpDemoUrl;
+  });
+  var mcpTokenForm = document.getElementById("mcp-token-form");
+  if (mcpTokenForm) mcpTokenForm.addEventListener("submit", function (event) { saveMcpToken(event, false); });
+  var mcpTokenClear = document.getElementById("mcp-token-clear");
+  if (mcpTokenClear) mcpTokenClear.addEventListener("click", function () { saveMcpToken(null, true); });
+  var mcpRemoveConfirm = document.getElementById("mcp-remove-confirm");
+  if (mcpRemoveConfirm) mcpRemoveConfirm.addEventListener("click", confirmMcpRemove);
+
   load();
   syncRail();
 })();
