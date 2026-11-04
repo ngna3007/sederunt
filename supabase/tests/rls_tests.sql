@@ -175,7 +175,7 @@ begin
     fd uuid := '00000000-0000-4000-a000-00000000fd04';
     fe uuid := '00000000-0000-4000-a000-00000000fe05';
     ff uuid := '00000000-0000-4000-a000-00000000ff06';
-    fg uuid := '00000000-0000-4000-a000-00000000fg07';
+    fg uuid := '00000000-0000-4000-a000-00000000f907';
     ch_secret uuid;
     msg uuid;
     req uuid;
@@ -248,8 +248,12 @@ begin
     select count(*) into n from public.files where id = fc and status = 'pending_delete' and delete_reason = 'owner';
     r := r || jsonb_build_object('t','owner delete records reason owner','pass', n = 1);
     perform public.delete_file(fb, null);
+    -- An admin does not own fb, so RLS hides the pending row from them; check as postgres.
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '', true);
     select count(*) into n from public.files where id = fb and status = 'pending_delete' and delete_reason = 'moderation';
     r := r || jsonb_build_object('t','admin delete records reason moderation','pass', n = 1);
+    perform set_config('role', 'authenticated', true);
 
     perform set_config('request.jwt.claims', json_build_object('sub', bob, 'role', 'authenticated',
                        'email', 'bob@example.test')::text, true);
