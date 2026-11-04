@@ -1,3 +1,5 @@
+import { sederuntMark, FAVICON_LINK } from "./sederunt-mark.js";
+
 /**
  * First-run welcome and invite acceptance. The console shell stays on Home.
  * This page asks the one space question, then gets out of the way.
@@ -29,12 +31,13 @@ export function renderWelcomePage(state = {}) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${step === "ready" ? "Invites" : "Welcome"} · Sederunt</title>
+${FAVICON_LINK}
 <link rel="stylesheet" href="/console.css">
 </head>
 <body class="welcome-page">
 <main class="auth welcome">
   <section class="auth-card welcome-card" aria-labelledby="welcome-title">
-    <p class="auth-mark"><span class="tile-mark" aria-hidden="true">S</span> Sederunt</p>
+    <p class="auth-mark">${sederuntMark({ size: 32 })}<span class="brand-word">Sederunt</span></p>
     ${body}
   </section>
 </main>
@@ -104,12 +107,13 @@ export function renderFlowMessage(title, message) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeText(title)} · Sederunt</title>
+${FAVICON_LINK}
 <link rel="stylesheet" href="/console.css">
 </head>
 <body class="welcome-page">
 <main class="auth welcome">
   <section class="auth-card welcome-card" aria-labelledby="flow-title">
-    <p class="auth-mark"><span class="tile-mark" aria-hidden="true">S</span> Sederunt</p>
+    <p class="auth-mark">${sederuntMark({ size: 32 })}<span class="brand-word">Sederunt</span></p>
     <h1 id="flow-title">${escapeText(title)}</h1>
     <p class="alert" role="alert">${escapeText(message)}</p>
     <p class="welcome-skip"><a href="/console">Back to Home</a></p>
@@ -130,12 +134,13 @@ export function renderInvitePage(state = {}) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Accept invite · Sederunt</title>
+${FAVICON_LINK}
 <link rel="stylesheet" href="/console.css">
 </head>
 <body class="welcome-page">
 <main class="auth welcome">
   <section class="auth-card welcome-card" aria-labelledby="invite-title">
-    <p class="auth-mark"><span class="tile-mark" aria-hidden="true">S</span> Sederunt</p>
+    <p class="auth-mark">${sederuntMark({ size: 32 })}<span class="brand-word">Sederunt</span></p>
     <h1 id="invite-title">Accept invite</h1>
     <p class="page-lede">Join this space with the email on your account.</p>
     ${error}

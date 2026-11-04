@@ -88,6 +88,38 @@ export function validateEventUpdate(input = {}) {
 }
 
 /**
+ * Google Calendar MCP `update_event` arguments for a checked update.
+ * Omitted fields stay unchanged on Google's side, so only what changed is
+ * sent: `description` when it differs, `addedAttendees` and
+ * `removedAttendeeEmails` from a case-insensitive diff against the stored
+ * guests. The organizer is never removed. `sendUpdates` maps to
+ * `notificationLevel` (all → ALL, none → NONE). Returns null when nothing
+ * changed, so no write (and no guest email) goes out.
+ *
+ * @param {{ id: string, description?: string, attendees?: Array<{ email?: string, organizer?: boolean }> }} current
+ * @param {{ description: string, attendees: Array<{ email: string, name?: string }>, sendUpdates: "all" | "none" }} next
+ */
+export function eventUpdateArgs(current, next) {
+  const key = (guest) => String(guest?.email || "").trim().toLowerCase();
+  const stored = (current?.attendees || []).filter((guest) => key(guest));
+  const have = new Set(stored.map(key));
+  const want = new Set(next.attendees.map(key));
+  const addedAttendees = next.attendees
+    .filter((guest) => !have.has(key(guest)))
+    .map((guest) => (guest.name ? { email: guest.email, displayName: guest.name } : { email: guest.email }));
+  const removedAttendeeEmails = stored
+    .filter((guest) => !guest.organizer && !want.has(key(guest)))
+    .map((guest) => String(guest.email).trim());
+  const args = { eventId: current.id };
+  if ((current?.description || "") !== next.description) args.description = next.description;
+  if (addedAttendees.length) args.addedAttendees = addedAttendees;
+  if (removedAttendeeEmails.length) args.removedAttendeeEmails = removedAttendeeEmails;
+  if (Object.keys(args).length === 1) return null;
+  args.notificationLevel = next.sendUpdates === "none" ? "NONE" : "ALL";
+  return args;
+}
+
+/**
  * @param {unknown} error
  */
 export function asCalendarError(error) {

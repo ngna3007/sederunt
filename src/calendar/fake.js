@@ -1,5 +1,5 @@
 import { toUtcIso } from "../instant.js";
-import { CalendarError, validateEventUpdate } from "./validate.js";
+import { CalendarError, eventUpdateArgs, validateEventUpdate } from "./validate.js";
 
 const DEFAULT_ZONE = "Asia/Ho_Chi_Minh";
 
@@ -116,17 +116,12 @@ export function createFakeCalendarAdapter(env = {}, options = {}) {
       if (!event) throw new CalendarError("not-found", "That meeting was not found.");
       if (event.readOnly) throw new CalendarError("read-only", "This meeting is read-only.");
       const next = validateEventUpdate({ description, attendees, sendUpdates, current: event });
-      const payload = {
-        eventId: event.id,
-        description: next.description,
-        attendees: next.attendees.map((guest) => ({ email: guest.email })),
-        sendUpdates: next.sendUpdates,
-      };
-      calls.push({ name: "update_event", arguments: payload });
+      const payload = eventUpdateArgs(event, next);
+      if (payload) calls.push({ name: "update_event", arguments: payload });
       event.description = next.description;
       event.attendees = next.attendees;
       event.lastSendUpdates = next.sendUpdates;
-      return publicEvent(event);
+      return { ...publicEvent(event), changed: Boolean(payload) };
     },
   };
 }

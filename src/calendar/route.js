@@ -51,13 +51,15 @@ export async function handleCalendarEvent(ctx) {
     const sendUpdates = body?.sendUpdates === "all" || body?.sendUpdates === "none"
       ? body.sendUpdates
       : (body?.notify === false ? "none" : "all");
-    const event = publicEvent(await calendar.updateEventDetails({
+    const saved = await calendar.updateEventDetails({
       id,
       description: typeof body?.description === "string" ? body.description : "",
       attendees: Array.isArray(body?.attendees) ? body.attendees : [],
       sendUpdates,
-    }));
-    sendJson(send, res, 200, { ok: true, sendUpdates, event });
+    });
+    // An unchanged save writes nothing to Google, so nobody was notified.
+    const changed = saved?.changed !== false;
+    sendJson(send, res, 200, { ok: true, changed, sendUpdates: changed ? sendUpdates : "none", event: publicEvent(saved) });
   } catch (error) {
     const typed = error instanceof CalendarError ? error : null;
     const code = typed?.code || "network";

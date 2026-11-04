@@ -1,8 +1,8 @@
 import { toUtcIso } from "../instant.js";
 import { calendarFakeEnabled, calendarPresentedConnected, createFakeCalendarAdapter } from "./fake.js";
-import { CalendarError, asCalendarError, validateEventUpdate } from "./validate.js";
+import { CalendarError, asCalendarError, eventUpdateArgs, validateEventUpdate } from "./validate.js";
 
-export { CalendarError, calendarFakeEnabled, calendarPresentedConnected, validateEventUpdate };
+export { CalendarError, calendarFakeEnabled, calendarPresentedConnected, eventUpdateArgs, validateEventUpdate };
 
 const CALENDAR_URL = "https://calendarmcp.googleapis.com/mcp/v1";
 
@@ -52,7 +52,7 @@ export function createCalendarAdapter(env = process.env, options = {}) {
       const zone = zoneOf(env);
       if (!token || !id) return null;
       try {
-        const result = await toolsCall(fetchImpl, token, "get_event", { eventId: id, timeZone: zone });
+        const result = await toolsCall(fetchImpl, token, "get_event", { eventId: id });
         const event = singleEvent(result);
         if (event?.start) return { id: event.id || id, start: toUtcIso(event.start), end: toUtcIso(event.end), timeZone: event.timeZone || zone };
       } catch { /* list_events is the fallback when get_event is absent */ }
@@ -96,7 +96,7 @@ export function createCalendarAdapter(env = process.env, options = {}) {
       const zone = zoneOf(env);
       return withCalendarToken(env, fetchImpl, save, async (token) => {
         try {
-          const result = await toolsCall(fetchImpl, token, "get_event", { eventId: clean, timeZone: zone });
+          const result = await toolsCall(fetchImpl, token, "get_event", { eventId: clean });
           const event = singleEvent(result);
           if (event && (!event.id || event.id === clean) && (event.id || event.summary || event.start)) return toDetails(event, clean);
         } catch {
@@ -122,19 +122,17 @@ export function createCalendarAdapter(env = process.env, options = {}) {
       const current = await this.readEventDetails(id);
       if (current.readOnly) throw new CalendarError("read-only", "This meeting is read-only.");
       const next = validateEventUpdate({ description, attendees, sendUpdates, current });
-      await withCalendarToken(env, fetchImpl, save, async (token) => {
-        try {
-          await toolsCall(fetchImpl, token, "update_event", {
-            eventId: current.id,
-            description: next.description,
-            attendees: next.attendees.map((guest) => ({ email: guest.email })),
-            sendUpdates: next.sendUpdates,
-          });
-        } catch (error) {
-          if (Number(error?.status) === 401) throw error;
-          throw asCalendarError(error);
-        }
-      });
+      const args = eventUpdateArgs(current, next);
+      if (args) {
+        await withCalendarToken(env, fetchImpl, save, async (token) => {
+          try {
+            await toolsCall(fetchImpl, token, "update_event", args);
+          } catch (error) {
+            if (Number(error?.status) === 401) throw error;
+            throw asCalendarError(error);
+          }
+        });
+      }
       return {
         id: current.id,
         title: current.title,
@@ -143,6 +141,7 @@ export function createCalendarAdapter(env = process.env, options = {}) {
         description: next.description,
         attendees: next.attendees,
         readOnly: false,
+        changed: Boolean(args),
       };
     },
     async call(name, params) {
@@ -439,15 +438,35 @@ function normalizeEvent(event) {
   return {
     id: event?.id || "",
     summary: event?.summary || event?.title || "",
-    start: event?.start?.dateTime || event?.startTime || event?.start || "",
-    end: event?.end?.dateTime || event?.endTime || event?.end || "",
+    start: timeOf(event?.start) || timeOf(event?.startTime),
+    end: timeOf(event?.end) || timeOf(event?.endTime),
     timeZone: event?.timeZone || event?.start?.timeZone || "",
     description: typeof event?.description === "string" ? event.description : "",
     attendees: normalizeAttendees(event?.attendees),
-    readOnly: event?.readOnly === true,
+    readOnly: event?.readOnly === true || notEditable(event, organizer),
     organizerEmail: typeof organizer?.email === "string" ? organizer.email : "",
     organizerName: typeof organizer?.displayName === "string" ? organizer.displayName : (typeof organizer?.name === "string" ? organizer.name : ""),
   };
+}
+
+/** Event.start / end are DateOrDateTime: `{ dateTime }`, or `{ date }` for all-day. */
+function timeOf(value) {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object") return value.dateTime || value.date || "";
+  return "";
+}
+
+/**
+ * Event has no read-only flag. It is not ours to edit when the organizer is
+ * someone else (`organizer.self === false`, or our own attendee row is not
+ * the organizer) and guests may not modify it.
+ */
+function notEditable(event, organizer) {
+  if (event?.guestPermissions?.guestsCanModify === true) return false;
+  if (organizer?.self === true) return false;
+  if (organizer?.self === false) return true;
+  const mine = Array.isArray(event?.attendees) ? event.attendees.find((guest) => guest?.self === true) : null;
+  return Boolean(mine && mine.organizer !== true);
 }
 
 function normalizeAttendees(list) {
