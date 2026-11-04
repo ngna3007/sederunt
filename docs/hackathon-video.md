@@ -20,8 +20,8 @@ Go to chat. Ask "Where is the offsite?" Show the answer from the earlier decisio
 
 ## 2:20–2:40 — Close
 
-Return to the Proof panel for that correction's blob, if the live seed has been verified. One sentence: Walrus holds what the team learned, and Tatum is how Sederunt shows it is on chain.
+Return to the Proof panel for that correction's blob. It is verified on mainnet in Walrus epoch 43. One sentence: Walrus holds what the team learned, and Tatum is how Sederunt shows it is on chain.
 
-## If the live seed has not been run
+## Live seed
 
-Use the dry-run console harness. Say plainly that the ids on screen are the shape of a proof, and that a live run needs `TATUM_API_KEY`, the company MemWal delegate, and `HACKATHON_CONFIRM_MAINNET=yes`. Do not type the keys on camera.
+The live seed ran on 2026-11-04. The workspace holds 28 memories, and all 28 verify through Tatum. For the Suiscan cut, open the booth decision: [object](https://suiscan.xyz/mainnet/object/0xf734ea6c946482d9bf28f6443ea6529099a67cc306717562361cd463438de944) and [transaction](https://suiscan.xyz/mainnet/tx/EMyYSF9gsiefY7HcMJUyDGj7VAmhpJSPqVr6Y7ZANQrZ). The ids for every seeded memory are in `docs/hackathon/mainnet-seed-proof.json`. Do not type keys on camera.

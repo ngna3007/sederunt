@@ -18,6 +18,8 @@ Finding a memory on chain is a short walk. `remember` returns the owner address;
 
 If the key is missing, or the read fails, the proof stays unknown. There is no quiet hop to a public fullnode.
 
+On 2026-11-04 we seeded 13 demo memories on mainnet through the managed relayer, which paid the gas. The `sederunt` namespace then held 28 memories. Tatum verified all 28 in 39.3 s on the free plan's 3 requests per second, with one retry. The booth decision is [this object](https://suiscan.xyz/mainnet/object/0xf734ea6c946482d9bf28f6443ea6529099a67cc306717562361cd463438de944), certified by [this transaction](https://suiscan.xyz/mainnet/tx/EMyYSF9gsiefY7HcMJUyDGj7VAmhpJSPqVr6Y7ZANQrZ) in Walrus epoch 43.
+
 ## How it learned over time
 
 Search is not the same as learning. Before Sederunt answers, it recalls a few memories from the `sederunt` namespace and lets them change the words.

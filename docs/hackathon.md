@@ -86,6 +86,19 @@ HACKATHON_CONFIRM_MAINNET=yes node scripts/hackathon-seed-memories.mjs --live
 
 Estimated cost of `remember()` on the managed relayer is $0 to this wallet. Creating the MemWal account and registering a delegate key is done once at https://memory.walrus.xyz and spends a small owner-wallet gas fee. The script does not create that account. The dry run also prints how many Tatum calls the verify would use at the free-plan rate.
 
+### Mainnet seed, 2026-11-04
+
+The 13 demo memories were written to the company `sederunt` namespace on Sui mainnet between 23:43 and 23:50 UTC+7 (checkpoint times). Every write went through the MemWal managed relayer at relayer.memory.walrus.xyz, which paid WAL and SUI. No transaction came from the owner wallet.
+
+The first run was cut off by the shell after 4 memories. Recall showed those 4 had landed once each, so the second run used `--skip-existing`, found them by recall, and wrote the other 9. The script now writes its report after every memory, so a cut-off run still shows what landed.
+
+After the seed the namespace holds 28 memories. A recheck at 23:54 UTC+7 verified all 28 through Tatum gRPC in 39.3 s at 3 requests per second, with one retry. The 13 new blobs were certified in Walrus epoch 43, at checkpoints 341,620,219 to 341,621,779.
+
+- Booth decision: [object](https://suiscan.xyz/mainnet/object/0xf734ea6c946482d9bf28f6443ea6529099a67cc306717562361cd463438de944), [transaction](https://suiscan.xyz/mainnet/tx/EMyYSF9gsiefY7HcMJUyDGj7VAmhpJSPqVr6Y7ZANQrZ), [checkpoint](https://suiscan.xyz/mainnet/checkpoint/341620328)
+- Offsite decision: [object](https://suiscan.xyz/mainnet/object/0x4d720f662973a9098dcf277c64a3c5b22ed995e6c295c1d5b58daea38f948107), [transaction](https://suiscan.xyz/mainnet/tx/7Sj2oR33ZX4F7WsufZ7GC1tYQbLbm2ugjwfJtcKA5Eyh)
+
+The full list, with blob ids, objects, transactions, checkpoints, and epochs, is in [`docs/hackathon/mainnet-seed-proof.json`](hackathon/mainnet-seed-proof.json). It holds no keys or account ids.
+
 ## Environment names
 
 The process reads these names. Values stay in the environment or in `COMPANY_ENV_FILE`. They are not printed.
