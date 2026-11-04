@@ -84,9 +84,11 @@ async function liveRun() {
   const { createTatumReader } = await import("../src/tatum/get-object.js");
   const tatum = createTatumReader(process.env);
   const memories = [];
+  const existing = args.includes("--skip-existing") ? await keptBlobs() : new Map();
   for (const memory of DEMO_MEMORIES) {
     try {
-      const saved = await rememberCompany({
+      const already = existing.get(memory.text);
+      const saved = already ? { blobId: already } : await rememberCompany({
         text: memory.text,
         kind: memory.kind,
         idempotencyKey: memory.idempotencyKey,
@@ -110,9 +112,15 @@ async function liveRun() {
           proof = { status: "unknown", reason: safeMessage(error) };
         }
       }
-      memories.push(publicRow(memory, saved, proof));
+      memories.push({ ...publicRow(memory, saved, proof), ...(already ? { keptEarlier: true } : {}) });
+      // Written after every memory, so an interrupted run still shows what landed.
+      writeReport({ dryRun: false, written: true, partial: memories.length < DEMO_MEMORIES.length, count: memories.length, kinds: countKinds(memories), memories });
+      console.error(`kept ${memories.length}/${DEMO_MEMORIES.length} ${memory.kind} · ${proof?.status || "unknown"}`);
     } catch (error) {
       console.error(`Remember failed for ${memory.kind}: ${safeMessage(error)}`);
+      // Keep what already landed, so a second run can skip it instead of
+      // writing a duplicate.
+      writeReport({ dryRun: false, written: memories.length > 0, partial: true, failedAt: memory.idempotencyKey, count: memories.length, kinds: countKinds(memories), memories });
       return 1;
     }
   }
@@ -129,6 +137,35 @@ async function liveRun() {
   printReport(report);
   writeReport(report);
   return 0;
+}
+
+/**
+ * Seed sentences already in the namespace, by text, with their blob ids.
+ * A rerun after an interruption verifies these instead of writing them again.
+ */
+async function keptBlobs() {
+  const { MemWal } = await import("@mysten-incubation/memwal");
+  const memwal = MemWal.create({
+    key: process.env.COMPANY_MEMWAL_KEY,
+    accountId: process.env.COMPANY_MEMWAL_ACCOUNT_ID,
+    serverUrl: process.env.COMPANY_MEMWAL_SERVER || "https://relayer.memory.walrus.xyz",
+    namespace: "sederunt",
+  });
+  const kept = new Map();
+  for (const memory of DEMO_MEMORIES) {
+    const result = await memwal.recall({ query: memory.text, topK: 5, namespace: "sederunt" });
+    for (const hit of result?.results ?? []) {
+      let text = "";
+      try {
+        text = JSON.parse(hit.text)?.text ?? "";
+      } catch {
+        text = "";
+      }
+      if (text === memory.text && typeof hit.blob_id === "string") kept.set(memory.text, hit.blob_id);
+    }
+  }
+  console.error(`already kept: ${kept.size}/${DEMO_MEMORIES.length}`);
+  return kept;
 }
 
 function prove(memory, calls) {
