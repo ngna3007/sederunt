@@ -70,7 +70,8 @@ test("built-in forms preset does not fetch loopback", async (t) => {
   assert.deepEqual(names.map((tool) => tool.name).sort(), ["add_questions", "create_form", "get_form", "list_responses", "publish_form"]);
   const read = await callTool(legacy, "get_form", { formId: "fake-form-seed" }, { env: legacy.env });
   assert.equal(read.ok, true);
-  assert.equal(JSON.parse(read.text).title, "Weekly feedback");
+  assert.equal(read.structuredContent.title, "Weekly feedback");
+  assert.match(read.text, /Weekly feedback \(fake-form-seed\), 2 questions\./);
 
   const blocked = await testConnection({
     url: "http://127.0.0.1:9/mcp",
@@ -115,8 +116,8 @@ test("built-in forms preset does not fetch loopback", async (t) => {
     method: "tools/call",
     params: { name: "google-forms__get_form", arguments: { formId: "fake-form-seed" } },
   }));
-  assert.equal(form.result.structuredContent.ok, true);
-  assert.equal(JSON.parse(form.result.structuredContent.text).title, "Weekly feedback");
+  assert.equal(form.result.structuredContent.title, "Weekly feedback");
+  assert.match(form.result.content[0].text, /Weekly feedback \(fake-form-seed\), 2 questions\./);
 
   const again = json(await call(port, "POST", `/console/connectors/${added.connector.id}/test`, {}));
   assert.equal(again.test.ok, true);
@@ -132,6 +133,8 @@ test("built-in forms preset does not fetch loopback", async (t) => {
     },
   }));
   assert.equal(held.result.structuredContent.held, true);
+  assert.equal(held.result.structuredContent.needsConfirmation, true);
+  assert.equal(held.result.structuredContent.preference, "ask");
   const created = json(await call(port, "POST", "/mcp", {
     jsonrpc: "2.0",
     id: 4,
@@ -145,7 +148,9 @@ test("built-in forms preset does not fetch loopback", async (t) => {
       },
     },
   }));
-  assert.equal(created.result.structuredContent.ok, true);
+  assert.equal(created.result.structuredContent.formId, "fake-form-1");
+  assert.equal(created.result.structuredContent.published, true);
+  assert.match(created.result.content[0].text, /Created "Launch check"/);
   const preview = await call(port, "GET", "/forms/fake/fake-form-1/viewform", null, { accept: "text/html" });
   assert.equal(preview.status, 200);
 

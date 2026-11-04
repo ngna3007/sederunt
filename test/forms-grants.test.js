@@ -528,8 +528,10 @@ test("invalid_grant clears the forms grant and the tool reports needs_access", a
     method: "tools/call",
     params: { name: "google-forms__get_form", arguments: { formId: "Form_1" } },
   }, { cookie: cookieHeader(granted.jar) }));
+  assert.equal(called.result.isError, true);
   assert.equal(called.result.structuredContent.code, "needs_access");
-  assert.equal(called.result.structuredContent.ok, false);
+  assert.match(called.result.structuredContent.message, /sign in again/);
+  assert.match(called.result.content[0].text, /sign in again/);
   assert.equal(JSON.stringify(called).includes("fr.google"), false);
   assert.equal(JSON.stringify(called).includes("ya29."), false);
   assert.equal(rows.map.size, 0);

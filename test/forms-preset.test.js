@@ -76,11 +76,7 @@ function mcp(port, id, method, params) {
 function toolBody(response) {
   const body = json(response);
   assert.equal(body.error, undefined);
-  return body.result.structuredContent;
-}
-
-function parsedTool(content) {
-  return JSON.parse(content.text);
+  return body.result;
 }
 
 function storeCookies(jar, headers) {
@@ -168,22 +164,22 @@ test("google forms preset adds five tools and confirms a write", async (t) => {
     name: "google-forms__get_form",
     arguments: { formId: "fake-form-seed" },
   }));
-  assert.equal(form.held, false);
-  assert.equal(form.ok, true);
-  const seed = parsedTool(form);
+  assert.equal(form.isError, undefined);
+  const seed = form.structuredContent;
   assert.equal(seed.title, "Weekly feedback");
+  assert.equal(seed.questionCount, 2);
   assert.match(seed.responderUri, /\/forms\/fake\/fake-form-seed\/viewform$/);
+  assert.match(form.content[0].text, /Weekly feedback \(fake-form-seed\), 2 questions\./);
 
   const responses = toolBody(await mcp(port, 3, "tools/call", {
     name: "google-forms__list_responses",
     arguments: { formId: "fake-form-seed" },
   }));
-  assert.equal(responses.held, false);
-  assert.equal(responses.ok, true);
-  const listedResponses = parsedTool(responses);
+  const listedResponses = responses.structuredContent;
   assert.equal(listedResponses.responses[0].answers["How was the week?"], "Good");
   assert.equal(listedResponses.responses[0].answers["Anything else?"], "Ship it");
   assert.equal(listedResponses.responses[1].answers["How was the week?"], "Busy");
+  assert.equal(responses.content[0].text, "2 responses.");
 
   const missing = await call(port, "GET", "/forms/fake/fake-form-1/viewform", null, { accept: "text/html" });
   assert.equal(missing.status, 404);
@@ -196,9 +192,13 @@ test("google forms preset adds five tools and confirms a write", async (t) => {
       questions: [{ title: "Ready?", type: "short_text", required: true }],
     },
   }));
-  assert.equal(held.held, true);
-  assert.equal(held.needsConfirmation, true);
-  assert.ok(held.actionId);
+  assert.equal(held.structuredContent.held, true);
+  assert.equal(held.structuredContent.needsConfirmation, true);
+  assert.equal(held.structuredContent.tool, "google-forms__create_form");
+  assert.equal(held.structuredContent.actionClass, "write");
+  assert.equal(held.structuredContent.preference, "ask");
+  assert.ok(held.structuredContent.actionId);
+  assert.match(held.content[0].text, /Needs confirmation before google-forms__create_form runs/);
   const stillMissing = await call(port, "GET", "/forms/fake/fake-form-1/viewform", null, { accept: "text/html" });
   assert.equal(stillMissing.status, 404);
 
@@ -208,12 +208,12 @@ test("google forms preset adds five tools and confirms a write", async (t) => {
       title: "Launch check",
       description: "Before we ship",
       questions: [{ title: "Ready?", type: "short_text", required: true }],
-      _confirm: held.actionId,
+      _confirm: held.structuredContent.actionId,
     },
   }));
-  assert.equal(created.ok, true);
-  assert.equal(created.held, false);
-  const made = parsedTool(created);
+  assert.equal(created.isError, undefined);
+  const made = created.structuredContent;
+  assert.match(created.content[0].text, /Created "Launch check" \(fake-form-1\)\./);
   assert.equal(made.formId, "fake-form-1");
   assert.equal(made.title, "Launch check");
   assert.equal(made.published, true);
@@ -228,18 +228,19 @@ test("google forms preset adds five tools and confirms a write", async (t) => {
 
   const spent = toolBody(await mcp(port, 6, "tools/call", {
     name: "google-forms__create_form",
-    arguments: { title: "Launch check", _confirm: held.actionId },
+    arguments: { title: "Launch check", _confirm: held.structuredContent.actionId },
   }));
-  assert.equal(spent.ok, false);
-  assert.equal(spent.held, false);
-  assert.equal(spent.actionId, undefined);
-  assert.match(spent.text, /no longer available/);
+  assert.equal(spent.isError, true);
+  assert.equal(spent.structuredContent.code, "confirm");
+  assert.match(spent.structuredContent.message, /no longer available/);
+  assert.match(spent.content[0].text, /no longer available/);
   const notSecond = toolBody(await mcp(port, 7, "tools/call", {
     name: "google-forms__get_form",
     arguments: { formId: "fake-form-2" },
   }));
-  assert.equal(notSecond.ok, false);
-  assert.match(notSecond.text, /not-found/);
+  assert.equal(notSecond.isError, true);
+  assert.equal(notSecond.structuredContent.code, "not-found");
+  assert.match(notSecond.content[0].text, /^not-found:/);
 
   const badHeld = toolBody(await mcp(port, 8, "tools/call", {
     name: "google-forms__create_form",
@@ -248,22 +249,24 @@ test("google forms preset adds five tools and confirms a write", async (t) => {
       questions: [{ title: "Pick one", type: "multiple_choice" }],
     },
   }));
-  assert.equal(badHeld.held, true);
+  assert.equal(badHeld.structuredContent.held, true);
   const bad = toolBody(await mcp(port, 9, "tools/call", {
     name: "google-forms__create_form",
     arguments: {
       title: "Broken",
       questions: [{ title: "Pick one", type: "multiple_choice" }],
-      _confirm: badHeld.actionId,
+      _confirm: badHeld.structuredContent.actionId,
     },
   }));
-  assert.equal(bad.ok, false);
-  assert.match(bad.text, /invalid-argument: Choice questions need between 1 and 50 options/);
+  assert.equal(bad.isError, true);
+  assert.equal(bad.structuredContent.code, "invalid-argument");
+  assert.match(bad.content[0].text, /^invalid-argument: Choice questions need between 1 and 50 options/);
   const stillOne = toolBody(await mcp(port, 10, "tools/call", {
     name: "google-forms__get_form",
     arguments: { formId: "fake-form-2" },
   }));
-  assert.match(stillOne.text, /not-found/);
+  assert.equal(stillOne.isError, true);
+  assert.match(stillOne.content[0].text, /^not-found:/);
 
   const appendHeld = toolBody(await mcp(port, 11, "tools/call", {
     name: "google-forms__add_questions",
@@ -272,17 +275,18 @@ test("google forms preset adds five tools and confirms a write", async (t) => {
       questions: [{ title: "When?", type: "date" }],
     },
   }));
-  assert.equal(appendHeld.held, true);
+  assert.equal(appendHeld.structuredContent.held, true);
   const appended = toolBody(await mcp(port, 12, "tools/call", {
     name: "google-forms__add_questions",
     arguments: {
       formId: "fake-form-1",
       questions: [{ title: "When?", type: "date" }],
     },
-    _meta: { confirmed: true, confirmActionId: appendHeld.actionId },
+    _meta: { confirmed: true, confirmActionId: appendHeld.structuredContent.actionId },
   }));
-  assert.equal(appended.ok, true);
-  assert.equal(parsedTool(appended).questionCount, 2);
+  assert.equal(appended.structuredContent.questionCount, 2);
+  assert.equal(appended.structuredContent.added, 1);
+  assert.match(appended.content[0].text, /Added 1 question\. 2 on the form\./);
 
   session.preferences.push({
     id: "preference-9",
@@ -295,11 +299,11 @@ test("google forms preset adds five tools and confirms a write", async (t) => {
     name: "google-forms__create_form",
     arguments: { title: "Automatic", publish: false },
   }));
-  assert.equal(direct.held, false);
-  assert.equal(direct.ok, true);
-  const second = parsedTool(direct);
+  assert.equal(direct.isError, undefined);
+  const second = direct.structuredContent;
   assert.equal(second.formId, "fake-form-2");
   assert.equal(second.published, false);
+  assert.match(direct.content[0].text, /Created "Automatic" \(fake-form-2\)\./);
 });
 
 test("google forms preset asks for access until Forms scopes are granted", async (t) => {

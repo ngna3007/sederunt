@@ -120,10 +120,12 @@ export function startFakeMcpServer(options = {}) {
     }
     if (method === "tools/call") {
       const args = stableArgs(message?.params?.arguments || {});
-      return rpcResult(message.id, {
+      const result = {
         content: [{ type: "text", text: `${name}:${JSON.stringify(args)}` }],
         isError: false,
-      });
+      };
+      if (name === "lookup_customer") result.structuredContent = { id: String(args.id || ""), note: "demo" };
+      return rpcResult(message.id, result);
     }
     return { jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "unknown method" } };
   }

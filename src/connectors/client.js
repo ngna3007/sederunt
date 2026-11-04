@@ -134,15 +134,7 @@ export async function callTool(connector, name, args = {}, options = {}) {
           arguments: args && typeof args === "object" ? args : {},
         }, { timeout: timeoutMs }));
       });
-      const text = toolText(result);
-      return {
-        ok: result?.isError !== true,
-        text,
-        structuredContent: result?.structuredContent,
-        isError: result?.isError === true,
-        code: "",
-        message: "",
-      };
+      return describedCall(result);
     }
     const url = await guardConnectorUrl(connector?.url, { env: options.env, lookup: options.lookup });
     const auth = authFrom({ ...connector, ...options, token: connector?.token || "" });
@@ -166,8 +158,7 @@ export async function callTool(connector, name, args = {}, options = {}) {
       }
       throw last;
     });
-    const text = toolText(result);
-    return { ok: result?.isError !== true, text, isError: result?.isError === true, code: "", message: "" };
+    return describedCall(result);
   } catch (error) {
     const code = classify(error);
     return { ok: false, text: "", isError: true, code, message: connectorMessage(code) };
@@ -288,6 +279,21 @@ function readServerInfo(client) {
   const info = typeof client.getServerVersion === "function" ? client.getServerVersion() : null;
   if (!info || typeof info !== "object") return { name: "", version: "" };
   return { name: String(info.name || ""), version: String(info.version || "") };
+}
+
+function describedCall(result) {
+  const text = toolText(result);
+  const structured = result?.structuredContent && typeof result.structuredContent === "object"
+    ? result.structuredContent
+    : undefined;
+  return {
+    ok: result?.isError !== true,
+    text,
+    ...(structured ? { structuredContent: structured } : {}),
+    isError: result?.isError === true,
+    code: typeof structured?.code === "string" ? structured.code : "",
+    message: typeof structured?.message === "string" ? structured.message : "",
+  };
 }
 
 function toolText(result) {

@@ -133,14 +133,18 @@ test("connector flow on the fake server", async (t) => {
   assert.equal(lookup.inputSchema.properties.id.type, "string");
 
   const read = json(await track(await mcp(port, 2, "tools/call", { name: "demo__lookup_customer", arguments: { id: "acme" } })));
-  assert.equal(read.result.structuredContent.ok, true);
-  assert.match(read.result.structuredContent.text, /lookup_customer/);
-  assert.match(read.result.structuredContent.text, /acme/);
+  assert.deepEqual(read.result.structuredContent, { id: "acme", note: "demo" });
+  assert.match(read.result.content[0].text, /lookup_customer/);
+  assert.match(read.result.content[0].text, /acme/);
 
   const before = fake.calls.filter((entry) => entry.method === "tools/call" && entry.name === "create_note").length;
   const held = json(await track(await mcp(port, 3, "tools/call", { name: "demo__create_note", arguments: { text: "hello" } })));
   assert.equal(held.result.structuredContent.held, true);
   assert.equal(held.result.structuredContent.needsConfirmation, true);
+  assert.equal(held.result.structuredContent.tool, "demo__create_note");
+  assert.equal(held.result.structuredContent.actionClass, "write");
+  assert.equal(held.result.structuredContent.preference, "ask");
+  assert.match(held.result.content[0].text, /Needs confirmation/);
   assert.equal(fake.calls.filter((entry) => entry.method === "tools/call" && entry.name === "create_note").length, before);
 
   fake.setMode("changed");
@@ -310,8 +314,10 @@ test("connector page flow and layout", { timeout: 180000 }, async (t) => {
     return { listed, read, held };
   });
   assert.ok(called.listed.result.tools.some((tool) => tool.name === "demo__lookup_customer"));
-  assert.equal(called.read.result.structuredContent.ok, true);
+  assert.deepEqual(called.read.result.structuredContent, { id: "acme", note: "demo" });
+  assert.match(called.read.result.content[0].text, /lookup_customer/);
   assert.equal(called.held.result.structuredContent.held, true);
+  assert.equal(called.held.result.structuredContent.needsConfirmation, true);
   assert.equal(fake.calls.filter((entry) => entry.method === "tools/call" && entry.name === "create_note").length, 0);
   fake.setMode("changed");
   await page.getByRole("button", { name: "Test again" }).click();

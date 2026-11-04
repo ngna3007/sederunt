@@ -174,13 +174,21 @@ export async function callCustomTool(input) {
     return failed(name, detail || "The tool call failed.", called.code || "protocol");
   }
   const text = redactToolText(called.text || "", token, bearer).slice(0, TEXT_CAP);
+  const structuredContent = redactStructured(called.structuredContent, token, bearer);
   const verb = tool.actionClass === "read" ? "read" : "call";
   const id = nextId(input.session, "mcp-call");
   safeLog(() => {
     logAction(input.session, activityInput({ id, verb, connector, tool, summary }));
     logResult(input.session, activityInput({ id: `${id}:result`, requestId: id, verb, connector, tool, summary }));
   });
-  return { ok: true, held: false, needsConfirmation: false, text, tool: name };
+  return {
+    ok: true,
+    held: false,
+    needsConfirmation: false,
+    text,
+    tool: name,
+    ...(structuredContent ? { structuredContent } : {}),
+  };
 }
 
 /**
@@ -245,6 +253,30 @@ async function takeAccess(input, force = false) {
 
 function unauthorizedTool(called) {
   return called?.isError === true && /^unauthorized\b/i.test(String(called.text || ""));
+}
+
+/**
+ * Drop bearer values from a structured tool result. The shape stays otherwise.
+ *
+ * @param {unknown} value
+ * @param {...string} tokens
+ */
+export function redactStructured(value, ...tokens) {
+  if (!value || typeof value !== "object") return undefined;
+  let raw = JSON.stringify(value);
+  let cleaned = raw;
+  for (const token of tokens) {
+    if (token) cleaned = cleaned.split(token).join("");
+  }
+  cleaned = cleaned.replace(/\bya29\.[A-Za-z0-9._\-]+/g, "");
+  cleaned = cleaned.replace(/\bBearer\s+/gi, "");
+  if (cleaned === raw) return value;
+  try {
+    const parsed = JSON.parse(cleaned);
+    return parsed && typeof parsed === "object" ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function redactToolText(text, ...tokens) {
