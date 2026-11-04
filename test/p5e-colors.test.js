@@ -29,7 +29,7 @@ test("preset tones: Connected green, Add accent, error red", () => {
   assert.match(html, /state === "connected" \|\| state === "ready"\) return "ok"/);
   assert.match(html, /state === "error"\) return "bad"/);
   assert.match(html, /return "accent"/);
-  assert.match(html, /badge accent" data-preset-badge>Add</);
+  assert.match(html, /preset-action" data-preset-badge>Add</);
   assert.doesNotMatch(html, /already connected/);
 });
 

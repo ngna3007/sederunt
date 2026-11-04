@@ -212,7 +212,7 @@ ${slack}
     <div class="page-head" id="home-head">
     <div>
     <p id="home-title" class="page-title">Home</p>
-    <p class="page-lede">Decisions this workspace kept, and the actions that followed.</p>
+    <p class="page-lede">Meetings, decisions, and follow-ups for this workspace.</p>
     </div>
     <div class="page-actions">
       <button type="button" class="secondary" id="home-add-to-meeting">Add to a meeting</button>
@@ -350,7 +350,7 @@ ${slack}
       <div class="page-head" id="mcp-head">
         <div>
           <p class="page-title">Connectors</p>
-          <p class="page-lede">MCP servers whose tools this space can call.</p>
+          <p class="page-lede">Tools this workspace can use.</p>
         </div>
         <div class="page-actions">
           <button type="button" class="primary" id="mcp-add-head" hidden>Add a connector</button>
@@ -366,13 +366,13 @@ ${slack}
         <div class="preset-row">
           <button type="button" class="preset-card" data-preset="google-forms" data-state="add">
             <span class="preset-head">${formsIcon}<span class="preset-name">Google Forms</span></span>
-            <span class="preset-detail">Uses this person's Google account.</span>
-            <span class="badge accent" data-preset-badge>Add</span>
+            <span class="preset-detail">Uses your Google account.</span>
+            <span class="preset-action" data-preset-badge>Add</span>
           </button>
           <button type="button" class="preset-card" data-preset="google-calendar" data-state="add">
             <span class="preset-head">${calendarIcon}<span class="preset-name">Google Calendar</span></span>
-            <span class="preset-detail">Uses this person's Google account.</span>
-            <span class="badge accent" data-preset-badge>Add</span>
+            <span class="preset-detail">Uses your Google account.</span>
+            <span class="preset-action" data-preset-badge>Add</span>
           </button>
         </div>
       </div>
@@ -394,7 +394,10 @@ ${slack}
         <label class="search">${searchIcon}<span class="sr">Search rooms</span><input id="room-search" type="search" placeholder="Search" autocomplete="off"></label>
       </div>
       <section id="meeting-rows" class="meeting-rows" hidden>
-        <h2 class="section-label">Meetings</h2>
+        <div class="meeting-head">
+          <h2 class="section-label" id="meeting-heading">Meetings</h2>
+          <a class="meetings-more" id="meetings-more" href="/console/rooms" hidden>All meetings</a>
+        </div>
         <div id="meeting-list" class="meeting-list"></div>
       </section>
       <div class="explorer">
@@ -472,7 +475,7 @@ ${slack}
       </div>
     </section>
     <section id="account-page" hidden>
-      <div class="page-head"><div><p class="page-title">Account</p><p class="page-lede">Who is signed in, and how long this sign-in lasts.</p></div></div>
+      <div class="page-head"><div><p class="page-title">Account</p><p class="page-lede">The person signed in to this workspace.</p></div></div>
       <div class="account-layout">
         <div class="overview-card account-hero" id="account-card">
           <span id="account-page-avatar" class="account-avatar lg" aria-hidden="true">${heroAvatar}</span>
@@ -488,7 +491,7 @@ ${slack}
             <dt class="account-name-row">Name</dt><dd id="account-detail-name" class="account-name-row">${detailName}</dd>
             ${profileRows}
             <dt>Workspace</dt><dd id="account-detail-workspace">${workspaceDetail}</dd>
-            <dt id="account-session-label">${state.accountExpiry ? "Expires" : "Session"}</dt><dd id="account-detail-expiry"${state.accountExpiry ? ` data-at="${escapeHtml(new Date(state.accountExpiry).toISOString())}" data-kind="expiry"` : ""}>${escapeHtml(signedIn ? "This sign-in does not list an expiry." : "Sign-in is not set up.")}</dd>
+            <dt id="account-session-label">${state.accountExpiry ? "Signed in until" : "Session"}</dt><dd id="account-detail-expiry"${state.accountExpiry ? ` data-at="${escapeHtml(new Date(state.accountExpiry).toISOString())}" data-kind="expiry"` : ""}>${escapeHtml(signedIn ? "This sign-in does not list an expiry." : "Sign-in is not set up.")}</dd>
           </dl>
         </div>
         <div class="settings-card">
@@ -619,7 +622,10 @@ ${slack}
                   <label class="switch"><input id="ask-first" type="checkbox" checked aria-label="Run automatically"><span class="sr">Run automatically</span></label>
                 </div>
                 <div class="room-set">
-                  <div class="set-copy"><strong>Voice</strong></div>
+                  <div class="set-copy">
+                    <strong>Voice</strong>
+                    <p class="field-hint" id="voice-hint">Short is one sentence. Plain adds who heard it. Formal also says what is waiting.</p>
+                  </div>
                   <div class="choices voices" role="group" aria-label="How this room reads">
                     <button type="button" data-voice="short">Short</button>
                     <button type="button" data-voice="plain" aria-pressed="true">Plain</button>
@@ -629,6 +635,7 @@ ${slack}
                 <div class="room-set">
                   <div class="set-copy">
                     <strong>Raise a clash</strong>
+                    <p class="field-hint" id="clash-hint">When two decisions disagree, say so in this room. Both stay.</p>
                     <p id="clash-note"></p>
                   </div>
                   <label class="switch"><input id="raise-clash" type="checkbox" aria-label="Raise a clash"><span class="sr">Raise a clash</span></label>
@@ -1580,6 +1587,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     roomCol.dataset.col = "room";
     var title = document.createElement("strong");
     title.textContent = spec.title || "Room";
+    title.title = spec.fullTitle || spec.title || "Room";
     title.classList.remove("mono");
     var count = document.createElement("span");
     count.className = "ex-count";
@@ -1609,7 +1617,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
     heard.className = "avatar-stack";
     heard.dataset.col = "speakers";
     var people = spec.people || [];
-    heard.title = people.map(function (person) { return personLabel(person) || person; }).join(", ");
+    heard.title = people.length ? people.map(function (person) { return personLabel(person) || person; }).join(", ") : "No speakers yet";
+    if (!people.length) {
+      var noneSpeaker = document.createElement("span");
+      noneSpeaker.className = "speaker-none";
+      noneSpeaker.textContent = "None";
+      noneSpeaker.title = "No speakers yet";
+      heard.append(noneSpeaker);
+    }
     people.slice(0, 2).forEach(function (person) { heard.append(face(personLabel(person) || person)); });
     if (people.length > 2) {
       var more = document.createElement("span");
@@ -2185,11 +2200,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var box = document.getElementById("counts");
     clear("counts");
     var counts = (state && state.counts) || {};
-    addCount(box, "Decisions kept", counts.kept || 0, "Sentences kept in this workspace.", null, false);
-    addCount(box, "Actions today", counts.actionsToday || 0, "Changes that ran today.", null, false);
+    addCount(box, "Decisions", counts.kept || 0, "Sentences kept in this workspace.", null, false);
+    addCount(box, "Actions", counts.actionsToday || 0, "Changes that ran today.", null, false);
     if (counts.failed) {
       var failedNote = counts.failed === 1 ? "1 change did not go through." : (counts.failed + " changes did not go through.");
-      addCount(box, "Failed actions", counts.failed, failedNote, null, "danger");
+      addCount(box, "Failed", counts.failed, failedNote, null, "danger");
     }
     if (counts.sent) addCount(box, "Sent", counts.sent, "The tool accepted the change.", null, false);
   }
@@ -2217,11 +2232,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
     ((state && state.activity) || []).forEach(function (row) {
       if (!row || row.kind !== "failure" || row.outcome !== "failed" || row.resolved) return;
+      var origin = row.origin || {};
       items.push({
         kind: "failed",
         text: row.sentence || "A change did not go through.",
         href: "/console/history#activity-" + encodeURIComponent(row.id || ""),
         activityId: row.id || "",
+        roomId: origin.roomId || "",
+        retryable: row.retryable === true,
         at: attentionStamp(row.ts)
       });
     });
@@ -2233,9 +2251,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var quiet = !state || state.reading === true || state.read === "failed" || sectionName !== "home";
     section.hidden = quiet || items.length === 0;
     items.forEach(function (item) {
+      var wrap = document.createElement("div");
+      wrap.className = "attention-item";
       var link = document.createElement("a");
       link.className = "attention-row";
       link.href = item.href;
+      link.title = item.text;
       var badge = document.createElement("span");
       badge.className = item.kind === "failed" ? "badge attention-failed" : "badge warn";
       badge.textContent = item.kind === "failed" ? "Failed" : "Clashing";
@@ -2258,7 +2279,33 @@ if (sessionWhen && sessionWhen.dataset.at) {
         var node = document.getElementById(target);
         if (node && node.scrollIntoView) node.scrollIntoView({ block: "center" });
       });
-      list.append(link);
+      wrap.append(link);
+      if (item.kind === "failed" && (item.roomId || item.retryable)) {
+        var actions = document.createElement("span");
+        actions.className = "attention-actions";
+        if (item.roomId) {
+          var roomLink = document.createElement("a");
+          roomLink.className = "attention-room";
+          roomLink.href = "/console/rooms/" + encodeURIComponent(item.roomId);
+          roomLink.textContent = "Room";
+          roomLink.addEventListener("click", function (event) {
+            if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+            event.preventDefault();
+            openFile(item.roomId);
+          });
+          actions.append(roomLink);
+        }
+        if (item.retryable && item.activityId) {
+          var retry = document.createElement("button");
+          retry.type = "button";
+          retry.className = "attention-retry";
+          retry.textContent = "Retry";
+          retry.addEventListener("click", function () { postActivity("retry", item.activityId, retry); });
+          actions.append(retry);
+        }
+        wrap.append(actions);
+      }
+      list.append(wrap);
     });
   }
 
@@ -2870,6 +2917,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (homeTools) homeTools.hidden = name !== "home";
     if (homeStats && name !== "home") homeStats.hidden = true;
     paintAttention();
+    paintMeetings();
     var label = onFile ? ((document.getElementById("file-title") || {}).textContent || "Room") : sectionLabel(name);
     setViewTitle(label);
     placeNotice();
@@ -3836,6 +3884,17 @@ if (sessionWhen && sessionWhen.dataset.at) {
     box.hidden = facts.length === 0;
   }
 
+  function transcriptEmptyCopy(hasRows) {
+    if (hasRows) return "No matching lines.";
+    var media = roomMediaState;
+    var word = meetingWord(roomOf(fileRoom)).word;
+    if (media && (media.state === "processing" || word === "Live")) return "No transcript yet.";
+    if (media && (media.state === "ready" || media.state === "novideo") && word !== "Ended" && word !== "No recording" && word !== "Channel") return "No transcript yet.";
+    if (!media) return "No transcript yet.";
+    if (media.state === "none" || media.state === "channel" || media.state === "expired" || word === "Ended" || word === "No recording" || word === "Channel") return "Nothing was recorded.";
+    return "No transcript yet.";
+  }
+
   function renderTranscript(rows) {
     var box = document.getElementById("file-transcript");
     if (!box) return;
@@ -3888,7 +3947,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (!shown) {
       var empty = document.createElement("p");
       empty.className = "meta";
-      empty.textContent = (rows && rows.length) ? "No matching lines." : "No transcript yet.";
+      empty.textContent = transcriptEmptyCopy(rows && rows.length);
       box.append(empty);
     }
   }
@@ -4070,12 +4129,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
         save.setAttribute("download", "");
         view.target = "_blank";
         view.rel = "noopener";
+        actions.append(view, save);
       } else {
-        view.setAttribute("aria-disabled", "true");
-        save.setAttribute("aria-disabled", "true");
-        item.title = "No " + row[0].toLowerCase() + " for this room.";
+        var none = document.createElement("span");
+        none.className = "artifact-none";
+        none.textContent = "None";
+        actions.append(none);
       }
-      actions.append(view, save);
       item.append(label, actions);
       list.append(item);
     });
@@ -4283,6 +4343,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       roomMediaState = channel ? { state: "channel", title: roomName(room) } : { state: "none" };
       paintPlayer(roomMediaState);
       paintArtifacts(roomMediaState);
+      renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
       paintTimeline();
       return;
     }
@@ -4320,6 +4381,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       roomMediaState = { state: "none" };
       paintPlayer(roomMediaState);
       paintArtifacts(roomMediaState);
+      renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
     }).finally(function () {
       if (mediaFlight === asked) mediaFlight = "";
     });
@@ -4941,10 +5003,16 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (!box || !list) return;
     var meetings = (state && state.meetings) || [];
     var failed = state && state.read === "failed";
+    var onHome = sectionName === "home";
+    var heading = document.getElementById("meeting-heading");
+    var more = document.getElementById("meetings-more");
+    if (heading) heading.textContent = onHome ? "Next meeting" : "Meetings";
+    if (more) more.hidden = !onHome || meetings.length < 2;
+    var shown = onHome ? meetings.slice(0, 1) : meetings;
     box.hidden = failed || meetings.length === 0;
     list.replaceChildren();
     if (box.hidden) return;
-    meetings.forEach(function (meeting) {
+    shown.forEach(function (meeting) {
       if (!meeting || !meeting.id) return;
       var row = document.createElement("div");
       row.className = "meeting-row";
@@ -6428,24 +6496,46 @@ if (sessionWhen && sessionWhen.dataset.at) {
     card.disabled = state === "connected";
     var badge = card.querySelector("[data-preset-badge]");
     var detail = card.querySelector(".preset-detail");
-    if (badge) badge.className = "badge " + presetTone(state);
+    if (badge) badge.className = state === "add" ? "preset-action" : ("badge " + presetTone(state));
     if (state === "needs_access") {
       if (badge) badge.textContent = "Needs Google access";
       if (detail) detail.textContent = preset && preset.message ? preset.message : accessDetail;
     } else if (state === "connected") {
       if (badge) badge.textContent = "Connected";
-      if (detail) detail.textContent = "Uses this person's Google account.";
+      if (detail) detail.textContent = "Uses your Google account.";
     } else if (state === "error") {
       if (badge) badge.textContent = "Couldn't add";
     } else if (state === "connecting") {
       if (badge) badge.textContent = "Connecting";
     } else if (state === "ready") {
       if (badge) badge.textContent = "Connected";
-      if (detail) detail.textContent = "Uses this person's Google account.";
+      if (detail) detail.textContent = "Uses your Google account.";
     } else {
       if (badge) badge.textContent = "Add";
-      if (detail) detail.textContent = "Uses this person's Google account.";
+      if (detail) detail.textContent = "Uses your Google account.";
     }
+  }
+
+  function presetTaken(id, connectors) {
+    return connectors.some(function (connector) {
+      if (!connector) return false;
+      if (connector.preset === id) return true;
+      if (id === "google-forms" && connector.url === "builtin:google-forms") return true;
+      if (id === "google-calendar" && /calendarmcp\\.googleapis\\.com/.test(connector.url || "")) return true;
+      return false;
+    });
+  }
+
+  function hideConnectedPresets(connectors) {
+    var any = false;
+    document.querySelectorAll(".preset-card[data-preset]").forEach(function (card) {
+      var id = card.getAttribute("data-preset") || "";
+      var hide = card.getAttribute("data-state") === "connected" && presetTaken(id, connectors);
+      card.hidden = hide;
+      if (!hide) any = true;
+    });
+    var box = document.getElementById("mcp-presets");
+    if (box) box.hidden = !any;
   }
 
   function paintMcp(data) {
@@ -6469,6 +6559,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     connectors.forEach(function (connector) {
       list.appendChild(mcpCard(connector));
     });
+    hideConnectedPresets(connectors);
     var manageDialog = document.getElementById("mcp-manage-dialog");
     if (mcpManageId && manageDialog && !manageDialog.hidden) paintMcpManage();
   }
@@ -6591,7 +6682,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (connector.authType === "google_oauth") {
       var account = document.createElement("p");
       account.className = "meta";
-      account.textContent = "Uses this person's Google account.";
+      account.textContent = "Uses your Google account.";
       body.append(account);
     } else {
       var tokenLine = document.createElement("p");

@@ -545,12 +545,11 @@ test("google calendar preset layout", { timeout: 180000 }, async (t) => {
     const card = document.querySelector("[data-preset='google-calendar']");
     return card && card.getAttribute("data-state") === "connected" && card.disabled;
   });
+  assert.equal(await page.locator("[data-preset='google-calendar']").isHidden(), true);
   const formsText = await page.locator("[data-preset='google-forms']").innerText();
-  const calendarText = await page.locator("[data-preset='google-calendar']").innerText();
   assert.match(formsText, /Google Forms/);
-  assert.match(calendarText, /Google Calendar/);
-  assert.match(calendarText, /Connected/);
-  assert.match(calendarText, /Uses this person's Google account/);
+  assert.match(formsText, /Add/);
+  assert.match(formsText, /Uses your Google account/);
   const logo = await page.locator("[data-preset='google-calendar'] use").getAttribute("href");
   assert.equal(logo, "#logo-google-calendar");
   const formsLogo = await page.locator("[data-preset='google-forms'] use").getAttribute("href");
@@ -601,7 +600,7 @@ test("connector Manage modal is accessible and groups tools", { timeout: 180000 
   assert.equal(await page.evaluate(() => document.activeElement.classList.contains("close")), true);
   const groups = await page.locator("#mcp-manage-dialog [data-group]").evaluateAll((nodes) => nodes.map((n) => n.getAttribute("data-group")));
   assert.deepEqual(groups, ["read", "write", "delete"]);
-  assert.match(await dialog.innerText(), /Uses this person's Google account/);
+  assert.match(await dialog.innerText(), /Uses your Google account/);
   assert.match(await dialog.innerText(), /Last tested/);
   assert.equal(await page.locator("#mcp-manage-dialog button.danger").innerText(), "Remove");
   for (let i = 0; i < 40; i += 1) {

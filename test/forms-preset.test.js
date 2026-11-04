@@ -471,10 +471,7 @@ test("google forms preset layout", { timeout: 180000 }, async (t) => {
     const card = document.querySelector("[data-preset='google-forms']");
     return card && card.getAttribute("data-state") === "connected" && card.disabled;
   });
-  const cardText = await page.locator("[data-preset='google-forms']").innerText();
-  assert.match(cardText, /Google Forms/);
-  assert.match(cardText, /Connected/);
-  assert.match(cardText, /Uses this person's Google account/);
+  assert.equal(await page.locator("[data-preset='google-forms']").isHidden(), true);
   await page.waitForSelector("#mcp-list .mcp-card");
   const cardSummary = await page.locator("#mcp-list .mcp-card").innerText();
   assert.match(cardSummary, /\d+ tools · \d+ on/);
@@ -483,7 +480,7 @@ test("google forms preset layout", { timeout: 180000 }, async (t) => {
   await page.click("#mcp-list .mcp-manage");
   await page.waitForSelector("#mcp-manage-dialog:not([hidden]) [data-tool]");
   const connectorText = await page.locator("#mcp-manage-dialog").innerText();
-  assert.match(connectorText, /Uses this person's Google account/);
+  assert.match(connectorText, /Uses your Google account/);
   assert.doesNotMatch(connectorText, /Add token/);
   const tested = await page.locator("#mcp-manage-dialog .meta").first().innerText();
   assert.match(tested, /Last tested .+\d{1,2}:\d{2} (AM|PM) \S+/);
