@@ -5448,6 +5448,7 @@ button.row-edit {
     border: 0;
     border-radius: 0;
   }
+}
 /* The mobile menu opens above the sticky top bar, so its logo and close button show. */
 @media (max-width: 1100px) {
   body.nav-open .rail-wrap { z-index: 36; }
