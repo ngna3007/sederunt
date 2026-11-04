@@ -100,6 +100,11 @@ function seeded() {
     });
   }
   const tool = { name: "act", server: "sederunt-mcp" };
+  // Local midnight minus 12 hours stays inside yesterday in the viewer zone.
+  // A fixed offset (26h) crosses into the day before yesterday after midnight.
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const yesterday = new Date(startOfToday.getTime() - 12 * 60 * 60 * 1000).toISOString();
   logAction(session, {
     id: "act-label",
     requestId: "act-label",
@@ -114,7 +119,7 @@ function seeded() {
   logAction(session, {
     id: "act-slack",
     requestId: "act-slack",
-    ts: new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString(),
+    ts: yesterday,
     actor: { type: "sederunt", name: "Sederunt" },
     verb: "post",
     target: { system: "slack", type: "message", url: "https://sederunt.slack.com/archives/C0DEMO/p1", title: "Booth notes" },
