@@ -27,3 +27,12 @@ We store the decision in Walrus Memory through the public relayer. We store a fi
 
 - Requirements: [docs/requirements/sederunt.md](../requirements/sederunt.md) — SED-2, SED-5, SED-6, SED-7.6
 - Designs: [docs/design/record.md](../design/record.md), [docs/design/system.md](../design/system.md)
+
+## Amendment (2026-11-04): file blobs
+
+- **Status**: Accepted
+- **Context**: Files sent in channels need per-channel access, moderation deletes, and deletion when the source message goes. Console accounts belong to one person, so Console cannot serve a channel's files.
+- **Decision**: For channel files only, Sederunt holds its own funded **testnet** Sui wallet. That service address owns every file's Walrus Blob object, pays SUI gas and WAL storage, stores blobs as deletable, extends them before expiry, and deletes them. Walrus memories about files are written to a Sederunt-owned testnet Walrus Memory account, so their permanent deletion can be signed automatically.
+- **Unchanged**: decisions still go to Walrus Memory through the relayer. Postgres holds a rebuildable index of file blobs (each Blob object carries `sederunt:file_id`, `sederunt:tenant_id` and `sederunt:channel_id` attributes) plus access state. The service key lives only in server env and is never logged or rendered.
+- **Consequences**: Sederunt now holds a treasury key, limited to testnet funds. Moving to mainnet needs a separate decision on who pays. Linking a workspace's own Walrus Memory account remains a later option.
+- **Design**: [docs/design/walrus-files.md](../design/walrus-files.md)
