@@ -1,8 +1,7 @@
 import { openRouterComplete, openRouterConfig } from "../openrouter.js";
 import { buildSystemPrompt } from "../bot/persona.js";
-import { looksLikeOpenQuestion } from "../parse.js";
+import { looksLikeOpenQuestion, looksLikeRecallAsk } from "../parse.js";
 
-const RECALL = /what was decided|what happened/i;
 const STOP = new Set(["what", "about", "that", "this", "with", "from", "your", "have", "does", "file", "when", "where", "who", "why", "how", "was", "decided", "the", "and", "for"]);
 
 /** The file name a question is about, or an empty string. */
@@ -192,7 +191,7 @@ function questionWords(question) {
 export function slackQuestion(text) {
   const trimmed = String(text ?? "").trim();
   if (!trimmed) return false;
-  return looksLikeOpenQuestion(trimmed) || RECALL.test(trimmed);
+  return looksLikeOpenQuestion(trimmed) || looksLikeRecallAsk(trimmed);
 }
 
 /**

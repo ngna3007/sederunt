@@ -12,6 +12,9 @@ const DAY = "monday|tuesday|wednesday|thursday|friday|saturday|sunday";
 const CALENDAR_READ = new RegExp(`what is on (${DAY})`, "i");
 const CALENDAR_EDIT = new RegExp(`move the review(?:\\s+to\\s+(${DAY}))?`, "i");
 const RECALL = /what was decided|what happened/i;
+const FILE_NAME = /\b[\w.-]+\.(?:pdf|png|docx|txt|pptx)\b/i;
+const SUMMARIZE_OR_RESEND = /\b(?:summarize|resend)\b/i;
+const SHARE_FILE_OR_LINK = /\bshare\b[\s/]*(?:the\s+|a\s+)?(?:attached\s+|working\s+)?(?:file|link)s?\b/i;
 const ASSIGN = /^assign\s+(.+)$/i;
 const CREATE_TICKET = /^create\s+(?:(?:a|one)\s+)?(?:test\s+)?ticket\s+titled\s+["\u201c]?(.+?)["\u201d]?[.!]?$/i;
 const ISSUE_ID = /^[A-Z][A-Z0-9]*-\d+$/;
@@ -90,7 +93,7 @@ export function parseUtterance(text) {
       params: { title: trimmed },
     };
   }
-  if (RECALL.test(trimmed)) return { type: "recall" };
+  if (looksLikeRecallAsk(trimmed)) return { type: "recall" };
   const create = CREATE_TICKET.exec(trimmed);
   if (create) {
     return {
@@ -139,6 +142,21 @@ export function parseUtterance(text) {
 const OPEN_QUESTION = /^(what|who|when|where|why|how|can|did)\b/i;
 
 /**
+ * A recall, summarize, or file/announcement ask. Calendar and trip reads
+ * stay their own parse types: they match earlier in parseUtterance, and
+ * looksLikeOpenQuestion still excludes them.
+ *
+ * @param {string} text
+ */
+export function looksLikeRecallAsk(text) {
+  const trimmed = String(text ?? "").trim();
+  if (!trimmed) return false;
+  if (RECALL.test(trimmed)) return true;
+  if (SUMMARIZE_OR_RESEND.test(trimmed) || SHARE_FILE_OR_LINK.test(trimmed)) return true;
+  return /\bannouncement\b/i.test(trimmed) && FILE_NAME.test(trimmed);
+}
+
+/**
  * A meeting question. Recall and calendar or ticket reads are not this:
  * those already have their own parse type.
  *
@@ -147,7 +165,7 @@ const OPEN_QUESTION = /^(what|who|when|where|why|how|can|did)\b/i;
 export function looksLikeOpenQuestion(text) {
   const trimmed = String(text ?? "").trim();
   if (!trimmed) return false;
-  if (/what was decided|what happened/i.test(trimmed)) return false;
+  if (RECALL.test(trimmed)) return false;
   if (CALENDAR_READ.test(trimmed) || TRIP_READ.test(trimmed)) return false;
   return /\?$/.test(trimmed) || OPEN_QUESTION.test(trimmed);
 }
