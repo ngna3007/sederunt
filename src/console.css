@@ -5415,11 +5415,13 @@ button.row-edit {
   }
 }
 @media (max-width: 640px) {
-  .meeting-row { align-items: flex-start; flex-wrap: wrap; }
-  .meeting-row .secondary { align-self: flex-start; }
+  .meeting-row { align-items: center; flex-wrap: nowrap; }
+  .meeting-row .secondary { align-self: center; }
   .page-actions { flex-wrap: wrap; min-width: 0; }
 }
 #home-head { min-width: 0; }
+#home-rooms-label[hidden] { display: none; }
+#home-rooms-label { margin: 8px 0 0; }
 #home-head .page-actions { flex-wrap: wrap; min-width: 0; max-width: 100%; }
 #home-add-to-meeting { max-width: 100%; }
 

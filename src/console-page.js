@@ -1911,6 +1911,17 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var pageSize = onHome ? 3 : roomPageSize;
     var explorerHead = document.querySelector("#rooms .explorer-head");
     if (explorerHead) explorerHead.hidden = onHome;
+    // Home: a label so the recent rooms read as their own block under the meetings list.
+    var roomsLabel = document.getElementById("home-rooms-label");
+    var roomsExplorer = document.querySelector("#rooms .explorer");
+    if (!roomsLabel && roomsExplorer && roomsExplorer.parentNode) {
+      roomsLabel = document.createElement("h2");
+      roomsLabel.id = "home-rooms-label";
+      roomsLabel.className = "section-label";
+      roomsLabel.textContent = "Recent rooms";
+      roomsExplorer.parentNode.insertBefore(roomsLabel, roomsExplorer);
+    }
+    if (roomsLabel) roomsLabel.hidden = !(onHome && shown > 0);
     specs.slice(start, start + pageSize).forEach(addRoomCard);
     var allRooms = document.getElementById("home-all-rooms");
     if (!allRooms) {
@@ -5481,9 +5492,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var onHome = sectionName === "home";
     var heading = document.getElementById("meeting-heading");
     var more = document.getElementById("meetings-more");
-    if (heading) heading.textContent = onHome ? "Next meeting" : "Meetings";
-    if (more) more.hidden = !onHome || meetings.length < 2;
-    var shown = onHome ? meetings.slice(0, 1) : meetings;
+    // Home lists every upcoming meeting the calendar returned, soonest first.
+    if (heading) heading.textContent = onHome ? (meetings.length === 1 ? "Next meeting" : "Upcoming meetings") : "Meetings";
+    if (more) more.hidden = true;
+    var shown = meetings;
     box.hidden = failed || meetings.length === 0;
     list.replaceChildren();
     if (box.hidden) return;
