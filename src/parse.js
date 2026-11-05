@@ -12,7 +12,6 @@ const DAY = "monday|tuesday|wednesday|thursday|friday|saturday|sunday";
 const CALENDAR_READ = new RegExp(`what is on (${DAY})`, "i");
 const CALENDAR_EDIT = new RegExp(`move the review(?:\\s+to\\s+(${DAY}))?`, "i");
 const RECALL = /what was decided|what happened/i;
-const FILE_NAME = /\b[\w.-]+\.(?:pdf|png|docx|txt|pptx)\b/i;
 const SUMMARIZE_OR_RESEND = /\b(?:summarize|resend)\b/i;
 const SHARE_FILE_OR_LINK = /\bshare\b[\s/]*(?:the\s+|a\s+)?(?:attached\s+|working\s+)?(?:file|link)s?\b/i;
 const ASSIGN = /^assign\s+(.+)$/i;
@@ -142,7 +141,9 @@ export function parseUtterance(text) {
 const OPEN_QUESTION = /^(what|who|when|where|why|how|can|did)\b/i;
 
 /**
- * A recall, summarize, or file/announcement ask. Calendar and trip reads
+ * A recall or summarize ask on the typed and meeting doors. Slack does not
+ * use this: there, a DM or @mention is an ask and every other channel line
+ * is kept (see handleUtterance intent "keep"). Calendar and trip reads
  * stay their own parse types: they match earlier in parseUtterance, and
  * looksLikeOpenQuestion still excludes them.
  *
@@ -152,8 +153,7 @@ export function looksLikeRecallAsk(text) {
   const trimmed = String(text ?? "").trim();
   if (!trimmed) return false;
   if (RECALL.test(trimmed)) return true;
-  if (SUMMARIZE_OR_RESEND.test(trimmed) || SHARE_FILE_OR_LINK.test(trimmed)) return true;
-  return /\bannouncement\b/i.test(trimmed) && FILE_NAME.test(trimmed);
+  return SUMMARIZE_OR_RESEND.test(trimmed) || SHARE_FILE_OR_LINK.test(trimmed);
 }
 
 /**

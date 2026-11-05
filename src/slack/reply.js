@@ -1,28 +1,38 @@
 import { openRouterComplete, openRouterConfig } from "../openrouter.js";
-import { buildSystemPrompt } from "../bot/persona.js";
+import { buildSlackAskPrompt } from "../bot/persona.js";
 
-const FILE_NAME = /\b([\w.-]+\.(?:pdf|png|docx|txt|pptx))\b/i;
 const STOP = new Set(["what", "about", "that", "this", "with", "from", "your", "have", "does", "file", "when", "where", "who", "why", "how", "was", "decided", "the", "and", "for"]);
 
-/** The file name a question is about, or an empty string. */
+/**
+ * Fallback only, for when the model is down: a stored file the question
+ * names, by its exact name or its name said as words. It reads stored file
+ * names, not question patterns.
+ */
 export function replyFile(visible, question) {
-  const named = FILE_NAME.exec(String(question ?? ""))?.[1]?.toLowerCase() || "";
-  if (named) {
-    for (const row of visible ?? []) {
-      if (row?.fileName && row.fileName.toLowerCase() === named) return row.fileName;
-    }
-    for (const row of visible ?? []) {
-      if (row?.fileName && String(row.text ?? "").toLowerCase().includes(named)) return row.fileName;
-    }
-  }
-  const words = questionWords(question);
-  if (words.length === 0) return "";
+  const asked = String(question ?? "").toLowerCase();
+  if (!asked) return "";
+  const spaced = ` ${spacedWords(asked)} `;
+  let best = "";
   for (const row of visible ?? []) {
-    if (!row?.fileName) continue;
-    const hay = `${row.text ?? ""} ${row.fileName}`.toLowerCase();
-    if (words.some((word) => hay.includes(word))) return row.fileName;
+    const name = typeof row?.fileName === "string" ? row.fileName : "";
+    if (!name) continue;
+    const dot = name.lastIndexOf(".");
+    const stem = spacedWords((dot > 0 ? name.slice(0, dot) : name).toLowerCase());
+    // The exact stored name, or its stem said as words ("floor plan" for floor-plan.pdf).
+    const said = asked.includes(name.toLowerCase()) || (stem.length >= 3 && spaced.includes(` ${stem} `));
+    if (said && name.length > best.length) best = name;
   }
-  return "";
+  return best;
+}
+
+/** Lowercase words joined by one space; punctuation and separators become spaces. */
+function spacedWords(text) {
+  let out = "";
+  for (const char of String(text)) {
+    const word = (char >= "a" && char <= "z") || (char >= "0" && char <= "9") || char.charCodeAt(0) > 127;
+    out += word ? char : " ";
+  }
+  return out.split(" ").filter(Boolean).join(" ");
 }
 
 /**
@@ -52,62 +62,107 @@ export function slackAnswer(visible, question) {
 }
 
 /**
- * Slack Q&A, Walrus Memory chatbot shape (see withMemWal docs):
- * remember on the write path already stored decisions; here we recall invite-visible
- * rows, inject the top matches into the prompt, then generate. No auto-save on ask.
- * OpenRouter when OPENROUTER_API_KEY is set; otherwise retrieval-only.
+ * Slack ask (DM or @mention). The model reads the message and the
+ * invite-visible memories and answers naturally. It returns
+ * {"text","attach"}; attach is honored only when it is a listed stored file.
+ * With no key, or when every model fails, a short retrieval answer is used.
  *
  * @param {unknown} visible
  * @param {string} question
- * @param {{ env?: NodeJS.ProcessEnv, fetchImpl?: typeof fetch, botName?: string, maxMemories?: number }} [options]
+ * @param {{ env?: NodeJS.ProcessEnv, fetchImpl?: typeof fetch, botName?: string, maxMemories?: number, recall?: (query: string) => Promise<unknown>, preferences?: object | null }} [options]
+ * @returns {Promise<{ text: string, file: string, source: "openrouter" | "retrieval", recalled: number }>}
  */
 export async function answerSlackQuestion(visible, question, options = {}) {
-  const base = slackAnswer(visible, question);
   const env = options.env ?? process.env;
-  const limit = options.maxMemories ?? 5;
-  // A stored file is a read. Resend it. Do not ask the model to confirm.
-  if (base.file) {
-    const recalled = recallVisibleForAsk(visible, question, limit);
-    return { ...base, source: "retrieval", recalled: recalled.length };
-  }
-  let recalled = recallVisibleForAsk(visible, question, limit);
-  // withMemWal shape: optional MemWal.recall(query) before generate; invite-visible only.
-  if (typeof options.recall === "function") {
+  const asked = String(question ?? "").trim();
+  const limit = Math.max(1, Math.min(Number(options.maxMemories) || 20, 50));
+  const rows = (Array.isArray(visible) ? visible : []).filter((row) =>
+    String(row?.text ?? "").trim() || (typeof row?.fileName === "string" && row.fileName.trim()));
+  let hits = null;
+  if (typeof options.recall === "function" && asked) {
     try {
-      const hits = await options.recall(String(question ?? "").trim());
-      const merged = mergeSemanticVisible(visible, hits, question, limit);
-      if (merged.length) recalled = merged;
+      hits = await options.recall(asked);
     } catch {
-      // Keep keyword rank when the relayer is down.
+      hits = null;
     }
   }
-  if (!openRouterConfig(env).enabled) {
-    return { ...base, source: "retrieval", recalled: recalled.length };
-  }
-  const facts = recalled.length
-    ? recalled.map((row) => plainFact(row.text, row.connectorId)).join("\n")
-    : String(base.text || "").trim();
-  const system = [
-    buildSystemPrompt({ mode: "slack", botName: options.botName || "" }),
-    "Walrus Memory recall ran before this reply. Only answer from the memories below.",
-    "Do not invent facts. Do not store anything from this question.",
-    "Resending or sharing a stored file is not a write and must not ask for confirmation.",
-    "If nothing applies, say exactly: Nothing is stored that you can read.",
-    "Lead with the answer. Keep it short.",
-    "",
-    "Relevant memories:",
-    facts || "(none)",
-  ].join("\n");
+  const memories = askMemories(rows, hits, limit);
+  const fallback = () => ({ ...slackAnswer(rows, asked), source: "retrieval", recalled: memories.length });
+  if (!openRouterConfig(env).enabled) return fallback();
   const completed = await openRouterComplete({
     env,
-    system,
-    messages: [{ role: "user", content: String(question ?? "").trim() || "What was decided?" }],
+    system: buildSlackAskPrompt({ botName: options.botName || "", preferences: options.preferences ?? null, memories }),
+    messages: [{ role: "user", content: asked || "Hi" }],
     fetchImpl: options.fetchImpl,
   });
-  if (!completed.used || !completed.text) {
-    return { ...base, source: "retrieval", recalled: recalled.length };
+  if (!completed.used || !completed.text) return fallback();
+  const reply = readAskReply(completed.text);
+  if (!reply.text) return fallback();
+  return {
+    text: reply.text,
+    file: listedFile(memories, reply.attach),
+    source: "openrouter",
+    recalled: memories.length,
+  };
+}
+
+/**
+ * Memories for the ask prompt. MemWal hits (inside the invite set) come first
+ * and narrow the facts; every stored file stays listed so the model can attach it.
+ * With no hits, every invite-visible row is listed, up to the cap.
+ */
+export function askMemories(rows, hits, limit = 20) {
+  const list = Array.isArray(rows) ? rows : [];
+  const ranked = Array.isArray(hits) ? [...hits].sort((a, b) => {
+    const da = typeof a?.distance === "number" ? a.distance : 1;
+    const db = typeof b?.distance === "number" ? b.distance : 1;
+    return da - db;
+  }) : [];
+  const picked = [];
+  const seen = new Set();
+  const add = (row) => {
+    if (!row || seen.has(row) || picked.length >= limit) return;
+    seen.add(row);
+    picked.push(row);
+  };
+  for (const hit of ranked) {
+    const id = String(hit?.decision?.id || hit?.id || "");
+    const text = String(hit?.decision?.text ?? hit?.text ?? "").trim().toLowerCase();
+    add(list.find((row) => (id && String(row?.id || "") === id) || (text && String(row?.text ?? "").trim().toLowerCase() === text)));
   }
-  return { text: completed.text, file: base.file, source: "openrouter", recalled: recalled.length };
+  if (picked.length) {
+    for (const row of list) if (row?.fileName) add(row);
+    return picked;
+  }
+  for (const row of list) add(row);
+  return picked;
+}
+
+/** Parse the model's {"text","attach"} reply. Plain prose is the text with no attach. */
+export function readAskReply(raw) {
+  const body = String(raw ?? "").trim();
+  const open = body.indexOf("{");
+  const close = body.lastIndexOf("}");
+  if (open !== -1 && close > open) {
+    try {
+      const parsed = JSON.parse(body.slice(open, close + 1));
+      if (parsed && typeof parsed === "object" && typeof parsed.text === "string") {
+        const attach = typeof parsed.attach === "string" && parsed.attach.trim() ? parsed.attach.trim() : null;
+        return { text: parsed.text.trim(), attach };
+      }
+    } catch {
+      // Not JSON. The prose is the reply.
+    }
+  }
+  return { text: body, attach: null };
+}
+
+/** The stored name of a listed file, or "" when the model named anything else. */
+function listedFile(memories, attach) {
+  if (!attach) return "";
+  const wanted = attach.toLowerCase();
+  const row = (memories ?? []).find((item) => typeof item?.fileName === "string" && item.fileName.toLowerCase() === wanted);
+  return row ? row.fileName : "";
 }
 
 /**

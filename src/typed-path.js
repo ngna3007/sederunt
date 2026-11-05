@@ -118,8 +118,17 @@ export async function handleUtterance(input, deps = {}) {
       preference: "ask",
     });
   }
-  if (parsed.type === "read") return answerRead(input, session, deps, parsed);
+  // A Slack channel line that is not an ask is kept. Its words never turn it
+  // into a recall or a read; the ask/keep split is where the message arrived.
+  // Ticket commands (writes) still go through their allow first.
   if (parsed.type === "write") return requestWrite(input, session, deps, parsed);
+  if (input.intent === "keep") {
+    const note = parsed.type === "note"
+      ? parsed
+      : { type: "note", private: false, text: String(withoutAddress(input.text, input.session?.hearing) ?? "").trim() };
+    return storeDecision(input, session, deps, note);
+  }
+  if (parsed.type === "read") return answerRead(input, session, deps, parsed);
   if (parsed.type === "recall") return answerRecall(input, session, deps);
   return storeDecision(input, session, deps, parsed);
 }
@@ -1384,7 +1393,7 @@ async function storeDecision(input, session, deps, parsed) {
   const inviteMemberIds = snapshot(input, room);
   const invite = checkInvite(input.memberId, inviteMemberIds);
   if (!invite.ok) return refusal(session, invite.reason === "missing-member" ? "No decision is stored." : "No decision is stored.");
-  if (looksLikeOpenQuestion(sentence)) {
+  if (input.intent !== "keep" && looksLikeOpenQuestion(sentence)) {
     return finish(session, {
       status: "recorded",
       kind: "answer",

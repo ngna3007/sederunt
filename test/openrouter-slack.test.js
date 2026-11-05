@@ -64,10 +64,10 @@ test("answerSlackQuestion uses OpenRouter when the key is set", async () => {
   assert.deepEqual(seen[0].body.reasoning, { effort: "low", exclude: true });
   assert.equal(seen[0].body.temperature, undefined);
   assert.equal(seen[0].auth, "Bearer sk-or-test");
-  assert.match(seen[0].body.messages[0].content, /Relevant memories/);
-  assert.match(seen[0].body.messages[0].content, /booth opens at nine/);
-  assert.match(seen[0].body.messages[0].content, /Walrus Memory recall/);
-  assert.match(seen[0].body.messages[0].content, /Resending or sharing a stored file is not a write and must not ask for confirmation/);
+  assert.match(seen[0].body.messages[0].content, /Memories you can use/);
+  assert.match(seen[0].body.messages[0].content, /booth opens at nine \(ticket ROW-69\)/);
+  assert.match(seen[0].body.messages[0].content, /Resending a stored file is a read, not a write, so never ask for confirmation/);
+  assert.doesNotMatch(seen[0].body.messages[0].content, /Walrus Memory recall/);
 });
 
 test("answerSlackQuestion falls back to retrieval when OpenRouter fails", async () => {

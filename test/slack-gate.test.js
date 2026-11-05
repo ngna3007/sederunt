@@ -207,14 +207,15 @@ test("the slack route answers a DM or a mention and stores an untagged channel l
     assert.equal((await decisions()).some((item) => item.text === "The booth opens at nine."), true);
 
     const untagged = await send({ channel: "C1", text: "what was decided", client_msg_id: "ask-untagged" });
+    // An untagged channel line is kept, whatever its words say. Only a DM or @mention asks.
     assert.equal(untagged.body.posted, false);
     assert.equal(posts.length, 0);
-    assert.equal(untagged.body.decisions, 1);
+    assert.equal(untagged.body.decisions, 2);
 
     const summarize = await send({ channel: "C1", text: SUMMARIZE, client_msg_id: "ask-sum" });
     assert.equal(summarize.body.posted, false);
     assert.equal(posts.length, 0);
-    assert.equal(summarize.body.decisions, 1);
+    assert.equal(summarize.body.decisions, 3);
 
     const noId = await send({ channel: "C1", text: "<@UBOT> what was decided", client_msg_id: "ask-noid" });
     assert.equal(noId.body.posted, false);
@@ -226,7 +227,7 @@ test("the slack route answers a DM or a mention and stores an untagged channel l
     );
     assert.equal(other.body.posted, false);
     assert.equal(posts.length, 0);
-    assert.equal((await decisions()).length, 1);
+    assert.equal((await decisions()).length, 3);
 
     const mentioned = await send(
       { channel: "C1", text: "<@UBOT> what was decided", client_msg_id: "ask-auth" },
@@ -237,7 +238,7 @@ test("the slack route answers a DM or a mention and stores an untagged channel l
     assert.equal(posts.at(-1).channel, "C1");
     assert.match(posts.at(-1).text, /The booth opens at nine/);
     assert.equal(posts.length, 1);
-    assert.equal(mentioned.body.decisions, 1);
+    assert.equal(mentioned.body.decisions, 3);
 
     const appMention = await send({
       type: "app_mention",
@@ -247,13 +248,13 @@ test("the slack route answers a DM or a mention and stores an untagged channel l
     });
     assert.equal(appMention.body.posted, true);
     assert.equal(posts.length, 2);
-    assert.equal(appMention.body.decisions, 1);
+    assert.equal(appMention.body.decisions, 3);
     assert.equal((await decisions()).some((item) => /floor is open/i.test(item.text)), false);
 
     const dm = await send({ channel: "D1", channel_type: "im", text: "The booth opens at nine.", client_msg_id: "dm-1" });
     assert.equal(dm.body.posted, true);
     assert.equal(posts.at(-1).channel, "D1");
-    assert.equal(dm.body.decisions, 1);
+    assert.equal(dm.body.decisions, 3);
     assert.equal((await decisions()).filter((item) => item.text === "The booth opens at nine.").length, 1);
 
     const mpim = await send({ channel: "CMPIM", channel_type: "mpim", text: "ping", client_msg_id: "mpim-1" });
@@ -263,7 +264,7 @@ test("the slack route answers a DM or a mention and stores an untagged channel l
     const dPrefix = await send({ channel: "DPREFIX", text: "hello there", client_msg_id: "d-prefix" });
     assert.equal(dPrefix.body.posted, true);
     assert.equal(posts.at(-1).channel, "DPREFIX");
-    assert.equal((await decisions()).length, 1);
+    assert.equal((await decisions()).length, 3);
     for (const channel of ["D1", "CMPIM", "DPREFIX"]) {
       assert.equal(channels.includes(channel), false, channel);
     }

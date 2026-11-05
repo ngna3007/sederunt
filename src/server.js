@@ -1085,13 +1085,22 @@ export function createApp(options = {}) {
           }
         }
         const doorDeps = depsFor(workspace, companyId);
+        const keptBefore = current.decisions.length;
+        // Where the message arrived decides ask or keep: a DM or @mention asks,
+        // any other channel line is kept. Its words are never pattern-matched for this.
+        const intent = delivery.intent === "delete" ? "delete" : (question ? "recall" : (huddle ? undefined : "keep"));
         const result = await handleUtterance({
           ...delivery,
-          intent: delivery.intent === "delete" ? "delete" : (question ? "recall" : undefined),
+          intent,
           session: current,
         }, doorDeps);
+        // "Kept <file>" only when this utterance actually recorded a decision with that file.
+        const keptFile = storedFile?.name
+          ? current.decisions.slice(keptBefore).some((item) =>
+            !item.deleted && item.fileNames?.some((file) => file?.name === storedFile.name))
+          : false;
         const repeat = result?.allow === "duplicate-delivery" || result?.outcome === "duplicate-delivery" || result?.outcome === "duplicate";
-        if (!question && storedFile?.name && !repeat && result?.allow !== "not-invited" && result?.allow !== "missing-member" && env.SLACK_BOT_TOKEN) {
+        if (!question && keptFile && !repeat && result?.allow !== "not-invited" && result?.allow !== "missing-member" && env.SLACK_BOT_TOKEN) {
           const channel = delivery.room?.askChannel || (typeof event.channel === "string" ? event.channel : "");
           if (channel) {
             await postSlackReply({
@@ -1109,8 +1118,8 @@ export function createApp(options = {}) {
             env,
             fetchImpl: deps.slack?.fetch || deps.fetch,
             botName,
-            maxMemories: 5,
-            // Walrus withMemWal ask path: MemWal.recall(query) before OpenRouter.
+            maxMemories: 20,
+            // MemWal.recall(query) ranks memories before the model reads them.
             recall: doorDeps.memory?.recall
               ? async (query) => doorDeps.memory.recall(query)
               : undefined,
