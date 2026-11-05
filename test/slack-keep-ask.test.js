@@ -194,3 +194,64 @@ test("Slack ask keeps the model reply (not result.learned) and pins a named file
     await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
   }
 });
+
+test("a DM answer posts only once when the Slack client and bot token are both set", async () => {
+  const { createSlackClient } = await import("../src/slack/post.js");
+  const api = slackApi();
+  const openrouterCalls = [];
+  const fetch = async (url, init = {}) => {
+    const href = String(url);
+    if (href.includes("openrouter.ai")) {
+      openrouterCalls.push(href);
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { choices: [{ message: { content: JSON.stringify({ text: "One clear answer.", attach: null }) } }] };
+        },
+      };
+    }
+    return api.fetch(url, init);
+  };
+  const memory = mockAccount({ accountId: "company-once", delegates: ["delegate-once"] });
+  const session = createSession();
+  session.learned = [{
+    kind: "decision",
+    text: "Ship the demo",
+    at: "2026-11-05T00:00:00.000Z",
+    key: "learned:decision:demo",
+  }];
+  const client = createSlackClient({ SLACK_BOT_TOKEN: "xoxb-test" }, fetch);
+  const app = createApp({
+    session,
+    deps: {
+      memory,
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+      slack: client,
+      fetch,
+    },
+    env: {
+      COMPANY_MEMWAL_KEY: "key-sentinel-value",
+      COMPANY_MEMWAL_ACCOUNT_ID: "account-id-sentinel",
+      SLACK_SIGNING_SECRET: secret,
+      SLACK_BOT_TOKEN: "xoxb-test",
+      SEDERUNT_MEMBER: "U1",
+      OPENROUTER_API_KEY: "sk-or-test",
+    },
+    companyLoaded: true,
+  });
+  app.listen(0, "127.0.0.1");
+  await once(app, "listening");
+  const port = app.address().port;
+  try {
+    const message = signed({ type: "message", user: "U1", channel: "D1", channel_type: "im", text: "what did we decide?", client_msg_id: "dm-once-1" });
+    const reply = await post(port, message.payload, message.headers);
+    const body = JSON.parse(reply.raw);
+    assert.equal(reply.status, 200, reply.raw);
+    assert.equal(body.posted, true);
+    assert.equal(api.texts.length, 1, `expected one chat.postMessage, got ${api.texts.length}`);
+    assert.equal(api.texts[0].text, "One clear answer.");
+  } finally {
+    await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
+  }
+});

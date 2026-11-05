@@ -1041,7 +1041,9 @@ export function createApp(options = {}) {
         acked = true;
         send(res, status, contentType, body);
       };
-      const liveAck = parsed.type === "event_callback" && Boolean(env.SLACK_BOT_TOKEN) && !deps.slack;
+      // defaultDeps always builds a Slack client, so do not key off deps.slack.
+      // Tests pass options.deps and read the response body; production acks first.
+      const liveAck = parsed.type === "event_callback" && Boolean(env.SLACK_BOT_TOKEN) && options.deps == null;
       const slackWork = (async () => {
       const current = await prepareWorkspace(workspace, companyId);
       const botName = (await currentBot(workspace, req)).name;
@@ -1160,7 +1162,8 @@ export function createApp(options = {}) {
             thread: typeof event.thread_ts === "string" ? event.thread_ts : "",
             username: botName,
           };
-          if (typeof deps.slack?.postMessage === "function") await deps.slack.postMessage(reply);
+          // One post only. createSlackClient always has postMessage, so posting
+          // through both that client and postSlackReply duplicated every DM answer.
           if (env.SLACK_BOT_TOKEN) {
             await postSlackReply({
               token: env.SLACK_BOT_TOKEN,
@@ -1171,6 +1174,8 @@ export function createApp(options = {}) {
               file: reply.file,
               username: reply.username,
             });
+          } else if (typeof deps.slack?.postMessage === "function") {
+            await deps.slack.postMessage(reply);
           }
         }
         replyHttp(200, "application/json; charset=utf-8", JSON.stringify({
