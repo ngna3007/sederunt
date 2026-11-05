@@ -1361,6 +1361,8 @@ function liveFiles(env, identity) {
 function attachFiles(options, env) {
   const explicit = options.env;
   if (explicit && filesConfigured(explicit)) return true;
+  // Serverless entry is not argv[1] === server.js, so isDirectRun() is false on Vercel.
+  if (process.env.VERCEL && filesConfigured(env)) return true;
   return isDirectRun() && filesConfigured(env);
 }
 

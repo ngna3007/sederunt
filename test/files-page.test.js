@@ -77,3 +77,29 @@ test("the demo owner, member, and admin see different file actions", async () =>
     await server.close();
   }
 });
+
+test("Vercel attaches /api/files when Files is configured", async () => {
+  const prev = { VERCEL: process.env.VERCEL, FILES_DEMO: process.env.FILES_DEMO };
+  process.env.VERCEL = "1";
+  process.env.FILES_DEMO = "1";
+  let server;
+  try {
+    // Same shape as the serverless entry: no options.env, no options.files.
+    const app = createApp({});
+    app.listen(0, "127.0.0.1");
+    await once(app, "listening");
+    server = {
+      port: app.address().port,
+      close: () => new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve()))),
+    };
+    const api = await get(server.port, "/api/files?as=empty");
+    assert.equal(api.status, 200);
+    assert.equal(api.body.files.length, 0);
+  } finally {
+    if (prev.VERCEL === undefined) delete process.env.VERCEL;
+    else process.env.VERCEL = prev.VERCEL;
+    if (prev.FILES_DEMO === undefined) delete process.env.FILES_DEMO;
+    else process.env.FILES_DEMO = prev.FILES_DEMO;
+    if (server) await server.close();
+  }
+});
