@@ -463,7 +463,7 @@ ${slack}
           <p class="ask-out" id="ask-out" role="status" hidden><strong>No questions left today.</strong> <span id="ask-out-copy">You've used all ${askDaily}. They come back at midnight.</span></p>
           <div class="composer-box">
             <label><span class="sr">Ask the workspace</span><textarea id="chat-text" name="chat" rows="1" placeholder="Ask about a meeting or decision"></textarea></label>
-            <button id="ask-send" class="primary" type="submit" aria-label="Send">Send</button>
+            <button id="ask-send" class="primary" type="button" aria-label="Send">Send</button>
           </div>
           <div class="composer-foot">
             <span id="ask-quota" class="ask-quota ask-quota-pending" role="status">${askDaily} questions a day</span>
@@ -6431,7 +6431,6 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var button = document.getElementById("ask-send");
     if (!button) return;
     button.classList.toggle("ask-stop", on);
-    button.type = on ? "button" : "submit";
     button.textContent = on ? "Stop" : "Send";
     button.setAttribute("aria-label", on ? "Stop" : "Send");
     button.disabled = !on && askState.remaining !== null && askState.remaining <= 0;
@@ -6493,8 +6492,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
   var askLive = null;
   var askCancel = false;
+  var askBusy = false;
+  function releaseAsk() { askBusy = false; }
   function stopAsk() {
     askCancel = true;
+    releaseAsk();
     var live = askLive;
     askLive = null;
     if (!live) {
@@ -6536,9 +6538,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
       keepAskInView(turn);
     });
     source.addEventListener("done", function (event) {
+      var data = {};
+      try { data = JSON.parse(event.data || "{}"); } catch (error) { data = {}; }
       stop();
       setAskSending(false);
-      settleAsk(turn, JSON.parse(event.data || "{}"));
+      if (data.quota) takeAskQuota(data.quota);
+      settleAsk(turn, data);
+      releaseAsk();
     });
     source.addEventListener("again", function () {
       stop();
@@ -6552,6 +6558,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (tries > 5) {
         setAskSending(false);
         settleAsk(turn, { status: "stopped" });
+        releaseAsk();
         return;
       }
       setTimeout(function () { followAsk(id, turn, got); }, 800 * tries);
@@ -6649,14 +6656,28 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
   var askSend = document.getElementById("ask-send");
   if (askSend) askSend.addEventListener("click", function () {
-    if (askSend.classList.contains("ask-stop")) stopAsk();
+    if (askSend.classList.contains("ask-stop")) {
+      stopAsk();
+      return;
+    }
+    if (askSend.disabled) return;
+    var form = document.getElementById("chat-form");
+    if (!form) return;
+    if (form.requestSubmit) form.requestSubmit();
+    else form.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
   });
   document.getElementById("chat-form").addEventListener("submit", function (event) {
     event.preventDefault();
+    if (askBusy) return;
+    askBusy = true;
     var input = document.getElementById("chat-text");
     var askedNow = input.value.trim();
-    if (!askedNow) return;
+    if (!askedNow) {
+      releaseAsk();
+      return;
+    }
     if (askState.remaining !== null && askState.remaining <= 0) {
+      releaseAsk();
       openDialog("ask-ai-dialog");
       return;
     }
@@ -6678,6 +6699,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (askCancel) {
         askCancel = false;
         setAskSending(false);
+        releaseAsk();
         if (turn.getAttribute("data-settled") !== "1") settleAsk(turn, { status: "stopped" });
         return;
       }
@@ -6685,6 +6707,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         turn.classList.remove("chat-pending", "chat-thinking");
         span.textContent = "You've used today's " + (reply.body.limit || askState.limit) + " questions. " + askResetLabel();
         setAskSending(false);
+        releaseAsk();
         takeAskQuota({ limit: reply.body.limit, used: reply.body.used, remaining: reply.body.remaining });
         openDialog("ask-ai-dialog");
         return;
@@ -6692,16 +6715,19 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (reply.status !== 200 || !reply.body.id) {
         turn.classList.remove("chat-pending", "chat-thinking");
         setAskSending(false);
+        releaseAsk();
         span.textContent = reply.body.error && reply.body.error !== "limit" ? reply.body.error : "Ask AI did not answer. Send the question again.";
         return;
       }
       takeAskQuota(reply.body);
       turn.setAttribute("data-ask", reply.body.id);
       followAsk(reply.body.id, turn, 0);
+      if (!askState.streams[reply.body.id]) releaseAsk();
     }).catch(function () {
       var span = turn.querySelector(".chat-body > span");
       turn.classList.remove("chat-pending", "chat-thinking");
       setAskSending(false);
+      releaseAsk();
       if (span) span.textContent = "Ask AI did not answer. Send the question again.";
     });
   });

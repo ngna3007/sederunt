@@ -8,6 +8,12 @@
 const DEFAULT_MODEL = "google/gemma-4-31b-it:free";
 const DEFAULT_FALLBACKS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"];
 const CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
+/**
+ * Completion budget for both reasoning and the visible answer.
+ * Low effort still spends about a fifth of this on reasoning, and some
+ * providers floor the reasoning budget near 1024, so the cap stays above that.
+ */
+export const OPENROUTER_OUTPUT_TOKENS = 2048;
 
 /**
  * @param {string | undefined} raw
@@ -71,7 +77,7 @@ export function textFromContent(content) {
     }
     if (!part || typeof part !== "object") continue;
     const type = String(part.type || "");
-    if (type === "reasoning" || type === "reasoning_text" || type.startsWith("tool")) continue;
+    if (type.startsWith("reasoning") || type.startsWith("tool")) continue;
     if (typeof part.text === "string") out += part.text;
   }
   return out;
@@ -82,10 +88,39 @@ function choiceText(choice) {
   if (!choice || typeof choice !== "object") return "";
   const delta = choice.delta;
   if (delta && typeof delta === "object") {
-    const fromDelta = textFromContent(delta.content);
-    if (fromDelta) return fromDelta;
+    if ("content" in delta && delta.content != null) {
+      const fromDelta = textFromContent(delta.content);
+      if (fromDelta) return fromDelta;
+    }
+    // content null plus reasoning/tools is not an answer, even if message repeats the trace.
+    if (delta.reasoning || delta.reasoning_content || delta.reasoning_details || delta.tool_calls) return "";
   }
   return textFromContent(choice.message?.content);
+}
+
+/**
+ * Shared chat body. Reasoning models get a low effort cap so the trace cannot
+ * spend the whole max_tokens budget, and the trace is left out of the reply.
+ * @param {string} model
+ * @param {Array<{ role: string, content: string }>} messages
+ * @param {{ stream?: boolean, maxTokens?: number }} [options]
+ */
+function completionBody(model, messages, options = {}) {
+  const body = {
+    model,
+    messages,
+    max_tokens: options.maxTokens ?? OPENROUTER_OUTPUT_TOKENS,
+  };
+  // Sampling params are rejected by some reasoning endpoints and would skip the model.
+  if (!usesReasoning(model)) body.temperature = 0.2;
+  if (options.stream) body.stream = true;
+  if (usesReasoning(model)) body.reasoning = { effort: "low", exclude: true };
+  return body;
+}
+
+function dropBody(response) {
+  const cancel = response?.body?.cancel;
+  if (typeof cancel === "function") cancel.call(response.body).catch(() => {});
 }
 
 /**
@@ -127,15 +162,16 @@ export async function openRouterComplete(input = {}) {
           "HTTP-Referer": "https://sederunt.app",
           "X-Title": "Sederunt",
         },
-        body: JSON.stringify({
-          model,
-          messages,
-          temperature: 0.2,
-        }),
+        body: JSON.stringify(completionBody(model, messages, { maxTokens: input.maxTokens })),
       });
-      if (!response?.ok) continue;
+      if (!response?.ok) {
+        dropBody(response);
+        continue;
+      }
       const body = typeof response.json === "function" ? await response.json() : null;
-      const text = textFromContent(body?.choices?.[0]?.message?.content).trim();
+      const choice = body?.choices?.[0];
+      const text = textFromContent(choice?.message?.content).trim();
+      // content null with only a reasoning trace, or a length stop, is not an answer.
       if (!text) continue;
       return { text, used: true, model, tried };
     } catch {
@@ -179,14 +215,7 @@ export async function openRouterStream(input = {}) {
     tried.push(model);
     let text = "";
     try {
-      const body = {
-        model,
-        messages,
-        temperature: 0.2,
-        stream: true,
-        max_tokens: input.maxTokens ?? 700,
-      };
-      if (usesReasoning(model)) body.reasoning = { effort: "low", exclude: true };
+      const body = completionBody(model, messages, { stream: true, maxTokens: input.maxTokens });
       const response = await fetchImpl(CHAT_URL, {
         method: "POST",
         headers: {
@@ -201,6 +230,7 @@ export async function openRouterStream(input = {}) {
       });
       if (!response?.ok || !response.body) {
         lastError = `http-${response?.status ?? 0}`;
+        dropBody(response);
         continue;
       }
       const decoder = new TextDecoder();
@@ -219,6 +249,8 @@ export async function openRouterStream(input = {}) {
         const delta = choiceText(event?.choices?.[0]);
         if (!delta) return;
         text += delta;
+        // Leading padding from a reasoning model is not an answer and must not be shown.
+        if (!delta.trim() && !text.trim()) return;
         if (typeof input.onDelta === "function") await input.onDelta(delta);
       };
       const consume = async (block, flushTail) => {

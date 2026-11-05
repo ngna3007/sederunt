@@ -8,6 +8,16 @@ const NOTHING = "Nothing kept in this workspace matches that yet.";
 /** Shown when every model fails and no kept sentence answers the question. */
 export const ASK_UNAVAILABLE = "I couldn't answer that just now. Try again in a moment.";
 
+/**
+ * A daily question is spent only when the person got a real answer.
+ * Unavailable, errors, and stopped turns are refunded.
+ * @param {string | undefined} source
+ * @param {string} [status]
+ */
+export function askSpendsQuota(source, status = "done") {
+  return status === "done" && (source === "openrouter" || source === "retrieval");
+}
+
 const PROTOCOL_LINE = /^(?:missing-member|not-invited|duplicate-delivery|recorded|current|clashing|replaced|unknown|filed|updated)$/i;
 const PROTOCOL_TAG = /^(?:preference|checkpoint)(?:\s+\S+)?$/i;
 const PROTOCOL_ROW = /^ROW-\d+$/i;

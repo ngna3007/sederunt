@@ -56,7 +56,7 @@ import { loadCompanyEnv, loadLocalEnv } from "./local-env.js";
 import { looksLikeOpenQuestion } from "./parse.js";
 import { createSession } from "./session.js";
 import { createAskStore, askLimit, settledStatus } from "./ask/store.js";
-import { runAsk } from "./ask/run.js";
+import { askSpendsQuota, runAsk } from "./ask/run.js";
 import { openRouterConfig } from "./openrouter.js";
 import { answerSlackQuestion, postSlackReply, slackChannelMembers, slackFileBytes, slackQuestion } from "./slack/reply.js";
 import { slackDelivery, verifySlackRequest } from "./slack/sign.js";
@@ -1476,13 +1476,28 @@ async function handleAsk(workspace, req, res, url) {
         await store.refund(user).catch(() => {});
         throw error;
       }
+      // Reserve a slot on the way in, then give it back unless the answer is real text.
+      let refunded = false;
+      const askStore = {
+        ...store,
+        async finish(askId, fields = {}) {
+          const status = fields.status || "done";
+          if (askId === id && !refunded && !askSpendsQuota(fields.source, status)) {
+            refunded = true;
+            await store.refund(user).catch(() => {});
+          }
+          return store.finish(askId, fields);
+        },
+      };
       const companyId = typeof body.company === "string" ? body.company : "";
       const scope = body.workspace === "personal" ? "personal" : "company";
       const work = (async () => {
         const previous = [];
         const priorIds = (await store.list(user).catch(() => [])).filter((prior) => prior !== id).slice(0, 3).reverse();
         for (const view of await askViews(store, priorIds).catch(() => [])) {
-          if (view && view.user === user && view.status === "done" && view.text) previous.push({ question: view.question, answer: view.text });
+          if (view && view.user === user && view.status === "done" && view.text && askSpendsQuota(view.source, view.status)) {
+            previous.push({ question: view.question, answer: view.text });
+          }
         }
         const current = await prepareWorkspace(workspace, companyId);
         const memberId = consoleBoardMember(gate.session, env, scope, "");
@@ -1490,7 +1505,7 @@ async function handleAsk(workspace, req, res, url) {
         const doorDeps = depsFor(workspace, companyId);
         const bot = await currentBot(workspace, req).catch(() => null);
         return runAsk({
-          store,
+          store: askStore,
           id,
           question,
           visible,
@@ -1503,7 +1518,7 @@ async function handleAsk(workspace, req, res, url) {
           // The signed-in board member, not a client-supplied id and not only SEDERUNT_MEMBER.
           retrieval: () => chatReply(workspace, { text: question, workspace: scope, company: companyId }, memberId),
         });
-      })().catch(() => store.finish(id, { status: "error" }).catch(() => {}));
+      })().catch(() => askStore.finish(id, { status: "error" }).catch(() => {}));
       if (env.VERCEL) {
         try {
           const { waitUntil } = await import("@vercel/functions");
@@ -1543,7 +1558,8 @@ async function handleAsk(workspace, req, res, url) {
           from += 1;
         }
         if (status !== "streaming") {
-          write("done", { status, source: meta?.source || "", sources: meta?.sources || [], result: meta?.result || null, count: from });
+          const quota = await store.quota(user, limit).catch(() => null);
+          write("done", { status, source: meta?.source || "", sources: meta?.sources || [], result: meta?.result || null, count: from, quota });
           break;
         }
         if (Date.now() - started > ASK_STREAM_MS) {

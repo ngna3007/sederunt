@@ -39,4 +39,12 @@ test("Ask AI is live in the rail: no Coming soon, no MCP gate, a daily quota pil
   assert.match(page, /function humanAskText/);
   assert.match(page, /function stopAsk/);
   assert.doesNotMatch(html, /source === "retrieval" && done\.result/);
+  assert.match(html, /id="ask-send" class="primary" type="button"/);
+  assert.match(page, /var askBusy = false/);
+  assert.match(page, /if \(askBusy\) return/);
+  assert.doesNotMatch(page, /button\.type = on \? "button" : "submit"/);
+  const settle = page.slice(page.indexOf("function settleAsk"), page.indexOf("var askSend"));
+  assert.doesNotMatch(settle, /requestSubmit|fetch\("\/api\/ask"/);
+  const follow = page.slice(page.indexOf("function followAsk"), page.indexOf("function drawAnswer"));
+  assert.doesNotMatch(follow, /requestSubmit|method: "POST"/);
 });

@@ -3,7 +3,7 @@ import { once } from "node:events";
 import net from "node:net";
 import test from "node:test";
 import { askBackend, createAskStore, quotaDay, settledStatus } from "../src/ask/store.js";
-import { ASK_UNAVAILABLE, askFallbackText, runAsk } from "../src/ask/run.js";
+import { ASK_UNAVAILABLE, askFallbackText, askSpendsQuota, runAsk } from "../src/ask/run.js";
 import { sealSession, sessionCookie } from "../src/console-auth.js";
 import { createApp } from "../src/server.js";
 import { createSession } from "../src/session.js";
@@ -246,6 +246,8 @@ test("runAsk recalls before generating and writes deltas to the store", async ()
   const request = order[1][2];
   assert.equal(request.model, "google/gemma-4-31b-it:free");
   assert.equal(request.stream, true);
+  assert.ok(request.max_tokens >= 2048);
+  assert.equal(request.reasoning, undefined);
   assert.match(request.messages[0].content, /The booth opens at nine\./);
   assert.equal((await store.chunks(id, 0)).join(""), "The booth opens at nine.");
   const meta = await store.meta(id);
@@ -276,6 +278,8 @@ test("POST /api/ask streams, resumes after a reload, lists history, and stops at
     assert.equal(done.event, "done");
     assert.equal(done.data.status, "done");
     assert.equal(done.data.source, "openrouter");
+    assert.equal(done.data.quota.used, 1);
+    assert.equal(done.data.quota.remaining, 4);
     assert.ok(done.data.sources.length >= 1);
 
     // A reloaded page that already had chunk 0 asks from 1 and gets only the rest.
@@ -315,7 +319,16 @@ test("POST /api/ask streams, resumes after a reload, lists history, and stops at
   }
 });
 
-test("a failed model chain stores a friendly answer, not protocol, and claims quota once", async () => {
+test("ask quota is spent only for a real answer", () => {
+  assert.equal(askSpendsQuota("openrouter", "done"), true);
+  assert.equal(askSpendsQuota("retrieval", "done"), true);
+  assert.equal(askSpendsQuota("unavailable", "done"), false);
+  assert.equal(askSpendsQuota("openrouter", "error"), false);
+  assert.equal(askSpendsQuota("", "error"), false);
+  assert.equal(askSpendsQuota(undefined, "stopped"), false);
+});
+
+test("a failed model chain stores a friendly answer, not protocol, and refunds the quota", async () => {
   const store = createAskStore({});
   const tried = [];
   const app = createApp({
@@ -351,12 +364,15 @@ test("a failed model chain stores a friendly answer, not protocol, and claims qu
     const done = streamed.events.at(-1);
     assert.equal(done.data.source, "unavailable");
     assert.equal(done.data.result.body, ASK_UNAVAILABLE);
+    assert.equal(done.data.quota.used, 0);
+    assert.equal(done.data.quota.remaining, 5);
     const again = await fetch(`http://127.0.0.1:${port}/api/ask`, { headers: { cookie: cookie() } }).then((r) => r.json());
-    assert.equal(again.used, 1);
-    assert.equal(again.remaining, 4);
+    assert.equal(again.used, 0);
+    assert.equal(again.remaining, 5);
     assert.equal(tried.length, 3);
     const second = await ask(port, "What is Sederunt in one sentence?");
-    assert.equal(second.body.remaining, 3);
+    assert.equal(second.body.used, 1);
+    assert.equal(second.body.remaining, 4);
   } finally {
     app.close();
   }
