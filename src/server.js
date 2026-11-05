@@ -431,7 +431,7 @@ export function createApp(options = {}) {
       return;
     }
     if (url.pathname === "/console/auth" || url.pathname.startsWith("/console/auth/")) {
-      await handleAuthRoute({ req, res, url, env, identity, send, redirect, googleGrants: workspace.googleGrants, calendarSave: workspace.calendarSave });
+      await handleAuthRoute({ req, res, url, env, identity, send, redirect, googleGrants: workspace.googleGrants, calendarSave: workspace.calendarSave, fetchImpl: options.fetch || globalThis.fetch });
       return;
     }
     if (req.method === "GET" && url.pathname === "/console/sign-in") {
@@ -699,6 +699,10 @@ export function createApp(options = {}) {
       let token = invitePath[1];
       try { token = decodeURIComponent(token); } catch { token = invitePath[1]; }
       await handleInvite({ req, res, url, env, identity, send, redirect, token });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/console/ask") {
+      redirect(res, "/console/chat");
       return;
     }
     if (req.method === "GET" && (url.pathname === "/console" || url.pathname.startsWith("/console/"))) {
@@ -1481,8 +1485,8 @@ async function handleAsk(workspace, req, res, url) {
           if (view && view.user === user && view.status === "done" && view.text) previous.push({ question: view.question, answer: view.text });
         }
         const current = await prepareWorkspace(workspace, companyId);
-        const memberId = consoleBoardMember(gate.session, env, "company", typeof body.memberId === "string" ? body.memberId : "");
-        const visible = companyBoard(current, memberId).decisions || [];
+        const memberId = consoleBoardMember(gate.session, env, scope, "");
+        const visible = (scope === "personal" ? personalBoard(current, memberId) : companyBoard(current, memberId)).decisions || [];
         const doorDeps = depsFor(workspace, companyId);
         const bot = await currentBot(workspace, req).catch(() => null);
         return runAsk({
@@ -1496,7 +1500,8 @@ async function handleAsk(workspace, req, res, url) {
           botName: bot?.name || "",
           // withMemWal ask path: MemWal.recall(query) before generate.
           recall: doorDeps.memory?.recall ? async (query) => doorDeps.memory.recall(query) : undefined,
-          retrieval: () => chatReply(workspace, { text: question, workspace: scope, company: companyId, memberId: body.memberId }),
+          // The signed-in board member, not a client-supplied id and not only SEDERUNT_MEMBER.
+          retrieval: () => chatReply(workspace, { text: question, workspace: scope, company: companyId }, memberId),
         });
       })().catch(() => store.finish(id, { status: "error" }).catch(() => {}));
       if (env.VERCEL) {
@@ -1561,8 +1566,12 @@ async function handleAsk(workspace, req, res, url) {
   }
 }
 
-/** The kept-decision answer that /api/chat returns, also the Ask AI fallback. */
-async function chatReply(workspace, body) {
+/**
+ * The kept-decision answer that /api/chat returns, also the Ask AI fallback.
+ * trustedMember is the console board member. A body field cannot set it:
+ * /api/chat forwards the JSON body, and a caller must not pick their own invite.
+ */
+async function chatReply(workspace, body, trustedMember = "") {
   const env = workspace.env;
   const companyId = typeof body.company === "string" ? body.company : "";
   const current = await prepareWorkspace(workspace, companyId);
@@ -1585,7 +1594,8 @@ async function chatReply(workspace, body) {
       stored: false,
     };
   }
-  const bound = bindMember(env, body.memberId);
+  const trusted = typeof trustedMember === "string" ? trustedMember.trim() : "";
+  const bound = trusted ? { ok: true, memberId: trusted } : bindMember(env, body.memberId);
   if (!bound.ok) {
     return {
       body: memberRefusal(bound.reason).body,

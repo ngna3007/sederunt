@@ -288,7 +288,7 @@ serial("empty home and chat offer a next step", async (t) => {
       const doc = document.documentElement;
       return { chips, see: see.length, overflow: doc.scrollWidth > doc.clientWidth + 1 };
     });
-    assert.equal(chat.chips.length, 3);
+    assert.equal(chat.chips.length, 4);
     assert.equal(chat.see, 0, `See Status still visible at ${width}`);
     assert.equal(chat.overflow, false, `empty chat ${width} overflows`);
   }
@@ -298,8 +298,8 @@ serial("empty home and chat offer a next step", async (t) => {
   assert.equal(await page.locator("#ask-ai-dialog").isHidden(), true, "Ask AI opens straight to the composer");
   const prompt = await page.locator("#chat-suggests .suggest-chip").first().textContent();
   await page.locator("#chat-suggests .suggest-chip").first().click();
-  const filled = await page.locator("#chat-text").inputValue();
-  assert.equal(filled, prompt.trim());
+  await page.waitForSelector(".chat-you", { timeout: 15000 });
+  assert.match(await page.locator(".chat-you").innerText(), new RegExp(prompt.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   await page.goto(`http://127.0.0.1:${opened.port}/console`, { waitUntil: "networkidle" });
   await page.waitForSelector("#home-connect-tools", { timeout: 45000 });
   await page.click("#home-connect-tools");

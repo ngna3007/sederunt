@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { openRouterComplete, openRouterConfig, openRouterModels, openRouterStream } from "../src/openrouter.js";
+import { openRouterComplete, openRouterConfig, openRouterModels, openRouterStream, textFromContent } from "../src/openrouter.js";
 import { answerSlackQuestion, mergeSemanticVisible, recallVisibleForAsk, slackAnswer } from "../src/slack/reply.js";
 
 const FACTS = [
@@ -209,4 +209,62 @@ test("openRouterStream tries next model after rate-limit, without reasoning on g
   assert.equal(seen[0].reasoning, false);
   assert.equal(seen[1].model, "openai/gpt-oss-120b");
   assert.equal(seen[1].reasoning, true);
+});
+
+function streamOf(chunks) {
+  const encoder = new TextEncoder();
+  return {
+    ok: true,
+    status: 200,
+    body: new ReadableStream({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+        controller.close();
+      },
+    }),
+  };
+}
+
+test("openRouterStream keeps assistant text and drops reasoning and tool deltas", async () => {
+  assert.equal(textFromContent([{ type: "text", text: "Nine." }, { type: "reasoning", text: "hidden" }]), "Nine.");
+  const deltas = [];
+  const result = await openRouterStream({
+    env: { OPENROUTER_API_KEY: "sk-or-test", OPENROUTER_MODEL: "openai/gpt-oss-20b", OPENROUTER_MODEL_FALLBACKS: "" },
+    messages: [{ role: "user", content: "when?" }],
+    fetchImpl: async () => streamOf([
+      `data: ${JSON.stringify({ choices: [{ delta: { reasoning: "think", content: [{ type: "reasoning", text: "hidden" }, { type: "text", text: "The booth " }] } }] })}\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ id: "1" }], content: null } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, message: { content: "opens at nine." } }] })}`,
+    ]),
+    onDelta: (text) => deltas.push(text),
+  });
+  assert.equal(result.used, true);
+  assert.equal(result.text, "The booth opens at nine.");
+  assert.deepEqual(deltas, ["The booth ", "opens at nine."]);
+  assert.doesNotMatch(result.text, /hidden|tool/);
+});
+
+test("openRouterStream tries the next model when the first returns only reasoning", async () => {
+  const seen = [];
+  const result = await openRouterStream({
+    env: { OPENROUTER_API_KEY: "sk-or-test" },
+    messages: [{ role: "user", content: "when?" }],
+    fetchImpl: async (_url, init) => {
+      const model = JSON.parse(init.body).model;
+      seen.push(model);
+      if (model === "google/gemma-4-31b-it:free") {
+        return streamOf([
+          `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "secret", content: "" } }] })}\n\n`,
+          "data: [DONE]\n\n",
+        ]);
+      }
+      return streamOf([
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "Nine." } }] })}\n\n`,
+        "data: [DONE]\n\n",
+      ]);
+    },
+  });
+  assert.deepEqual(seen, ["google/gemma-4-31b-it:free", "openai/gpt-oss-120b"]);
+  assert.equal(result.text, "Nine.");
+  assert.equal(result.model, "openai/gpt-oss-120b");
 });

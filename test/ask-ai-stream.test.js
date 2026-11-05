@@ -3,7 +3,7 @@ import { once } from "node:events";
 import net from "node:net";
 import test from "node:test";
 import { askBackend, createAskStore, quotaDay, settledStatus } from "../src/ask/store.js";
-import { runAsk } from "../src/ask/run.js";
+import { ASK_UNAVAILABLE, askFallbackText, runAsk } from "../src/ask/run.js";
 import { sealSession, sessionCookie } from "../src/console-auth.js";
 import { createApp } from "../src/server.js";
 import { createSession } from "../src/session.js";
@@ -158,6 +158,44 @@ test("Upstash REST store sends Bearer commands with a dated quota key", async ()
   assert.ok(Number(calls[0].body[1][2]) > 12 * 3600);
 });
 
+test("one prompt increments the quota key once and overview reads that same key", async () => {
+  const calls = [];
+  const data = new Map();
+  const fetchImpl = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    calls.push(body);
+    const out = body.map(([name, key]) => {
+      if (name === "INCR") { data.set(key, (Number(data.get(key)) || 0) + 1); return { result: data.get(key) }; }
+      if (name === "GET") return { result: data.has(key) ? String(data.get(key)) : null };
+      return { result: 1 };
+    });
+    return new Response(JSON.stringify(out), { status: 200 });
+  };
+  const store = createAskStore({ UPSTASH_REDIS_REST_URL: "https://example.upstash.io", UPSTASH_REDIS_REST_TOKEN: "tok" }, { fetchImpl, now: () => NOON_SAIGON });
+  const claimed = await store.claim("qa-user", 5);
+  const view = await store.overview("qa-user", 5);
+  assert.equal(claimed.ok, true);
+  assert.equal(claimed.remaining, 4);
+  assert.equal(view.quota.used, 1);
+  assert.equal(view.quota.remaining, 4);
+  const incrs = calls.filter((body) => body[0][0] === "INCR");
+  const gets = calls.filter((body) => body[0][0] === "GET");
+  assert.equal(incrs.length, 1);
+  assert.equal(gets.length, 1);
+  assert.equal(incrs[0][0][1], "sederunt:ask:quota:qa-user:2026-11-05");
+  assert.equal(gets[0][0][1], incrs[0][0][1]);
+});
+
+test("ask fallback text is a sentence, never protocol keys", () => {
+  assert.equal(askFallbackText("What is Sederunt in one sentence?", {
+    body: "missing-member\nrecorded\npreference ask",
+  }), ASK_UNAVAILABLE);
+  assert.equal(askFallbackText("When does the booth open?", {
+    body: "The booth opens at nine.\nrecorded\npreference ask",
+  }), "The booth opens at nine.");
+  assert.doesNotMatch(ASK_UNAVAILABLE, /missing-member|recorded|preference/);
+});
+
 function redisUp(port = 6390) {
   return new Promise((resolve) => {
     const socket = net.connect(port, "127.0.0.1");
@@ -272,6 +310,65 @@ test("POST /api/ask streams, resumes after a reload, lists history, and stops at
 
     const empty = await ask(port, "   ", "mina");
     assert.equal(empty.status, 400);
+  } finally {
+    app.close();
+  }
+});
+
+test("a failed model chain stores a friendly answer, not protocol, and claims quota once", async () => {
+  const store = createAskStore({});
+  const tried = [];
+  const app = createApp({
+    session: seeded(),
+    companyLoaded: true,
+    askStore: store,
+    openrouterFetch: async (_url, init) => {
+      tried.push(JSON.parse(init.body).model);
+      return { ok: false, status: 401, body: null };
+    },
+    deps: {
+      memory: { async remember() { return { blobId: null }; }, async recall() { return []; } },
+      tatum: { async getObject() { return { text: "", checkpoint: null }; } },
+    },
+    env: {
+      SEDERUNT_CONSOLE_SECRET: SECRET,
+      SEDERUNT_MEMBER: "",
+      COMPANY_MEMWAL_KEY: "k",
+      COMPANY_MEMWAL_ACCOUNT_ID: "a",
+      OPENROUTER_API_KEY: "test-key",
+    },
+  });
+  const port = await listen(app);
+  try {
+    const first = await ask(port, "What is Sederunt in one sentence?");
+    assert.equal(first.status, 200);
+    assert.equal(first.body.remaining, 4);
+    assert.equal(first.body.used, 1);
+    const streamed = await readStream(port, first.body.id, 0);
+    const text = streamed.events.filter((row) => row.event === "chunk").map((row) => row.data.t).join("");
+    assert.equal(text, ASK_UNAVAILABLE);
+    assert.doesNotMatch(text, /missing-member|preference ask|\brecorded\b/);
+    const done = streamed.events.at(-1);
+    assert.equal(done.data.source, "unavailable");
+    assert.equal(done.data.result.body, ASK_UNAVAILABLE);
+    const again = await fetch(`http://127.0.0.1:${port}/api/ask`, { headers: { cookie: cookie() } }).then((r) => r.json());
+    assert.equal(again.used, 1);
+    assert.equal(again.remaining, 4);
+    assert.equal(tried.length, 3);
+    const second = await ask(port, "What is Sederunt in one sentence?");
+    assert.equal(second.body.remaining, 3);
+  } finally {
+    app.close();
+  }
+});
+
+test("GET /console/ask redirects to the chat page", async () => {
+  const app = appFor();
+  const port = await listen(app);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/console/ask`, { redirect: "manual" });
+    assert.equal(response.status, 302);
+    assert.equal(response.headers.get("location"), "/console/chat");
   } finally {
     app.close();
   }

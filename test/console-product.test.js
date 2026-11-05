@@ -157,7 +157,7 @@ test("the console is the workspace and the room page redirects", async () => {
     assert.match(home.raw, /Run automatically/);
     assert.match(home.raw, /The meeting has not sent who is there/);
     assert.match(home.raw, /Names heard in a room/);
-    assert.match(home.raw, /Nothing has been asked yet/);
+    assert.match(home.raw, /Ask Sederunt/);
     assert.match(home.raw, /data-scope="group"/);
     assert.match(home.raw, /data-scope="you"/);
     assert.match(home.raw, /id="workspace-chip"/);

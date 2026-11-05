@@ -1,9 +1,47 @@
 import { openRouterConfig, openRouterStream } from "../openrouter.js";
+import { contentWords } from "../room-match.js";
 import { mergeSemanticVisible, recallVisibleForAsk } from "../slack/reply.js";
 
 const FLUSH_MS = 120;
 const FLUSH_CHARS = 48;
 const NOTHING = "Nothing kept in this workspace matches that yet.";
+/** Shown when every model fails and no kept sentence answers the question. */
+export const ASK_UNAVAILABLE = "I couldn't answer that just now. Try again in a moment.";
+
+const PROTOCOL_LINE = /^(?:missing-member|not-invited|duplicate-delivery|recorded|current|clashing|replaced|unknown|filed|updated)$/i;
+const PROTOCOL_TAG = /^(?:preference|checkpoint)(?:\s+\S+)?$/i;
+const PROTOCOL_ROW = /^ROW-\d+$/i;
+const SYSTEM_LINE = /^(?:Nothing stored matches that\.|Nothing is stored that you can read\.|There are no notes yet\.|A decision is kept from a room\.?|The question is missing\.)$/i;
+
+/** Drop tool protocol lines. A real sentence stays. */
+export function humanAskText(raw) {
+  return String(raw ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !PROTOCOL_LINE.test(line) && !PROTOCOL_TAG.test(line) && !PROTOCOL_ROW.test(line))
+    .join("\n")
+    .trim();
+}
+
+/**
+ * The retrieval fallback the user can read. Protocol keys are never the answer.
+ * Unmatched decision dumps are not either: those wait for the model.
+ * @param {string} question
+ * @param {{ body?: string, learned?: string } | null | undefined} answer
+ */
+export function askFallbackText(question, answer) {
+  const learned = humanAskText(answer?.learned);
+  if (learned) return learned;
+  const lines = humanAskText(answer?.body).split("\n").map((line) => line.trim()).filter(Boolean);
+  if (!lines.length) return ASK_UNAVAILABLE;
+  const words = contentWords(question);
+  if (words.length) {
+    const matched = lines.filter((line) => words.some((word) => line.toLowerCase().includes(word)));
+    if (matched.length) return matched.join("\n");
+  }
+  if (lines.length === 1 && (SYSTEM_LINE.test(lines[0]) || !words.length)) return lines[0];
+  return ASK_UNAVAILABLE;
+}
 
 /**
  * Web Ask AI system prompt. Walrus Memory chatbot shape: recall ran before this
@@ -116,16 +154,22 @@ export async function runAsk(input) {
       });
       await flush();
       await chain;
-      if (result.used || wrote) {
-        await store.finish(id, { status: result.error && !result.used ? "error" : "done", source: "openrouter", sources });
+      const streamed = humanAskText(result.text);
+      if ((result.used || wrote) && streamed) {
+        await store.finish(id, { status: "done", source: "openrouter", sources });
         return { source: "openrouter", sources };
       }
+      // Every configured model failed. Do not substitute tool protocol for the reply.
+      await store.append(id, ASK_UNAVAILABLE);
+      await store.finish(id, { status: "done", source: "unavailable", sources, result: { body: ASK_UNAVAILABLE } });
+      return { source: "unavailable", sources };
     }
     const answer = typeof input.retrieval === "function" ? await input.retrieval() : null;
-    const text = String(answer?.learned || answer?.body || "").trim() || NOTHING;
+    const text = askFallbackText(question, answer);
     await store.append(id, text);
-    await store.finish(id, { status: "done", source: "retrieval", sources, result: answer || { body: text } });
-    return { source: "retrieval", sources };
+    const source = text === ASK_UNAVAILABLE ? "unavailable" : "retrieval";
+    await store.finish(id, { status: "done", source, sources, result: { body: text } });
+    return { source, sources };
   } catch {
     try {
       await store.finish(id, { status: "error" });

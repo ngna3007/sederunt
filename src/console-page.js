@@ -448,22 +448,28 @@ ${slack}
       </div>
     </section>
     <section id="chat" hidden>
-      <div class="page-head"><div><p class="page-title">Ask AI</p><p class="page-lede">Ask about your meetings and decisions. Answers come only from what this workspace kept, with the sources shown.</p></div><div class="page-actions"><span id="ask-quota" class="ask-quota ask-quota-pending" role="status">${askDaily} questions a day</span></div></div>
+      <div class="page-head"><div><p class="page-title">Ask AI</p><p class="page-lede">Ask about a meeting or a decision this workspace kept.</p></div></div>
       <div class="talk-panel ai-chat">
-        <div class="thread" id="chat-log">
+        <div class="thread" id="chat-log" role="log" aria-live="polite" aria-relevant="additions">
           <div id="chat-empty" class="chat-hello">
-            <p class="empty-title">Nothing has been asked yet.</p>
+            <p class="empty-title">Ask Sederunt</p>
+            <p class="chat-hello-copy">Answers come from what this workspace kept.</p>
             <div class="suggests" id="chat-suggests"></div>
           </div>
-          <p id="chat-purpose"></p>
+          <p id="chat-purpose" hidden></p>
         </div>
         <p id="chat-next-row" class="section-next"><button id="chat-next" class="primary" type="button" hidden>New room</button></p>
         <form id="chat-form" class="composer">
           <p class="ask-out" id="ask-out" role="status" hidden><strong>No questions left today.</strong> <span id="ask-out-copy">You've used all ${askDaily}. They come back at midnight.</span></p>
-          <label><span class="sr">Ask the workspace</span><textarea id="chat-text" name="chat" rows="1" placeholder="Ask about a meeting or decision"></textarea></label>
-          <button class="primary" type="submit" aria-label="Ask">Ask</button>
+          <div class="composer-box">
+            <label><span class="sr">Ask the workspace</span><textarea id="chat-text" name="chat" rows="1" placeholder="Ask about a meeting or decision"></textarea></label>
+            <button id="ask-send" class="primary" type="submit" aria-label="Send">Send</button>
+          </div>
+          <div class="composer-foot">
+            <span id="ask-quota" class="ask-quota ask-quota-pending" role="status">${askDaily} questions a day</span>
+            <p class="composer-hint" id="chat-hint">Enter sends. Shift+Enter adds a line.</p>
+          </div>
         </form>
-        <p class="composer-hint" id="chat-hint">Enter sends. Shift+Enter adds a line.</p>
       </div>
     </section>
     <section id="record" hidden>
@@ -2608,26 +2614,23 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var box = document.getElementById("chat-suggests");
     if (!box) return;
     box.replaceChildren();
+    var prompts = [];
     var rooms = ((state && state.rooms) || []).filter(function (room) {
       return decisionsFor(room.id).length > 0;
     });
-    if (rooms.length) {
-      rooms.slice(0, 3).forEach(function (room) {
-        var title = roomIdentity(room, decisionsFor(room.id)).title || room.id || "";
-        var shortName = String(title).split(":")[0].trim() || title;
-        var button = document.createElement("button");
-        button.type = "button";
-        button.setAttribute("data-suggest", "What did " + shortName + " decide?");
-        button.textContent = "What did " + shortName + " decide?";
-        box.append(button);
-      });
-      return;
-    }
-    ["What did the last meeting decide?", "Which decisions are clashing?", "What changed since yesterday?"].forEach(function (prompt) {
+    rooms.slice(0, 2).forEach(function (room) {
+      var title = roomIdentity(room, decisionsFor(room.id)).title || room.id || "";
+      var shortName = String(title).split(":")[0].trim() || title;
+      prompts.push("What did " + shortName + " decide?");
+    });
+    ["What did the last meeting decide?", "Which decisions are clashing?", "What changed since yesterday?", "What is still open?"].forEach(function (prompt) {
+      if (prompts.length < 4 && prompts.indexOf(prompt) === -1) prompts.push(prompt);
+    });
+    prompts.slice(0, 4).forEach(function (prompt) {
       var example = document.createElement("button");
       example.type = "button";
       example.className = "suggest-chip";
-      example.setAttribute("data-fill", prompt);
+      example.setAttribute("data-suggest", prompt);
       example.textContent = prompt;
       box.append(example);
     });
@@ -2780,18 +2783,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var chatNext = document.getElementById("chat-next");
     if (chatNext) chatNext.hidden = true;
     var chatForm = document.getElementById("chat-form");
-    var chatButton = document.querySelector("#chat-form button");
-    var chatInput = document.getElementById("chat-text");
     var chatEmpty = document.getElementById("chat-empty");
     if (chatEmpty) chatEmpty.hidden = document.querySelector("#chat-log .chat-turn") != null;
     paintSuggestions();
     if (chatForm) chatForm.hidden = false;
-    if (chatButton) chatButton.disabled = noKept;
-    if (chatInput) {
-      chatInput.disabled = noKept;
-      chatInput.placeholder = noKept ? "" : "Ask about a meeting or decision";
-    }
-    if (!noKept && typeof paintAskQuota === "function") paintAskQuota();
+    if (typeof paintAskQuota === "function") paintAskQuota();
     syncRoomLabels();
     if (fileRoom) renderFile();
     if (!routed) {
@@ -2982,7 +2978,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (path === "/console/rooms") return "rooms";
     if (path === "/console/history") return "history";
     if (path === "/console/decisions") return "record";
-    if (path === "/console/chat") return "chat";
+    if (path === "/console/chat" || path === "/console/ask") return "chat";
     if (path === "/console/people") return "people";
     if (path === "/console/files") return "files";
     if (path === "/console/account") return "account";
@@ -6383,7 +6379,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function paintAskQuota() {
     var pill = document.getElementById("ask-quota");
     var input = document.getElementById("chat-text");
-    var button = document.querySelector("#chat-form button[type=submit]");
+    var button = document.getElementById("ask-send");
     if (!pill || !askState) return;
     // Before /api/ask answers, the pill keeps the server-rendered daily allowance, never blank.
     if (askState.remaining === null) {
@@ -6409,17 +6405,49 @@ if (sessionWhen && sessionWhen.dataset.at) {
       input.disabled = out;
       input.placeholder = out ? "No questions left. Back at midnight." : "Ask about a meeting or decision";
     }
-    if (button) button.disabled = out;
+    if (button && !button.classList.contains("ask-stop")) button.disabled = out;
     var copy = document.getElementById("ask-limit-copy");
     if (copy) copy.textContent = "Each person gets " + askState.limit + " Ask AI questions a day. " + askResetLabel();
   }
   function takeAskQuota(data) {
     if (!data) return;
     if (typeof data.limit === "number") askState.limit = data.limit;
-    if (typeof data.remaining === "number") askState.remaining = data.remaining;
+    // used and remaining come from the same quota key. If they disagree, trust used.
+    if (typeof data.used === "number" && typeof data.limit === "number" && data.used < data.limit) {
+      askState.remaining = data.limit - data.used;
+    } else if (typeof data.remaining === "number") askState.remaining = data.remaining;
     if (typeof data.live === "boolean") askState.live = data.live;
     if (data.resetAt) askState.resetAt = data.resetAt;
     paintAskQuota();
+  }
+  function refreshAskQuota() {
+    fetch("/api/ask", { headers: { accept: "application/json" } }).then(function (response) {
+      return response.ok ? response.json() : null;
+    }).then(function (data) {
+      if (data) takeAskQuota(data);
+    }).catch(function () {});
+  }
+  function setAskSending(on) {
+    var button = document.getElementById("ask-send");
+    if (!button) return;
+    button.classList.toggle("ask-stop", on);
+    button.type = on ? "button" : "submit";
+    button.textContent = on ? "Stop" : "Send";
+    button.setAttribute("aria-label", on ? "Stop" : "Send");
+    button.disabled = !on && askState.remaining !== null && askState.remaining <= 0;
+  }
+  var ASK_FRIENDLY = "I couldn't answer that just now. Try again in a moment.";
+  function protocolLine(line) {
+    var trimmed = String(line || "").trim();
+    if (!trimmed) return true;
+    if (isStatusWord(trimmed)) return true;
+    if (trimmed === "missing-member" || trimmed === "not-invited" || trimmed === "duplicate-delivery") return true;
+    if (/^(?:preference|checkpoint)(?:\\s+\\S+)?$/i.test(trimmed)) return true;
+    if (/^ROW-[0-9]+$/.test(trimmed)) return true;
+    return false;
+  }
+  function humanAskText(value) {
+    return splitLines(value).map(function (line) { return line.trim(); }).filter(function (line) { return !protocolLine(line); }).join(String.fromCharCode(10));
   }
   function loadAsks() {
     fetch("/api/ask", { headers: { accept: "application/json" } }).then(function (response) {
@@ -6434,10 +6462,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
         if (!ask || !ask.id || document.querySelector('#chat-log [data-ask="' + ask.id + '"]')) return;
         showAskThread();
         addChatTurn("You", ask.question || "", "");
-        var turn = addChatTurn("Sederunt", ask.text ? "" : "Reading.", "");
+        var turn = addChatTurn("Sederunt", ask.text ? "" : "Thinking\u2026", "");
         turn.setAttribute("data-ask", ask.id);
         var span = turn.querySelector(".chat-body > span");
-        if (ask.text) span.textContent = ask.text;
+        if (ask.text) {
+          turn._askRaw = ask.text;
+          var shown = humanAskText(ask.text);
+          span.textContent = shown;
+        }
         if (ask.status === "streaming") {
           turn.classList.add("chat-streaming");
           followAsk(ask.id, turn, ask.count || 0);
@@ -6459,31 +6491,53 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var near = log.scrollHeight - log.scrollTop - log.clientHeight < 160;
     if (near) log.scrollTop = log.scrollHeight;
   }
+  var askLive = null;
+  var askCancel = false;
+  function stopAsk() {
+    askCancel = true;
+    var live = askLive;
+    askLive = null;
+    if (!live) {
+      setAskSending(false);
+      return;
+    }
+    live.turn.setAttribute("data-stopped", "1");
+    if (live.source) live.source.close();
+    delete askState.streams[live.id];
+    setAskSending(false);
+    settleAsk(live.turn, { status: "stopped" });
+  }
   function followAsk(id, turn, from) {
+    if (turn.getAttribute("data-stopped") === "1" || turn.getAttribute("data-settled") === "1") return;
     if (askState.streams[id] || typeof EventSource !== "function") return;
     var got = from || 0;
     var span = turn.querySelector(".chat-body > span");
     var source = new EventSource("/api/ask/" + encodeURIComponent(id) + "/stream?from=" + got);
     askState.streams[id] = source;
+    askLive = { id: id, turn: turn, source: source };
+    setAskSending(true);
     function stop() {
       source.close();
       delete askState.streams[id];
+      if (askLive && askLive.source === source) askLive = null;
     }
     source.addEventListener("chunk", function (event) {
       var data = JSON.parse(event.data || "{}");
       if (typeof data.i !== "number" || data.i < got) return;
-      if (turn.classList.contains("chat-pending")) {
-        turn.classList.remove("chat-pending");
-        span.textContent = "";
+      turn._askRaw = (turn._askRaw || "") + (data.t || "");
+      var shown = humanAskText(turn._askRaw);
+      if (shown) {
+        turn.classList.remove("chat-pending", "chat-thinking");
+        turn.classList.add("chat-streaming");
+        span.textContent = shown;
       }
-      turn.classList.add("chat-streaming");
-      span.textContent += data.t || "";
       got = data.i + 1;
       turn.removeAttribute("data-tries");
       keepAskInView(turn);
     });
     source.addEventListener("done", function (event) {
       stop();
+      setAskSending(false);
       settleAsk(turn, JSON.parse(event.data || "{}"));
     });
     source.addEventListener("again", function () {
@@ -6492,9 +6546,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
     source.onerror = function () {
       stop();
+      if (turn.getAttribute("data-stopped") === "1" || turn.getAttribute("data-settled") === "1") return;
       var tries = Number(turn.getAttribute("data-tries") || "0") + 1;
       turn.setAttribute("data-tries", String(tries));
       if (tries > 5) {
+        setAskSending(false);
         settleAsk(turn, { status: "stopped" });
         return;
       }
@@ -6539,19 +6595,21 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function settleAsk(turn, done, quiet) {
     if (!turn || turn.getAttribute("data-settled") === "1") return;
     turn.setAttribute("data-settled", "1");
-    turn.classList.remove("chat-pending", "chat-streaming");
+    turn.classList.remove("chat-pending", "chat-thinking", "chat-streaming");
     var span = turn.querySelector(".chat-body > span");
     if (!span) return;
-    if (done && done.source === "retrieval" && done.result) {
-      span.textContent = "";
-      renderChatResult(done.result, turn, quiet);
-      if (!quiet) load();
-      return;
+    var streamed = humanAskText(turn._askRaw || span.textContent || "");
+    var fromResult = "";
+    if (done && done.result) {
+      var learned = typeof done.result.learned === "string" ? done.result.learned : "";
+      var body = typeof done.result.body === "string" ? done.result.body : "";
+      fromResult = humanAskText(learned || body);
     }
-    var said = String(span.textContent || "").trim();
+    var said = streamed || fromResult;
     var status = done && done.status;
     if (!said) {
-      span.textContent = status === "done" ? "Nothing kept in this workspace matches that yet." : "The answer stopped. Ask again.";
+      span.textContent = status === "done" ? ASK_FRIENDLY : "The answer stopped. Ask again.";
+      if (!quiet) refreshAskQuota();
       return;
     }
     drawAnswer(span, said);
@@ -6584,8 +6642,15 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
     actions.append(copy);
     span.parentNode.append(actions);
-    if (!quiet) keepAskInView(turn);
+    if (!quiet) {
+      keepAskInView(turn);
+      refreshAskQuota();
+    }
   }
+  var askSend = document.getElementById("ask-send");
+  if (askSend) askSend.addEventListener("click", function () {
+    if (askSend.classList.contains("ask-stop")) stopAsk();
+  });
   document.getElementById("chat-form").addEventListener("submit", function (event) {
     event.preventDefault();
     var input = document.getElementById("chat-text");
@@ -6598,7 +6663,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
     showAskThread();
     lastQuestion = askedNow;
     addChatTurn("You", askedNow, "");
-    var turn = addChatTurn("Sederunt", "Reading.", "");
+    var turn = addChatTurn("Sederunt", "Thinking\u2026", "");
+    setAskSending(true);
     input.value = "";
     growChat();
     fetch("/api/ask", {
@@ -6609,15 +6675,23 @@ if (sessionWhen && sessionWhen.dataset.at) {
       return response.json().then(function (body) { return { status: response.status, body: body || {} }; });
     }).then(function (reply) {
       var span = turn.querySelector(".chat-body > span");
+      if (askCancel) {
+        askCancel = false;
+        setAskSending(false);
+        if (turn.getAttribute("data-settled") !== "1") settleAsk(turn, { status: "stopped" });
+        return;
+      }
       if (reply.status === 429) {
-        turn.classList.remove("chat-pending");
+        turn.classList.remove("chat-pending", "chat-thinking");
         span.textContent = "You've used today's " + (reply.body.limit || askState.limit) + " questions. " + askResetLabel();
-        takeAskQuota({ limit: reply.body.limit, remaining: 0 });
+        setAskSending(false);
+        takeAskQuota({ limit: reply.body.limit, used: reply.body.used, remaining: reply.body.remaining });
         openDialog("ask-ai-dialog");
         return;
       }
       if (reply.status !== 200 || !reply.body.id) {
-        turn.classList.remove("chat-pending");
+        turn.classList.remove("chat-pending", "chat-thinking");
+        setAskSending(false);
         span.textContent = reply.body.error && reply.body.error !== "limit" ? reply.body.error : "Ask AI did not answer. Send the question again.";
         return;
       }
@@ -6626,7 +6700,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
       followAsk(reply.body.id, turn, 0);
     }).catch(function () {
       var span = turn.querySelector(".chat-body > span");
-      turn.classList.remove("chat-pending");
+      turn.classList.remove("chat-pending", "chat-thinking");
+      setAskSending(false);
       if (span) span.textContent = "Ask AI did not answer. Send the question again.";
     });
   });
@@ -6737,11 +6812,21 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function addChatTurn(who, value, detail, cites) {
-    var line = document.createElement("p");
+    var line = document.createElement("div");
     line.className = who === "You" ? "chat-turn chat-you" : "chat-turn chat-bot";
-    if (value === "Reading.") line.classList.add("chat-pending");
-    var label = document.createElement("strong");
-    label.textContent = who;
+    line.setAttribute("role", "article");
+    var thinking = value === "Thinking\u2026";
+    if (thinking) line.classList.add("chat-pending", "chat-thinking");
+    if (who !== "You") {
+      var avatar = document.createElement("span");
+      avatar.className = "ask-avatar";
+      avatar.setAttribute("aria-hidden", "true");
+      avatar.textContent = "S";
+      line.append(avatar);
+    }
+    var label = document.createElement("span");
+    label.className = "sr";
+    label.textContent = who === "You" ? "You" : "Sederunt";
     var body = document.createElement("span");
     body.className = "chat-body";
     var answer = document.createElement("span");

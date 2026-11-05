@@ -56,6 +56,39 @@ function usesReasoning(model) {
 }
 
 /**
+ * Assistant text only. Reasoning, tool calls, and status objects are not the answer.
+ * @param {unknown} content
+ * @returns {string}
+ */
+export function textFromContent(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  let out = "";
+  for (const part of content) {
+    if (typeof part === "string") {
+      out += part;
+      continue;
+    }
+    if (!part || typeof part !== "object") continue;
+    const type = String(part.type || "");
+    if (type === "reasoning" || type === "reasoning_text" || type.startsWith("tool")) continue;
+    if (typeof part.text === "string") out += part.text;
+  }
+  return out;
+}
+
+/** Visible text from one streamed choice. Ignores reasoning and tool deltas. */
+function choiceText(choice) {
+  if (!choice || typeof choice !== "object") return "";
+  const delta = choice.delta;
+  if (delta && typeof delta === "object") {
+    const fromDelta = textFromContent(delta.content);
+    if (fromDelta) return fromDelta;
+  }
+  return textFromContent(choice.message?.content);
+}
+
+/**
  * One chat completion. Tries each model in the fallback chain. Never throws.
  *
  * @param {{
@@ -102,7 +135,7 @@ export async function openRouterComplete(input = {}) {
       });
       if (!response?.ok) continue;
       const body = typeof response.json === "function" ? await response.json() : null;
-      const text = String(body?.choices?.[0]?.message?.content ?? "").trim();
+      const text = textFromContent(body?.choices?.[0]?.message?.content).trim();
       if (!text) continue;
       return { text, used: true, model, tried };
     } catch {
@@ -174,29 +207,44 @@ export async function openRouterStream(input = {}) {
       let buffer = "";
       let finished = false;
       let streamError = false;
+      const takePayload = async (data) => {
+        if (data === "[DONE]") { finished = true; return; }
+        let event;
+        try { event = JSON.parse(data); } catch { return; }
+        if (event?.error) {
+          streamError = true;
+          lastError = "stream-error";
+          return;
+        }
+        const delta = choiceText(event?.choices?.[0]);
+        if (!delta) return;
+        text += delta;
+        if (typeof input.onDelta === "function") await input.onDelta(delta);
+      };
+      const consume = async (block, flushTail) => {
+        let rest = block;
+        let cut;
+        while ((cut = rest.indexOf("\n")) !== -1) {
+          const line = rest.slice(0, cut).replace(/\r$/, "").trim();
+          rest = rest.slice(cut + 1);
+          if (!line.startsWith("data:")) continue;
+          await takePayload(line.slice(5).trim());
+          if (finished || streamError) return "";
+        }
+        if (flushTail && rest.trim().startsWith("data:")) {
+          await takePayload(rest.trim().slice(5).trim());
+          return "";
+        }
+        return rest;
+      };
       for await (const part of response.body) {
         buffer += typeof part === "string" ? part : decoder.decode(part, { stream: true });
-        let cut;
-        while ((cut = buffer.indexOf("\n")) !== -1) {
-          const line = buffer.slice(0, cut).trim();
-          buffer = buffer.slice(cut + 1);
-          if (!line.startsWith("data:")) continue;
-          const data = line.slice(5).trim();
-          if (data === "[DONE]") { finished = true; break; }
-          let event;
-          try { event = JSON.parse(data); } catch { continue; }
-          if (event?.error) {
-            streamError = true;
-            lastError = "stream-error";
-            break;
-          }
-          const delta = event?.choices?.[0]?.delta?.content;
-          if (typeof delta === "string" && delta) {
-            text += delta;
-            if (typeof input.onDelta === "function") await input.onDelta(delta);
-          }
-        }
+        buffer = await consume(buffer, false);
         if (finished || streamError) break;
+      }
+      if (!finished && !streamError) {
+        buffer += decoder.decode();
+        await consume(buffer, true);
       }
       if (streamError && !text.trim()) continue;
       const trimmed = text.trim();

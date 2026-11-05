@@ -31,4 +31,12 @@ test("Ask AI is live in the rail: no Coming soon, no MCP gate, a daily quota pil
   assert.match(page, /if \(name === "chat"\) loadAsks\(\);/);
   assert.doesNotMatch(page, /data-seen/);
   assert.match(page, /if \(name === "chat"\) return "Ask AI";/);
+  assert.match(html, /id="ask-send"/);
+  assert.match(html, /class="ask-avatar"|ask-avatar/);
+  assert.match(html, /id="chat-log"/);
+  assert.match(html, /Thinking/);
+  assert.match(html, /id="chat-suggests"/);
+  assert.match(page, /function humanAskText/);
+  assert.match(page, /function stopAsk/);
+  assert.doesNotMatch(html, /source === "retrieval" && done\.result/);
 });

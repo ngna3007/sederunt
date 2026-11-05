@@ -533,29 +533,12 @@ test("home and rooms columns line up, and the pass 04 fixes hold in the browser"
   await page.waitForSelector("#chat-text", { timeout: 45000 });
   assert.equal(await page.locator("#ask-ai-dialog").isHidden(), true, "Ask AI opens straight to the composer");
   await page.fill("#chat-text", "When does the booth open?");
-  await page.locator("#chat-form button").click();
-  await page.waitForSelector(".chat-clash", { timeout: 15000 });
-  const clash = await page.evaluate(() => {
-    const answer = document.querySelector(".chat-answer");
-    const box = document.querySelectorAll(".chat-clash");
-    const chips = [...document.querySelectorAll(".chat-clash .cite-chip")].map((chip) => chip.textContent);
-    const actions = [...document.querySelectorAll(".clash-actions a, .clash-actions button")].map((node) => node.textContent);
-    return {
-      lead: answer ? answer.textContent : "",
-      boxes: box.length,
-      chips,
-      actions,
-      more: chips.some((chip) => /^\+\d+ more$/.test(chip || "")),
-    };
-  });
-  assert.equal(clash.boxes, 1);
-  assert.match(clash.lead, /Two decisions disagree: the booth opens at nine/);
-  assert.match(clash.lead, /vs ten so setup is not rushed/);
-  assert.ok(clash.chips.some((chip) => /rowan · \d{1,2}:\d{2} [AP]M/.test(chip)));
-  assert.ok(clash.chips.some((chip) => /tomas · \d{1,2}:\d{2} [AP]M/.test(chip)));
-  assert.equal(clash.more, false);
-  assert.ok(clash.actions.includes("Open room"));
-  assert.ok(clash.actions.includes("Copy"));
+  await page.locator("#ask-send").click();
+  await page.waitForSelector(".chat-bot .chat-answer-md", { timeout: 15000 });
+  const answer = await page.locator(".chat-bot").innerText();
+  assert.match(answer, /booth opens at nine/i);
+  assert.doesNotMatch(answer, /missing-member|preference ask/);
+  assert.equal(await page.locator(".ask-avatar").count(), 1);
 
   for (const width of [1920, 1097, 1024, 768, 640, 390]) {
     await page.setViewportSize({ width, height: 900 });
