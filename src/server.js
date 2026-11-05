@@ -1145,6 +1145,9 @@ export function createApp(options = {}) {
             fetchImpl: deps.slack?.fetch || deps.fetch,
             botName,
             maxMemories: 20,
+            token: env.SLACK_BOT_TOKEN,
+            channel,
+            excludeTs: typeof event.ts === "string" ? event.ts : "",
             // MemWal.recall(query) ranks memories before the model reads them.
             recall: doorDeps.memory?.recall
               ? async (query) => doorDeps.memory.recall(query)

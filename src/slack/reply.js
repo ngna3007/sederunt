@@ -72,6 +72,49 @@ export function slackAnswer(visible, question) {
  * @param {{ env?: NodeJS.ProcessEnv, fetchImpl?: typeof fetch, botName?: string, maxMemories?: number, recall?: (query: string) => Promise<unknown>, preferences?: object | null }} [options]
  * @returns {Promise<{ text: string, file: string, source: "openrouter" | "retrieval", recalled: number }>}
  */
+
+/**
+ * Recent Slack turns for the ask model, oldest first. Bot lines become
+ * assistant; people become user. The current event ts is left out so it
+ * is not duplicated as the latest user turn.
+ *
+ * @param {{ token?: string, channel?: string, fetchImpl?: typeof fetch, limit?: number, excludeTs?: string }} [input]
+ * @returns {Promise<Array<{ role: "user" | "assistant", content: string }>>}
+ */
+export async function slackRecentTurns(input = {}) {
+  const token = typeof input.token === "string" ? input.token.trim() : "";
+  const channel = typeof input.channel === "string" ? input.channel.trim() : "";
+  if (!token || !channel) return [];
+  const fetchFn = input.fetchImpl || fetch;
+  const limit = Math.max(1, Math.min(Number(input.limit) || 6, 20));
+  const exclude = typeof input.excludeTs === "string" ? input.excludeTs.trim() : "";
+  try {
+    const url = new URL("https://slack.com/api/conversations.history");
+    url.searchParams.set("channel", channel);
+    url.searchParams.set("limit", String(limit));
+    const response = await fetchFn(url.toString(), {
+      method: "GET",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) return [];
+    const body = await response.json();
+    if (body?.ok !== true || !Array.isArray(body.messages)) return [];
+    const turns = [];
+    for (const message of [...body.messages].reverse()) {
+      if (!message || typeof message !== "object") continue;
+      if (exclude && String(message.ts || "") === exclude) continue;
+      if (message.subtype && message.subtype !== "bot_message" && message.subtype !== "file_share") continue;
+      const text = String(message.text || "").trim();
+      if (!text) continue;
+      const bot = Boolean(message.bot_id) || message.subtype === "bot_message";
+      turns.push({ role: bot ? "assistant" : "user", content: text });
+    }
+    return turns;
+  } catch {
+    return [];
+  }
+}
+
 export async function answerSlackQuestion(visible, question, options = {}) {
   const env = options.env ?? process.env;
   const asked = String(question ?? "").trim();
@@ -89,10 +132,21 @@ export async function answerSlackQuestion(visible, question, options = {}) {
   const memories = askMemories(rows, hits, limit);
   const fallback = () => ({ ...slackAnswer(rows, asked), source: "retrieval", recalled: memories.length });
   if (!openRouterConfig(env).enabled) return fallback();
+  const prior = Array.isArray(options.history) ? options.history : await slackRecentTurns({
+    token: options.token || env.SLACK_BOT_TOKEN,
+    channel: options.channel,
+    fetchImpl: options.fetchImpl,
+    limit: options.historyLimit || 6,
+    excludeTs: options.excludeTs,
+  });
+  const messages = [
+    ...prior.filter((turn) => turn && (turn.role === "user" || turn.role === "assistant") && String(turn.content || "").trim()),
+    { role: "user", content: asked || "Hi" },
+  ];
   const completed = await openRouterComplete({
     env,
     system: buildSlackAskPrompt({ botName: options.botName || "", preferences: options.preferences ?? null, memories }),
-    messages: [{ role: "user", content: asked || "Hi" }],
+    messages,
     fetchImpl: options.fetchImpl,
   });
   if (!completed.used || !completed.text) return fallback();
