@@ -6782,8 +6782,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (span) span.textContent = "Ask AI did not answer. Send the question again.";
     });
   });
+  var joinBusy = false;
   document.getElementById("meet-form").addEventListener("submit", function (event) {
     event.preventDefault();
+    if (joinBusy) return;
     var link = document.getElementById("meet-link").value.trim();
     var lowered = link.toLowerCase();
     if (!link) {
@@ -6800,6 +6802,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
       text("join-status", "That link is not Zoom, Google Meet, Teams, or Webex.");
       return;
     }
+    joinBusy = true;
+    var joinButton = document.getElementById("join-submit");
+    if (joinButton) {
+      joinButton.disabled = true;
+      joinButton.textContent = "Joining…";
+    }
+    text("join-status", "Sederunt is joining that meeting…");
     fetch("/api/join", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -6817,6 +6826,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
         : "Meet is not ready, so Sederunt cannot join that meeting yet.");
     }).catch(function () {
       text("join-status", "Sederunt could not join that meeting.");
+    }).finally(function () {
+      joinBusy = false;
+      syncJoinReady();
     });
   });
   function reserveComposer() {

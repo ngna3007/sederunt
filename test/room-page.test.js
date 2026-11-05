@@ -517,3 +517,52 @@ function postPath(port, path, body) {
     req.end(payload);
   });
 }
+
+test("a double-click shares one meeting.join for the same URL", async () => {
+  let starts = 0;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const meeting = {
+    async join() {
+      starts += 1;
+      await gate;
+      return { id: "bot-1", startedAt: "2026-11-06T00:00:00.000Z" };
+    },
+  };
+  const ready = createApp({
+    deps: { memory: null, meeting },
+    linearReady: true,
+    env: {
+      RECALL_API_KEY: "present",
+      RECALL_WEBHOOK_SECRET: "present",
+      SEDERUNT_PUBLIC_ORIGIN: "https://sederunt.example",
+      SLACK_SIGNING_SECRET: "present",
+      SLACK_BOT_TOKEN: "present",
+      SEDERUNT_MEMBER: "U_MINA",
+      CONSOLE_API_KEY: "present",
+      CONSOLE_SERVICE_PRIVATE_KEY: "present",
+      CONSOLE_FOLDER_ID: "present",
+      COMPANY_MEMWAL_KEY: "present",
+      COMPANY_MEMWAL_ACCOUNT_ID: "present",
+    },
+  });
+  ready.listen(0, "127.0.0.1");
+  await once(ready, "listening");
+  try {
+    const port = ready.address().port;
+    const url = "https://meet.google.com/abc-defg-hij";
+    const first = postPath(port, "/api/join", { url });
+    const second = postPath(port, "/api/join", { url });
+    for (let i = 0; i < 100 && starts === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(starts, 1);
+    release();
+    const [a, b] = await Promise.all([first, second]);
+    assert.equal(a.body.join, "sent");
+    assert.equal(b.body.join, "sent");
+    assert.equal(starts, 1);
+  } finally {
+    await new Promise((resolve, reject) => ready.close((error) => (error ? reject(error) : resolve())));
+  }
+});

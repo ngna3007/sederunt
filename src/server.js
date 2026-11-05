@@ -860,43 +860,64 @@ export function createApp(options = {}) {
     }
     if (req.method === "POST" && url.pathname === "/api/join") {
       const body = await readJson(req);
-      const meetingUrl = typeof body.url === "string" ? body.url : "";
+      const meetingUrl = typeof body.url === "string" ? body.url.trim() : "";
       let join = "not-configured";
       if (!doorReport(env, workspace.linearReady === true).walk) {
         send(res, 200, "application/json; charset=utf-8", JSON.stringify({ join }));
         return;
       }
-      let botId = "";
-      let startedAt = "";
-      if (deps.meeting?.join) {
-        try {
-          const ready = await prepareWorkspace(workspace, "");
-          const guest = normalizeHearing(ready?.hearing).name;
-          const bot = await currentBot(workspace, req);
-          const sent = await deps.meeting.join({ url: meetingUrl, name: guest, botName: bot.name });
-          join = "sent";
-          botId = typeof sent?.id === "string" ? sent.id : "";
-          startedAt = typeof sent?.startedAt === "string" ? sent.startedAt : (typeof sent?.started_at === "string" ? sent.started_at : "");
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "";
-          join = message === "Meeting join is not configured" ? "not-configured" : "failed";
-        }
+      if (!workspace.joinInFlight) workspace.joinInFlight = new Map();
+      const pending = workspace.joinInFlight;
+      const prior = pending.get(meetingUrl);
+      if (prior) {
+        const reused = await prior;
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify(reused));
+        return;
       }
-      if (join === "sent" && workspace.companyLoaded) {
-        const platform = meetingPlatform(meetingUrl);
-        if (platform) {
+      const work = (async () => {
+        let botId = "";
+        let startedAt = "";
+        let status = "not-configured";
+        if (deps.meeting?.join) {
           try {
-            const current = await prepareWorkspace(workspace, "");
-            await handleUtterance({
-              session: current,
-              openedRoom: { platform, id: botId, ...(startedAt ? { startedAt } : {}) },
-            }, depsFor(workspace, ""));
-          } catch {
-            // The door already sent the bot. A missed record does not change that word.
+            const ready = await prepareWorkspace(workspace, "");
+            const guest = normalizeHearing(ready?.hearing).name;
+            const bot = await currentBot(workspace, req);
+            const sent = await deps.meeting.join({ url: meetingUrl, name: guest, botName: bot.name });
+            status = "sent";
+            botId = typeof sent?.id === "string" ? sent.id : "";
+            startedAt = typeof sent?.startedAt === "string" ? sent.startedAt : (typeof sent?.started_at === "string" ? sent.started_at : "");
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "";
+            status = message === "Meeting join is not configured" ? "not-configured" : "failed";
           }
         }
+        if (status === "sent" && workspace.companyLoaded) {
+          const platform = meetingPlatform(meetingUrl);
+          if (platform) {
+            try {
+              const current = await prepareWorkspace(workspace, "");
+              await handleUtterance({
+                session: current,
+                openedRoom: { platform, id: botId, ...(startedAt ? { startedAt } : {}) },
+              }, depsFor(workspace, ""));
+            } catch {
+              // The door already sent the bot. A missed record does not change that word.
+            }
+          }
+        }
+        return { join: status };
+      })();
+      pending.set(meetingUrl, work);
+      try {
+        const result = await work;
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify(result));
+      } finally {
+        // Keep the promise briefly so a double-click shares one bot, then clear.
+        setTimeout(() => {
+          if (pending.get(meetingUrl) === work) pending.delete(meetingUrl);
+        }, 15_000);
       }
-      send(res, 200, "application/json; charset=utf-8", JSON.stringify({ join }));
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/recall") {
