@@ -1,3 +1,4 @@
+import { DEFAULT_BOT_NAME } from "./bot/identity.js";
 import { brandLogo, brandSprite } from "./brand-logos.js";
 import { sederuntMark, FAVICON_LINK } from "./sederunt-mark.js";
 
@@ -23,6 +24,9 @@ export const SLACK_DOCS = "https://docs.slack.dev/ai/slack-mcp-server";
  *   notice?: string,
  *   name?: string,
  *   email?: string,
+ *   renaming?: boolean,
+ *   botName?: string,
+ *   botInvalid?: boolean,
  *   joinable?: Array<{ id: string, name: string }>,
  *   calendar?: { connected?: boolean, meetings?: Array<{ when: string, title: string }>, unavailable?: boolean, autoJoin?: boolean, asked?: boolean },
  *   chat?: { slack?: boolean, channel?: string, asked?: boolean },
@@ -90,7 +94,9 @@ function backLink(href) {
 function workspaceStep(state) {
   const renaming = state.renaming === true;
   const name = String(state.name || "");
-  const invalid = state.error ? ` aria-invalid="true" aria-describedby="ob-error"` : "";
+  const botName = String(state.botName || DEFAULT_BOT_NAME);
+  const invalid = state.error && !state.botInvalid ? ` aria-invalid="true" aria-describedby="ob-error"` : "";
+  const botInvalid = state.botInvalid ? ` aria-invalid="true" aria-describedby="ob-error"` : "";
   const joinable = renaming ? [] : (Array.isArray(state.joinable) ? state.joinable.filter((row) => row && row.id) : []);
   const joins = joinable.length ? `<div class="ob-join" id="ob-joinable">
         <p class="ob-label">Your team is already here</p>
@@ -101,6 +107,11 @@ function workspaceStep(state) {
         </li>`).join("")}</ul>
         <p class="ob-or"><span>or create a new one</span></p>
       </div>` : "";
+  const botFields = renaming ? "" : `
+      <label class="ob-field" for="ob-bot-name"><span class="ob-label">Bot name <span class="ob-optional">optional</span></span>
+        <input id="ob-bot-name" name="bot_name" type="text" value="${escapeAttr(botName)}" maxlength="32" autocomplete="off" spellcheck="false"${botInvalid}>
+      </label>
+      <p class="ob-hint" id="ob-bot-hint">People say this name in a meeting. Leave it as ${escapeText(DEFAULT_BOT_NAME)} if you like. Sederunt stays the product name.</p>`;
   return {
     title: renaming ? "Your workspace" : "Create your workspace",
     sub: renaming
@@ -110,7 +121,7 @@ function workspaceStep(state) {
       <label class="ob-field" for="workspace-name"><span class="ob-label">Workspace name</span>
         <input id="workspace-name" name="name" type="text" value="${escapeAttr(name)}" maxlength="120" autocomplete="organization" required${invalid}>
       </label>
-      <p class="ob-hint">Usually your company or team name.</p>`,
+      <p class="ob-hint">Usually your company or team name.</p>${botFields}`,
     left: state.email ? `<span class="ob-muted" id="ob-signed-in">Signed in as ${escapeText(state.email)}</span>` : "",
     right: `<button class="ob-primary" type="submit" id="ob-continue">Continue</button>`,
   };

@@ -5665,6 +5665,7 @@ body.ob-page {
 .ob-page :is(.ob-primary, .ob-btn, .ob-dark, .ob-link, .ob-x, select, input):focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
 .ob-label { display: block; margin: 0 0 6px; font-size: var(--text-sm); font-weight: var(--weight-medium); }
+.ob-optional { font-weight: var(--weight-regular); color: var(--muted-foreground); }
 .ob-field { display: block; }
 .ob-page input[type="text"], .ob-page select.ob-select {
   height: var(--control-lg); min-height: var(--control-lg); box-sizing: border-box;
@@ -5681,7 +5682,7 @@ body.ob-page {
 }
 .ob-page select.ob-select-sm { height: var(--control-h); min-height: var(--control-h); font-size: var(--text-sm); padding: 0 26px 0 8px; border-color: transparent; background-color: transparent; background-position: right 6px center; }
 .ob-page select.ob-select-sm:hover { background-color: var(--muted); }
-.ob-hint { margin: 8px 0 0; font-size: var(--text-xs); line-height: 1.45; color: var(--muted-foreground); }
+.ob-hint { margin: 8px 0 0; font-size: var(--text-xs); line-height: 1.45; color: var(--muted-foreground); overflow-wrap: anywhere; }
 .ob-field-error { margin: 6px 0 0; font-size: var(--text-xs); color: var(--danger-text); }
 .ob-field-error[hidden] { display: none; }
 
@@ -5814,6 +5815,44 @@ body.ob-page {
 .ob-soon-line { margin: 12px 0 0; font-size: var(--text-xs); line-height: 1.6; color: var(--muted-foreground); }
 .ob-soon-line .ob-soon { margin-right: 4px; }
 
+/* People matching (Account) */
+.match-list { list-style: none; margin: 0; padding: 0 16px 14px; display: grid; gap: 8px; }
+.match-list li { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--border); font-size: var(--text-sm); }
+.match-email { overflow-wrap: anywhere; min-width: 0; }
+.match-user { font-family: var(--font-mono); color: var(--muted-foreground); overflow-wrap: anywhere; }
+.match-source { font-size: var(--text-xs); color: var(--muted-foreground); text-transform: capitalize; }
+.match-override { grid-column: 1 / 3; display: flex; gap: 8px; align-items: center; font-size: var(--text-xs); color: var(--muted-foreground); min-width: 0; }
+.match-override input { flex: 1; min-width: 0; }
+.match-list li > button { grid-column: 3; }
+@media (max-width: 640px) {
+  .match-list li { grid-template-columns: minmax(0, 1fr) auto; }
+  .match-email { grid-column: 1 / -1; }
+  .match-override { grid-column: 1 / -1; }
+  .match-list li > button { grid-column: 1 / -1; justify-self: start; }
+}
+
+/* Account bot name and wake phrases */
+#bot-card { min-width: 0; }
+#bot-card .bot-fields { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 0; }
+#bot-card .bot-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: var(--text-sm); font-weight: var(--weight-medium); }
+#bot-card .bot-label { font-size: var(--text-sm); font-weight: var(--weight-medium); }
+#bot-card .bot-phrase-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+#bot-card .bot-phrase-row { display: flex; gap: 8px; align-items: center; min-width: 0; }
+#bot-card .bot-phrase-row input { flex: 1 1 0; width: auto; min-width: 0; }
+#bot-card .bot-phrase-row .secondary { flex: none; }
+#bot-card .bot-preview,
+#bot-card .bot-note,
+#bot-card .card-help { overflow-wrap: anywhere; min-width: 0; }
+#bot-card .bot-preview,
+#bot-card .bot-note { margin: 0; font-size: var(--text-sm); color: var(--muted-foreground); }
+#bot-card .bot-field-error { margin: 0; font-size: var(--text-xs); color: var(--danger-text); }
+#bot-card .bot-field-error[hidden] { display: none; }
+#bot-card input:disabled { opacity: 1; background: var(--muted); color: var(--foreground); }
+@media (max-width: 480px) {
+  #bot-card .bot-phrase-row { flex-wrap: wrap; }
+  #bot-card .bot-phrase-row input { flex: 1 1 100%; width: 100%; }
+  #bot-card .bot-phrase-row .secondary { width: 100%; }
+}
 
 /* pm-roast-2 round 2: failed rows keep their text wide on phones; presets read like connector cards on desktop. */
 @media (max-width: 767px) {

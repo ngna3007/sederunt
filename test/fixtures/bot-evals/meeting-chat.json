@@ -1,0 +1,74 @@
+[
+  {
+    "id": "meeting-chat-short-good",
+    "rule": "meeting_short",
+    "mode": "meeting_chat",
+    "expect": "pass",
+    "messages": [
+      { "role": "user", "text": "Where are the notes?" },
+      { "role": "assistant", "text": "The retro is Thursday. https://docs.google.com/document/d/retro" }
+    ]
+  },
+  {
+    "id": "meeting-chat-short-bad",
+    "rule": "meeting_short",
+    "mode": "meeting_chat",
+    "expect": "fail",
+    "messages": [
+      { "role": "user", "text": "Where are the notes?" },
+      { "role": "assistant", "text": "The retro is Thursday at 3pm in the booth. The retro is Thursday at 3pm in the booth. The retro is Thursday at 3pm in the booth. The retro is Thursday at 3pm in the booth. The retro is Thursday at 3pm in the booth. The retro is Thursday at 3pm in the booth. The retro is Thursday at 3pm in the booth. The retro is Thursday at 3pm in the booth." }
+    ]
+  },
+  {
+    "id": "meeting-chat-answer-first-good",
+    "rule": "answer_first",
+    "mode": "meeting_chat",
+    "expect": "pass",
+    "messages": [
+      { "role": "user", "text": "When is the retro?" },
+      { "role": "assistant", "text": "Thursday at 3pm." }
+    ]
+  },
+  {
+    "id": "meeting-chat-answer-first-bad",
+    "rule": "answer_first",
+    "mode": "meeting_chat",
+    "expect": "fail",
+    "messages": [
+      { "role": "user", "text": "When is the retro?" },
+      { "role": "assistant", "text": "Great question! You asked when the retro is. Hope this helps!" }
+    ]
+  },
+  {
+    "id": "meeting-chat-confirm-good",
+    "rule": "confirm_writes",
+    "mode": "meeting_chat",
+    "expect": "pass",
+    "context": { "writeRequested": true },
+    "messages": [
+      { "role": "user", "text": "Create the form." },
+      { "role": "assistant", "text": "I'll create the form once you approve." }
+    ]
+  },
+  {
+    "id": "meeting-chat-confirm-bad",
+    "rule": "confirm_writes",
+    "mode": "meeting_chat",
+    "expect": "fail",
+    "context": { "writeRequested": true },
+    "messages": [
+      { "role": "user", "text": "Create the form." },
+      { "role": "assistant", "text": "Done. I created the form." }
+    ]
+  },
+  {
+    "id": "meeting-chat-no-broadcast-bad",
+    "rule": "no_broadcast",
+    "mode": "meeting_chat",
+    "expect": "fail",
+    "messages": [
+      { "role": "user", "text": "Tell the room." },
+      { "role": "assistant", "text": "Thursday at 3pm. @here" }
+    ]
+  }
+]

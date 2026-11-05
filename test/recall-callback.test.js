@@ -204,8 +204,18 @@ test("join sends one bot to the public camera page and a failed join omits the k
   assert.equal(sent[0].init.headers.authorization, `Token ${key}`);
   const body = JSON.parse(sent[0].init.body);
   assert.equal(body.meeting_url, "https://meet.google.com/abc-defg-hij");
-  assert.equal(body.bot_name, "Maple");
+  assert.equal(body.bot_name, "Adam");
   assert.equal(body.output_media.camera.config.url, "https://sederunt.example/meeting?name=Maple");
+  sent.length = 0;
+  await createMeetingAdapter(env, {
+    async fetch(url, init) {
+      sent.push({ url, init });
+      return { ok: true, async text() { return JSON.stringify({ id: "bot-2" }); } };
+    },
+  }).join({ ...meeting, name: "Maple", botName: "Mai" });
+  const renamed = JSON.parse(sent[0].init.body);
+  assert.equal(renamed.bot_name, "Mai");
+  assert.equal(renamed.output_media.camera.config.url, "https://sederunt.example/meeting?name=Maple");
   assert.deepEqual(body.recording_config, {
     video_mixed_mp4: {},
     transcript: {

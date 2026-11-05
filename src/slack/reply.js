@@ -74,6 +74,7 @@ export async function postSlackReply(input) {
   if (file?.name && file.bytes != null) {
     return postSlackFile({ token, channel, text, thread: input.thread, file, fetchImpl });
   }
+  const speaker = typeof input.username === "string" ? input.username.trim() : "";
   const response = await fetchImpl("https://slack.com/api/chat.postMessage", {
     method: "POST",
     headers: {
@@ -84,6 +85,7 @@ export async function postSlackReply(input) {
       channel,
       text,
       thread_ts: input.thread || undefined,
+      ...(speaker ? { username: speaker } : {}),
     }),
   });
   return { posted: response.ok, file: "" };

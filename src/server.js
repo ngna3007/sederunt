@@ -40,6 +40,8 @@ import { createIdentity, identityConfigured } from "./identity/client.js";
 import { clearOAuthCookie } from "./identity/pending.js";
 import { handleAuthRoute, requestOrigin } from "./identity/routes.js";
 import { refreshOAuthSession, rememberRefreshCookie } from "./identity/session.js";
+import { createMemoryPreferenceStore } from "./bot/preferences.js";
+import { canEditBot, handleBotSettings, readBot } from "./console/bot-settings.js";
 import { handleToolPref, loadAccountProfile, loadToolAsk } from "./console-account.js";
 import { handleInvite, handleJoinLink, handleSpaceSwitch, handleWelcome, loadChecklist, loadSpaceView, welcomeLocation } from "./console-flow.js";
 import { roleLabel } from "./identity/onboarding.js";
@@ -278,6 +280,7 @@ function fileFrom(file) {
 export function createApp(options = {}) {
   const session = options.session ?? createSession();
   const env = options.env ?? process.env;
+  const botPreferences = options.botPreferences ?? createMemoryPreferenceStore();
   const deps = options.deps ?? defaultDeps({
     liveLinear: options.liveLinear === true,
     loadToken: options.loadToken,
@@ -308,8 +311,11 @@ export function createApp(options = {}) {
     companyLoaded: loadedCompany(options, deps, env, companies),
     linearReady: options.linearReady === true || (options.env ? false : linearReady()),
     recall: options.recall || null,
+    botPreferences,
+    identity: null,
   };
   const identity = options.identity ?? (identityConfigured(env) ? createIdentity(env) : null);
+  workspace.identity = identity;
   workspace.forms = createFormsApp({ env, fetchImpl: options.fetch });
   workspace.googleGrants = options.googleGrants || createPersonGoogleStore({ env, fetchImpl: options.fetch });
   workspace.calendarMcp = createFakeCalendarMcp();
@@ -533,6 +539,22 @@ export function createApp(options = {}) {
       send(res, 200, "text/javascript; charset=utf-8", source);
       return;
     }
+    if (req.method === "GET" && url.pathname === "/console/bot-identity.js") {
+      const source = await readFile(resolve("src/bot/identity.js"));
+      send(res, 200, "text/javascript; charset=utf-8", source);
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/console/bot-card.js") {
+      const source = await readFile(resolve("src/console/bot-card.js"));
+      send(res, 200, "text/javascript; charset=utf-8", source);
+      return;
+    }
+    if (url.pathname === "/api/bot") {
+      await handleBotSettings({
+        req, res, url, env, identity, send, readJson, store: workspace.botPreferences,
+      });
+      return;
+    }
     if (req.method === "GET" && url.pathname === "/api/activity") {
       const gate = guardConsole(req, env);
       if (!gate.session) {
@@ -578,6 +600,7 @@ export function createApp(options = {}) {
       await handleWelcome({
         req, res, url, env, identity, send, redirect,
         readPosted: readPostedAll,
+        botPreferences: workspace.botPreferences,
         calendar: workspace.deps.calendar,
         doors: doorReport(env, workspace.linearReady === true),
         slack: workspace.deps.slack,
@@ -677,6 +700,17 @@ export function createApp(options = {}) {
       const accountProfile = oauth ? await loadAccountProfile(identity, gate.session, spaces) : null;
       const toolAsk = oauth ? await loadToolAsk(identity, gate.session, connectedDoors || {}, env) : null;
       const checklist = oauth && url.pathname === "/console" ? await loadChecklist(identity, gate.session, spaces, toolAsk) : null;
+      const botTenant = spaces?.activeId || "local";
+      const botView = await readBot(workspace.botPreferences, botTenant);
+      const bot = {
+        ...botView,
+        canEdit: canEditBot({
+          signedIn: Boolean(gate.session),
+          oauth: Boolean(spaces?.oauth),
+          role: spaces?.activeRole || "",
+          authRequired: gate.required,
+        }),
+      };
       send(res, status, "text/html; charset=utf-8", renderConsolePage({
         meeting: doors.meeting,
         meetingSetup: !env.SEDERUNT_PUBLIC_ORIGIN
@@ -700,6 +734,7 @@ export function createApp(options = {}) {
         checklist,
         accountProfile,
         toolAsk,
+        bot,
       }));
       return;
     }
@@ -787,7 +822,8 @@ export function createApp(options = {}) {
         try {
           const ready = await prepareWorkspace(workspace, "");
           const guest = normalizeHearing(ready?.hearing).name;
-          const sent = await deps.meeting.join({ url: meetingUrl, name: guest });
+          const bot = await currentBot(workspace, req);
+          const sent = await deps.meeting.join({ url: meetingUrl, name: guest, botName: bot.name });
           join = "sent";
           botId = typeof sent?.id === "string" ? sent.id : "";
           startedAt = typeof sent?.startedAt === "string" ? sent.startedAt : (typeof sent?.started_at === "string" ? sent.started_at : "");
@@ -979,6 +1015,7 @@ export function createApp(options = {}) {
       const liveAck = parsed.type === "event_callback" && Boolean(env.SLACK_BOT_TOKEN) && !deps.slack;
       const slackWork = (async () => {
       const current = await prepareWorkspace(workspace, companyId);
+      const botName = (await currentBot(workspace, req)).name;
       try {
         const delivery = slackDelivery(event);
         const question = delivery.intent !== "delete" && slackQuestion(delivery.text);
@@ -1006,6 +1043,7 @@ export function createApp(options = {}) {
                   fetchImpl: deps.slack?.fetch,
                   channel,
                   text: "The file did not arrive.",
+                  username: botName,
                 });
               }
               replyHttp(200, "application/json; charset=utf-8", JSON.stringify({
@@ -1031,6 +1069,7 @@ export function createApp(options = {}) {
               fetchImpl: deps.slack?.fetch,
               channel,
               text: `Kept ${storedFile.name}.`,
+              username: botName,
             });
           }
         }
@@ -1043,6 +1082,7 @@ export function createApp(options = {}) {
             text: answer.text,
             file: answer.file && bytes != null ? { name: answer.file, bytes } : undefined,
             thread: typeof event.thread_ts === "string" ? event.thread_ts : "",
+            username: botName,
           };
           if (typeof deps.slack?.postMessage === "function") await deps.slack.postMessage(reply);
           if (env.SLACK_BOT_TOKEN) {
@@ -1053,6 +1093,7 @@ export function createApp(options = {}) {
               text: reply.text,
               thread: reply.thread,
               file: reply.file,
+              username: reply.username,
             });
           }
         }
@@ -1318,6 +1359,16 @@ function sessionFor(workspace, companyId) {
 function depsFor(workspace, companyId) {
   if (!workspace.companies) return workspace.deps;
   return { ...workspace.deps, memory: workspace.companies[companyKey(workspace, companyId)] };
+}
+
+async function currentBot(workspace, req) {
+  const gate = guardConsole(req, workspace.env);
+  let tenantId = "local";
+  if (workspace.identity && gate.session?.kind === "oauth") {
+    const spaces = await loadSpaceView(workspace.identity, gate.session);
+    if (spaces?.activeId) tenantId = spaces.activeId;
+  }
+  return readBot(workspace.botPreferences, tenantId);
 }
 
 async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0) {

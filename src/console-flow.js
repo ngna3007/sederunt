@@ -11,6 +11,12 @@ import { calendarTimeZone } from "./calendar/mcp.js";
 import { renderFlowMessage, renderInvitePage, renderWelcomePage } from "./console-welcome.js";
 import { requestOrigin } from "./identity/routes.js";
 import {
+  DEFAULT_BOT_NAME,
+  defaultWakePhrases,
+  saveBotIdentity,
+  validateBotName,
+} from "./bot/identity.js";
+import {
   activeSpace,
   identityMessage,
   needsOnboarding,
@@ -159,6 +165,8 @@ async function renderWorkspaceStep(ctx, session, extra) {
     renaming: Boolean(renaming),
     email: session.email,
     name: typeof extra.name === "string" ? extra.name : (renaming?.name || suggestedWorkspaceName({ name: session.name, email: session.email })),
+    botName: typeof extra.botName === "string" ? extra.botName : DEFAULT_BOT_NAME,
+    botInvalid: extra.botInvalid === true,
     joinable,
     error: extra.error || "",
   });
@@ -373,9 +381,27 @@ async function renameWorkspace(ctx, session, active, body) {
 
 async function createWorkspace(ctx, session, body) {
   const { req, res, redirect, identity, env } = ctx;
-  const named = validateSpaceName(one(body.name));
+  const typedName = one(body.name);
+  const typedBot = one(body.bot_name).trim();
+  const named = validateSpaceName(typedName);
+  const botNamed = validateBotName(typedBot || DEFAULT_BOT_NAME);
   if (named.error) {
-    await renderWorkspaceStep(ctx, session, { status: 400, name: one(body.name), error: named.error });
+    await renderWorkspaceStep(ctx, session, {
+      status: 400,
+      name: typedName,
+      botName: typedBot || DEFAULT_BOT_NAME,
+      error: named.error,
+    });
+    return;
+  }
+  if (!botNamed.ok) {
+    await renderWorkspaceStep(ctx, session, {
+      status: 400,
+      name: named.name,
+      botName: typedBot,
+      botInvalid: true,
+      error: botNamed.error,
+    });
     return;
   }
   try {
@@ -385,11 +411,27 @@ async function createWorkspace(ctx, session, body) {
     } catch {
       // The workspace exists, which is what Home checks.
     }
+    if (botNamed.name !== DEFAULT_BOT_NAME && ctx.botPreferences) {
+      try {
+        await saveBotIdentity(ctx.botPreferences, {
+          tenantId,
+          name: botNamed.name,
+          phrases: defaultWakePhrases(botNamed.name),
+        });
+      } catch {
+        // The workspace exists. The name can be set on Account.
+      }
+    }
     const cookie = resealOAuth(req, env, session, { onboarded: true, tenantId });
     const from = one(body.from);
     redirect(res, from === "switcher" ? "/console/welcome?step=team&mode=manage" : "/console/welcome?step=calendar", { "set-cookie": cookie });
   } catch (error) {
-    await renderWorkspaceStep(ctx, session, { status: 400, name: named.name, error: identityMessage(error) });
+    await renderWorkspaceStep(ctx, session, {
+      status: 400,
+      name: named.name,
+      botName: botNamed.name,
+      error: identityMessage(error),
+    });
   }
 }
 

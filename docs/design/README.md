@@ -26,6 +26,8 @@ shaped that way.
 - [activity-log.md](./activity-log.md) — one event shape for every request and its effect.
 - [workspace.md](./workspace.md) — the operator workspace. Shell, home, and history.
 - [rooms.md](./rooms.md) — bringing the bot into a room, and the room dialog.
+- [bot-behavior.md](./bot-behavior.md) — how Sederunt speaks in a meeting, in meeting chat, and in Slack.
+- [meeting-followups.md](./meeting-followups.md) — invitee matching, the action DM, and where minutes go.
 - [design-system.md](./design-system.md) — tokens and components for the console, sign-in, and onboarding.
 
 ## When to read

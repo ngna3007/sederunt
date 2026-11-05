@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { DEFAULT_BOT_NAME, normalizeBotName } from "../bot/identity.js";
 import { addressesHearing, normalizeHearing } from "../hearing.js";
 
 /**
@@ -64,6 +65,7 @@ export function createMeetingAdapter(env = process.env, options = {}) {
       const key = typeof env.RECALL_API_KEY === "string" ? env.RECALL_API_KEY : "";
       const meetingUrl = httpsUrl(input?.url);
       const guest = normalizeHearing({ name: input?.name }).name;
+      const botName = normalizeBotName(input?.botName) || DEFAULT_BOT_NAME;
       const cameraUrl = cameraPage(env.SEDERUNT_PUBLIC_ORIGIN, guest);
       if (!key || !env.RECALL_WEBHOOK_SECRET || !meetingUrl || !cameraUrl) throw new Error("Meeting join is not configured");
       let response;
@@ -77,7 +79,7 @@ export function createMeetingAdapter(env = process.env, options = {}) {
           },
           body: JSON.stringify({
             meeting_url: meetingUrl,
-            bot_name: guest,
+            bot_name: botName,
             output_media: {
               camera: { kind: "webpage", config: { url: cameraUrl } },
             },

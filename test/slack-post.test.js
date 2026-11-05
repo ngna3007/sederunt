@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createSlackClient } from "../src/slack/post.js";
+import { postSlackReply } from "../src/slack/reply.js";
 import { parseUtterance } from "../src/parse.js";
 import { rankDecisions } from "../src/room-match.js";
 
@@ -53,6 +54,35 @@ test("a channel name resolves from conversations.list or the default channel", a
   assert.equal(await slack.channelLabel("#design"), "design");
   assert.equal(await slack.channelLabel("C0MISSING"), "");
   assert.equal(await fallback.channelLabel("CDEFAULT"), "");
+});
+
+test("a slack post and reply can carry the bot display name", async () => {
+  const bodies = [];
+  const fetchImpl = async (url, init = {}) => {
+    if (String(url).endsWith("chat.postMessage")) {
+      bodies.push(JSON.parse(init.body));
+      return { ok: true, status: 200, json: async () => ({ ok: true, channel: "C0123", ts: "1710000000.000100" }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ ok: true, permalink: "https://sederunt.slack.com/archives/C0123/p1" }) };
+  };
+  await createSlackClient({ SLACK_BOT_TOKEN: "xoxb-test" }, fetchImpl).postMessage({
+    channel: "C0123",
+    text: "Booth notes",
+    username: "Mai",
+  });
+  await postSlackReply({
+    token: "xoxb-test",
+    fetchImpl,
+    channel: "C0123",
+    text: "Booth notes",
+    thread: "1710000000.000100",
+    username: "Mai",
+  });
+  assert.equal(bodies.length, 2);
+  assert.equal(bodies[0].username, "Mai");
+  assert.equal(bodies[1].username, "Mai");
+  assert.equal(bodies[0].text, "Booth notes");
+  assert.equal(bodies[1].thread_ts, "1710000000.000100");
 });
 
 test("a permalink falls back to the archive url", async () => {

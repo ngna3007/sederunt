@@ -1,0 +1,109 @@
+[
+  {
+    "id": "minutes-shape-good",
+    "rule": "minutes_shape",
+    "mode": "slack",
+    "expect": "pass",
+    "context": { "kind": "minutes" },
+    "messages": [
+      { "role": "user", "text": "Send the minutes." },
+      { "role": "assistant", "text": "TL;DR: Ship the booth on Friday.\n\n*Decisions*\n• Ship the booth on Friday (12:04)\n\n*Action items*\n• Order the banners — <@U04MAI>, Thursday (12:10)\n\n*Open questions*\n• Who prints the map?" }
+    ]
+  },
+  {
+    "id": "minutes-shape-bad",
+    "rule": "minutes_shape",
+    "mode": "slack",
+    "expect": "fail",
+    "context": { "kind": "minutes" },
+    "messages": [
+      { "role": "user", "text": "Send the minutes." },
+      { "role": "assistant", "text": "TL;DR: Too many decisions.\n\n*Decisions*\n• One (12:01)\n• Two (12:02)\n• Three (12:03)\n• Four (12:04)\n• Five (12:05)\n• Six (12:06)\n\n*Action items*\n• Order the banners — <@U04MAI>, Thursday (12:10)" }
+    ]
+  },
+  {
+    "id": "minutes-cite-good",
+    "rule": "cite_transcript",
+    "mode": "slack",
+    "expect": "pass",
+    "context": { "kind": "minutes" },
+    "messages": [
+      { "role": "user", "text": "Send the minutes." },
+      { "role": "assistant", "text": "TL;DR: Ship the booth on Friday.\n\n*Decisions*\n• Ship the booth on Friday (12:04)\n\n*Action items*\n• Order the banners — <@U04MAI>, Thursday (12:10)" }
+    ]
+  },
+  {
+    "id": "minutes-cite-bad",
+    "rule": "cite_transcript",
+    "mode": "slack",
+    "expect": "fail",
+    "context": { "kind": "minutes" },
+    "messages": [
+      { "role": "user", "text": "Send the minutes." },
+      { "role": "assistant", "text": "TL;DR: Ship the booth on Friday.\n\n*Decisions*\n• Ship the booth on Friday\n\n*Action items*\n• Order the banners — <@U04MAI>, Thursday" }
+    ]
+  },
+  {
+    "id": "minutes-owner-good",
+    "rule": "no_invented_owner",
+    "mode": "slack",
+    "expect": "pass",
+    "context": { "kind": "minutes", "unclearOwner": true, "unclearDue": true },
+    "messages": [
+      { "role": "user", "text": "Send the minutes." },
+      { "role": "assistant", "text": "TL;DR: Someone should order banners.\n\n*Decisions*\n• Order banners later (12:04)\n\n*Action items*\n• Order the banners — owner?, due? (12:04)" }
+    ]
+  },
+  {
+    "id": "minutes-owner-bad",
+    "rule": "no_invented_owner",
+    "mode": "slack",
+    "expect": "fail",
+    "context": { "kind": "minutes", "unclearOwner": true, "unclearDue": true },
+    "messages": [
+      { "role": "user", "text": "Send the minutes." },
+      { "role": "assistant", "text": "TL;DR: Someone should order banners.\n\n*Decisions*\n• Order banners later (12:04)\n\n*Action items*\n• Order the banners — <@U04FAKE>, Friday (12:04)" }
+    ]
+  },
+  {
+    "id": "action-dm-good",
+    "rule": "action_dm",
+    "mode": "slack",
+    "expect": "pass",
+    "context": { "kind": "action_dm", "wherePhrase": "in your Google Drive" },
+    "messages": [
+      { "role": "user", "text": "Create the retro form." },
+      {
+        "role": "assistant",
+        "text": "Create Google Form 'Retro' in your Google Drive",
+        "blocks": [
+          {
+            "type": "section",
+            "block_id": "form-retro",
+            "text": { "type": "mrkdwn", "text": "Create Google Form 'Retro' in your Google Drive" }
+          },
+          {
+            "type": "actions",
+            "block_id": "form-retro-actions",
+            "elements": [
+              { "type": "button", "text": { "type": "plain_text", "text": "Approve" }, "action_id": "approve:form-retro", "value": "form-retro" },
+              { "type": "button", "text": { "type": "plain_text", "text": "Edit" }, "action_id": "edit:form-retro", "value": "form-retro" },
+              { "type": "button", "text": { "type": "plain_text", "text": "Skip" }, "action_id": "skip:form-retro", "value": "form-retro" }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "action-dm-bad",
+    "rule": "action_dm",
+    "mode": "slack",
+    "expect": "fail",
+    "context": { "kind": "action_dm", "wherePhrase": "in your Google Drive" },
+    "messages": [
+      { "role": "user", "text": "Create the retro form." },
+      { "role": "assistant", "text": "I can make a form if you want, somewhere." }
+    ]
+  }
+]
