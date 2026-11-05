@@ -25,6 +25,7 @@ export const DECISION_COLUMNS = ["Decision", "Room", "Status", ""];
  * @param {{ meeting?: boolean, meetingSetup?: string, slackReady?: boolean, signedIn?: boolean, accountName?: string, accountMember?: string, accountLine?: string, spaces?: object | null, accountProfile?: object | null, toolAsk?: object | null }} [state]
  */
 export function renderConsolePage(state = {}) {
+  const askDaily = Number.isInteger(state.askLimit) && state.askLimit >= 0 ? state.askLimit : 5;
   const signedIn = state.signedIn === true;
   const accountMember = String(state.accountMember || "").trim();
   const givenName = String(state.accountName || "").trim();
@@ -447,7 +448,7 @@ ${slack}
       </div>
     </section>
     <section id="chat" hidden>
-      <div class="page-head"><div><p class="page-title">Ask AI</p><p class="page-lede">Ask about your meetings and decisions. Answers come only from what this workspace kept, with the sources shown.</p></div><div class="page-actions"><span id="ask-quota" class="ask-quota" hidden></span></div></div>
+      <div class="page-head"><div><p class="page-title">Ask AI</p><p class="page-lede">Ask about your meetings and decisions. Answers come only from what this workspace kept, with the sources shown.</p></div><div class="page-actions"><span id="ask-quota" class="ask-quota ask-quota-pending" role="status">${askDaily} questions a day</span></div></div>
       <div class="talk-panel ai-chat">
         <div class="thread" id="chat-log">
           <div id="chat-empty" class="chat-hello">
@@ -458,10 +459,11 @@ ${slack}
         </div>
         <p id="chat-next-row" class="section-next"><button id="chat-next" class="primary" type="button" hidden>New room</button></p>
         <form id="chat-form" class="composer">
+          <p class="ask-out" id="ask-out" role="status" hidden><strong>No questions left today.</strong> <span id="ask-out-copy">You've used all ${askDaily}. They come back at midnight.</span></p>
           <label><span class="sr">Ask the workspace</span><textarea id="chat-text" name="chat" rows="1" placeholder="Ask about a meeting or decision"></textarea></label>
           <button class="primary" type="submit" aria-label="Ask">Ask</button>
         </form>
-        <p class="composer-hint">Enter sends. Shift+Enter adds a line.</p>
+        <p class="composer-hint" id="chat-hint">Enter sends. Shift+Enter adds a line.</p>
       </div>
     </section>
     <section id="record" hidden>
@@ -719,7 +721,7 @@ ${slack}
       <button type="button" class="close" data-close="ask-ai-dialog" aria-label="Close">${closeIcon}</button>
     </div>
     <div class="panel-body">
-      <p id="ask-limit-copy">Each person gets 5 Ask AI questions a day. They come back at midnight.</p>
+      <p id="ask-limit-copy">Each person gets ${askDaily} Ask AI questions a day. They come back at midnight.</p>
       <p class="meta">To keep asking now, plug your own agent in under Connectors (MCP).</p>
       <div class="wait-actions">
         <button type="button" class="secondary" id="ask-ai-kept" data-close="ask-ai-dialog">Close</button>
@@ -6338,7 +6340,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (!quiet) placeChatAnswer((pending && pending.querySelector(".cite-row")) || pending);
   }
 
-  var askState = { limit: 5, remaining: null, live: false, loaded: false, resetAt: "", streams: {} };
+  var askState = { limit: ${askDaily}, remaining: null, live: false, loaded: false, resetAt: "", streams: {} };
   function askResetLabel() {
     return "They come back at midnight.";
   }
@@ -6346,11 +6348,27 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var pill = document.getElementById("ask-quota");
     var input = document.getElementById("chat-text");
     var button = document.querySelector("#chat-form button[type=submit]");
-    if (!pill || !askState || askState.remaining === null) return;
+    if (!pill || !askState) return;
+    // Before /api/ask answers, the pill keeps the server-rendered daily allowance, never blank.
+    if (askState.remaining === null) {
+      pill.hidden = false;
+      pill.textContent = askState.limit + " questions a day";
+      return;
+    }
     var out = askState.remaining <= 0;
     pill.hidden = false;
+    pill.classList.remove("ask-quota-pending");
     pill.textContent = out ? "No questions left today" : (askState.remaining + " of " + askState.limit + " questions left today");
     pill.classList.toggle("ask-quota-out", out);
+    // Out of questions: say so beside the composer instead of waiting for a refused send.
+    var outNote = document.getElementById("ask-out");
+    var outCopy = document.getElementById("ask-out-copy");
+    var hint = document.getElementById("chat-hint");
+    if (outCopy) outCopy.textContent = "You've used all " + askState.limit + ". " + askResetLabel();
+    if (outNote) outNote.hidden = !out;
+    if (hint) hint.hidden = out;
+    var composer = document.getElementById("chat-form");
+    if (composer) composer.classList.toggle("composer-out", out);
     if (input) {
       input.disabled = out;
       input.placeholder = out ? "No questions left. Back at midnight." : "Ask about a meeting or decision";

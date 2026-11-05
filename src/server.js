@@ -776,6 +776,7 @@ export function createApp(options = {}) {
           : (gate.session ? "Owner" : "Sign-in is not set up"),
         accountExpiry: gate.session?.exp || 0,
         calendarTimeZone: calendarTimeZone(env),
+        askLimit: askLimit(env),
         spaces,
         checklist,
         accountProfile,

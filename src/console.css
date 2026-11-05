@@ -6219,6 +6219,20 @@ body.room-open .room-right .kv dt { padding-right: 12px; }
   white-space: nowrap;
 }
 .ask-quota-out { color: var(--foreground); background: var(--muted); }
+.ask-quota-pending { color: var(--muted-foreground); }
+.ask-out {
+  margin: 8px 0 0;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+}
+.ask-out strong { color: var(--foreground); font-weight: var(--weight-semibold); }
+.ask-out[hidden], #chat-hint[hidden] { display: none; }
+#chat-form.composer-out { flex-wrap: wrap; }
+#chat-form .ask-out { flex: 1 0 100%; margin: 0; }
 #chat .chat-you .chat-body {
   padding: 8px 14px;
   border-radius: 16px 16px 4px 16px;
