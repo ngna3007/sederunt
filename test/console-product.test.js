@@ -213,7 +213,8 @@ test("the console is the workspace and the room page redirects", async () => {
     assert.equal(board.counts.waiting, 0);
     assert.equal(board.counts.sent, 0);
     assert.equal(board.counts.failed, 0);
-    assert.equal(state.raw.includes("blobId"), false);
+    assert.equal(typeof board.decisions[0].blobId, "string");
+    assert.equal(board.decisions[0].proofStatus, "unknown");
     assert.equal(state.raw.includes("consoleFileId"), false);
     noSecret(state.raw);
   } finally {
@@ -1024,7 +1025,8 @@ test("a personal workspace keeps the private note and has no room", async () => 
     assert.equal(personal.decisions[0].roomId, "");
     assert.equal(JSON.stringify(personal).includes("booth opens"), false);
     assert.equal(JSON.stringify(personal).includes("venue ticket"), false);
-    assert.equal(JSON.stringify(personal).includes("blobId"), false);
+    assert.equal(typeof personal.decisions[0].blobId, "string");
+    assert.equal(personal.decisions[0].proofStatus, "unknown");
     noSecret(JSON.stringify(personal));
 
     const hidden = JSON.parse((await get(port, "/api/console?member=henry&workspace=personal")).raw);
@@ -1391,8 +1393,9 @@ test("a named file stays in Console, the proof is read, and the epoch is not ren
     assert.equal(raw.includes("file-secret"), false);
     assert.equal(raw.includes("folder-secret"), false);
     assert.equal(raw.includes("PDFBYTES"), false);
-    assert.equal(raw.includes("0xaaaaaaaa"), false);
-    noSecret(raw);
+    assert.equal(board.decisions[0].proof.objectId, "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    assert.match(raw, /https:\/\/suiscan\.xyz\/mainnet\/object\/0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/);
+    assert.equal(board.chain.transport, "tatum-grpc");
   } finally {
     await close(first);
   }
@@ -1504,7 +1507,9 @@ test("a later expiry copy does not clear the epoch already observed", async () =
   assert.equal(proved.decisions[0].expiryEpoch, 420);
   assert.deepEqual(proved.decisions[0].fileNames, [{ name: "brief.pdf" }]);
   assert.equal(JSON.stringify(proved).includes("file-secret"), false);
-  assert.equal(JSON.stringify(proved).includes("blob-sentence"), false);
+  assert.equal(proved.decisions[0].blobId, "blob-sentence");
+  assert.equal(proved.decisions[0].proof.blobId, "blob-sentence");
+  assert.equal(proved.decisions[0].proofStatus, "unknown");
   const unknown = await readProofs(session, companyBoard(session, "mina"), {
     async getObject() {
       throw new Error("Tatum read failed");

@@ -233,7 +233,7 @@ test("a read-only console key is rejected before any upload", async () => {
 
 test("the six adapters own their calls and do not open the network when unconfigured", async () => {
   const env = {};
-  await assert.rejects(() => createTatumReader(env).getObject("blob-1"), /Tatum read failed/);
+  await assert.rejects(() => createTatumReader(env).getObject("blob-1"), /Tatum key not set/);
   assert.deepEqual(await createCalendarAdapter(env).listTools(), []);
   await assert.rejects(() => createConsoleAdapter({ apiKey: "", scope: "" }).upload({ name: "a.txt" }), /not configured/);
   await assert.rejects(() => createMeetingAdapter(env).join(), /not configured/);

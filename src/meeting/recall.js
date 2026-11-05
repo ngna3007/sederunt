@@ -122,6 +122,24 @@ export function createMeetingAdapter(env = process.env, options = {}) {
  *
  * @param {unknown} payload
  */
+/**
+ * A meeting is over when Recall says the bot is done and names that bot.
+ * A bare `{ event: "bot.done" }` has no room, so it is not an ending.
+ *
+ * @param {unknown} payload
+ */
+export function meetingEnded(payload) {
+  const root = payload && typeof payload === "object" ? payload : {};
+  const event = typeof root.event === "string" ? root.event : "";
+  if (event !== "bot.done" && event !== "bot.status_change") return null;
+  const data = root.data && typeof root.data === "object" ? root.data : {};
+  const status = typeof data.status === "string" ? data.status : (data.status?.code || "");
+  if (event === "bot.status_change" && status !== "done" && status !== "call_ended") return null;
+  const botId = data.bot?.id || data.bot_id || root.bot?.id || "";
+  if (typeof botId !== "string" || !botId.trim()) return null;
+  return { roomId: botId.trim() };
+}
+
 export function recallTranscriptDelivery(payload) {
   const root = payload && typeof payload === "object" ? payload : {};
   const data = root.data && typeof root.data === "object" ? root.data : root;

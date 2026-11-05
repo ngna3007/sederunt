@@ -53,7 +53,9 @@ test("meeting words separate live, ended, channel, and silence", () => {
   assert.match(page, /id="decision-room"/);
   assert.match(page, /id="decision-copy"/);
   assert.doesNotMatch(page, /No checkpoint was returned/);
-  assert.match(page, /Kept at checkpoint/);
+  assert.match(page, /Verified on Walrus/);
+  assert.match(page, /Show technical details/);
+  assert.equal(page.slice(page.indexOf('id="right-overview"'), page.indexOf('id="right-decisions"')).includes('id="proof-panel"'), false);
   assert.match(page, /1 change did not go through/);
   assert.match(page, /changes did not go through/);
   assert.doesNotMatch(page, /No room yet\./);
@@ -681,7 +683,7 @@ test("list columns share a gap and history rows stay compact", async (t) => {
     assert.equal(detail.overflow, false, `dialog ${width} overflows`);
     assert.equal(detail.sentenceClip, false, `sentence clipped at ${width}`);
     assert.equal(detail.otherClip, false, `clash clipped at ${width}`);
-    assert.match(detail.heard, new RegExp(opened.when.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(detail.heard, new RegExp(opened.when.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
     assert.match(detail.other, /Clashes with: The booth opens at nine.+\(rowan, \d{1,2}:\d{2} [AP]M\)/);
     assert.equal(detail.proofHidden, true, detail.proof);
     assert.equal(detail.proof, "");

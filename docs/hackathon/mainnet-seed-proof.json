@@ -1,0 +1,272 @@
+{
+  "network": "sui-mainnet",
+  "namespace": "sederunt",
+  "writer": "MemWal managed relayer (relayer.memory.walrus.xyz); the relayer paid WAL and SUI, no owner-wallet transaction",
+  "reader": "Tatum gRPC gateway (sui-mainnet-grpc.gateway.tatum.io), free plan, about 3 requests/s",
+  "seededAt": "2026-11-04, 23:43 to 23:50 UTC+7 (checkpoint times)",
+  "written": 13,
+  "runs": [
+    {
+      "run": 1,
+      "wrote": 4,
+      "note": "The first run was cut off by the tool after 4 memories. Recall confirmed what landed, with no duplicates."
+    },
+    {
+      "run": 2,
+      "wrote": 9,
+      "note": "Resumed with --skip-existing; the 4 earlier memories were found by recall and not written again."
+    }
+  ],
+  "namespaceTotalAfter": 28,
+  "recheck": {
+    "at": "2026-11-04, 23:54 UTC+7",
+    "recalled": 28,
+    "counts": {
+      "verified": 28
+    },
+    "seconds": 39.256,
+    "wire": {
+      "ListOwnedObjects:ok": 28,
+      "GetObject:ok": 56,
+      "GetTransaction:ok": 28,
+      "GetTransaction:cached": 28,
+      "GetObject:retry": 1
+    }
+  },
+  "memories": [
+    {
+      "kind": "decision",
+      "text": "The offsite is in Da Lat for three nights.",
+      "run": 1,
+      "blobId": "OWaH9kS6BC0TklyijFT7gZ0oMXsQ1hCa76XcGWold_8",
+      "objectId": "0x4d720f662973a9098dcf277c64a3c5b22ed995e6c295c1d5b58daea38f948107",
+      "tx": "7Sj2oR33ZX4F7WsufZ7GC1tYQbLbm2ugjwfJtcKA5Eyh",
+      "checkpoint": 341620219,
+      "checkpointTime": "2026-11-04T16:43:28.451Z",
+      "certifiedEpoch": 43,
+      "statusAtSeed": "verified",
+      "statusAtRecheck": "verified",
+      "links": {
+        "object": "https://suiscan.xyz/mainnet/object/0x4d720f662973a9098dcf277c64a3c5b22ed995e6c295c1d5b58daea38f948107",
+        "tx": "https://suiscan.xyz/mainnet/tx/7Sj2oR33ZX4F7WsufZ7GC1tYQbLbm2ugjwfJtcKA5Eyh",
+        "checkpoint": "https://suiscan.xyz/mainnet/checkpoint/341620219"
+      }
+    },
+    {
+      "kind": "decision",
+      "text": "The booth opens at nine. Badge pickup stays at the north entrance.",
+      "run": 1,
+      "blobId": "q568Jc6szaY41ieYxDFIO0jkrb0AigW5H0DosQHmZgk",
+      "objectId": "0xf734ea6c946482d9bf28f6443ea6529099a67cc306717562361cd463438de944",
+      "tx": "EMyYSF9gsiefY7HcMJUyDGj7VAmhpJSPqVr6Y7ZANQrZ",
+      "checkpoint": 341620328,
+      "checkpointTime": "2026-11-04T16:43:54.797Z",
+      "certifiedEpoch": 43,
+      "statusAtSeed": "verified",
+      "statusAtRecheck": "verified",
+      "links": {
+        "object": "https://suiscan.xyz/mainnet/object/0xf734ea6c946482d9bf28f6443ea6529099a67cc306717562361cd463438de944",
+        "tx": "https://suiscan.xyz/mainnet/tx/EMyYSF9gsiefY7HcMJUyDGj7VAmhpJSPqVr6Y7ZANQrZ",
+        "checkpoint": "https://suiscan.xyz/mainnet/checkpoint/341620328"
+      }
+    },
+    {
+      "kind": "decision",
+      "text": "The launch moves to the 18th if billing is not green by the 12th.",
+      "run": 1,
+      "blobId": "1pal0ytHUYHNO7d9JrRbiIlN2XpWYPJcuJ0gncD6rto",
+      "objectId": "0x3e9312c664666d4277ac1d3adaf3e79631988bc450c7bc461e484b2d33c12db6",
+      "tx": "HktF3TszaP1TLqRrZpj4QsQDry24YpYqXJRsKBx9K5oR",
+      "checkpoint": 341620439,
+      "checkpointTime": "2026-11-04T16:44:21.536Z",
+      "certifiedEpoch": 43,
+      "statusAtSeed": "verified",
+      "statusAtRecheck": "verified",
+      "links": {
+        "object": "https://suiscan.xyz/mainnet/object/0x3e9312c664666d4277ac1d3adaf3e79631988bc450c7bc461e484b2d33c12db6",
+        "tx": "https://suiscan.xyz/mainnet/tx/HktF3TszaP1TLqRrZpj4QsQDry24YpYqXJRsKBx9K5oR",
+        "checkpoint": "https://suiscan.xyz/mainnet/checkpoint/341620439"
+      }
+    },
+    {
+      "kind": "minutes",
+      "text": "Standup notes. The booth plan is set and the offsite is Da Lat.",
+      "run": 1,
+      "blobId": "InJBvZHtV-KyWgsuDBDKn_46kgXZuvQsBK99yDIAhOs",
+      "objectId": "0x5db3aa7774595164526caf506a1243b8d846afd1f714454031f95e0f8eaf7505",
+      "tx": "GxwM7H12HJZYJSdfNVAorPpFVtqiRqNWUxT8XaEjqXJD",
+      "checkpoint": 341620538,
+      "checkpointTime": "2026-11-04T16:44:45.352Z",
+      "certifiedEpoch": 43,
+      "statusAtSeed": "verified",
+      "statusAtRecheck": "verified",
+      "links": {
+        "object": "https://suiscan.xyz/mainnet/object/0x5db3aa7774595164526caf506a1243b8d846afd1f714454031f95e0f8eaf7505",
+        "tx": "https://suiscan.xyz/mainnet/tx/GxwM7H12HJZYJSdfNVAorPpFVtqiRqNWUxT8XaEjqXJD",
+        "checkpoint": "https://suiscan.xyz/mainnet/checkpoint/341620538"
+      }
+    },
+    {
+      "kind": "minutes",
+      "text": "Launch review. Billing is the gate for the 18th.",
+      "run": 2,
+      "blobId": "zFS6w5yFBjJWo8fSpDzsprZEX2d_PKHMlx0R1Zg3K2Q",
+      "objectId": "0xe68b641b6b90e5d16aca7c511c958bf551b2a82cafe662fe3b9bfe80449c3573",
+      "tx": "E1JsG97ySor1U1RHv9QcTcAFYqYkcNNvyvdbumPifeAy",
+      "checkpoint": 341620911,
+      "checkpointTime": "2026-11-04T16:46:17.548Z",
+      "certifiedEpoch": 43,
+      "statusAtSeed": "verified",
+      "statusAtRecheck": "verified",
+      "links": {
+        "object": "https://suiscan.xyz/mainnet/object/0xe68b641b6b90e5d16aca7c511c958bf551b2a82cafe662fe3b9bfe80449c3573",
+        "tx": "https://suiscan.xyz/mainnet/tx/E1JsG97ySor1U1RHv9QcTcAFYqYkcNNvyvdbumPifeAy",
+        "checkpoint": "https://suiscan.xyz/mainnet/checkpoint/341620911"
+      }
+    },
+    {
+      "kind": "minutes",
+      "text": "Demo rehearsal. Rowan owns the banner.",
+      "run": 2,
+      "blobId": "m5QZm52DELhklzxVSDIImC--erqOVL0ZaJbKvs0R0-M",
+      "objectId": "0xbcbbfb2baf85a7c34ae834a274662e8db3dba3f7fc29720dac544aca75857665",
+      "tx": "E9sDssn2vPKtdpX9cuSmCSNSo7H3obKrfMAXGjH9uiYK",
+      "checkpoint": 341621028,
+      "checkpointTime": "2026-11-04T16:46:45.517Z",
+      "certifiedEpoch": 43,
+      "statusAtSeed": "verified",
+      "statusAtRecheck": "verified",
+      "links": {
+        "object": "https://suiscan.xyz/mainnet/object/0xbcbbfb2baf85a7c34ae834a274662e8db3dba3f7fc29720dac544aca75857665",
+        "tx": "https://suiscan.xyz/mainnet/tx/E9sDssn2vPKtdpX9cuSmCSNSo7H3obKrfMAXGjH9uiYK",
+        "checkpoint": "https://suiscan.xyz/mainnet/checkpoint/341621028"
+      }
+    },
+    {
+      "kind": "action-item",
+      "text": "Order the banner by Friday.",
+      "run": 2,
+      "blobId": "iOPa57W7wIpYryv4mKN1TqmP8Iy2zEG73SlrR-dI3JM",
+      "objectId": "0x5093dc8571b7d26e997ca000d82cf260bff7363b6d3a359f9e15d04f80203126",
+      "tx": "35zBy6G5tA6RLbhxAEgQA1nheMoTmK6t7XEwayDpWBTX",
+      "checkpoint": 341621136,
+      "checkpointTime": "2026-11-04T16:47:11.747Z",
+      "certifiedEpoch": 43,
+      "statusAtSeed": "verified",
+      "statusAtRecheck": "verified",
+      "links": {
+        "object": "https://suiscan.xyz/mainnet/object/0x5093dc8571b7d26e997ca000d82cf260bff7363b6d3a359f9e15d04f80203126",
+        "tx": "https://suiscan.xyz/mainnet/tx/35zBy6G5tA6RLbhxAEgQA1nheMoTmK6t7XEwayDpWBTX",
+        "checkpoint": "https://suiscan.xyz/mainnet/checkpoint/341621136"
+      }
+    },
+    {
+      "kind": "action-item",
+      "text": "Confirm the venue headcount in two weeks.",
+      "run": 2,
+      "blobId": "tGMPfF7QzhqIw6bLSY5kfOwKVTL7ljl1RinhzHeZ29k",
+      "objectId": "0x133b14cd75aa18bfdf6126a8d543da8e359988104f3283046fa2d7f4f9cbc722",
+      "tx": "2GVVQt44Zbs3TvyV2yqrXyf97kqbQiYimbqJm5qT6E8D",
+      "checkpoint": 341621242,
+      "checkpointTime": "2026-11-04T16:47:37.539Z",
+      "certifiedEpoch": 43,
+      "statusAtSeed": "verified",
+      "statusAtRecheck": "verified",
+      "links": {
+        "object": "https://suiscan.xyz/mainnet/object/0x133b14cd75aa18bfdf6126a8d543da8e359988104f3283046fa2d7f4f9cbc722",
+        "tx": "https://suiscan.xyz/mainnet/tx/2GVVQt44Zbs3TvyV2yqrXyf97kqbQiYimbqJm5qT6E8D",
+        "checkpoint": "https://suiscan.xyz/mainnet/checkpoint/341621242"
+      }
+    },
+    {
+      "kind": "action-item",
+      "text": "Finish the billing migration by the 12th.",
+      "run": 2,
+      "blobId": "acLE1KFAtsQiQv_O0oGG2FykDnS2ukq70mJXVRWQYNE",
+      "objectId": "0xc81b65c4c9bf28be9e309ca8ee91767096e3c2f4f71a78cfd98c2ff55f9f3853",
+      "tx": "2BoHkZ729AUFex6TMKxfi855jwL35rzDDikuWdc1vDqt",
+      "checkpoint": 341621342,
+      "checkpointTime": "2026-11-04T16:48:01.956Z",
+      "certifiedEpoch": 43,
+      "statusAtSeed": "verified",
+      "statusAtRecheck": "verified",
+      "links": {
+        "object": "https://suiscan.xyz/mainnet/object/0xc81b65c4c9bf28be9e309ca8ee91767096e3c2f4f71a78cfd98c2ff55f9f3853",
+        "tx": "https://suiscan.xyz/mainnet/tx/2BoHkZ729AUFex6TMKxfi855jwL35rzDDikuWdc1vDqt",
+        "checkpoint": "https://suiscan.xyz/mainnet/checkpoint/341621342"
+      }
+    },
+    {
+      "kind": "team-preference",
+      "text": "Post minutes to #sederunt-demo.",
+      "run": 2,
+      "blobId": "dKQuXj7QQczgwiPoLz8XEDgTJKAf_PynhPCy3L79N8E",
+      "objectId": "0xd268ee6893a6ee4ce8f34993cccf0658657c990b4ad0cb7837642abb6517a0d2",
+      "tx": "AvB5LPWUGVLPQkcSTvvN4Ga1dH6yvcTaLTBERcZH82T1",
+      "checkpoint": 341621452,
+      "checkpointTime": "2026-11-04T16:48:28.699Z",
+      "certifiedEpoch": 43,
+      "statusAtSeed": "verified",
+      "statusAtRecheck": "verified",
+      "links": {
+        "object": "https://suiscan.xyz/mainnet/object/0xd268ee6893a6ee4ce8f34993cccf0658657c990b4ad0cb7837642abb6517a0d2",
+        "tx": "https://suiscan.xyz/mainnet/tx/AvB5LPWUGVLPQkcSTvvN4Ga1dH6yvcTaLTBERcZH82T1",
+        "checkpoint": "https://suiscan.xyz/mainnet/checkpoint/341621452"
+      }
+    },
+    {
+      "kind": "team-preference",
+      "text": "Assign the banner order to Rowan.",
+      "run": 2,
+      "blobId": "g0BKAMpmbU93Wdn8C7sxQ7ncBaJsvfsJJu1QbMd8Vfk",
+      "objectId": "0x87b431f4751177d9ad9c6eb56f667a2ebb28c28b17d210507abaa26fde5a796a",
+      "tx": "DyBttts8x1xALJ3Hoy9ktocyapfoHFu9mYkTTWTyHv2U",
+      "checkpoint": 341621556,
+      "checkpointTime": "2026-11-04T16:48:54.319Z",
+      "certifiedEpoch": 43,
+      "statusAtSeed": "verified",
+      "statusAtRecheck": "verified",
+      "links": {
+        "object": "https://suiscan.xyz/mainnet/object/0x87b431f4751177d9ad9c6eb56f667a2ebb28c28b17d210507abaa26fde5a796a",
+        "tx": "https://suiscan.xyz/mainnet/tx/DyBttts8x1xALJ3Hoy9ktocyapfoHFu9mYkTTWTyHv2U",
+        "checkpoint": "https://suiscan.xyz/mainnet/checkpoint/341621556"
+      }
+    },
+    {
+      "kind": "correction",
+      "text": "The offsite is in Da Lat, not Da Nang.",
+      "run": 2,
+      "blobId": "rxmyvxxDGeRVQ9_j8-JV3QOH7z1n0OHBNFeTtIqOeD4",
+      "objectId": "0x2fa86ed9f2f5c7bec844999100738a830400ff8d4734952cf31751399fb8e211",
+      "tx": "NUzfpmzJUW4YyD58XP13i5YhjgC7ZekS7WMSVFqjD6P",
+      "checkpoint": 341621670,
+      "checkpointTime": "2026-11-04T16:49:22.086Z",
+      "certifiedEpoch": 43,
+      "statusAtSeed": "verified",
+      "statusAtRecheck": "verified",
+      "links": {
+        "object": "https://suiscan.xyz/mainnet/object/0x2fa86ed9f2f5c7bec844999100738a830400ff8d4734952cf31751399fb8e211",
+        "tx": "https://suiscan.xyz/mainnet/tx/NUzfpmzJUW4YyD58XP13i5YhjgC7ZekS7WMSVFqjD6P",
+        "checkpoint": "https://suiscan.xyz/mainnet/checkpoint/341621670"
+      }
+    },
+    {
+      "kind": "team-preference",
+      "text": "Standup stays async on Fridays.",
+      "run": 2,
+      "blobId": "taYqCXxbu9jmec_kojRSb9ChmjpfVrn4OBWmLWcGqXA",
+      "objectId": "0xe2864dc186e69d593064aa4b7b5fd0d3548d13a6bc3ae373ffeba214813a826d",
+      "tx": "8m2dDZEyE55xJmk5eYhAPcqX9EqqaG5KEpmmXwZ1K4FV",
+      "checkpoint": 341621779,
+      "checkpointTime": "2026-11-04T16:49:48.749Z",
+      "certifiedEpoch": 43,
+      "statusAtSeed": "verified",
+      "statusAtRecheck": "verified",
+      "links": {
+        "object": "https://suiscan.xyz/mainnet/object/0xe2864dc186e69d593064aa4b7b5fd0d3548d13a6bc3ae373ffeba214813a826d",
+        "tx": "https://suiscan.xyz/mainnet/tx/8m2dDZEyE55xJmk5eYhAPcqX9EqqaG5KEpmmXwZ1K4FV",
+        "checkpoint": "https://suiscan.xyz/mainnet/checkpoint/341621779"
+      }
+    }
+  ]
+}

@@ -14,14 +14,14 @@ const DECISION_MARK = "sederunt-decision";
  * An epoch on the job is recorded. This process does not extend the blob.
  * Pass `client` to use a fake relayer. Without one, the live client is used.
  */
-export async function rememberCompany({ text, kind, knowableAtCheckpoint, decision, preference, roomSetting, expiry, room, access, hearing, account, client, env = process.env, idempotencyKey }) {
+export async function rememberCompany({ text, kind, knowableAtCheckpoint, decision, preference, roomSetting, expiry, room, access, hearing, learned, minutes, actionItem, account, client, env = process.env, idempotencyKey, tatum }) {
   const key = env.COMPANY_MEMWAL_KEY;
   const accountId = env.COMPANY_MEMWAL_ACCOUNT_ID;
   if (!key || !accountId) {
     throw new Error("Company MemWal credentials are not set");
   }
   const memwal = client ?? liveClient(env);
-  const saved = await memwal.rememberAndWait(decisionPayload({ text, kind, decision, preference, roomSetting, expiry, room, access, hearing, account }), NAMESPACE, {
+  const saved = await memwal.rememberAndWait(decisionPayload({ text, kind, decision, preference, roomSetting, expiry, room, access, hearing, learned, minutes, actionItem, account }), NAMESPACE, {
     timeoutMs: 90000,
     idempotencyKey: typeof idempotencyKey === "string" ? idempotencyKey : undefined,
   });
@@ -31,6 +31,7 @@ export async function rememberCompany({ text, kind, knowableAtCheckpoint, decisi
     kind,
     saved,
     knowableAtCheckpoint,
+    tatum,
   });
 }
 
@@ -68,6 +69,9 @@ export async function indexCompany({ client, env = process.env } = {}) {
       access: parsed.access ?? null,
       hearing: parsed.hearing ?? null,
       activity: parsed.activity ?? null,
+      learned: parsed.learned ?? null,
+      minutes: parsed.minutes ?? null,
+      actionItem: parsed.actionItem ?? null,
     });
   }
   return rows;
@@ -87,6 +91,9 @@ function decisionPayload(input) {
     access: input?.access ?? null,
     hearing: input?.hearing ?? null,
     activity: input?.activity ?? null,
+    learned: input?.learned ?? null,
+    minutes: input?.minutes ?? null,
+    actionItem: input?.actionItem ?? null,
   });
 }
 
@@ -95,7 +102,7 @@ function readDecisionPayload(text) {
   try {
     const parsed = JSON.parse(text);
     if (!parsed || parsed.mark !== DECISION_MARK) return null;
-    if (!parsed.decision && !parsed.preference && !parsed.roomSetting && !parsed.expiry && !parsed.room && !parsed.access && !parsed.hearing && !parsed.activity) return null;
+    if (!parsed.decision && !parsed.preference && !parsed.roomSetting && !parsed.expiry && !parsed.room && !parsed.access && !parsed.hearing && !parsed.activity && !parsed.learned && !parsed.minutes && !parsed.actionItem) return null;
     return parsed;
   } catch {
     return null;
@@ -112,13 +119,21 @@ function liveClient(env) {
   });
 }
 
-async function safeLocate(blobId) {
+async function safeLocate(blobId, saved, tatum) {
+  if (!tatum || typeof tatum.getObject !== "function") {
+    return { objectId: null, checkpoint: null, digest: null, locateError: "Tatum key not set" };
+  }
   try {
-    return await locateMemory(blobId);
+    return await locateMemory(blobId, {
+      tatum,
+      owner: typeof saved?.owner === "string" ? saved.owner : "",
+      objectId: typeof saved?.object_id === "string" ? saved.object_id : "",
+    });
   } catch (error) {
     return {
       objectId: null,
       checkpoint: null,
+      digest: null,
       locateError: error instanceof Error ? error.message : "locate failed",
     };
   }
@@ -142,8 +157,8 @@ export async function rememberPersonal({ text, kind, knowableAtCheckpoint }) {
   });
 }
 
-async function finishRecord({ account, accountId, kind, saved, knowableAtCheckpoint }) {
-  const located = await safeLocate(saved.blob_id);
+async function finishRecord({ account, accountId, kind, saved, knowableAtCheckpoint, tatum }) {
+  const located = await safeLocate(saved.blob_id, saved, tatum);
   if (located.checkpoint != null && knowableAtCheckpoint != null) {
     const gate = acceptCheckpoint({
       checkpoint: located.checkpoint,
@@ -173,7 +188,9 @@ async function finishRecord({ account, accountId, kind, saved, knowableAtCheckpo
     namespace: saved.namespace,
     blobId: saved.blob_id,
     objectId,
+    digest: located.digest || null,
     checkpoint: located.checkpoint,
+    owner: typeof saved?.owner === "string" ? saved.owner : null,
     expiryEpoch: observedEpoch(saved),
     explorerUrl: objectId ? `https://suiscan.xyz/mainnet/object/${objectId}` : null,
     locateError: located.locateError || null,

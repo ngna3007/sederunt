@@ -567,7 +567,7 @@ ${slack}
             <span class="meta-item header-only" id="file-usage-item" hidden><span class="meta-label">Usage</span><span id="file-usage" class="usage-chip"></span></span>
             <p id="file-lead" class="page-lede" hidden></p>
             <p id="file-lead-status" class="meta"></p>
-            <a id="file-proof" class="badge ok proof-chip" href="#proof-panel" hidden></a>
+            <button type="button" id="file-proof" class="badge proof-chip" hidden><svg class="proof-check" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg><span id="file-proof-label"></span></button>
           </div>
         </div>
         <div class="room-body">
@@ -592,13 +592,13 @@ ${slack}
               <button type="button" data-left-tab="config" aria-selected="false">Config</button>
               <button type="button" data-left-tab="raw" aria-selected="false">Raw</button>
             </div>
+            <label class="search dock-search">${searchIcon}<span class="sr">Search the transcript</span><input id="transcript-search" type="search" placeholder="Search transcript" autocomplete="off"></label>
             <div id="left-transcript" class="tab-pane left-scroll">
               <div id="file-transcript"></div>
               <h2 class="pane-label">Speakers</h2>
               <div id="file-heard" class="faces"></div>
               <p id="file-present">The meeting has not sent who is there.</p>
             </div>
-            <label class="search dock-search">${searchIcon}<span class="sr">Search the transcript</span><input id="transcript-search" type="search" placeholder="Search transcript" autocomplete="off"></label>
             <div id="left-config" class="tab-pane" hidden>
               <section class="detail-block" id="files-block">
                 <h2 id="files-heading" hidden>Files</h2>
@@ -631,8 +631,8 @@ ${slack}
               <div class="outcome-card" id="file-outcome" hidden></div>
               <dl class="kv" id="file-facts"></dl>
               <section id="participants" class="participants"></section>
-              <section class="artifacts" id="artifacts">
-                <h2 class="artifact-title">Meeting artifacts</h2>
+              <section class="artifacts" id="artifacts" hidden>
+                <h2 class="artifact-title">Downloads</h2>
                 <div id="artifact-list"></div>
               </section>
               <div class="settings-card room-settings">
@@ -711,6 +711,30 @@ ${slack}
     </div>
   </div>
 </div>
+<div id="proof-dialog" class="dialog" hidden role="dialog" aria-modal="true" aria-labelledby="proof-dialog-title">
+  <div class="shade" data-close="proof-dialog"></div>
+  <div class="panel">
+    <div class="panel-bar">
+      <h2 id="proof-dialog-title">Record</h2>
+      <button type="button" class="close" data-close="proof-dialog" aria-label="Close">${closeIcon}</button>
+    </div>
+    <div class="panel-body">
+      <section id="proof-panel" class="detail-block proof-panel">
+        <p id="proof-plain" class="proof-plain"></p>
+        <p id="proof-status" class="meta" aria-live="polite">Verifying on chain…</p>
+        <details class="proof-tech" id="proof-tech">
+          <summary>Show technical details</summary>
+          <p id="proof-kept" class="meta" hidden></p>
+          <p id="proof-reason" class="meta" hidden></p>
+          <dl class="kv" id="proof-facts"></dl>
+          <p id="proof-links" class="proof-links"></p>
+          <p id="proof-chain" class="meta">Read via Tatum gRPC · 0 calls</p>
+          <button type="button" class="secondary" id="proof-again">Verify again</button>
+        </details>
+      </section>
+    </div>
+  </div>
+</div>
 <div id="create-dialog" class="dialog" hidden role="dialog" aria-modal="true" aria-labelledby="create-title">
   <div class="shade" data-close="create-dialog"></div>
   <div class="panel">
@@ -776,6 +800,19 @@ ${spaceDialog}
     <p id="decision-file" hidden></p>
     <p id="decision-ticket" hidden></p>
     <p id="decision-proof" hidden></p>
+    <section id="decision-proof-panel" class="detail-block proof-panel" hidden>
+      <p id="decision-proof-plain" class="proof-plain"></p>
+      <p id="decision-proof-status" class="meta" aria-live="polite">Verifying on chain…</p>
+      <details class="proof-tech">
+        <summary>Show source</summary>
+        <p id="decision-proof-kept" class="meta" hidden></p>
+        <p id="decision-proof-reason" class="meta" hidden></p>
+        <dl class="kv" id="decision-proof-facts"></dl>
+        <p id="decision-proof-links" class="proof-links"></p>
+        <p id="decision-proof-chain" class="meta">Read via Tatum gRPC · 0 calls</p>
+        <button type="button" class="secondary" id="decision-proof-again">Verify again</button>
+      </details>
+    </section>
     <p id="decision-epoch" hidden></p>
     <div id="decision-other"></div>
     ${linearAsk}
@@ -1046,9 +1083,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function proofExplain(decision) {
-    if (decision && typeof decision.checkpoint === "number") {
-      return "Kept at checkpoint " + decision.checkpoint + ".";
-    }
+    if (!decision) return "";
+    var status = (decision.proof && decision.proof.status) || decision.proofStatus || "";
+    if (status === "verified" || typeof decision.checkpoint === "number") return "Stored on Walrus.";
     return "";
   }
 
@@ -3007,7 +3044,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function dialogOpen() {
-    var ids = ["event-dialog", "profile-dialog", "decision-dialog", "create-dialog", "workspace-dialog", "space-dialog", "mcp-dialog", "mcp-manage-dialog", "mcp-token-dialog", "mcp-remove-dialog"];
+    var ids = ["proof-dialog", "event-dialog", "profile-dialog", "decision-dialog", "create-dialog", "workspace-dialog", "space-dialog", "mcp-dialog", "mcp-manage-dialog", "mcp-token-dialog", "mcp-remove-dialog"];
     for (var i = 0; i < ids.length; i += 1) {
       var node = document.getElementById(ids[i]);
       if (node && !node.hidden) return true;
@@ -3049,6 +3086,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
       return;
     }
     if (id === "file-dialog") {
+      var proofOpen = document.getElementById("proof-dialog");
+      if (proofOpen && !proofOpen.hidden) proofOpen.hidden = true;
       var decision = document.getElementById("decision-dialog");
       if (decision && !decision.hidden) closeDialog("decision-dialog");
       showSection(returnSection === "rooms" ? "rooms" : "home");
@@ -3113,13 +3152,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       status.textContent = "";
       status.hidden = true;
     }
-    var chip = document.getElementById("file-proof");
-    if (chip) {
-      var kept = lead && typeof lead.checkpoint === "number";
-      chip.textContent = kept ? "On Walrus" : "";
-      chip.title = kept ? proofExplain(lead) : "";
-      chip.hidden = !kept;
-    }
+    paintProofChip(lead);
   }
 
   function fileMark(name) {
@@ -3705,10 +3738,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
     text("decision-sentence", decision.text || "");
     var heardWho = personLabel(decision.speaker);
     var heardWhen = relativeWhen(decision.spokenAt) || whenLabel(decision.spokenAt);
-    text("decision-heard", heardWho && heardWhen ? heardWho + " kept this on " + heardWhen + "." : heardWho ? heardWho + " kept this." : heardWhen ? "Kept on " + heardWhen + "." : "No one is recorded yet.");
+    text("decision-heard", heardWho && heardWhen ? heardWho + " kept this " + whenInSentence(heardWhen) + "." : heardWho ? heardWho + " kept this." : heardWhen ? "Kept " + whenInSentence(heardWhen) + "." : "No one is recorded yet.");
     showLine("decision-file", fileLine(decision));
     showLine("decision-ticket", ticketLine(decision));
-    showLine("decision-proof", proofExplain(decision));
+    showLine("decision-proof", "");
+    renderProofPanel("decision-proof", decision);
     showLine("decision-epoch", epochLine(decision));
     clear("decision-other");
     if (decision.status === "clashing") {
@@ -3796,10 +3830,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
     text("file-summary", "");
     var outcome = document.getElementById("file-outcome");
-    if (outcome) {
-      outcome.hidden = true;
-      outcome.textContent = "";
-    }
+    if (outcome) paintMeetingOutcome(outcome, leadRows, people);
     paintCallout(fileRoom);
     clear("file-overview-people");
     people.forEach(function (person) {
@@ -3891,6 +3922,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
       badge.className = decision.status === "clashing" ? "badge warn" : "badge";
       badge.textContent = statusLabel(decision.status || "recorded");
       line.append(badge);
+      line.setAttribute("role", "button");
+      line.tabIndex = 0;
+      line.addEventListener("click", function () { openDecision(decision); });
       if (who || when) {
         var meta = document.createElement("span");
         meta.className = "meta";
@@ -3915,6 +3949,306 @@ if (sessionWhen && sessionWhen.dataset.at) {
     renderWaiting();
     renderFiles();
     renderOutside();
+    renderProofPanel("proof", lead);
+  }
+
+  function chainLine() {
+    var chain = state && state.chain;
+    if (!chain) return "Read via Tatum gRPC · 0 calls";
+    var calls = chain.calls || 0;
+    var ms = chain.lastMs == null ? "" : " · last " + chain.lastMs + " ms";
+    var tip = chain.checkpoint == null ? "" : " · latest checkpoint " + chain.checkpoint;
+    return "Read via Tatum gRPC · " + calls + " calls" + ms + tip;
+  }
+
+  function suiscanHref(kind, id) {
+    if (id == null || id === "") return "";
+    return "https://suiscan.xyz/mainnet/" + kind + "/" + id;
+  }
+
+  function whySource(memory) {
+    if (!memory) return null;
+    var rows = [
+      ["Blob", memory.blobId || ""],
+      ["Object", memory.objectId || ""],
+      ["Transaction", memory.digest || ""],
+      ["Checkpoint", memory.checkpoint != null ? String(memory.checkpoint) : ""]
+    ].filter(function (pair) { return pair[1]; });
+    if (!rows.length) return null;
+    var details = document.createElement("details");
+    details.className = "why-source";
+    var summary = document.createElement("summary");
+    summary.textContent = "Show source";
+    details.append(summary);
+    rows.forEach(function (pair) {
+      var line = document.createElement("p");
+      line.className = "proof-id";
+      var kind = pair[0] === "Object" ? "object" : pair[0] === "Transaction" ? "tx" : pair[0] === "Checkpoint" ? "checkpoint" : "";
+      if (kind) {
+        var link = document.createElement("a");
+        link.href = suiscanHref(kind, pair[1]);
+        link.target = "_blank";
+        link.rel = "noopener";
+        link.textContent = pair[0] + " " + pair[1];
+        line.append(link);
+      } else line.textContent = pair[0] + " " + pair[1];
+      details.append(line);
+    });
+    return details;
+  }
+
+  function proofStatusCopy(decision) {
+    var proof = decision && decision.proof;
+    var status = (proof && proof.status) || (decision && decision.proofStatus) || "unknown";
+    if (status === "verified") return "Verified on chain.";
+    if (status === "pending") return "Verifying on chain…";
+    if (status === "unverified") return (proof && proof.reason) || (decision && decision.proofReason) || "Unverified.";
+    return (proof && proof.reason) || (decision && decision.proofReason) || "Proof is unknown.";
+  }
+
+  function proofCheckpoint(decision) {
+    var proof = (decision && decision.proof) || {};
+    if (proof.checkpoint != null && proof.checkpoint !== "") return String(proof.checkpoint);
+    if (decision && typeof decision.checkpoint === "number") return String(decision.checkpoint);
+    return "";
+  }
+
+  function whenInSentence(when) {
+    var text = String(when || "").trim();
+    if (/^(today|yesterday|tomorrow)( |$)/i.test(text)) return text.charAt(0).toLowerCase() + text.slice(1);
+    return "on " + text;
+  }
+
+  function countWords(n, one, many) {
+    var words = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
+    return (n <= 10 ? words[n] : String(n)) + " " + (n === 1 ? one : many);
+  }
+
+  function proofPlain(decision, noun) {
+    var proof = (decision && decision.proof) || {};
+    var status = (proof && proof.status) || (decision && decision.proofStatus) || "unknown";
+    var meeting = noun !== "decision";
+    var when = chainWhen(proof.checkpointTime);
+    if (status === "verified") {
+      var head = meeting ? "This meeting's record is stored on Walrus" : "This decision is stored on Walrus";
+      if (when) return head + " and was confirmed on the Sui network " + whenInSentence(when) + ". Nobody can change it.";
+      return head + " and was confirmed on the Sui network. Nobody can change it.";
+    }
+    if (status === "pending") {
+      return meeting ? "We're checking that this meeting's record is stored on Walrus." : "We're checking that this decision is stored on Walrus.";
+    }
+    return meeting ? "We couldn't confirm this record on Walrus." : "We couldn't confirm this decision on Walrus.";
+  }
+
+  function proofWorthShowing(decision) {
+    if (!decision) return false;
+    var proof = decision.proof || {};
+    var status = proof.status || decision.proofStatus || "";
+    if (status === "verified" || status === "pending" || status === "unverified") return true;
+    if (proof.blobId || decision.blobId || proof.objectId || decision.objectId || proof.digest || decision.digest) return true;
+    if (proof.checkpoint != null || typeof decision.checkpoint === "number") return true;
+    return false;
+  }
+
+  function paintProofChip(decision) {
+    var chip = document.getElementById("file-proof");
+    var label = document.getElementById("file-proof-label");
+    if (!chip) return;
+    if (!decision) {
+      chip.hidden = true;
+      chip.className = "badge proof-chip";
+      if (label) label.textContent = "";
+      var idleTitle = document.getElementById("proof-dialog-title");
+      if (idleTitle) idleTitle.textContent = "Record";
+      return;
+    }
+    var proof = decision.proof || {};
+    var status = proof.status || decision.proofStatus || "unknown";
+    var word = "Couldn't verify";
+    var tone = "badge warn proof-chip";
+    if (status === "verified") {
+      word = "Verified on Walrus";
+      tone = "badge ok proof-chip is-verified";
+    } else if (status === "pending") {
+      word = "Verifying…";
+      tone = "badge info proof-chip";
+    }
+    chip.className = tone;
+    chip.hidden = false;
+    if (label) label.textContent = word;
+    var title = document.getElementById("proof-dialog-title");
+    if (title) title.textContent = word;
+  }
+
+  // A chain or memory time in the viewer's zone, with the zone named:
+  // "Today at 11:44 PM GMT+7" rather than a raw ISO string.
+  function chainWhen(iso) {
+    if (!iso) return "";
+    var text = formatConsoleWhen(iso);
+    if (!text) return "";
+    var zone = zoneShortName(iso, Intl.DateTimeFormat().resolvedOptions().timeZone);
+    return zone ? text + " " + zone : text;
+  }
+
+  function renderProofPanel(prefix, decision) {
+    var status = document.getElementById(prefix + "-status");
+    var facts = document.getElementById(prefix + "-facts");
+    var links = document.getElementById(prefix + "-links");
+    var chain = document.getElementById(prefix + "-chain");
+    var noun = prefix === "decision-proof" ? "decision" : "meeting";
+    if (chain) chain.textContent = chainLine();
+    if (status) status.textContent = decision ? proofStatusCopy(decision) : "Proof is unknown until the chain is read.";
+    if (status) status.setAttribute("data-proof", decision ? ((decision.proof && decision.proof.status) || decision.proofStatus || "unknown") : "none");
+    var plain = document.getElementById(prefix + "-plain");
+    if (plain) plain.textContent = decision ? proofPlain(decision, noun) : "We couldn't confirm this record on Walrus.";
+    var panel = document.getElementById(prefix + "-panel");
+    if (prefix === "decision-proof" && panel) panel.hidden = !proofWorthShowing(decision);
+    if (prefix === "proof") paintProofChip(decision);
+    var kept = document.getElementById(prefix + "-kept");
+    if (kept) {
+      var checkpoint = proofCheckpoint(decision);
+      kept.textContent = checkpoint ? ("Checkpoint " + checkpoint + " on the Sui network.") : "";
+      kept.hidden = !kept.textContent;
+    }
+    var reasonNode = document.getElementById(prefix + "-reason");
+    if (reasonNode) {
+      var proof = (decision && decision.proof) || {};
+      var stateName = (proof && proof.status) || (decision && decision.proofStatus) || "unknown";
+      var reason = (proof && proof.reason) || (decision && decision.proofReason) || "";
+      var showReason = stateName !== "verified" && stateName !== "pending" && reason && reason !== "Verifying on chain…";
+      reasonNode.textContent = showReason ? reason : "";
+      reasonNode.hidden = !showReason;
+    }
+    if (decision && proofPending(decision)) followProof(decision);
+    if (facts) {
+      facts.replaceChildren();
+      var proof = (decision && decision.proof) || {};
+      var rows = [
+        ["Blob", proof.blobId || (decision && decision.blobId) || ""],
+        ["Object", proof.objectId || (decision && decision.objectId) || ""],
+        ["Transaction", proof.digest || (decision && decision.digest) || ""],
+        ["Checkpoint", proof.checkpoint != null ? String(proof.checkpoint) : (decision && typeof decision.checkpoint === "number" ? String(decision.checkpoint) : "")],
+        ["Checkpoint time", chainWhen(proof.checkpointTime)],
+        ["Certified in Walrus epoch", proof.certifiedEpoch != null ? String(proof.certifiedEpoch) : ""]
+      ];
+      rows.forEach(function (pair) {
+        if (!pair[1]) return;
+        var term = document.createElement("dt");
+        term.textContent = pair[0];
+        var value = document.createElement("dd");
+        value.className = "proof-id";
+        value.textContent = pair[1];
+        facts.append(term, value);
+      });
+    }
+    if (links) {
+      links.replaceChildren();
+      var proof = (decision && decision.proof) || {};
+      var objectId = proof.objectId || (decision && decision.objectId) || "";
+      var digest = proof.digest || (decision && decision.digest) || "";
+      var checkpoint = proof.checkpoint != null ? proof.checkpoint : (decision && typeof decision.checkpoint === "number" ? decision.checkpoint : "");
+      [["object", objectId, "Object"], ["tx", digest, "Transaction"], ["checkpoint", checkpoint, "Checkpoint"]].forEach(function (item) {
+        if (item[1] === "" || item[1] == null) return;
+        var link = document.createElement("a");
+        link.href = suiscanHref(item[0], item[1]);
+        link.target = "_blank";
+        link.rel = "noopener";
+        link.textContent = item[2];
+        links.append(link);
+      });
+    }
+  }
+
+  // A proof the server is still reading comes back "pending". The panel says
+  // so and follows it up here, without a reload. Each follow-up waits on the
+  // read already running on the server, so this does not add gateway calls.
+  // "unknown" is shown only after a real failure, with Verify again.
+  var PROOF_FOLLOW_TRIES = 8;
+  var PROOF_FOLLOW_GAP_MS = 750;
+
+  function proofPending(decision) {
+    var proof = decision && decision.proof;
+    return ((proof && proof.status) || (decision && decision.proofStatus)) === "pending";
+  }
+
+  function applyProofResult(decision, result) {
+    decision.proof = result.proof || decision.proof;
+    decision.proofStatus = result.status || decision.proofStatus;
+    decision.proofReason = result.reason || decision.proofReason;
+    if (result.checkpoint != null) decision.checkpoint = result.checkpoint;
+    if (result.chain) state.chain = result.chain;
+  }
+
+  function paintProof(decision) {
+    var rows = fileRoom ? decisionsFor(fileRoom) : [];
+    var lead = rows.length ? rows[rows.length - 1] : null;
+    if (lead && lead.id === decision.id) renderProofPanel("proof", decision);
+    if (openDecisionRow && openDecisionRow.id === decision.id) {
+      renderProofPanel("decision-proof", decision);
+      showLine("decision-proof", "");
+    }
+  }
+
+  function proofFailed(decision, reason) {
+    decision.proof = { status: "unknown", reason: reason, blobId: (decision.proof && decision.proof.blobId) || decision.blobId || null, links: {} };
+    decision.proofStatus = "unknown";
+    decision.proofReason = reason;
+    paintProof(decision);
+  }
+
+  function askProof(decision, fresh) {
+    return fetch("/api/proof", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: decision.id, workspace: workspaceKind, fresh: fresh === true })
+    }).then(function (response) {
+      if (!response.ok) throw new Error("proof " + response.status);
+      return response.json();
+    });
+  }
+
+  function followProof(decision, tries) {
+    if (!decision || !decision.id) return;
+    if (tries == null) {
+      if (decision.proofFollowing) return;
+      decision.proofFollowing = true;
+      tries = 0;
+    }
+    askProof(decision, false).then(function (result) {
+      applyProofResult(decision, result);
+      if (proofPending(decision)) {
+        if (tries + 1 >= PROOF_FOLLOW_TRIES) {
+          decision.proofFollowing = false;
+          proofFailed(decision, "Tatum did not answer in time. Try Verify again.");
+          return;
+        }
+        paintProof(decision);
+        setTimeout(function () { followProof(decision, tries + 1); }, PROOF_FOLLOW_GAP_MS);
+        return;
+      }
+      decision.proofFollowing = false;
+      paintProof(decision);
+    }).catch(function () {
+      decision.proofFollowing = false;
+      proofFailed(decision, "The chain read failed. Try Verify again.");
+    });
+  }
+
+  function verifyDecision(decision) {
+    if (!decision || !decision.id) return;
+    decision.proof = { status: "pending", reason: "Verifying on chain…", blobId: (decision.proof && decision.proof.blobId) || decision.blobId || null, links: {} };
+    decision.proofStatus = "pending";
+    // Hold off the follow-up while this fresh read is out.
+    decision.proofFollowing = true;
+    paintProof(decision);
+    askProof(decision, true).then(function (result) {
+      decision.proofFollowing = false;
+      applyProofResult(decision, result);
+      paintProof(decision);
+    }).catch(function () {
+      decision.proofFollowing = false;
+      proofFailed(decision, "The chain read failed. Try Verify again.");
+    });
   }
 
   function renderFacts(room, named, rows) {
@@ -3998,6 +4332,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
       empty.textContent = transcriptEmptyCopy(rows && rows.length);
       box.append(empty);
     }
+    placeTranscriptSearch((rows || []).length);
+  }
+
+  function placeTranscriptSearch(count) {
+    var search = document.querySelector("label.dock-search");
+    if (!search) return;
+    var lines = typeof count === "number" ? count : (fileRoom ? decisionsFor(fileRoom).length : 0);
+    search.hidden = leftTab !== "transcript" || lines < 2;
   }
 
   function applyRoomTabs() {
@@ -4013,8 +4355,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var button = document.querySelector('[data-right-tab="' + name + '"]');
       if (button) button.setAttribute("aria-selected", name === rightTab ? "true" : "false");
     });
-    var search = document.querySelector(".dock-search");
-    if (search) search.hidden = leftTab !== "transcript";
+    placeTranscriptSearch();
     var settings = document.querySelector(".room-settings");
     if (settings) settings.hidden = rightTab !== "overview";
   }
@@ -4076,6 +4417,57 @@ if (sessionWhen && sessionWhen.dataset.at) {
     }
     callout.hidden = callout.childElementCount === 0;
     placeRoomChrome();
+  }
+
+  function paintMeetingOutcome(box, rows, people) {
+    box.replaceChildren();
+    box.hidden = false;
+    var list = (rows || []).filter(function (row) { return row && String(row.text || "").trim(); });
+    var isAction = function (row) { return /action|todo|task/i.test(String(row.kind || row.type || "")); };
+    var decided = list.filter(function (row) { return !isAction(row); });
+    var actions = list.filter(isAction);
+    var head = document.createElement("h2");
+    head.textContent = "Summary";
+    var lede = document.createElement("p");
+    lede.className = "outcome-lede";
+    if (!list.length) {
+      lede.textContent = "Nothing decided in this meeting yet.";
+      box.append(head, lede);
+      return;
+    }
+    var names = (people || []).map(function (p) { return personLabel(p) || p; }).filter(Boolean);
+    var bits = [];
+    if (decided.length) bits.push(countWords(decided.length, "decision", "decisions"));
+    if (actions.length) bits.push(countWords(actions.length, "action item", "action items"));
+    var who = names.length === 1 ? names[0] + " agreed on "
+      : names.length > 1 ? (names.length <= 10 ? countWords(names.length, "person", "people") : names.length + " people") + " met and agreed on "
+      : "This meeting agreed on ";
+    who = who.charAt(0).toUpperCase() + who.slice(1);
+    lede.textContent = who + bits.join(" and ") + ".";
+    box.append(head, lede);
+    function group(title, items) {
+      if (!items.length) return;
+      var h = document.createElement("h3");
+      h.className = "outcome-label";
+      h.textContent = title;
+      var ul = document.createElement("ul");
+      ul.className = "outcome-list";
+      items.forEach(function (row) {
+        var li = document.createElement("li");
+        li.textContent = String(row.text).trim();
+        var who = personLabel(row.speaker);
+        if (who) {
+          var by = document.createElement("span");
+          by.className = "meta";
+          by.textContent = " · " + who;
+          li.append(by);
+        }
+        ul.append(li);
+      });
+      box.append(h, ul);
+    }
+    group("Decisions", decided);
+    group("Action items", actions);
   }
 
   function placeRoomChrome() {
@@ -4159,7 +4551,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
       ["Participants", media && media.participantsUrl],
       ["Participant events", media && media.eventsUrl],
       ["Speaker timeline", media && media.timelineUrl]
-    ];
+    ].filter(function (row) { return row[1]; });
+    var section = document.getElementById("artifacts");
+    if (section) section.hidden = rows.length === 0;
     rows.forEach(function (row) {
       var item = document.createElement("div");
       item.className = row[1] ? "artifact-row" : "artifact-row off";
@@ -5643,6 +6037,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (!document.getElementById("account-menu").hidden) closeAccountMenu();
     else if (!document.getElementById("profile-dialog").hidden) closeDialog("profile-dialog");
     else if (!document.getElementById("palette").hidden) closePalette();
+    else if (document.getElementById("proof-dialog") && !document.getElementById("proof-dialog").hidden) closeDialog("proof-dialog");
     else if (!document.getElementById("decision-dialog").hidden) closeDialog("decision-dialog");
     else if (!document.getElementById("create-dialog").hidden) closeDialog("create-dialog");
     else if (!document.getElementById("file-dialog").hidden) closeDialog("file-dialog");
@@ -5759,6 +6154,15 @@ if (sessionWhen && sessionWhen.dataset.at) {
       navigator.clipboard.writeText(copied).then(done, function () { toast("Copy did not work."); });
     } else toast("Copy did not work.");
   });
+  var proofAgain = document.getElementById("proof-again");
+  if (proofAgain) proofAgain.addEventListener("click", function () {
+    var rows = fileRoom ? decisionsFor(fileRoom) : [];
+    verifyDecision(rows.length ? rows[rows.length - 1] : null);
+  });
+  var decisionAgain = document.getElementById("decision-proof-again");
+  if (decisionAgain) decisionAgain.addEventListener("click", function () {
+    verifyDecision(openDecisionRow);
+  });
   document.getElementById("chat-form").addEventListener("submit", function (event) {
     event.preventDefault();
     var sentence = document.getElementById("chat-text").value;
@@ -5773,11 +6177,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text: sentence, workspace: workspaceKind })
     }).then(function (response) { return response.json(); }).then(function (result) {
-      var answer = result.body || "";
-      if (answer === "A decision is kept from a room.") {
+      var learned = typeof result.learned === "string" ? result.learned.trim() : "";
+      var answer = learned || result.body || "";
+      if (!learned && answer === "A decision is kept from a room.") {
         answer = "A decision is kept from a room. Chat does not keep a decision. Ask what was decided.";
       }
-      var parts = chatParts(answer);
+      var parts = learned ? { answer: answer, detail: "", cites: [], clash: [] } : chatParts(answer);
       var purpose = document.getElementById("chat-purpose");
       if (purpose) purpose.hidden = true;
       var reading = document.querySelector("#chat-log .chat-turn:last-child .chat-body > span");
@@ -5877,6 +6282,32 @@ if (sessionWhen && sessionWhen.dataset.at) {
         reading.parentNode.append(extra);
       }
       if (reading && parts.cites && !(parts.clash && parts.clash.length > 1)) appendCites(reading.parentNode, parts.cites);
+      if (reading && result.why && result.why.length) {
+        var why = document.createElement("details");
+        why.className = "why-panel";
+        var summary = document.createElement("summary");
+        summary.textContent = "Why";
+        why.append(summary);
+        result.why.forEach(function (memory) {
+          var row = document.createElement("div");
+          row.className = "why-row";
+          var sentence = document.createElement("p");
+          var bits = [];
+          if (memory && memory.text) bits.push(String(memory.text).trim());
+          if (memory && memory.at) bits.push(chainWhen(memory.at) || memory.at);
+          var trust = memory && memory.verified === "verified" ? "Verified on Walrus." : (memory && memory.verified === "unverified" ? "Couldn't verify." : "");
+          var spoken = [];
+          if (bits[0]) spoken.push(bits[0]);
+          if (bits[1]) spoken.push("Kept " + whenInSentence(bits[1]) + ".");
+          if (trust) spoken.push(trust);
+          sentence.textContent = spoken.join(" ");
+          row.append(sentence);
+          var source = whySource(memory);
+          if (source) row.append(source);
+          why.append(row);
+        });
+        reading.parentNode.append(why);
+      }
       document.getElementById("chat-text").value = "";
       growChat();
       placeChatAnswer((pending && pending.querySelector(".cite-row")) || pending);
@@ -6258,13 +6689,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
     }
   });
   var proofChip = document.getElementById("file-proof");
-  if (proofChip) proofChip.addEventListener("click", function (event) {
-    var panel = document.getElementById("proof-panel");
-    if (!panel) return;
-    event.preventDefault();
-    var overviewTab = document.querySelector('[data-right-tab="overview"]');
-    if (overviewTab && overviewTab.getAttribute("aria-selected") !== "true") overviewTab.click();
-    panel.scrollIntoView({ block: "start", behavior: "smooth" });
+  if (proofChip) proofChip.addEventListener("click", function () {
+    openDialog("proof-dialog");
   });
   var transcriptSearch = document.getElementById("transcript-search");
   if (transcriptSearch) transcriptSearch.addEventListener("input", function () {

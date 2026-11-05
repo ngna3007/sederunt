@@ -1,13 +1,12 @@
 import { bcs } from "@mysten/sui/bcs";
 import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
-import { SuiGrpcClient } from "@mysten/sui/grpc";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
+import { createTatumClient } from "../tatum/client.js";
 import { Transaction } from "@mysten/sui/transactions";
 import { fromBase64, fromHex } from "@mysten/sui/utils";
 import { EncryptedObject, SealClient, SessionKey } from "@mysten/seal";
 
 const API = "https://api.console.walrus.xyz";
-const FULLNODE_URL = "https://fullnode.mainnet.sui.io:443";
 const ORIGINAL_PACKAGE_ID = "0xb8d5b1cade7917190c47b8abfc789f527389fc021a8963c22755bcc1b539786c";
 const LATEST_PACKAGE_ID = ORIGINAL_PACKAGE_ID;
 const BUCKET_REGISTRY_ID = "0x871f3d0341f36101ff0b30cd01dbe363f8d89d7f004df80e8084752d2f496958";
@@ -324,8 +323,9 @@ function pause(wait, ms) {
 }
 
 function sealClient(apiKey) {
-  // TODO(tatum): route this Sui client through the Tatum gRPC gateway once feat/hackathon-tatum lands.
-  const suiClient = new SuiGrpcClient({ network: "mainnet", baseUrl: FULLNODE_URL });
+  const tatum = createTatumClient();
+  if (!tatum.sui) throw new Error("Tatum key not set");
+  const suiClient = tatum.sui;
   const seal = new SealClient({
     suiClient,
     serverConfigs: [{

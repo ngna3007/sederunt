@@ -16,7 +16,7 @@ import { createLinearClient } from "./linear/mcp.js";
 import { loadLinearToken } from "./linear/token.js";
 import { renderCameraPage } from "./meeting/camera.js";
 import { normalizeHearing } from "./hearing.js";
-import { createMeetingAdapter, mediaFromBot, meetingDoorReady, recallBotUrl, recallTranscriptDelivery, verifyRecallRequest } from "./meeting/recall.js";
+import { createMeetingAdapter, mediaFromBot, meetingDoorReady, meetingEnded, recallBotUrl, recallTranscriptDelivery, verifyRecallRequest } from "./meeting/recall.js";
 import { createTatumReader } from "./tatum/get-object.js";
 import { resolveMcpSpace } from "./connectors/expose.js";
 import { stopDemoServer } from "./connectors/demo.js";
@@ -54,11 +54,12 @@ import { looksLikeOpenQuestion } from "./parse.js";
 import { createSession } from "./session.js";
 import { postSlackReply, slackAnswer, slackChannelMembers, slackFileBytes, slackQuestion } from "./slack/reply.js";
 import { slackDelivery, verifySlackRequest } from "./slack/sign.js";
-import { companyBoard, downloadFile, handleUtterance, hydrateSlackChannels, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded } from "./typed-path.js";
+import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded, warmProofs } from "./typed-path.js";
+import { wireCalls } from "./tatum/client.js";
 
 const port = Number(process.env.PORT || 8787);
 
-function memoryAdapter(env = process.env, client) {
+function memoryAdapter(env = process.env, client, tatum) {
   const company = env.COMPANY_MEMWAL_KEY;
   const personal = env.PERSONAL_MEMWAL_KEY;
   if (!company && !personal) return null;
@@ -73,7 +74,7 @@ function memoryAdapter(env = process.env, client) {
         throw new Error("This process holds only the company delegate");
       }
       const { rememberCompany } = await import("./memory/company.js");
-      return publicMemory(await rememberCompany({ ...input, client, env }));
+      return publicMemory(await rememberCompany({ ...input, client, env, tatum }));
     },
     async index() {
       const { indexCompany } = await import("./memory/company.js");
@@ -83,11 +84,16 @@ function memoryAdapter(env = process.env, client) {
 }
 
 function publicMemory(saved) {
+  const owner = typeof saved?.owner === "string" && /^0x[0-9a-fA-F]{64}$/.test(saved.owner) ? saved.owner : null;
   return {
     ok: Boolean(saved?.ok),
     blobId: saved?.blobId ?? null,
     kind: saved?.kind ?? null,
     expiryEpoch: Number.isInteger(saved?.expiryEpoch) && saved.expiryEpoch >= 0 ? saved.expiryEpoch : null,
+    objectId: typeof saved?.objectId === "string" ? saved.objectId : null,
+    digest: typeof saved?.digest === "string" ? saved.digest : null,
+    checkpoint: Number.isInteger(saved?.checkpoint) ? saved.checkpoint : null,
+    owner,
   };
 }
 
@@ -106,6 +112,7 @@ export function defaultDeps(options = {}) {
   const config = appConfig(env);
   const fetchImpl = options.fetch || globalThis.fetch;
   const linearCalls = [];
+  const tatum = options.tatum ?? createTatumReader(env);
   const deps = {
     linear: options.linear ?? {
       calls: linearCalls,
@@ -140,10 +147,10 @@ export function defaultDeps(options = {}) {
     },
     calendar: options.calendar ?? createCalendarAdapter(env),
     slack: options.slack ?? createSlackClient(env, fetchImpl),
-    tatum: options.tatum ?? createTatumReader(),
+    tatum,
     console: options.console ?? createConsoleAdapter(),
     meeting: options.meeting ?? createMeetingAdapter(env),
-    memory: options.memory === undefined ? memoryAdapter(env, options.memwal) : options.memory,
+    memory: options.memory === undefined ? memoryAdapter(env, options.memwal, tatum) : options.memory,
   };
   if (options.liveLinear === true) {
     deps.linear = liveLinear(deps.linear, options.loadToken, config);
@@ -317,6 +324,17 @@ export function createApp(options = {}) {
     botPreferences,
     identity: null,
   };
+  if (proofWarmOn(env) && workspace.companyLoaded && deps.tatum) {
+    // Read the company proofs once at start so the first room load is
+    // already verified. Sequential, through the reader's shared throttle.
+    workspace.warm = Promise.resolve()
+      .then(() => prepareWorkspace(workspace, ""))
+      .then((current) => warmProofs(current, deps.tatum))
+      .then((report) => {
+        if (typeof deps.log === "function") deps.log({ kind: "proof-warm", ...report });
+        return report;
+      }, () => null);
+  }
   const identity = options.identity ?? (identityConfigured(env) ? createIdentity(env) : null);
   workspace.identity = identity;
   workspace.forms = createFormsApp({ env, fetchImpl: options.fetch });
@@ -869,7 +887,8 @@ export function createApp(options = {}) {
       });
       if (accepted) {
         try {
-          const delivery = recallTranscriptDelivery(JSON.parse(raw || "{}"));
+          const payload = JSON.parse(raw || "{}");
+          const delivery = recallTranscriptDelivery(payload);
           if (delivery) {
             const configured = typeof env.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
             if (configured) {
@@ -879,6 +898,11 @@ export function createApp(options = {}) {
             }
             const current = await prepareWorkspace(workspace, "");
             await handleUtterance({ ...delivery, session: current }, depsFor(workspace, ""));
+          }
+          const ended = meetingEnded(payload);
+          if (ended?.roomId) {
+            const current = await prepareWorkspace(workspace, "");
+            await endMeeting(current, depsFor(workspace, ""), ended.roomId);
           }
         } catch {
           // A signed callback is still accepted when the transcript has no words.
@@ -894,6 +918,38 @@ export function createApp(options = {}) {
       const current = await prepareWorkspace(workspace, delivery.company || "");
       const result = await handleUtterance({ ...delivery, session: current }, depsFor(workspace, delivery.company || ""));
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(result));
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/proof") {
+      const body = await readJson(req);
+      const id = typeof body.id === "string" ? body.id : "";
+      const companyId = typeof body.company === "string" ? body.company : "";
+      const current = await prepareWorkspace(workspace, companyId);
+      const memberId = consoleBoardMember(null, env, "company", typeof body.memberId === "string" ? body.memberId : "");
+      const visible = companyBoard(current, memberId);
+      const row = (visible.decisions ?? []).find((item) => item.id === id) || null;
+      if (!row) {
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify({
+          id,
+          status: "unknown",
+          reason: "That decision is not in this workspace.",
+          chain: chainReport(workspace.deps?.tatum),
+        }));
+        return;
+      }
+      // Verify again is one decision the person asked for, so it may take the
+      // few throttled gateway calls a first locate needs.
+      // Verify again asks for a fresh read; a pending panel's follow-up
+      // joins the read already running.
+      await readProofs(current, { decisions: [row] }, workspace.deps?.tatum, { timeoutMs: 6000, fresh: body.fresh === true });
+      send(res, 200, "application/json; charset=utf-8", JSON.stringify({
+        id,
+        status: row.proofStatus || "unknown",
+        reason: row.proofReason || "The chain proof is incomplete.",
+        proof: row.proof || null,
+        checkpoint: row.checkpoint ?? null,
+        chain: chainReport(workspace.deps?.tatum),
+      }));
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/chat") {
@@ -944,6 +1000,8 @@ export function createApp(options = {}) {
       }
       if (namedRooms.length > 1) {
         const parts = [];
+        const why = [];
+        let learned = "";
         let matched = 0;
         for (const id of namedRooms) {
           const part = await handleUtterance({
@@ -956,13 +1014,18 @@ export function createApp(options = {}) {
             session: current,
           }, depsFor(workspace, companyId));
           parts.push(part.body);
+          if (part.learned) learned = part.learned;
+          if (Array.isArray(part.why)) why.push(...part.why);
           matched += current.decisions.filter((decision) => decision.roomId === id && !decision.deleted).length;
         }
-        send(res, 200, "application/json; charset=utf-8", JSON.stringify({
-          body: chatAnswer(parts.filter(Boolean).join("\n")),
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify(chatJson({
+          body: parts.filter(Boolean).join("\n"),
+          learned,
+          why,
+        }, {
           decisions: matched,
           stored: false,
-        }));
+        })));
         return;
       }
       const namedRoom = namedRooms[0] || "";
@@ -978,11 +1041,10 @@ export function createApp(options = {}) {
       const matched = namedRoom
         ? current.decisions.filter((decision) => decision.roomId === namedRoom && !decision.deleted).length
         : current.decisions.filter((decision) => !decision.deleted).length;
-      send(res, 200, "application/json; charset=utf-8", JSON.stringify({
-        body: chatAnswer(result.body),
+      send(res, 200, "application/json; charset=utf-8", JSON.stringify(chatJson(result, {
         decisions: matched,
         stored: false,
-      }));
+      })));
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/slack") {
@@ -1107,6 +1169,7 @@ export function createApp(options = {}) {
         if (question && result?.body && !repeat && result.allow !== "not-invited" && result.allow !== "missing-member") {
           const channel = delivery.room?.askChannel || (typeof event.channel === "string" ? event.channel : "");
           const answer = slackAnswer(result.visible, delivery.text);
+          if (typeof result.learned === "string" && result.learned) answer.text = result.learned;
           const bytes = answer.file ? await consoleFileBytes(current, answer.file, deps) : null;
           const reply = {
             channel,
@@ -1276,6 +1339,8 @@ export function createApp(options = {}) {
       });
     }));
   };
+  /** The start-up proof warm, when it runs. Resolves to its report or null. */
+  server.proofWarm = workspace.warm || null;
   return server;
 }
 
@@ -1359,6 +1424,16 @@ function displayActor(env) {
   return name || "Someone";
 }
 
+function chatJson(result, extra) {
+  const payload = {
+    body: chatAnswer(result?.body),
+    ...extra,
+  };
+  if (typeof result?.learned === "string" && result.learned) payload.learned = result.learned;
+  if (Array.isArray(result?.why) && result.why.length) payload.why = result.why;
+  return payload;
+}
+
 function chatAnswer(body) {
   return String(body || "")
     .split("\n")
@@ -1410,6 +1485,21 @@ async function currentBot(workspace, req) {
     if (spaces?.activeId) tenantId = spaces.activeId;
   }
   return readBot(workspace.botPreferences, tenantId);
+}
+
+const BOARD_PROOF_WAIT_MS = 400;
+
+/**
+ * Warm the proof cache at start when a real Tatum key is set, unless
+ * SEDERUNT_WARM_PROOFS=0. SEDERUNT_WARM_PROOFS=1 turns it on without a key.
+ *
+ * @param {Record<string, string | undefined>} env
+ */
+export function proofWarmOn(env) {
+  const flag = String(env?.SEDERUNT_WARM_PROOFS ?? "").trim();
+  if (flag === "1") return true;
+  if (flag === "0") return false;
+  return Boolean(env?.TATUM_API_KEY || env?.TATUM_MAINNET_API_KEY);
 }
 
 async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0) {
@@ -1517,7 +1607,9 @@ async function consolePayload(workspace, current, memberId, kind = "company") {
     };
   }
   const empty = report.empty && board.decisions.length === 0;
-  await readProofs(current, board, workspace.deps?.tatum);
+  // The board does not wait on a cold chain read. A proof still being read
+  // comes back pending and the page follows it up through /api/proof.
+  await readProofs(current, board, workspace.deps?.tatum, { timeoutMs: BOARD_PROOF_WAIT_MS });
   const payload = {
     companyLoaded: true,
     workspace: open,
@@ -1536,8 +1628,22 @@ async function consolePayload(workspace, current, memberId, kind = "company") {
     counts: board.counts,
     hearing: normalizeHearing(current.hearing),
     meetings: await calendarMeetings(workspace),
+    chain: chainReport(workspace.deps?.tatum),
   };
   return payload;
+}
+
+function chainReport(tatum) {
+  const log = Array.isArray(tatum?.log) ? tatum.log : [];
+  const wire = log.filter((entry) => entry && entry.outcome !== "cached");
+  const last = wire.length ? wire[wire.length - 1] : null;
+  const calls = typeof tatum?.wireCalls === "function" ? tatum.wireCalls() : (wire.length || wireCalls(log));
+  return {
+    calls,
+    lastMs: Number.isFinite(last?.ms) ? last.ms : null,
+    checkpoint: Number.isInteger(tatum?.latestCheckpoint) ? tatum.latestCheckpoint : null,
+    transport: "tatum-grpc",
+  };
 }
 
 async function calendarMeetings(workspace) {
