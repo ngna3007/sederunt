@@ -4802,7 +4802,8 @@ body.is-reading #rooms .explorer { display: none !important; }
   #history-list .activity-copy {
     display: flex !important;
     align-items: center;
-    gap: 0;
+    /* Flex drops the space text nodes between words, so the gap is the space. */
+    gap: 0.3em;
     min-width: 0;
     overflow: hidden;
     white-space: nowrap !important;

@@ -1294,7 +1294,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var button = document.getElementById("join-submit");
     if (!node) return;
     var ready = !document.getElementById("meet-block");
-    node.textContent = ready ? "Joining is available." : "Join turns on once Status lists a meeting.";
+    node.textContent = ready ? "Joining is available." : "Joining meetings is not set up on this server yet. Setup shows what is missing.";
     node.className = ready ? "" : "off";
     var label = document.getElementById("meet-link-label");
     if (label) label.hidden = !ready;
@@ -4036,8 +4036,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function proofStatusCopy(decision) {
     var proof = decision && decision.proof;
     var status = (proof && proof.status) || (decision && decision.proofStatus) || "unknown";
-    if (status === "verified") return "Verified on chain.";
-    if (status === "pending") return "Verifying on chain…";
+    if (status === "verified") return "Verified on Walrus.";
+    if (status === "pending") return "Verifying on Walrus…";
     if (status === "unverified") return (proof && proof.reason) || (decision && decision.proofReason) || "Unverified.";
     return (proof && proof.reason) || (decision && decision.proofReason) || "Proof is unknown.";
   }
@@ -4090,7 +4090,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var chip = document.getElementById("file-proof");
     var label = document.getElementById("file-proof-label");
     if (!chip) return;
-    if (!decision) {
+    // No proof to talk about yet: show nothing rather than a warning.
+    if (!decision || !proofWorthShowing(decision)) {
       chip.hidden = true;
       chip.className = "badge proof-chip";
       if (label) label.textContent = "";
@@ -4103,7 +4104,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var word = "Couldn't verify";
     var tone = "badge warn proof-chip";
     if (status === "verified") {
-      word = "Verified";
+      word = "Verified on Walrus";
       tone = "badge ok proof-chip is-verified";
     } else if (status === "pending") {
       word = "Verifying…";
@@ -5217,7 +5218,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (which === "linear") url = "https://linear.app/docs/mcp";
       if (which === "slack") url = "https://docs.slack.dev/ai/slack-mcp-server";
       window.open(url, "_blank", "noopener");
-      text("connector-who", "Allow the MCP in the window that opened, then come back. This page does not take a key.");
+      text("connector-who", "Finish in the window that opened, then come back here. This page never asks for a key.");
     });
   });
   window.addEventListener("focus", function () { load(); });
@@ -7820,7 +7821,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var error = document.getElementById("files-error");
     if (error) error.hidden = true;
     return fetch("/api/files" + (location.search || ""), { headers: { accept: "application/json" } })
-      .then(function (res) { return res.json(); })
+      .then(function (res) {
+        // A workspace without file storage has no files to list, which is the empty state, not an error.
+        if (res.status === 404) return {};
+        if (!res.ok) throw new Error("files " + res.status);
+        return res.json();
+      })
       .then(function (body) { paintFiles(body || {}); })
       .catch(function () {
         if (error) {

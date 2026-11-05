@@ -183,7 +183,7 @@ test("with the flag, the server warms the proofs at start", async () => {
 
 test("the page shows a pending proof and follows it up without a reload", () => {
   const page = renderConsolePage();
-  assert.match(page, /if \(status === "pending"\) return "Verifying on chain…";/);
+  assert.match(page, /if \(status === "pending"\) return "Verifying on Walrus…";/);
   assert.match(page, /function followProof\(decision, tries\)/);
   assert.match(page, /if \(decision && proofPending\(decision\)\) followProof\(decision\);/);
   assert.match(page, /fresh: fresh === true/);
