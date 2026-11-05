@@ -54,6 +54,7 @@ test("Ask AI is live in the rail: no Coming soon, no MCP gate, a daily quota pil
   const load = page.slice(page.indexOf("function loadAsks"), page.indexOf("function showAskThread"));
   assert.match(load, /fetch\("\/api\/ask"/);
   assert.doesNotMatch(load, /method:\s*"POST"/);
+  assert.match(load, /priorAsksForThread\(Array\.isArray\(data\.asks\) \? data\.asks : \[\]\)/);
   assert.match(load, /if \(followAsk\(ask\.id, turn, ask\.count \|\| 0\)\) askBusy = true/);
   const stop = page.slice(page.indexOf("function stopAsk"), page.indexOf("function followAsk"));
   assert.doesNotMatch(stop, /releaseAsk\(\);\s*var live = askLive/);

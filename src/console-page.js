@@ -1,3 +1,4 @@
+import { priorAsksForThread } from "./ask/thread.js";
 import { brandLogo, brandSprite } from "./brand-logos.js";
 import { formatLastTested } from "./console/local-time.js";
 import { renderBotSettings } from "./console/bot-settings.js";
@@ -6469,8 +6470,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function humanAskText(value) {
     return splitLines(value).map(function (line) { return line.trim(); }).filter(function (line) { return !protocolLine(line); }).join(String.fromCharCode(10));
   }
+  ${priorAsksForThread.toString().replaceAll("\n", "\n  ")}
   function loadAsks() {
     // Render and resume only. A reload must not POST the question again.
+    // priorAsksForThread leaves friendly failures and protocol-only turns out of the thread.
     fetch("/api/ask", { headers: { accept: "application/json" } }).then(function (response) {
       return response.ok ? response.json() : null;
     }).then(function (data) {
@@ -6478,7 +6481,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       takeAskQuota(data);
       if (askState.loaded) return;
       askState.loaded = true;
-      var asks = Array.isArray(data.asks) ? data.asks : [];
+      var asks = priorAsksForThread(Array.isArray(data.asks) ? data.asks : []);
       asks.forEach(function (ask) {
         if (!ask || !ask.id || document.querySelector('#chat-log [data-ask="' + ask.id + '"]')) return;
         showAskThread();
