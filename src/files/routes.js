@@ -9,14 +9,17 @@ export async function handleFileRequest(req, res, url, runtime, { send }) {
   const path = url.pathname;
   if (!path.startsWith("/api/files")) return false;
   try {
-    const viewer = runtime.viewer ? runtime.viewer(req, url) : null;
+    const viewer = runtime.viewer ? await runtime.viewer(req, url) : null;
     const userId = viewer?.userId || "";
+    const channels = Array.isArray(viewer?.channels) ? viewer.channels : [];
+    // Only a background runtime runs jobs from a request. Others run their own worker.
+    const kick = () => { if (runtime.background === true && typeof runtime.kick === "function") runtime.kick(); };
     if (req.method === "GET" && path === "/api/files") {
       if (!userId) {
         send(res, 200, "application/json; charset=utf-8", JSON.stringify({ viewer: null, files: [], requests: [], unanswered: [] }));
         return true;
       }
-      send(res, 200, "application/json; charset=utf-8", JSON.stringify(runtime.service.list(userId)));
+      send(res, 200, "application/json; charset=utf-8", JSON.stringify(runtime.service.list(userId, { channels })));
       return true;
     }
     if (req.method === "GET" && path === "/api/files/unanswered") {
@@ -27,14 +30,21 @@ export async function handleFileRequest(req, res, url, runtime, { send }) {
     if (req.method === "POST" && path === "/api/files") {
       if (!userId) throw new FileError(401, "auth", "Sign in again.");
       const upload = await readUpload(req);
+      const channelId = upload.channelId || (channels.length === 1 ? channels[0].id : "");
       const saved = await runtime.service.upload({
         actorUserId: userId,
-        channelId: upload.channelId,
+        channelId,
         name: upload.name,
         mimeType: upload.mimeType,
         bytes: upload.bytes,
         ownerName: viewer.name || "",
+        defer: runtime.background === true,
       });
+      if (runtime.background === true) {
+        kick();
+        send(res, 202, "application/json; charset=utf-8", JSON.stringify(publicFile(saved)));
+        return true;
+      }
       send(res, 201, "application/json; charset=utf-8", JSON.stringify(publicFile(saved)));
       return true;
     }
@@ -43,6 +53,7 @@ export async function handleFileRequest(req, res, url, runtime, { send }) {
       if (!userId) throw new FileError(401, "auth", "Sign in again.");
       const body = await readJson(req);
       const result = runtime.service.answerDelete(userId, decodeURIComponent(answer[1]), body.approve === true);
+      if (result.file) kick();
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({
         request: { id: result.request.id, status: result.request.status },
         file: result.file ? { id: result.file.id, status: result.file.status } : null,
@@ -56,21 +67,50 @@ export async function handleFileRequest(req, res, url, runtime, { send }) {
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({ id: request.id, status: request.status }));
       return true;
     }
+    const link = /^\/api\/files\/([^/]+)\/link$/.exec(path);
+    if (req.method === "POST" && link) {
+      if (!userId || !runtime.links) throw new FileError(404, "not_found", "Not found");
+      const fileId = decodeURIComponent(link[1]);
+      const file = runtime.store.getVisible(userId, fileId);
+      if (!file || file.status !== "active") throw new FileError(404, "not_found", "Not found");
+      const issued = runtime.links.issue(fileId, userId);
+      const query = new URLSearchParams({ token: issued.token });
+      if (url.searchParams.get("as")) query.set("as", url.searchParams.get("as"));
+      send(res, 200, "application/json; charset=utf-8", JSON.stringify({
+        url: `/api/files/${encodeURIComponent(fileId)}/download?${query}`,
+        expiresAt: issued.expiresAt,
+      }));
+      return true;
+    }
+    const signed = /^\/api\/files\/([^/]+)\/download$/.exec(path);
+    if (req.method === "GET" && signed) {
+      const fileId = decodeURIComponent(signed[1]);
+      const opened = runtime.links ? runtime.links.open(url.searchParams.get("token"), fileId) : null;
+      if (!opened) throw new FileError(410, "link_expired", "This download link has expired. Go back and choose Download again.");
+      // The link carries the person, so it works in a new tab; access is checked again here.
+      const downloaded = await runtime.service.download(opened.userId, fileId);
+      sendFile(res, send, downloaded);
+      return true;
+    }
+    const discard = /^\/api\/files\/([^/]+)\/discard$/.exec(path);
+    if (req.method === "POST" && discard) {
+      if (!userId) throw new FileError(401, "auth", "Sign in again.");
+      const file = runtime.service.discardFailed(userId, decodeURIComponent(discard[1]));
+      send(res, 200, "application/json; charset=utf-8", JSON.stringify({ id: file.id, status: file.status }));
+      return true;
+    }
     const filePath = /^\/api\/files\/([^/]+)$/.exec(path);
     const sub = /^\/api\/files\/([^/]+)\/(delete|request-delete)$/.exec(path);
     if (req.method === "GET" && filePath) {
       if (!userId) throw new FileError(404, "not_found", "Not found");
       const downloaded = await runtime.service.download(userId, decodeURIComponent(filePath[1]));
-      const name = downloaded.file.name.replace(/["\r\n]/g, "");
-      send(res, 200, downloaded.file.mimeType || "application/octet-stream", downloaded.bytes, {
-        "content-disposition": `attachment; filename="${name}"`,
-        "cache-control": "no-store",
-      });
+      sendFile(res, send, downloaded);
       return true;
     }
     if (req.method === "POST" && sub && sub[2] === "delete") {
       if (!userId) throw new FileError(401, "auth", "Sign in again.");
       const file = runtime.service.deleteFile(userId, decodeURIComponent(sub[1]));
+      kick();
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({ id: file.id, status: file.status, deleteReason: file.deleteReason }));
       return true;
     }
@@ -89,6 +129,14 @@ export async function handleFileRequest(req, res, url, runtime, { send }) {
     send(res, status, "application/json; charset=utf-8", JSON.stringify({ error: publicError(message) }));
     return true;
   }
+}
+
+function sendFile(res, send, downloaded) {
+  const name = downloaded.file.name.replace(/["\r\n\\]/g, "").replace(/[^\x20-\x7e]/g, "_");
+  send(res, 200, downloaded.file.mimeType || "application/octet-stream", downloaded.bytes, {
+    "content-disposition": `attachment; filename="${name}"; filename*=UTF-8''${encodeURIComponent(downloaded.file.name)}`,
+    "cache-control": "no-store",
+  });
 }
 
 function publicFile(file) {

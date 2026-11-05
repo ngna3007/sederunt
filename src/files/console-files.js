@@ -16,7 +16,7 @@ import {
   reserveConsoleFolder,
   signConsoleReserve,
 } from "../console/upload.js";
-import { configuredFolderId, configuredSpaceId, filesFolderName } from "./config.js";
+import { CONSOLE_API_BASE, configuredFolderId, configuredSpaceId, filesFolderName } from "./config.js";
 import { credentialUnreadable, openConsoleCredential } from "./credentials.js";
 
 /**
@@ -192,8 +192,43 @@ export function createConsoleFiles(options = {}) {
     if (state !== "completed") throw new Error("Console upload did not complete");
   }
 
+  /** Walrus ids for the "Verified on Walrus" details. A failed read only hides them. */
+  async function readProof(folderId, fileId, key) {
+    try {
+      const record = await readConsoleFile(fetchImpl, key, folderId, fileId, wait);
+      return proofFromRecord(record);
+    } catch {
+      return {};
+    }
+  }
+
   return {
     resolveFolder,
+    /**
+     * Active files in the shared folder that carry Sederunt metadata.
+     * Used to rebuild the list after a restart. Pages until done or `max`.
+     */
+    async listShared({ max = 500 } = {}) {
+      const folder = await sharedFolder({});
+      const out = [];
+      let cursor = "";
+      for (let page = 0; page < 20 && out.length < max; page += 1) {
+        const query = new URLSearchParams({ limit: "100" });
+        if (cursor) query.set("cursor", cursor);
+        const response = await fetchImpl(`${CONSOLE_API_BASE}/buckets/${encodeURIComponent(folder.folderId)}/files?${query}`, {
+          headers: { authorization: `Bearer ${apiKey}` },
+        });
+        if (!response.ok) throw new Error("Console files are not readable");
+        const body = await response.json();
+        for (const record of Array.isArray(body?.data) ? body.data : []) {
+          const row = importedFile(record, folder);
+          if (row) out.push(row);
+        }
+        cursor = body?.pagination?.has_more ? String(body.pagination.next_cursor || "") : "";
+        if (!cursor) break;
+      }
+      return out;
+    },
     async put({ name, plain, metadata, tags, folder, onAccepted }) {
       const keys = keysFrom(folder);
       const policyId = folder.sealPolicyId || await loadPolicy(folder.folderId, keys.apiKey);
@@ -211,7 +246,8 @@ export function createConsoleFiles(options = {}) {
         await onAccepted({ spaceId: folder.spaceId, folderId: folder.folderId, fileId });
       }
       await finishUpload({ folderId: folder.folderId, fileId, tags, apiKey: keys.apiKey });
-      return { spaceId: folder.spaceId, folderId: folder.folderId, fileId, state: "active" };
+      const proof = await readProof(folder.folderId, fileId, keys.apiKey);
+      return { spaceId: folder.spaceId, folderId: folder.folderId, fileId, state: "active", ...proof };
     },
     async finish({ folderId, fileId, tags }) {
       const keys = keysForFolder(folderId);
@@ -234,5 +270,54 @@ export function createConsoleFiles(options = {}) {
       if (!record || metadataReady(record) === "deleted") return { deleted: true };
       return { deleted: false, status: record.status || record.state || "" };
     },
+  };
+}
+
+/** @param {any} record */
+export function proofFromRecord(record) {
+  if (!record || typeof record !== "object") return {};
+  const blobId = typeof record.blob_id === "string" ? record.blob_id : "";
+  const objectId = typeof record.pooled_blob_object_id === "string"
+    ? record.pooled_blob_object_id
+    : (typeof record.blob_object_id === "string" ? record.blob_object_id : "");
+  return { ...(blobId ? { blobId } : {}), ...(objectId ? { objectId } : {}) };
+}
+
+/**
+ * One Console record back into a file row, or null when it is not ours.
+ * @param {any} record
+ * @param {{ spaceId?: string, folderId: string }} folder
+ */
+export function importedFile(record, folder) {
+  if (!record || String(record.status || "").toLowerCase() !== "active") return null;
+  let meta = record.metadata;
+  if (typeof meta === "string") {
+    try { meta = JSON.parse(meta); } catch { meta = null; }
+  }
+  if (!meta || typeof meta !== "object") return null;
+  const id = String(meta.sederunt_file_id || "");
+  const tenantId = String(meta.tenant_id || "");
+  const channelId = String(meta.channel_id || "");
+  if (!id || !tenantId || !channelId) return null;
+  const objectName = String(record.name || record.original_name || "");
+  const name = objectName.startsWith(`${id}-`) ? objectName.slice(id.length + 1) : objectName;
+  if (!name) return null;
+  const proof = proofFromRecord(record);
+  return {
+    id,
+    tenantId,
+    channelId,
+    ownerUserId: String(meta.owner_person_id || "") || null,
+    ownerName: String(meta.owner_name || ""),
+    name,
+    mimeType: String(meta.mime_type || record.mime_type || "application/octet-stream"),
+    sizeBytes: Number(meta.size_bytes) || Number(record.content_size) || 0,
+    slackFileId: meta.slack_file_id || null,
+    consoleSpaceId: folder.spaceId || null,
+    consoleFolderId: String(record.bucket_id || folder.folderId),
+    consoleFileId: String(record.id || ""),
+    walrusBlobId: proof.blobId || null,
+    suiObjectId: proof.objectId || null,
+    createdAt: record.created_at || null,
   };
 }

@@ -49,6 +49,8 @@ import { roleLabel } from "./identity/onboarding.js";
 import { renderLanding } from "./landing.js";
 import { handleFileRequest } from "./files/routes.js";
 import { createFileRuntime } from "./files/runtime.js";
+import { createFileStore } from "./files/store.js";
+import { createSessionFiles } from "./files/session.js";
 import { hideDeletedSlackMessages, ingestSlackFile } from "./files/slack.js";
 import { loadCompanyEnv, loadLocalEnv } from "./local-env.js";
 import { looksLikeOpenQuestion } from "./parse.js";
@@ -370,10 +372,7 @@ export function createApp(options = {}) {
   }
   const filesRuntime = options.files === false
     ? null
-    : (options.files || (attachFiles(options, env) ? createFileRuntime({
-      env,
-      demo: env.FILES_DEMO === "1",
-    }) : null));
+    : (options.files || (attachFiles(options, env) ? liveFiles(env, identity) : null));
   const server = createServer(async (req, res) => {
   try {
     if (identity) rememberRefreshCookie(res, await refreshOAuthSession(req, identity, env));
@@ -1316,6 +1315,27 @@ function saveCalendarEnv(env) {
   } catch {
     return;
   }
+}
+
+/**
+ * The demo keeps its seeded memory. A configured Console serves the signed-in
+ * workspace: uploads return at once and a background pass stores the bytes.
+ */
+function liveFiles(env, identity) {
+  if (env.FILES_DEMO === "1") return createFileRuntime({ env, demo: true });
+  const store = createFileStore();
+  let session = null;
+  const background = !process.env.VERCEL;
+  const runtime = createFileRuntime({
+    env,
+    store,
+    background,
+    linkSecret: `files:${sessionSecret(env)}`,
+    viewer: (req) => session.viewer(req),
+  });
+  session = createSessionFiles({ env, identity, store, storage: runtime.storage });
+  if (background && runtime.storage) runtime.startWorker(30_000);
+  return runtime;
 }
 
 function attachFiles(options, env) {

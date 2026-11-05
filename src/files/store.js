@@ -251,6 +251,8 @@ export function createFileStore({ clock = () => new Date() } = {}) {
       file.consoleFolderId = placed.folderId || file.consoleFolderId;
       file.consoleFileId = placed.fileId || file.consoleFileId;
       file.consoleState = placed.state || "active";
+      if (placed.blobId) file.walrusBlobId = placed.blobId;
+      if (placed.objectId) file.suiObjectId = placed.objectId;
       file.status = "active";
       file.updatedAt = now();
       ciphertext.delete(fileId);
@@ -346,6 +348,62 @@ export function createFileStore({ clock = () => new Date() } = {}) {
     },
     listVisible(userId) {
       return [...files.values()].filter((file) => visibleFile(userId, file)).map(copyFile);
+    },
+    /** The viewer's own uploads that are still running or did not finish. */
+    listOwnInFlight(userId) {
+      return [...files.values()]
+        .filter((file) => file.ownerUserId === userId && (file.status === "uploading" || file.status === "failed"))
+        .filter((file) => canSeeChannel(userId, file.channelId))
+        .map(copyFile);
+    },
+    /** Drop a failed upload from the owner's list. Nothing reached storage. */
+    discardFailed(userId, fileId) {
+      const file = files.get(fileId);
+      if (!file || file.ownerUserId !== userId || file.status !== "failed") throw new FileError(404, "not_found", "Not found");
+      file.status = "deleted";
+      file.deleteReason = "owner";
+      file.deletedAt = now();
+      file.updatedAt = now();
+      ciphertext.delete(fileId);
+      return copyFile(file);
+    },
+    /**
+     * Put back an active file that already lives in Console, after a restart.
+     * Idempotent by id. No job is queued because the bytes are already stored.
+     */
+    importActive(input) {
+      const existing = files.get(input.id);
+      if (existing) return copyFile(existing);
+      const row = {
+        id: input.id,
+        tenantId: input.tenantId,
+        channelId: input.channelId,
+        messageId: null,
+        ownerUserId: input.ownerUserId || null,
+        ownerGuestId: null,
+        ownerName: input.ownerName || "",
+        name: input.name,
+        mimeType: input.mimeType || "application/octet-stream",
+        sizeBytes: input.sizeBytes || 0,
+        sha256: null,
+        slackFileId: input.slackFileId || null,
+        consoleSpaceId: input.consoleSpaceId || null,
+        consoleFolderId: input.consoleFolderId,
+        consoleFileId: input.consoleFileId,
+        consoleState: "active",
+        walrusBlobId: input.walrusBlobId || null,
+        suiObjectId: input.suiObjectId || null,
+        status: "active",
+        deleteReason: null,
+        deletedBy: null,
+        createdAt: input.createdAt ? new Date(input.createdAt) : now(),
+        updatedAt: now(),
+        pendingDeleteAt: null,
+        deletedAt: null,
+        uploadStep: null,
+      };
+      files.set(row.id, row);
+      return copyFile(row);
     },
     getVisible(userId, id) {
       const file = files.get(id);

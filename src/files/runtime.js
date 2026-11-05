@@ -5,6 +5,8 @@ import { createMemoryConsole } from "./memory-console.js";
 import { createMemoryCleaner, createRelayerMemoryClient, memoryAccountFromEnv } from "./memory.js";
 import { createFileService } from "./service.js";
 import { createFileStore } from "./store.js";
+import { createFileLinks } from "./links.js";
+import { runFileWorker } from "./worker.js";
 
 /**
  * Wires a store and a Console client.
@@ -37,7 +39,11 @@ export function createFileRuntime(options = {}) {
     client: options.memoryClient || (account.configured ? createRelayerMemoryClient() : null),
   });
   const service = options.service || createFileService({ store, storage, memory });
-  return {
+  const links = options.links || createFileLinks({ secret: options.linkSecret || options.serverSecret, clock });
+  let running = null;
+  let again = false;
+  let timer = null;
+  const runtime = {
     env,
     store,
     storage,
@@ -45,6 +51,39 @@ export function createFileRuntime(options = {}) {
     service,
     demo,
     clock,
+    links,
+    /** Uploads return at once and the worker stores the bytes. */
+    background: options.background === true,
+    /** Run due jobs now. One pass at a time; a kick during a pass runs one more. */
+    kick() {
+      if (running) {
+        again = true;
+        return running;
+      }
+      running = (async () => {
+        try {
+          do {
+            again = false;
+            await runFileWorker(runtime);
+          } while (again);
+        } catch {
+          // A failed pass leaves its jobs queued with backoff.
+        } finally {
+          running = null;
+        }
+      })();
+      return running;
+    },
+    /** Retry queued jobs every `ms` until `stop()`. The timer does not hold the process open. */
+    startWorker(ms = 30_000) {
+      if (timer) return;
+      timer = setInterval(() => { runtime.kick(); }, ms);
+      timer.unref?.();
+    },
+    stop() {
+      if (timer) clearInterval(timer);
+      timer = null;
+    },
     viewer(req, url) {
       if (options.trustUserHeader) {
         const id = headerValue(req.headers["x-file-user"]);
@@ -59,6 +98,7 @@ export function createFileRuntime(options = {}) {
       return null;
     },
   };
+  return runtime;
 }
 
 function headerValue(value) {

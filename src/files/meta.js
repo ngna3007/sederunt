@@ -25,6 +25,10 @@ export function fileMetadata(file) {
     channel_id: file.channelId,
     owner_person_id: file.ownerUserId || file.ownerGuestId || "",
     slack_file_id: file.slackFileId || null,
+    // Enough to list the file again after a restart. Names only, no secrets.
+    owner_name: String(file.ownerName || "").slice(0, 120),
+    mime_type: String(file.mimeType || "").slice(0, 120),
+    size_bytes: Number(file.sizeBytes) || 0,
   };
 }
 

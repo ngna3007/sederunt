@@ -52,6 +52,8 @@ export function createFileService({ store, storage, memory }) {
         sha256: sha256Bytes(bytes),
       });
       store.stashUpload(row.id, bytes);
+      // Background mode: the queued upload job places the bytes. The list shows "Uploading…" meanwhile.
+      if (input.defer === true) return row;
       try {
         return await placeStoredFile({ store, storage }, row, bytes);
       } catch (error) {
@@ -113,8 +115,15 @@ export function createFileService({ store, storage, memory }) {
       return link;
     },
 
-    list(userId) {
+    discardFailed(userId, fileId) {
+      return store.discardFailed(userId, fileId);
+    },
+
+    list(userId, { channels = [] } = {}) {
       const files = store.listVisible(userId).map((file) => presentFile(store, userId, file));
+      const uploading = typeof store.listOwnInFlight === "function"
+        ? store.listOwnInFlight(userId).map((file) => presentFile(store, userId, file))
+        : [];
       const requests = store.listRequests(userId).map((request) => presentRequest(store, userId, request));
       const unanswered = store.listUnanswered(userId).map((request) => presentRequest(store, userId, request));
       return {
@@ -124,6 +133,8 @@ export function createFileService({ store, storage, memory }) {
           admin: store.isWorkspaceAdmin(userId),
         },
         files,
+        uploading,
+        channels: channels.filter((channel) => store.canSeeChannel(userId, channel.id)).map((channel) => ({ id: channel.id, name: channel.name })),
         requests,
         unanswered,
       };
@@ -149,6 +160,12 @@ function presentFile(store, userId, file) {
     deleting: file.status === "pending_delete",
     canDelete: file.status === "active" && (owner || admin),
     canRequest: file.status === "active" && !owner && !admin && store.canSeeChannel(userId, file.channelId),
+    uploading: file.status === "uploading",
+    failed: file.status === "failed",
+    // Shown only behind the "Verified on Walrus" badge, never on the list itself.
+    proof: file.status === "active" && file.walrusBlobId
+      ? { blobId: file.walrusBlobId, objectId: file.suiObjectId || "", storedAt: file.updatedAt ? new Date(file.updatedAt).toISOString() : "" }
+      : null,
   };
 }
 

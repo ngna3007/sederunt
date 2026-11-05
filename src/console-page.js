@@ -523,13 +523,13 @@ ${slack}
       <a class="secondary" href="/console"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10 3.5 5.5 8 10 12.5"/></svg>Back to Home</a>
     </section>
     <section id="files" hidden>
-      <div class="page-head" id="files-head"><div><p class="page-title">Files</p><p class="page-lede"><span>Files in the channels you can see.</span> <span>Kept with this workspace.</span></p></div></div>
+      <div class="page-head" id="files-head"><div><p class="page-title">Files</p><p class="page-lede"><span>Files in the channels you can see.</span> <span>Kept with this workspace.</span></p></div><div class="page-actions" id="files-actions" hidden><label class="sr" for="files-channel">Channel</label><select id="files-channel" hidden></select><input id="files-input" type="file" hidden><button type="button" class="primary" id="files-upload">Upload file</button></div></div>
       <div id="files-unanswered" hidden></div>
       <div id="files-requests" hidden></div>
       <div id="channel-files-empty" class="empty-state" hidden>
         <span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.6h5.2L12.2 5.6V13H4z"/><path d="M9.1 2.7V5.7H12.2"/></svg></span>
         <p class="empty-title">No files yet.</p>
-        <p>Files from your channels show up here.</p>
+        <p id="channel-files-empty-copy">Files from your channels show up here.</p>
       </div>
       <div id="files-list"></div>
       <p id="files-error" class="meta" hidden></p>
@@ -960,6 +960,41 @@ ${spaceDialog}
         <button type="submit" class="primary" id="mcp-token-save">Save token</button>
       </div>
     </form>
+  </div>
+</div>
+<div id="file-proof-dialog" class="dialog" hidden role="dialog" aria-modal="true" aria-labelledby="file-proof-title">
+  <div class="shade" data-close="file-proof-dialog"></div>
+  <div class="panel">
+    <div class="panel-bar">
+      <h2 id="file-proof-title">Verified on Walrus</h2>
+      <button type="button" class="close" data-close="file-proof-dialog" aria-label="Close">${closeIcon}</button>
+    </div>
+    <div class="panel-body">
+      <section class="detail-block proof-panel">
+        <p id="file-proof-plain" class="proof-plain"></p>
+        <p id="file-proof-when" class="meta"></p>
+        <details class="proof-tech" id="file-proof-tech">
+          <summary>Show technical details</summary>
+          <dl class="kv" id="file-proof-facts"></dl>
+        </details>
+      </section>
+    </div>
+  </div>
+</div>
+<div id="file-delete-dialog" class="dialog" hidden role="dialog" aria-modal="true" aria-labelledby="file-delete-title">
+  <div class="shade" data-close="file-delete-dialog"></div>
+  <div class="panel">
+    <div class="panel-bar">
+      <h2 id="file-delete-title">Delete file</h2>
+      <button type="button" class="close" data-close="file-delete-dialog" aria-label="Close">${closeIcon}</button>
+    </div>
+    <div class="panel-body">
+      <p id="file-delete-copy">Delete this file for everyone in the workspace? This cannot be undone.</p>
+      <div class="wait-actions">
+        <button type="button" class="secondary" data-close="file-delete-dialog">Cancel</button>
+        <button type="button" class="danger" id="file-delete-confirm">Delete</button>
+      </div>
+    </div>
   </div>
 </div>
 <div id="mcp-remove-dialog" class="dialog" hidden role="dialog" aria-modal="true" aria-labelledby="mcp-remove-title">
@@ -3080,7 +3115,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function dialogOpen() {
-    var ids = ["proof-dialog", "event-dialog", "profile-dialog", "decision-dialog", "create-dialog", "workspace-dialog", "space-dialog", "mcp-dialog", "mcp-manage-dialog", "mcp-token-dialog", "mcp-remove-dialog"];
+    var ids = ["proof-dialog", "event-dialog", "profile-dialog", "decision-dialog", "create-dialog", "workspace-dialog", "space-dialog", "mcp-dialog", "mcp-manage-dialog", "mcp-token-dialog", "mcp-remove-dialog", "file-proof-dialog", "file-delete-dialog"];
     for (var i = 0; i < ids.length; i += 1) {
       var node = document.getElementById(ids[i]);
       if (node && !node.hidden) return true;
@@ -7828,6 +7863,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         return res.json();
       })
       .then(function (body) { paintFiles(body || {}); })
+      .then(scheduleFilesPoll)
       .catch(function () {
         if (error) {
           error.hidden = false;
@@ -7836,8 +7872,45 @@ if (sessionWhen && sessionWhen.dataset.at) {
       });
   }
 
+  var filesPollTimer = null;
+  var filesBusy = false;
+  var filesChannels = [];
+  var filesDeleteId = "";
+
+  function scheduleFilesPoll() {
+    if (filesPollTimer) clearTimeout(filesPollTimer);
+    filesPollTimer = null;
+    var section = document.getElementById("files");
+    if (!filesBusy || !section || section.hidden) return;
+    // Storing a file takes a few seconds. Check again until it is ready.
+    filesPollTimer = setTimeout(loadFiles, 3000);
+  }
+
+  function paintFilesActions(body) {
+    var actions = document.getElementById("files-actions");
+    var select = document.getElementById("files-channel");
+    filesChannels = body.channels || [];
+    if (actions) actions.hidden = !body.viewer || filesChannels.length === 0;
+    if (!select) return;
+    var keep = select.value;
+    select.replaceChildren();
+    filesChannels.forEach(function (channel) {
+      var option = document.createElement("option");
+      option.value = channel.id;
+      option.textContent = channel.name || "Channel";
+      select.append(option);
+    });
+    if (keep) select.value = keep;
+    select.hidden = filesChannels.length < 2;
+    var copy = document.getElementById("channel-files-empty-copy");
+    if (copy) copy.textContent = filesChannels.length ? "Upload a file to share it with this workspace." : "Files from your channels show up here.";
+  }
+
   function paintFiles(body) {
-    var files = body.files || [];
+    paintFilesActions(body);
+    var uploading = body.uploading || [];
+    filesBusy = uploading.some(function (file) { return file.uploading; }) || (body.files || []).some(function (file) { return file.deleting; });
+    var files = uploading.concat(body.files || []);
     var requests = (body.requests || []).filter(function (request) { return request.canAnswer; });
     var unanswered = body.unanswered || [];
     paintFileRequests("files-requests", "Delete requests", requests, true);
@@ -7919,6 +7992,16 @@ if (sessionWhen && sessionWhen.dataset.at) {
     copy.append(name, meta);
     var actions = document.createElement("div");
     actions.className = "file-actions";
+    if (file.proof) copy.append(fileProofBadge(file));
+    if (file.uploading || file.failed) {
+      var state = document.createElement("p");
+      state.className = "files-deleting";
+      state.textContent = file.uploading ? "Uploading…" : "Couldn't upload";
+      actions.append(state);
+      if (file.failed) actions.append(fileButton("Remove", "secondary", function () { discardFailedFile(file.id); }));
+      row.append(copy, actions);
+      return row;
+    }
     if (file.deleting) {
       var pending = document.createElement("p");
       pending.className = "files-deleting";
@@ -7941,7 +8024,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     menu.hidden = true;
     menu.setAttribute("role", "menu");
     menu.append(fileMenuItem("Download", false, function () { downloadListedFile(file); }));
-    if (file.canDelete) menu.append(fileMenuItem("Delete", true, function () { deleteListedFile(file.id); }));
+    if (file.canDelete) menu.append(fileMenuItem("Delete", true, function () { confirmFileDelete(file); }));
     if (file.canRequest) menu.append(fileMenuItem("Ask owner to delete", false, function () { askFileDelete(file.id); }));
     actions.append(trigger, menu);
     row.append(copy, actions);
@@ -7991,8 +8074,125 @@ if (sessionWhen && sessionWhen.dataset.at) {
     error.textContent = message || "";
   }
 
+  function fileProofBadge(file) {
+    var badge = document.createElement("button");
+    badge.type = "button";
+    badge.className = "file-verified";
+    badge.textContent = "Verified on Walrus";
+    badge.setAttribute("aria-label", "Verified on Walrus: details for " + file.name);
+    badge.addEventListener("click", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      openFileProof(file);
+    });
+    return badge;
+  }
+
+  function openFileProof(file) {
+    var proof = file.proof || {};
+    var plain = document.getElementById("file-proof-plain");
+    var when = document.getElementById("file-proof-when");
+    var facts = document.getElementById("file-proof-facts");
+    var tech = document.getElementById("file-proof-tech");
+    if (plain) plain.textContent = (file.name || "This file") + " is stored encrypted, with a public proof it was saved. Only people in this workspace can open it.";
+    if (when) when.textContent = proof.storedAt ? "Stored " + formatFileDate(proof.storedAt) + "." : "";
+    if (tech) tech.open = false;
+    if (facts) {
+      facts.replaceChildren();
+      [["Blob ID", proof.blobId], ["Object ID", proof.objectId], ["File ID", file.id]].forEach(function (pair) {
+        if (!pair[1]) return;
+        var term = document.createElement("dt");
+        term.textContent = pair[0];
+        var value = document.createElement("dd");
+        var code = document.createElement("code");
+        code.textContent = pair[1];
+        value.append(code);
+        facts.append(term, value);
+      });
+    }
+    openDialog("file-proof-dialog");
+  }
+
+  function confirmFileDelete(file) {
+    closeFileMenus();
+    filesDeleteId = file.id;
+    var copy = document.getElementById("file-delete-copy");
+    if (copy) copy.textContent = "Delete " + (file.name || "this file") + " for everyone in the workspace? This cannot be undone.";
+    openDialog("file-delete-dialog");
+  }
+
+  var fileDeleteConfirm = document.getElementById("file-delete-confirm");
+  if (fileDeleteConfirm) fileDeleteConfirm.addEventListener("click", function () {
+    var id = filesDeleteId;
+    filesDeleteId = "";
+    closeDialog("file-delete-dialog");
+    if (id) deleteListedFile(id);
+  });
+
+  function discardFailedFile(id) {
+    filesPost("/api/files/" + encodeURIComponent(id) + "/discard").then(loadFiles).catch(function (error) {
+      fileNote(error.message || "The file could not be removed.");
+    });
+  }
+
+  var filesUpload = document.getElementById("files-upload");
+  var filesInput = document.getElementById("files-input");
+  if (filesUpload && filesInput) {
+    filesUpload.addEventListener("click", function () { filesInput.click(); });
+    filesInput.addEventListener("change", function () {
+      var picked = filesInput.files && filesInput.files[0];
+      filesInput.value = "";
+      if (picked) uploadPickedFile(picked);
+    });
+  }
+
+  function uploadPickedFile(picked) {
+    var select = document.getElementById("files-channel");
+    var channelId = (select && select.value) || (filesChannels[0] && filesChannels[0].id) || "";
+    fileNote("");
+    if (filesUpload) {
+      filesUpload.disabled = true;
+      filesUpload.textContent = "Uploading…";
+    }
+    fetch("/api/files" + (location.search || ""), {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": picked.type || "application/octet-stream",
+        "x-file-name": encodeURIComponent(picked.name || "file"),
+        "x-channel-id": channelId
+      },
+      body: picked
+    }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (payload) {
+        if (!res.ok) throw new Error(payload.error || "The file could not be uploaded.");
+        return payload;
+      });
+    }).then(loadFiles).catch(function (error) {
+      fileNote(error.message || "The file could not be uploaded.");
+    }).then(function () {
+      if (filesUpload) {
+        filesUpload.disabled = false;
+        filesUpload.textContent = "Upload file";
+      }
+    });
+  }
+
   function downloadListedFile(file) {
     closeFileMenus();
+    // A short-lived link opens the file straight from the server. The fallback reads it here.
+    filesPost("/api/files/" + encodeURIComponent(file.id) + "/link").then(function (link) {
+      if (!link || !link.url) throw new Error("no link");
+      var anchor = document.createElement("a");
+      anchor.href = link.url;
+      anchor.download = file.name || "file";
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+    }).catch(function () { downloadFileBytes(file); });
+  }
+
+  function downloadFileBytes(file) {
     var path = "/api/files/" + encodeURIComponent(file.id) + (location.search || "");
     fetch(path).then(function (res) {
       if (!res.ok) {
