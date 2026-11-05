@@ -56,7 +56,7 @@ import { loadCompanyEnv, loadLocalEnv } from "./local-env.js";
 import { looksLikeOpenQuestion } from "./parse.js";
 import { createSession } from "./session.js";
 import { createAskStore, askLimit, settledStatus } from "./ask/store.js";
-import { askSpendsQuota, runAsk } from "./ask/run.js";
+import { ASK_UNAVAILABLE, askSpendsQuota, humanAskText, runAsk } from "./ask/run.js";
 import { openRouterConfig } from "./openrouter.js";
 import { answerSlackQuestion, postSlackReply, slackChannelMembers, slackFileBytes, slackQuestion } from "./slack/reply.js";
 import { slackDelivery, verifySlackRequest } from "./slack/sign.js";
@@ -1481,12 +1481,20 @@ async function handleAsk(workspace, req, res, url) {
       const askStore = {
         ...store,
         async finish(askId, fields = {}) {
+          let next = fields;
           const status = fields.status || "done";
-          if (askId === id && !refunded && !askSpendsQuota(fields.source, status)) {
+          // The model can stream the failure sentence on a 200. That is not a kept answer.
+          if (askId === id && fields.source === "openrouter") {
+            const text = humanAskText((await store.chunks(askId, 0).catch(() => [])).join(""));
+            if (text === ASK_UNAVAILABLE) {
+              next = { ...fields, source: "unavailable", result: fields.result || { body: ASK_UNAVAILABLE } };
+            }
+          }
+          if (askId === id && !refunded && !askSpendsQuota(next.source, next.status || status)) {
             refunded = true;
             await store.refund(user).catch(() => {});
           }
-          return store.finish(askId, fields);
+          return store.finish(askId, next);
         },
       };
       const companyId = typeof body.company === "string" ? body.company : "";

@@ -3,7 +3,7 @@ import { once } from "node:events";
 import net from "node:net";
 import test from "node:test";
 import { askBackend, createAskStore, quotaDay, settledStatus } from "../src/ask/store.js";
-import { ASK_UNAVAILABLE, askFallbackText, askSpendsQuota, runAsk } from "../src/ask/run.js";
+import { ASK_UNAVAILABLE, NOTHING, askFallbackText, askSpendsQuota, askSystemPrompt, runAsk } from "../src/ask/run.js";
 import { sealSession, sessionCookie } from "../src/console-auth.js";
 import { createApp } from "../src/server.js";
 import { createSession } from "../src/session.js";
@@ -186,6 +186,35 @@ test("one prompt increments the quota key once and overview reads that same key"
   assert.equal(gets[0][0][1], incrs[0][0][1]);
 });
 
+test("ask system prompt answers what Sederunt is from product knowledge when memory is empty", () => {
+  const prompt = askSystemPrompt([], "Sederunt");
+  assert.match(prompt, /Memory recall ran before this reply/);
+  assert.match(prompt, /Built-in product knowledge/);
+  assert.match(prompt, /what Sederunt is or how Sederunt works/);
+  assert.match(prompt, /Sederunt joins a channel or a meeting, keeps what was decided, and answers later from that record/);
+  assert.match(prompt, /even when no memory applies/);
+  assert.match(prompt, /Do not answer a product question with the empty-memory sentence/);
+  assert.match(prompt, /Do not invent decisions, dates, owners, or numbers/);
+  assert.match(prompt, /needs a kept decision and none of the memories apply/);
+  assert.match(prompt, new RegExp(NOTHING.replace(/[.]/g, "\\.")));
+  assert.match(prompt, /Memories:\n\(none\)/);
+  assert.doesNotMatch(prompt, /Answer only from the memories below/);
+  assert.doesNotMatch(prompt, /If nothing below applies/);
+});
+
+test("ask system prompt still cites a kept decision and forbids inventing one", () => {
+  const prompt = askSystemPrompt([{
+    text: "The booth opens at nine.",
+    speaker: "rowan",
+    spokenAt: "2026-11-03T02:00:00.000Z",
+    roomId: "booth",
+  }], "");
+  assert.match(prompt, /1\. The booth opens at nine\./);
+  assert.match(prompt, /Do not invent decisions, dates, owners, or numbers/);
+  assert.match(prompt, /needs a kept decision and none of the memories apply/);
+  assert.doesNotMatch(prompt, /\(none\)/);
+});
+
 test("ask fallback text is a sentence, never protocol keys", () => {
   assert.equal(askFallbackText("What is Sederunt in one sentence?", {
     body: "missing-member\nrecorded\npreference ask",
@@ -227,6 +256,33 @@ test("a stream left mid-answer by a dead process reads as stopped", () => {
   assert.equal(settledStatus({ status: "streaming", updatedAt: now - 1000 }, now), "streaming");
   assert.equal(settledStatus({ status: "streaming", updatedAt: now - 120_000 }, now), "stopped");
   assert.equal(settledStatus(null), "missing");
+});
+
+test("runAsk sends product knowledge for an empty workspace and keeps the model sentence", async () => {
+  const order = [];
+  const store = createAskStore({});
+  const question = "What is Sederunt in one sentence?";
+  const sentence = "Sederunt joins a meeting, keeps what was decided, and answers later from that record.";
+  const id = await store.create("rowan", question);
+  await runAsk({
+    store,
+    id,
+    question,
+    visible: [],
+    recall: async (query) => { order.push(["recall", query]); return []; },
+    env: { OPENROUTER_API_KEY: "test-key" },
+    fetchImpl: sseFetch(order, [sentence]),
+  });
+  assert.deepEqual(order.map((row) => row[0]), ["recall", "generate"]);
+  const system = order[1][2].messages[0].content;
+  assert.match(system, /what Sederunt is or how Sederunt works/);
+  assert.match(system, /\(none\)/);
+  assert.doesNotMatch(system, /If nothing below applies/);
+  assert.equal(order[1][2].model, "google/gemma-4-31b-it:free");
+  assert.equal((await store.chunks(id, 0)).join(""), sentence);
+  const meta = await store.meta(id);
+  assert.equal(meta.status, "done");
+  assert.equal(meta.source, "openrouter");
 });
 
 test("runAsk recalls before generating and writes deltas to the store", async () => {
@@ -326,6 +382,50 @@ test("ask quota is spent only for a real answer", () => {
   assert.equal(askSpendsQuota("openrouter", "error"), false);
   assert.equal(askSpendsQuota("", "error"), false);
   assert.equal(askSpendsQuota(undefined, "stopped"), false);
+});
+
+test("the empty-memory sentence still spends a question when it is the model answer", async () => {
+  const app = appFor({ env: { OPENROUTER_API_KEY: "test-key" }, deltas: [NOTHING] });
+  const port = await listen(app);
+  try {
+    const first = await ask(port, "When does the booth open?");
+    assert.equal(first.status, 200);
+    assert.equal(first.body.remaining, 4);
+    const streamed = await readStream(port, first.body.id, 0);
+    const text = streamed.events.filter((row) => row.event === "chunk").map((row) => row.data.t).join("");
+    assert.equal(text, NOTHING);
+    const done = streamed.events.at(-1);
+    assert.equal(done.event, "done");
+    assert.equal(done.data.source, "openrouter");
+    assert.equal(done.data.quota.used, 1);
+    assert.equal(done.data.quota.remaining, 4);
+  } finally {
+    app.close();
+  }
+});
+
+test("a model reply that is exactly the unavailable sentence refunds the quota", async () => {
+  const app = appFor({ env: { OPENROUTER_API_KEY: "test-key" }, deltas: [ASK_UNAVAILABLE] });
+  const port = await listen(app);
+  try {
+    const first = await ask(port, "When does the booth open?");
+    assert.equal(first.status, 200);
+    assert.equal(first.body.used, 1);
+    assert.equal(first.body.remaining, 4);
+    const streamed = await readStream(port, first.body.id, 0);
+    const text = streamed.events.filter((row) => row.event === "chunk").map((row) => row.data.t).join("");
+    assert.equal(text, ASK_UNAVAILABLE);
+    const done = streamed.events.at(-1);
+    assert.equal(done.data.status, "done");
+    assert.equal(done.data.source, "unavailable");
+    assert.equal(done.data.quota.used, 0);
+    assert.equal(done.data.quota.remaining, 5);
+    const again = await fetch(`http://127.0.0.1:${port}/api/ask`, { headers: { cookie: cookie() } }).then((r) => r.json());
+    assert.equal(again.used, 0);
+    assert.equal(again.remaining, 5);
+  } finally {
+    app.close();
+  }
 });
 
 test("a failed model chain stores a friendly answer, not protocol, and refunds the quota", async () => {

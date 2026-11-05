@@ -6412,9 +6412,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function takeAskQuota(data) {
     if (!data) return;
     if (typeof data.limit === "number") askState.limit = data.limit;
-    // used and remaining come from the same quota key. If they disagree, trust used.
-    if (typeof data.used === "number" && typeof data.limit === "number" && data.used < data.limit) {
-      askState.remaining = data.limit - data.used;
+    // used and remaining come from the same quota key. A refund lowers used
+    // and raises remaining, so this snapshot replaces the claim, including used 0.
+    if (typeof data.used === "number" && typeof askState.limit === "number") {
+      var usedNow = data.used;
+      if (usedNow < 0) usedNow = 0;
+      if (usedNow > askState.limit) usedNow = askState.limit;
+      askState.remaining = askState.limit - usedNow;
     } else if (typeof data.remaining === "number") askState.remaining = data.remaining;
     if (typeof data.live === "boolean") askState.live = data.live;
     if (data.resetAt) askState.resetAt = data.resetAt;
@@ -6449,6 +6453,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     return splitLines(value).map(function (line) { return line.trim(); }).filter(function (line) { return !protocolLine(line); }).join(String.fromCharCode(10));
   }
   function loadAsks() {
+    // Render and resume only. A reload must not POST the question again.
     fetch("/api/ask", { headers: { accept: "application/json" } }).then(function (response) {
       return response.ok ? response.json() : null;
     }).then(function (data) {
@@ -6471,7 +6476,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         }
         if (ask.status === "streaming") {
           turn.classList.add("chat-streaming");
-          followAsk(ask.id, turn, ask.count || 0);
+          if (followAsk(ask.id, turn, ask.count || 0)) askBusy = true;
         } else settleAsk(turn, ask, true);
       });
       var log = document.getElementById("chat-log");
@@ -6493,14 +6498,27 @@ if (sessionWhen && sessionWhen.dataset.at) {
   var askLive = null;
   var askCancel = false;
   var askBusy = false;
-  function releaseAsk() { askBusy = false; }
+  function releaseAsk() {
+    var open = askState.streams ? Object.keys(askState.streams) : [];
+    if (open.length) return;
+    askBusy = false;
+  }
+  function askSendLocked() {
+    var button = document.getElementById("ask-send");
+    return askBusy || (button && button.classList.contains("ask-stop"));
+  }
   function stopAsk() {
-    askCancel = true;
-    releaseAsk();
     var live = askLive;
     askLive = null;
     if (!live) {
-      setAskSending(false);
+      if (askBusy) {
+        askCancel = true;
+        var held = document.getElementById("ask-send");
+        if (held) held.disabled = true;
+      } else {
+        askCancel = false;
+        setAskSending(false);
+      }
       return;
     }
     live.turn.setAttribute("data-stopped", "1");
@@ -6508,10 +6526,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
     delete askState.streams[live.id];
     setAskSending(false);
     settleAsk(live.turn, { status: "stopped" });
+    releaseAsk();
   }
   function followAsk(id, turn, from) {
-    if (turn.getAttribute("data-stopped") === "1" || turn.getAttribute("data-settled") === "1") return;
-    if (askState.streams[id] || typeof EventSource !== "function") return;
+    if (turn.getAttribute("data-stopped") === "1" || turn.getAttribute("data-settled") === "1") return false;
+    if (askState.streams[id]) return true;
+    if (typeof EventSource !== "function") return false;
     var got = from || 0;
     var span = turn.querySelector(".chat-body > span");
     var source = new EventSource("/api/ask/" + encodeURIComponent(id) + "/stream?from=" + got);
@@ -6548,11 +6568,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
     source.addEventListener("again", function () {
       stop();
-      followAsk(id, turn, got);
+      if (!followAsk(id, turn, got)) releaseAsk();
     });
     source.onerror = function () {
       stop();
-      if (turn.getAttribute("data-stopped") === "1" || turn.getAttribute("data-settled") === "1") return;
+      if (turn.getAttribute("data-stopped") === "1" || turn.getAttribute("data-settled") === "1") {
+        releaseAsk();
+        return;
+      }
       var tries = Number(turn.getAttribute("data-tries") || "0") + 1;
       turn.setAttribute("data-tries", String(tries));
       if (tries > 5) {
@@ -6561,8 +6584,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
         releaseAsk();
         return;
       }
-      setTimeout(function () { followAsk(id, turn, got); }, 800 * tries);
+      setTimeout(function () {
+        if (turn.getAttribute("data-stopped") === "1" || turn.getAttribute("data-settled") === "1" || !followAsk(id, turn, got)) releaseAsk();
+      }, 800 * tries);
     };
+    return true;
   }
   function drawAnswer(span, value) {
     span.textContent = "";
@@ -6660,24 +6686,29 @@ if (sessionWhen && sessionWhen.dataset.at) {
       stopAsk();
       return;
     }
-    if (askSend.disabled) return;
+    if (askBusy || askSend.disabled) return;
     var form = document.getElementById("chat-form");
     if (!form) return;
+    askSend.disabled = true;
     if (form.requestSubmit) form.requestSubmit();
     else form.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
   });
   document.getElementById("chat-form").addEventListener("submit", function (event) {
     event.preventDefault();
     if (askBusy) return;
+    if (askSendLocked()) return;
+    askCancel = false;
     askBusy = true;
     var input = document.getElementById("chat-text");
     var askedNow = input.value.trim();
     if (!askedNow) {
       releaseAsk();
+      setAskSending(false);
       return;
     }
     if (askState.remaining !== null && askState.remaining <= 0) {
       releaseAsk();
+      setAskSending(false);
       openDialog("ask-ai-dialog");
       return;
     }
@@ -6721,8 +6752,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
       }
       takeAskQuota(reply.body);
       turn.setAttribute("data-ask", reply.body.id);
-      followAsk(reply.body.id, turn, 0);
-      if (!askState.streams[reply.body.id]) releaseAsk();
+      if (!followAsk(reply.body.id, turn, 0)) {
+        setAskSending(false);
+        if (turn.getAttribute("data-settled") !== "1") settleAsk(turn, { status: "stopped" });
+        releaseAsk();
+      }
     }).catch(function () {
       var span = turn.querySelector(".chat-body > span");
       turn.classList.remove("chat-pending", "chat-thinking");
@@ -6996,17 +7030,20 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (button.hasAttribute("data-fill")) {
       input.disabled = false;
       var ask = document.querySelector("#chat-form button");
-      if (ask) ask.disabled = false;
+      if (ask && !askSendLocked()) ask.disabled = false;
       input.value = button.getAttribute("data-fill") || "";
       growChat();
       input.focus();
       return;
     }
-    if (input.disabled) return;
+    if (input.disabled || askSendLocked()) return;
     input.value = button.getAttribute("data-suggest") || "";
     growChat();
     var form = document.getElementById("chat-form");
+    var send = document.getElementById("ask-send");
+    if (send && form) send.disabled = true;
     if (form && form.requestSubmit) form.requestSubmit();
+    else if (send) send.disabled = false;
   });
   var roomPrev = document.getElementById("room-prev");
   var roomNext = document.getElementById("room-next");
@@ -7136,10 +7173,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
     chatBox.addEventListener("keydown", function (event) {
       if (event.key !== "Enter" || event.shiftKey) return;
       event.preventDefault();
-      if (event.repeat || chatBox.disabled) return;
+      if (event.repeat || chatBox.disabled || askBusy || askSendLocked()) return;
       var form = document.getElementById("chat-form");
-      if (form && form.requestSubmit) form.requestSubmit();
-      else if (form) form.dispatchEvent(new Event("submit", { cancelable: true }));
+      var send = document.getElementById("ask-send");
+      if (!form) return;
+      if (send) send.disabled = true;
+      if (form.requestSubmit) form.requestSubmit();
+      else form.dispatchEvent(new Event("submit", { cancelable: true }));
     });
   }
   document.getElementById("goto").addEventListener("click", openPalette);

@@ -4,7 +4,7 @@ import { mergeSemanticVisible, recallVisibleForAsk } from "../slack/reply.js";
 
 const FLUSH_MS = 120;
 const FLUSH_CHARS = 48;
-const NOTHING = "Nothing kept in this workspace matches that yet.";
+export const NOTHING = "Nothing kept in this workspace matches that yet.";
 /** Shown when every model fails and no kept sentence answers the question. */
 export const ASK_UNAVAILABLE = "I couldn't answer that just now. Try again in a moment.";
 
@@ -54,16 +54,22 @@ export function askFallbackText(question, answer) {
 }
 
 /**
- * Web Ask AI system prompt. Walrus Memory chatbot shape: recall ran before this
- * turn and the memories are injected; the model only answers from them.
+ * Web Ask AI system prompt. Recall already ran (Walrus Memory shape) and the
+ * memories are injected. They are the only source for a kept decision.
+ * A product question may use the built-in description when that list is empty.
+ * @param {Array<{ text?: string, speaker?: string, spokenAt?: string, roomId?: string }>} memories
+ * @param {string} [botName]
  */
 export function askSystemPrompt(memories, botName = "") {
   const name = String(botName || "").trim() || "Sederunt";
   return [
-    `You are ${name}, the assistant inside Sederunt. Sederunt joins meetings and keeps what was decided.`,
-    "Memory recall ran before this reply. Answer only from the memories below and the earlier turns.",
-    "Do not invent decisions, dates, owners, or numbers. Do not store anything from this question.",
-    `If nothing below applies, say exactly: ${NOTHING}`,
+    `You are ${name}, the assistant inside Sederunt.`,
+    "Built-in product knowledge: Sederunt joins a channel or a meeting, keeps what was decided, and answers later from that record. People ask in this console, in the room, or from an agent they already use.",
+    "Memory recall ran before this reply. The memories below are the only kept decisions you may cite.",
+    "If the question is what Sederunt is or how Sederunt works, answer in one or two short sentences from the built-in product knowledge, even when no memory applies. Do not answer a product question with the empty-memory sentence.",
+    "If the question asks for a meeting, a decision, a date, an owner, or a number, answer only from the memories below and the earlier turns. Do not invent decisions, dates, owners, or numbers.",
+    `If that question needs a kept decision and none of the memories apply, say exactly: ${NOTHING}`,
+    "Do not store anything from this question.",
     "Lead with the answer in one or two short sentences. Add at most three short bullet points when they help.",
     "When two memories disagree, say so plainly and name both.",
     "Plain language only. Never mention chains, blobs, checkpoints, wallets, or other storage details.",
@@ -165,12 +171,15 @@ export async function runAsk(input) {
       await flush();
       await chain;
       const streamed = humanAskText(result.text);
-      if ((result.used || wrote) && streamed) {
+      // A real answer includes the empty-memory sentence for a decision question.
+      // The friendly failure sentence is not an answer, so the daily charge is returned.
+      if ((result.used || wrote) && streamed && streamed !== ASK_UNAVAILABLE) {
         await store.finish(id, { status: "done", source: "openrouter", sources });
         return { source: "openrouter", sources };
       }
-      // Every configured model failed. Do not substitute tool protocol for the reply.
-      await store.append(id, ASK_UNAVAILABLE);
+      // Every configured model failed, or the only text is the failure sentence.
+      // Do not substitute tool protocol, and do not append the sentence twice.
+      if (streamed !== ASK_UNAVAILABLE) await store.append(id, ASK_UNAVAILABLE);
       await store.finish(id, { status: "done", source: "unavailable", sources, result: { body: ASK_UNAVAILABLE } });
       return { source: "unavailable", sources };
     }
