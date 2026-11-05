@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { answerSlackQuestion, slackRecentTurns } from "../src/slack/reply.js";
+import { answerSlackQuestion, mentionedFile, slackRecentTurns } from "../src/slack/reply.js";
 
 test("slackRecentTurns maps people to user and bots to assistant, oldest first", async () => {
   const calls = [];
@@ -72,4 +72,30 @@ test("answerSlackQuestion sends prior turns then the latest ask to OpenRouter", 
     { role: "assistant", content: "demo-note or the floor plan." },
     { role: "user", content: "demo-note" },
   ]);
+});
+
+test("mentionedFile picks the longest listed name the reply text names", () => {
+  assert.equal(mentionedFile([{ fileName: "note.txt" }, { fileName: "demo-note.txt" }], "Here is demo-note.txt."), "demo-note.txt");
+  assert.equal(mentionedFile([{ fileName: "demo-note.txt" }], "Nothing stored."), "");
+});
+
+test("answerSlackQuestion pins a file named in the reply when attach is null", async () => {
+  const fetchImpl = async (url, init = {}) => {
+    if (String(url).includes("openrouter.ai")) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { choices: [{ message: { content: JSON.stringify({ text: "Here's the demo-note.txt you requested.", attach: null }) } }] };
+        },
+      };
+    }
+    return { ok: true, status: 200, async json() { return { ok: true, messages: [] }; } };
+  };
+  const answer = await answerSlackQuestion(
+    [{ text: "Kept demo-note.txt", fileName: "demo-note.txt" }],
+    "resend the note from the announcement",
+    { env: { OPENROUTER_API_KEY: "sk-or-test" }, fetchImpl, history: [] },
+  );
+  assert.equal(answer.file, "demo-note.txt");
 });

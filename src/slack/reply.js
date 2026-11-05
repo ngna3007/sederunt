@@ -152,9 +152,10 @@ export async function answerSlackQuestion(visible, question, options = {}) {
   if (!completed.used || !completed.text) return fallback();
   const reply = readAskReply(completed.text);
   if (!reply.text) return fallback();
+  const attached = listedFile(memories, reply.attach) || mentionedFile(memories, reply.text);
   return {
     text: reply.text,
-    file: listedFile(memories, reply.attach),
+    file: attached,
     source: "openrouter",
     recalled: memories.length,
   };
@@ -217,6 +218,22 @@ function listedFile(memories, attach) {
   const wanted = attach.toLowerCase();
   const row = (memories ?? []).find((item) => typeof item?.fileName === "string" && item.fileName.toLowerCase() === wanted);
   return row ? row.fileName : "";
+}
+
+/**
+ * A listed file the reply text already names. Longest match wins so
+ * "demo-note.txt" beats "note.txt". Used when the model forgot attach.
+ */
+export function mentionedFile(memories, text) {
+  const hay = String(text ?? "").toLowerCase();
+  if (!hay) return "";
+  let best = "";
+  for (const row of memories ?? []) {
+    const name = typeof row?.fileName === "string" ? row.fileName.trim() : "";
+    if (!name) continue;
+    if (hay.includes(name.toLowerCase()) && name.length > best.length) best = name;
+  }
+  return best;
 }
 
 /**
