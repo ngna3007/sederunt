@@ -3,6 +3,8 @@ import { once } from "node:events";
 import { request } from "node:http";
 import test from "node:test";
 import { createPersonGoogleStore, FORMS_SCOPES } from "../src/connectors/google-person.js";
+import { providerScopesForGrant } from "../src/identity/routes.js";
+import { createFakeIdentity } from "../src/identity/fake.js";
 import { FORMS_PARTIAL_MESSAGE } from "../src/connectors/forms-preset.js";
 import { openSecret } from "../src/connectors/secrets.js";
 import { createApp } from "../src/server.js";
@@ -480,6 +482,65 @@ test("forms consent stores the grant and a partial scope stays needs_access", as
     nonce: [...partialRows.map.values()][0].nonce,
   }, partialEnv));
   assert.deepEqual(partialPlain.scopes, ["openid"]);
+});
+
+test("an empty provider scope is filled from Google tokeninfo and a failed lookup stays partial", async () => {
+  const granted = await providerScopesForGrant({
+    scope: "",
+    providerAccessToken: "ya29.tokeninfo-test",
+  }, "forms", async (url) => {
+    assert.match(String(url), /^https:\/\/oauth2\.googleapis\.com\/tokeninfo\?access_token=/);
+    return { ok: true, async json() { return { scope: FORMS_SCOPES.join(" ") }; } };
+  });
+  assert.deepEqual(granted, [...FORMS_SCOPES]);
+  const partial = await providerScopesForGrant({
+    scope: "openid",
+    providerAccessToken: "ya29.tokeninfo-test",
+  }, "forms", async () => { throw new Error("tokeninfo down"); });
+  assert.deepEqual(partial, ["openid"]);
+});
+
+test("forms consent still stores Forms scopes when the token payload has no scope field", async (t) => {
+  const rows = createGrantRows();
+  const env = appEnv();
+  const identity = createFakeIdentity(env);
+  const inner = identity.exchangeCode.bind(identity);
+  identity.exchangeCode = async (input) => {
+    const tokens = await inner(input);
+    tokens.scope = "";
+    return tokens;
+  };
+  const fetchImpl = async (url) => {
+    const href = String(url?.url || url);
+    if (href.startsWith("https://oauth2.googleapis.com/tokeninfo")) {
+      return { ok: true, async json() { return { scope: FORMS_SCOPES.join(" ") }; } };
+    }
+    throw new Error(`unexpected ${href.split("?")[0]}`);
+  };
+  const grants = createPersonGoogleStore({ env, fetchImpl, grantRows: rows });
+  const app = createApp({
+    session: createSession(),
+    companyLoaded: true,
+    env,
+    fetch: fetchImpl,
+    identity,
+    googleGrants: grants,
+    deps: {
+      memory: { async remember() { return { blobId: null }; } },
+      tatum: { async getObject() { return { text: "" }; } },
+    },
+  });
+  const port = await listen(app);
+  t.after(() => app.close());
+  const granted = await followAuth(port, "/console/auth/google?intent=forms&next=/console/connectors");
+  assert.equal(granted.path, "/console/connectors");
+  const plain = JSON.parse(openSecret({
+    ciphertext: [...rows.map.values()][0].ciphertext,
+    nonce: [...rows.map.values()][0].nonce,
+  }, env));
+  assert.deepEqual(plain.scopes, [...FORMS_SCOPES]);
+  const ready = json(await call(port, "GET", "/console/connectors", null, { cookie: cookieHeader(granted.jar) }));
+  assert.equal(ready.presets["google-forms"].state, "add");
 });
 
 test("invalid_grant clears the forms grant and the tool reports needs_access", async (t) => {

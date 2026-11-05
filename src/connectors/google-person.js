@@ -316,6 +316,19 @@ export function createPersonGoogleStore(options = {}) {
      * @param {string} personId
      * @param {{ tenantId?: string }} [describeOptions]
      */
+    /**
+     * Refresh token already sealed for this person, so a later consent that
+     * omits provider_refresh_token can still update scopes.
+     * @param {string} personId
+     * @param {{ tenantId?: string }} [options]
+     */
+    async savedRefresh(personId, options = {}) {
+      const id = String(personId || "").trim();
+      const tenantId = String(options.tenantId || "").trim();
+      if (!id || !acceptsTenant(tenantId)) return "";
+      const record = await load(tenantId, id);
+      return record?.refreshToken || "";
+    },
     async describe(personId, describeOptions = {}) {
       const id = String(personId || "").trim();
       const tenantId = String(describeOptions.tenantId || "").trim();

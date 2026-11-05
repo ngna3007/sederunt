@@ -161,6 +161,10 @@ async function finishCallback(ctx) {
   }
   try {
     const tokens = await identity.exchangeCode({ code, codeVerifier: pending.verifier });
+    if ((pending.intent === "forms" || pending.intent === "calendar") && pending.provider === "google") {
+      const scopes = await providerScopesForGrant(tokens, pending.intent, ctx.fetchImpl);
+      tokens.scope = scopes.join(" ");
+    }
     const user = await identity.getUser(tokens.accessToken);
     if (!user?.id) throw new Error("unverified");
     if (pending.intent === "calendar" && pending.provider === "google") {
@@ -176,15 +180,21 @@ async function finishCallback(ctx) {
       }
     }
     let formsTenant = "";
-    if (pending.intent === "forms" && pending.provider === "google" && tokens.providerRefreshToken && ctx.googleGrants) {
+    if (pending.intent === "forms" && pending.provider === "google" && ctx.googleGrants) {
       try {
         formsTenant = await formsTenantId(ctx, tokens.accessToken);
-        await ctx.googleGrants.save(user.id, {
-          refreshToken: tokens.providerRefreshToken,
-          accessToken: tokens.providerAccessToken || "",
-          expiresAt: tokens.expiresAt,
-          scopes: grantedScopeList(tokens.scope),
-        }, { tenantId: formsTenant });
+        let refresh = tokens.providerRefreshToken || "";
+        if (!refresh && typeof ctx.googleGrants.savedRefresh === "function") {
+          refresh = await ctx.googleGrants.savedRefresh(user.id, { tenantId: formsTenant });
+        }
+        if (refresh) {
+          await ctx.googleGrants.save(user.id, {
+            refreshToken: refresh,
+            accessToken: tokens.providerAccessToken || "",
+            expiresAt: tokens.expiresAt,
+            scopes: grantedScopeList(tokens.scope),
+          }, { tenantId: formsTenant });
+        }
       } catch {
         // Sign-in still completes. The Forms card stays on Connect until a grant is stored.
       }
@@ -264,6 +274,34 @@ function googleIntent(provider, raw) {
 function grantedScopeList(scope) {
   if (Array.isArray(scope)) return scope.map((item) => String(item || "").trim()).filter(Boolean);
   return String(scope || "").split(/[\s,]+/).map((item) => item.trim()).filter(Boolean);
+}
+
+/**
+ * Scopes to seal for a Google connector grant.
+ * Supabase's token response has provider tokens and no scope field, so an empty
+ * list is not proof the person declined. Ask Google tokeninfo for the access
+ * token's scopes. A failed lookup keeps the list we already have.
+ *
+ * @param {{ scope?: string, providerAccessToken?: string }} tokens
+ * @param {string} intent
+ * @param {typeof fetch | undefined} fetchImpl
+ * @returns {Promise<string[]>}
+ */
+export async function providerScopesForGrant(tokens, intent, fetchImpl) {
+  const required = intent === "calendar" ? CALENDAR_SCOPES : intent === "forms" ? FORMS_SCOPES : [];
+  const current = grantedScopeList(tokens?.scope);
+  if (!required.length || required.every((scope) => current.includes(scope))) return current;
+  const access = typeof tokens?.providerAccessToken === "string" ? tokens.providerAccessToken : "";
+  if (!access || typeof fetchImpl !== "function") return current;
+  try {
+    const response = await fetchImpl(`https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(access)}`);
+    if (!response?.ok) return current;
+    const body = typeof response.json === "function" ? await response.json() : null;
+    const listed = grantedScopeList(body?.scope);
+    return listed.length ? listed : current;
+  } catch {
+    return current;
+  }
 }
 
 function providerNotice(provider) {
