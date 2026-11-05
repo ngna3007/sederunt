@@ -1440,11 +1440,14 @@ async function keepLearned(session, deps, learned, roomId) {
 }
 
 async function keepDecision(input, session, deps, draft) {
-  const fileName = FILE_NAME.exec(draft.text)?.[1] || "";
-  const attached = input.file?.name && fileName && input.file.name.toLowerCase() === fileName.toLowerCase()
-    ? input.file.bytes
-    : undefined;
-  const file = fileName ? await nameFile(deps, fileName, attached) : null;
+  // An upload is the file even when the sentence never names it.
+  // With no upload, a filename written in the sentence is still the candidate.
+  const namedInText = FILE_NAME.exec(draft.text)?.[1] || "";
+  const attachedName = typeof input.file?.name === "string" ? input.file.name.trim() : "";
+  const attachedBytes = input.file?.bytes;
+  const hasAttached = Boolean(attachedName) && attachedBytes != null && attachedBytes !== "";
+  const fileName = hasAttached ? attachedName : namedInText;
+  const file = fileName ? await nameFile(deps, fileName, hasAttached ? attachedBytes : undefined) : null;
   const stamp = stampOf(input);
   const decision = {
     id: nextId(session, "decision"),

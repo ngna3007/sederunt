@@ -67,6 +67,7 @@ test("answerSlackQuestion uses OpenRouter when the key is set", async () => {
   assert.match(seen[0].body.messages[0].content, /Relevant memories/);
   assert.match(seen[0].body.messages[0].content, /booth opens at nine/);
   assert.match(seen[0].body.messages[0].content, /Walrus Memory recall/);
+  assert.match(seen[0].body.messages[0].content, /Resending or sharing a stored file is not a write and must not ask for confirmation/);
 });
 
 test("answerSlackQuestion falls back to retrieval when OpenRouter fails", async () => {

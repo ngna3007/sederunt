@@ -55,6 +55,11 @@ export async function answerSlackQuestion(visible, question, options = {}) {
   const base = slackAnswer(visible, question);
   const env = options.env ?? process.env;
   const limit = options.maxMemories ?? 5;
+  // A stored file is a read. Resend it. Do not ask the model to confirm.
+  if (base.file) {
+    const recalled = recallVisibleForAsk(visible, question, limit);
+    return { ...base, source: "retrieval", recalled: recalled.length };
+  }
   let recalled = recallVisibleForAsk(visible, question, limit);
   // withMemWal shape: optional MemWal.recall(query) before generate; invite-visible only.
   if (typeof options.recall === "function") {
@@ -76,6 +81,7 @@ export async function answerSlackQuestion(visible, question, options = {}) {
     buildSystemPrompt({ mode: "slack", botName: options.botName || "" }),
     "Walrus Memory recall ran before this reply. Only answer from the memories below.",
     "Do not invent facts. Do not store anything from this question.",
+    "Resending or sharing a stored file is not a write and must not ask for confirmation.",
     "If nothing applies, say exactly: Nothing is stored that you can read.",
     "Lead with the answer. Keep it short.",
     "",
