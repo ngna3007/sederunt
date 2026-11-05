@@ -924,7 +924,7 @@ ${spaceDialog}
         <span id="mcp-demo-note" class="field-hint"></span>
       </p>
       <label>Name <input id="mcp-name" name="name" maxlength="120" autocomplete="off" required></label>
-      <label>Server URL <input id="mcp-url" name="url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://example.com/mcp" required></label>
+      <label>Server URL <input id="mcp-url" name="url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://tools.example.com" required></label>
       <label>Auth token <input id="mcp-token" name="token" type="password" autocomplete="new-password" spellcheck="false"></label>
       <p class="field-hint">Optional. Sent as Authorization: Bearer. The token is stored on the server and is not shown again.</p>
       <label>Header name <input id="mcp-header" name="headerName" value="Authorization" autocomplete="off" spellcheck="false" maxlength="64"></label>
@@ -2610,6 +2610,15 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (list) list.append(row);
   }
 
+  function looksLikeRawRoomId(value) {
+    var s = String(value || "").replace(/^#/, "").trim();
+    if (!s) return true;
+    // Slack channel ids (C…) and bare UUIDs are not human meeting names.
+    if (/^[CGD][A-Z0-9]{8,}$/i.test(s)) return true;
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)) return true;
+    return false;
+  }
+
   function paintSuggestions() {
     var box = document.getElementById("chat-suggests");
     if (!box) return;
@@ -2619,8 +2628,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
       return decisionsFor(room.id).length > 0;
     });
     rooms.slice(0, 2).forEach(function (room) {
-      var title = roomIdentity(room, decisionsFor(room.id)).title || room.id || "";
+      var title = roomIdentity(room, decisionsFor(room.id)).title || "";
       var shortName = String(title).split(":")[0].trim() || title;
+      if (looksLikeRawRoomId(shortName)) return;
       prompts.push("What did " + shortName + " decide?");
     });
     ["What did the last meeting decide?", "Which decisions are clashing?", "What changed since yesterday?", "What is still open?"].forEach(function (prompt) {
@@ -3051,6 +3061,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (roomTools) roomTools.hidden = quietHome || (name !== "rooms" && name !== "home");
     var homeHead = document.getElementById("home-head");
     if (homeHead) homeHead.hidden = name !== "home";
+    var readError = document.getElementById("read-error");
+    if (readError) {
+      var showHomeError = (name === "home" || name === "rooms") && state && state.read === "failed";
+      readError.hidden = !showHomeError;
+      var readAgain = document.getElementById("read-again");
+      if (readAgain) readAgain.hidden = !showHomeError;
+    }
     var homeTools = document.querySelector(".home-tools");
     var homeStats = document.getElementById("home-stats");
     if (homeTools) homeTools.hidden = name !== "home";

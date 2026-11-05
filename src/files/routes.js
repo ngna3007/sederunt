@@ -12,8 +12,16 @@ export async function handleFileRequest(req, res, url, runtime, { send }) {
     const viewer = runtime.viewer ? await runtime.viewer(req, url) : null;
     const userId = viewer?.userId || "";
     const channels = Array.isArray(viewer?.channels) ? viewer.channels : [];
-    // Only a background runtime runs jobs from a request. Others run their own worker.
-    const kick = () => { if (runtime.background === true && typeof runtime.kick === "function") runtime.kick(); };
+    // Background runtimes fire-and-forget. Foreground (Vercel) awaits the pass
+    // so delete jobs finish before the response, or they stay "Deleting…".
+    async function settleJobs() {
+      if (typeof runtime.kick !== "function") return;
+      if (runtime.background === true) {
+        runtime.kick();
+        return;
+      }
+      await runtime.kick();
+    }
     if (req.method === "GET" && path === "/api/files") {
       if (!userId) {
         send(res, 200, "application/json; charset=utf-8", JSON.stringify({ viewer: null, files: [], requests: [], unanswered: [] }));
@@ -41,7 +49,7 @@ export async function handleFileRequest(req, res, url, runtime, { send }) {
         defer: runtime.background === true,
       });
       if (runtime.background === true) {
-        kick();
+        await settleJobs();
         send(res, 202, "application/json; charset=utf-8", JSON.stringify(publicFile(saved)));
         return true;
       }
@@ -53,7 +61,7 @@ export async function handleFileRequest(req, res, url, runtime, { send }) {
       if (!userId) throw new FileError(401, "auth", "Sign in again.");
       const body = await readJson(req);
       const result = runtime.service.answerDelete(userId, decodeURIComponent(answer[1]), body.approve === true);
-      if (result.file) kick();
+      if (result.file) await settleJobs();
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({
         request: { id: result.request.id, status: result.request.status },
         file: result.file ? { id: result.file.id, status: result.file.status } : null,
@@ -109,8 +117,10 @@ export async function handleFileRequest(req, res, url, runtime, { send }) {
     }
     if (req.method === "POST" && sub && sub[2] === "delete") {
       if (!userId) throw new FileError(401, "auth", "Sign in again.");
-      const file = runtime.service.deleteFile(userId, decodeURIComponent(sub[1]));
-      kick();
+      const deletedId = decodeURIComponent(sub[1]);
+      runtime.service.deleteFile(userId, deletedId);
+      await settleJobs();
+      const file = runtime.store.getFile(deletedId);
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({ id: file.id, status: file.status, deleteReason: file.deleteReason }));
       return true;
     }

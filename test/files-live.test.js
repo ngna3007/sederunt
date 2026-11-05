@@ -15,7 +15,7 @@ import { renderConsolePage as renderConsole } from "../src/console-page.js";
 const TENANT = "00000000-0000-4000-a000-00000000acme";
 const OTHER = "00000000-0000-4000-a000-0000000000b2";
 
-function liveApp({ users, rows = [] } = {}) {
+function liveApp({ users, rows = [], background = true } = {}) {
   let now = new Date("2026-11-05T06:00:00.000Z");
   const clock = () => now;
   const store = createFileStore({ clock });
@@ -27,7 +27,7 @@ function liveApp({ users, rows = [] } = {}) {
     store,
     storage,
     clock,
-    background: true,
+    background,
     linkSecret: "test-links",
     seal: null,
     viewer: (req) => session.viewer(req),
@@ -230,4 +230,26 @@ test("the Files page has an upload button, a delete confirm and the Walrus badge
   assert.match(html, /Show technical details/);
   assert.match(html, /Uploading…/);
   assert.match(html, /Couldn't upload/);
+});
+
+test("foreground delete finishes inside the request (Vercel shape)", async () => {
+  const server = await liveApp({ users: USERS, background: false });
+  try {
+    const uploaded = await call(server.port, "POST", "/api/files", {
+      user: "mina",
+      body: Buffer.from("scratch"),
+      headers: { "content-type": "text/plain", "x-file-name": encodeURIComponent("scratch.txt") },
+    });
+    assert.equal(uploaded.status, 201);
+    assert.equal(uploaded.body.status, "active");
+    const deleted = await call(server.port, "POST", `/api/files/${uploaded.body.id}/delete`, { user: "mina" });
+    assert.equal(deleted.status, 200);
+    assert.equal(deleted.body.status, "deleted");
+    assert.equal(server.store.getFile(uploaded.body.id).status, "deleted");
+    assert.equal(server.storage.calls.some((item) => item.op === "remove"), true);
+    const listed = await call(server.port, "GET", "/api/files", { user: "mina" });
+    assert.equal(listed.body.files.some((item) => item.id === uploaded.body.id), false);
+  } finally {
+    await server.close();
+  }
 });
