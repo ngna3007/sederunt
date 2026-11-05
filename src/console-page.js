@@ -7511,7 +7511,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     pill.className = mcpBadgeClass(connector.status);
     pill.setAttribute("data-status", connector.status || "draft");
     pill.textContent = mcpStatusLabel(connector.status);
-    who.append(mcpIcon(connector), title, pill);
+    who.append(mcpIcon(connector), title);
     var manage = document.createElement("button");
     manage.type = "button";
     manage.className = "secondary mcp-manage";
@@ -7519,7 +7519,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
     manage.setAttribute("aria-haspopup", "dialog");
     manage.setAttribute("aria-label", "Manage " + (connector.name || "connector"));
     manage.addEventListener("click", function () { openMcpManage(connector.id); });
-    head.append(who, manage);
+    var actions = document.createElement("div");
+    actions.className = "mcp-card-actions";
+    actions.append(pill, manage);
+    head.append(who, actions);
     var summary = document.createElement("p");
     summary.className = "mcp-summary";
     summary.textContent = mcpSummary(connector);

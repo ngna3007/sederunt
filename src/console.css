@@ -5445,12 +5445,14 @@ button.row-edit {
 }
 .preset-row { display: flex; flex-wrap: wrap; gap: 12px; width: 100%; }
 .preset-card {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  column-gap: 16px;
+  row-gap: 6px;
+  align-items: center;
   flex: 1 1 240px;
   box-sizing: border-box;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
   min-width: 0;
   max-width: 100%;
   padding: 14px 16px;
@@ -5465,6 +5467,15 @@ button.row-edit {
   gap: 8px;
   min-width: 0;
   max-width: 100%;
+  grid-column: 1;
+  grid-row: 1;
+}
+.preset-card .preset-detail { grid-column: 1; grid-row: 2; }
+.preset-card [data-preset-badge] {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  justify-self: end;
+  align-self: center;
 }
 .preset-card .conn-mark { width: 28px; height: 28px; }
 .preset-card:disabled { opacity: 0.72; cursor: not-allowed; }
@@ -5556,6 +5567,7 @@ button.row-edit {
 /* p5f: compact connector cards; details live in the Manage modal. */
 .mcp-card { gap: 6px; padding: 14px 16px; }
 .mcp-card-who { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; flex: 1 1 12rem; }
+.mcp-card-actions { display: flex; align-items: center; gap: 8px; flex: none; margin-left: auto; }
 .mcp-card .conn-mark { width: 28px; height: 28px; }
 .mcp-generic-mark { display: inline-grid; place-items: center; border-radius: var(--radius-lg); background: var(--muted); color: var(--muted-foreground); }
 .mcp-summary { margin: 0; color: var(--muted-foreground); font-size: var(--text-sm); }
@@ -5861,16 +5873,10 @@ body.ob-page {
   #bot-card .bot-phrase-row .secondary { width: 100%; }
 }
 
-/* pm-roast-2 round 2: failed rows keep their text wide on phones; presets read like connector cards on desktop. */
+/* pm-roast-2 round 2: failed rows keep their text wide on phones. */
 @media (max-width: 767px) {
   .attention-row { flex-basis: 100%; }
   .attention-actions { margin-left: 0; padding: 0 16px 10px 16px; }
-}
-@media (min-width: 768px) {
-  .preset-card { display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto; column-gap: 16px; align-items: center; }
-  .preset-card .preset-head { grid-column: 1; grid-row: 1; }
-  .preset-card .preset-detail { grid-column: 1; grid-row: 2; }
-  .preset-card .preset-action { grid-column: 2; grid-row: 1 / span 2; }
 }
 
 /* ===================================================================
