@@ -37,6 +37,7 @@ import {
   sessionSecret,
 } from "./console-auth.js";
 import { createIdentity, identityConfigured } from "./identity/client.js";
+import { resolveSignInProviders } from "./identity/shared.js";
 import { clearOAuthCookie } from "./identity/pending.js";
 import { handleAuthRoute, requestOrigin } from "./identity/routes.js";
 import { refreshOAuthSession, rememberRefreshCookie } from "./identity/session.js";
@@ -52,7 +53,7 @@ import { hideDeletedSlackMessages, ingestSlackFile } from "./files/slack.js";
 import { loadCompanyEnv, loadLocalEnv } from "./local-env.js";
 import { looksLikeOpenQuestion } from "./parse.js";
 import { createSession } from "./session.js";
-import { postSlackReply, slackAnswer, slackChannelMembers, slackFileBytes, slackQuestion } from "./slack/reply.js";
+import { answerSlackQuestion, postSlackReply, slackChannelMembers, slackFileBytes, slackQuestion } from "./slack/reply.js";
 import { slackDelivery, verifySlackRequest } from "./slack/sign.js";
 import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded, warmProofs } from "./typed-path.js";
 import { wireCalls } from "./tatum/client.js";
@@ -79,6 +80,11 @@ function memoryAdapter(env = process.env, client, tatum) {
     async index() {
       const { indexCompany } = await import("./memory/company.js");
       return indexCompany({ client, env });
+    },
+    /** Semantic ask path: query Walrus Memory before an LLM answer (withMemWal shape). */
+    async recall(query) {
+      const { recallCompany } = await import("./memory/company.js");
+      return recallCompany({ query, topK: 10, client, env });
     },
   };
 }
@@ -435,6 +441,7 @@ export function createApp(options = {}) {
         return;
       }
       const reason = url.searchParams.get("reason") || req.authFailure || "";
+      const providers = identity ? await resolveSignInProviders(identity) : { google: false, github: false };
       send(res, 200, "text/html; charset=utf-8", renderSignInPage({
         configured: Boolean(consoleSecret(env)),
         oauth: Boolean(identity),
@@ -442,6 +449,7 @@ export function createApp(options = {}) {
         reason: reason === "expired" || reason === "invalid" || reason === "mismatch" || reason === "missing-pass" ? reason : "",
         name: url.searchParams.get("name") || "",
         next: safeConsoleNext(url.searchParams.get("next") || "/console"),
+        providers,
       }));
       return;
     }
@@ -450,6 +458,7 @@ export function createApp(options = {}) {
       const next = safeConsoleNext(typeof body.next === "string" ? body.next : "/console");
       const secret = consoleSecret(env);
       const name = typeof body.name === "string" ? body.name.trim().slice(0, 80) : "";
+      const providers = identity ? await resolveSignInProviders(identity) : { google: false, github: false };
       if (!secret) {
         send(res, 200, "text/html; charset=utf-8", renderSignInPage({
           configured: false,
@@ -457,6 +466,7 @@ export function createApp(options = {}) {
           memberSet: Boolean(String(env.SEDERUNT_MEMBER || "").trim()),
           name,
           next,
+          providers,
         }));
         return;
       }
@@ -469,6 +479,7 @@ export function createApp(options = {}) {
           reason: "missing-pass",
           name,
           next,
+          providers,
         }));
         return;
       }
@@ -480,6 +491,7 @@ export function createApp(options = {}) {
           reason: "mismatch",
           name,
           next,
+          providers,
         }));
         return;
       }
@@ -1148,11 +1160,12 @@ export function createApp(options = {}) {
             }
           }
         }
+        const doorDeps = depsFor(workspace, companyId);
         const result = await handleUtterance({
           ...delivery,
           intent: delivery.intent === "delete" ? "delete" : (question ? "recall" : undefined),
           session: current,
-        }, depsFor(workspace, companyId));
+        }, doorDeps);
         const repeat = result?.allow === "duplicate-delivery" || result?.outcome === "duplicate-delivery" || result?.outcome === "duplicate";
         if (!question && storedFile?.name && !repeat && result?.allow !== "not-invited" && result?.allow !== "missing-member" && env.SLACK_BOT_TOKEN) {
           const channel = delivery.room?.askChannel || (typeof event.channel === "string" ? event.channel : "");
@@ -1168,7 +1181,16 @@ export function createApp(options = {}) {
         }
         if (question && result?.body && !repeat && result.allow !== "not-invited" && result.allow !== "missing-member") {
           const channel = delivery.room?.askChannel || (typeof event.channel === "string" ? event.channel : "");
-          const answer = slackAnswer(result.visible, delivery.text);
+          const answer = await answerSlackQuestion(result.visible, delivery.text, {
+            env,
+            fetchImpl: deps.slack?.fetch || deps.fetch,
+            botName,
+            maxMemories: 5,
+            // Walrus withMemWal ask path: MemWal.recall(query) before OpenRouter.
+            recall: doorDeps.memory?.recall
+              ? async (query) => doorDeps.memory.recall(query)
+              : undefined,
+          });
           if (typeof result.learned === "string" && result.learned) answer.text = result.learned;
           const bytes = answer.file ? await consoleFileBytes(current, answer.file, deps) : null;
           const reply = {

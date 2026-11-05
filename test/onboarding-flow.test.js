@@ -557,7 +557,12 @@ test("onboarding screens fit at desktop and phone widths", { timeout: 180000 }, 
     t.skip("no browser binary found");
     return;
   }
-  const env = { SEDERUNT_AUTH_FAKE: "1", SEDERUNT_SESSION_SECRET: SECRET, SEDERUNT_MEMBER: "Mina" };
+  const env = {
+    SEDERUNT_AUTH_FAKE: "1",
+    SEDERUNT_AUTH_FAKE_GITHUB: "1",
+    SEDERUNT_SESSION_SECRET: SECRET,
+    SEDERUNT_MEMBER: "Mina",
+  };
   const identity = createIdentity(env);
   const app = createApp({ companyLoaded: true, env, identity });
   const port = await listen(app);

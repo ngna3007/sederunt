@@ -12,7 +12,7 @@ const INVITE_MS = 14 * 24 * 60 * 60 * 1000;
 
 /**
  * In-memory GoTrue and the tenancy RPCs. Google signs in as Ada Lovelace.
- * GitHub is off until toggled, so the sign-in page can show the provider notice.
+ * GitHub is off until toggled, so the sign-in page hides that button until it is on.
  *
  * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
  */

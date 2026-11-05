@@ -274,15 +274,15 @@ test("supabase sign-in stays on localhost", async (t) => {
       assert.equal(called, false);
     });
 
-    await t.test("github stays on the sign-in page when the provider is off", async () => {
+    await t.test("github is hidden on the sign-in page when the provider is off", async () => {
       const env = { SEDERUNT_AUTH_FAKE: "1", SEDERUNT_SESSION_SECRET: SECRET, SEDERUNT_MEMBER: "Mina" };
       await withServer(env, async (port) => {
         const page = await call(port, "GET", "/console/sign-in");
         assert.equal(page.status, 200);
         assert.match(page.raw, /Continue with Google/);
-        assert.match(page.raw, /Continue with GitHub/);
         assert.match(page.raw, /id="auth-google" href="\/console\/auth\/google\?next=/);
-        assert.match(page.raw, /id="auth-github"/);
+        assert.doesNotMatch(page.raw, /Continue with GitHub/);
+        assert.doesNotMatch(page.raw, /id="auth-github"/);
         assert.doesNotMatch(page.raw, /id="sign-pass"/);
         assert.doesNotMatch(page.raw, /Sign-in is not set up on this server/);
         const github = await call(port, "GET", "/console/auth/github?next=/console/history");
@@ -295,6 +295,22 @@ test("supabase sign-in stays on localhost", async (t) => {
         const slack = await call(port, "POST", "/api/slack", { body: "{}" });
         assert.equal(slack.status, 200);
         assert.equal(slack.location, "");
+      });
+    });
+
+    await t.test("github appears on the sign-in page when the fake provider is on", async () => {
+      const env = {
+        SEDERUNT_AUTH_FAKE: "1",
+        SEDERUNT_AUTH_FAKE_GITHUB: "1",
+        SEDERUNT_SESSION_SECRET: SECRET,
+        SEDERUNT_MEMBER: "Mina",
+      };
+      await withServer(env, async (port) => {
+        const page = await call(port, "GET", "/console/sign-in");
+        assert.equal(page.status, 200);
+        assert.match(page.raw, /Continue with Google/);
+        assert.match(page.raw, /Continue with GitHub/);
+        assert.match(page.raw, /id="auth-github" href="\/console\/auth\/github\?next=/);
       });
     });
 

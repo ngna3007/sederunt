@@ -342,7 +342,8 @@ test("home and rooms columns line up, and the pass 04 fixes hold in the browser"
 
   for (const width of [1920, 1024]) {
     await page.setViewportSize({ width, height: 900 });
-    for (const path of ["/console", "/console/rooms"]) {
+    // Home only previews a few rooms and hides the explorer head; measure columns on Rooms.
+    for (const path of ["/console/rooms"]) {
       await page.goto(`http://127.0.0.1:${port}${path}`, { waitUntil: "networkidle" });
       await page.waitForSelector("#room-list a.room", { timeout: 45000 });
       const measured = await page.evaluate(() => {
@@ -413,6 +414,16 @@ test("home and rooms columns line up, and the pass 04 fixes hold in the browser"
 
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(`http://127.0.0.1:${port}/console`, { waitUntil: "networkidle" });
+  await page.waitForSelector("#room-list a.room", { timeout: 45000 });
+  const homePreview = await page.evaluate(() => ({
+    count: document.querySelectorAll("#room-list a.room").length,
+    headHidden: !!document.querySelector("#rooms .explorer-head")?.hidden,
+    allRooms: !!document.getElementById("home-all-rooms") && !document.getElementById("home-all-rooms").hidden,
+  }));
+  assert.ok(homePreview.count >= 2 && homePreview.count <= 3, JSON.stringify(homePreview));
+  assert.equal(homePreview.headHidden, true);
+
+  await page.goto(`http://127.0.0.1:${port}/console/rooms`, { waitUntil: "networkidle" });
   await page.waitForSelector("#room-list a.room", { timeout: 45000 });
   const rooms = await page.evaluate(() => {
     const rows = [...document.querySelectorAll("#room-list a.room")].map((row) => ({
@@ -520,6 +531,15 @@ test("home and rooms columns line up, and the pass 04 fixes hold in the browser"
 
   await page.goto(`http://127.0.0.1:${port}/console/chat`, { waitUntil: "networkidle" });
   await page.waitForSelector("#chat-text", { timeout: 45000 });
+  await page.waitForFunction(() => {
+    const d = document.getElementById("ask-ai-dialog");
+    return d && !d.hidden;
+  }, null, { timeout: 45000 });
+  await page.locator("#ask-ai-kept").click();
+  await page.waitForFunction(() => {
+    const d = document.getElementById("ask-ai-dialog");
+    return d && d.hidden;
+  }, null, { timeout: 45000 });
   await page.fill("#chat-text", "When does the booth open?");
   await page.locator("#chat-form button").click();
   await page.waitForSelector(".chat-clash", { timeout: 15000 });

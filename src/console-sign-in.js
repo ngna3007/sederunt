@@ -3,7 +3,7 @@ import { sederuntMark, FAVICON_LINK } from "./sederunt-mark.js";
 
 /**
  * Console sign-in. Passphrase mode is unchanged. When Supabase or the fake
- * auth backend is configured, Google and GitHub are the primary path and the
+ * auth backend is configured, enabled providers (usually Google) are the primary path and the
  * passphrase form is a secondary fallback.
  *
  * @param {{
@@ -14,6 +14,7 @@ import { sederuntMark, FAVICON_LINK } from "./sederunt-mark.js";
  *   notice?: string,
  *   name?: string,
  *   next?: string,
+ *   providers?: { google?: boolean, github?: boolean },
  * }} [state]
  */
 export function renderSignInPage(state = {}) {
@@ -31,7 +32,7 @@ export function renderSignInPage(state = {}) {
     ? `<p class="alert info" id="auth-notice" role="status">${escapeText(notice)}</p>`
     : "";
   const lede = oauth ? "Sederunt joins your meetings and keeps what was decided." : "Enter your workspace passphrase.";
-  const providers = oauth ? providerButtons(next) : "";
+  const providers = oauth ? providerButtons(next, state.providers) : "";
   const form = configured ? passphraseBlock(oauth, nextEscaped, name, passInvalid, passMessage) : "";
   return `<!DOCTYPE html>
 <html lang="en">
@@ -72,11 +73,21 @@ ${FAVICON_LINK}
 </html>`;
 }
 
-function providerButtons(next) {
+function providerButtons(next, providers = {}) {
   const query = `next=${escapeText(encodeURIComponent(next || "/console"))}`;
+  // Default: Google on, GitHub off. Callers pass identity.providerEnabled results.
+  const googleOn = providers.google !== false;
+  const githubOn = providers.github === true;
+  const links = [];
+  if (googleOn) {
+    links.push(`<a class="auth-provider" id="auth-google" href="/console/auth/google?${query}">${providerMark("google")}<span>Continue with Google</span></a>`);
+  }
+  if (githubOn) {
+    links.push(`<a class="auth-provider" id="auth-github" href="/console/auth/github?${query}">${providerMark("github")}<span>Continue with GitHub</span></a>`);
+  }
+  if (!links.length) return "";
   return `<div class="auth-providers">
-    <a class="auth-provider" id="auth-google" href="/console/auth/google?${query}">${providerMark("google")}<span>Continue with Google</span></a>
-    <a class="auth-provider" id="auth-github" href="/console/auth/github?${query}">${providerMark("github")}<span>Continue with GitHub</span></a>
+    ${links.join("\n    ")}
   </div>`;
 }
 

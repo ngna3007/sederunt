@@ -141,7 +141,7 @@ ${brandSprite()}
       <a href="/console/rooms" data-show="rooms" data-label="Rooms">${roomsIcon}Rooms</a>
       <a href="/console/history" data-show="history" data-label="History">${historyIcon}History</a>
       <a href="/console/decisions" data-show="record" data-label="Decisions">${recordIcon}Decisions</a>
-      <a href="/console/chat" data-show="chat" data-label="Chat">${chatIcon}Chat</a>
+      <a href="/console/chat" data-show="chat" data-label="Ask AI">${chatIcon}Ask AI<span class="rail-soon" aria-label="Coming soon">Soon</span></a>
       <a href="/console/files" data-show="files" data-label="Files">${filesIcon}Files</a>
       <p class="rail-label">Setup</p>
       <a href="/console/setup" id="show-connectors" data-label="Setup">${plugIcon}Setup</a>
@@ -319,7 +319,7 @@ ${slack}
           <div class="set-copy" data-col="tool">
             <strong>Slack</strong>
             <p id="slack-conn" class="conn-state off">Not connected</p>
-            <p id="slack-line" class="sr">Slack runs automatically.</p>
+            <p id="slack-line" class="conn-hint">Slack runs automatically.</p>
             <p id="slack-note" class="sr">Sederunt answers in a channel it has already joined.</p>
           </div>
           <div class="conn-actions" data-col="action">
@@ -447,7 +447,7 @@ ${slack}
       </div>
     </section>
     <section id="chat" hidden>
-      <div class="page-head"><div><p class="page-title">Chat</p><p class="page-lede">Ask what this workspace already kept. Chat does not keep a decision.</p></div></div>
+      <div class="page-head"><div><p class="page-title">Ask AI <span class="soon-chip">Coming soon</span></p><p class="page-lede">Built-in Ask AI is not on yet. You can still ask what this workspace already kept, or plug in your own agent under Connectors.</p></div></div>
       <div class="talk-panel ai-chat">
         <div class="thread" id="chat-log">
           <div id="chat-empty" class="chat-hello">
@@ -521,7 +521,7 @@ ${slack}
       <a class="secondary" href="/console"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10 3.5 5.5 8 10 12.5"/></svg>Back to Home</a>
     </section>
     <section id="files" hidden>
-      <div class="page-head" id="files-head"><div><p class="page-title">Files</p><p class="page-lede"><span>Files in the channels you can see.</span> <span>Stored on Walrus Console.</span></p></div></div>
+      <div class="page-head" id="files-head"><div><p class="page-title">Files</p><p class="page-lede"><span>Files in the channels you can see.</span> <span>Kept with this workspace.</span></p></div></div>
       <div id="files-unanswered" hidden></div>
       <div id="files-requests" hidden></div>
       <div id="channel-files-empty" class="empty-state" hidden>
@@ -707,6 +707,23 @@ ${slack}
     </div>
     <div id="toast" class="toast" hidden role="status"></div>
     <p id="read-note"></p>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="ask-ai-dialog" class="dialog" hidden role="dialog" aria-modal="true" aria-labelledby="ask-ai-title">
+  <div class="shade" data-close="ask-ai-dialog"></div>
+  <div class="panel">
+    <div class="panel-bar">
+      <h2 id="ask-ai-title">Ask AI is coming soon</h2>
+      <button type="button" class="close" data-close="ask-ai-dialog" aria-label="Close">${closeIcon}</button>
+    </div>
+    <div class="panel-body">
+      <p>There is no built-in model on this page yet. To ask with your own tools, add an agent under Connectors (MCP).</p>
+      <p class="meta">You can still ask what a room already kept without a model.</p>
+      <div class="wait-actions">
+        <button type="button" class="secondary" id="ask-ai-kept" data-close="ask-ai-dialog">Ask about kept decisions</button>
+        <button type="button" class="primary" id="ask-ai-connectors">Open Connectors</button>
       </div>
     </div>
   </div>
@@ -1085,7 +1102,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function proofExplain(decision) {
     if (!decision) return "";
     var status = (decision.proof && decision.proof.status) || decision.proofStatus || "";
-    if (status === "verified" || typeof decision.checkpoint === "number") return "Stored on Walrus.";
+    if (status === "verified" || typeof decision.checkpoint === "number") return "Kept with this room.";
     return "";
   }
 
@@ -1891,7 +1908,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (roomPage > pages - 1) roomPage = pages - 1;
     if (roomPage < 0) roomPage = 0;
     var start = onHome ? 0 : roomPage * roomPageSize;
-    var pageSize = onHome ? 5 : roomPageSize;
+    var pageSize = onHome ? 3 : roomPageSize;
+    var explorerHead = document.querySelector("#rooms .explorer-head");
+    if (explorerHead) explorerHead.hidden = onHome;
     specs.slice(start, start + pageSize).forEach(addRoomCard);
     var allRooms = document.getElementById("home-all-rooms");
     if (!allRooms) {
@@ -1906,7 +1925,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var roomList = document.getElementById("room-list");
       if (roomList && roomList.parentNode) roomList.parentNode.insertBefore(allRooms, roomList.nextSibling);
     }
-    allRooms.hidden = !(onHome && shown > 5);
+    allRooms.hidden = !(onHome && shown > 3);
     var total = rooms.length + waiting.length;
     var empty = document.getElementById("room-empty");
     var emptyLine = document.getElementById("room-empty-line");
@@ -2632,10 +2651,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var slackNote = document.getElementById("slack-note");
     if (slackNote) slackNote.textContent = next.slack === "ready"
       ? "Sederunt answers in a channel it has already joined."
-      : "";
+      : "Slack is not set up on this server yet. Calendar, rooms, and chat still work.";
     text("cal-line", calendarMode === "Ask" ? "Calendar waits before a change." : "Calendar runs automatically.");
     text("lin-line", linearMode === "Ask" ? "Linear waits before a change." : "Linear runs automatically.");
-    text("slack-line", slackMode === "Ask" ? "Slack waits before a change." : "Slack runs automatically.");
+    text("slack-line", next.slack === "ready"
+      ? (slackMode === "Ask" ? "Slack waits before a change." : "Slack runs automatically.")
+      : "Chat and rooms work without Slack. Connect it when a bot token is ready.");
     text("prefs", "");
     var calAsk = document.getElementById("cal-ask");
     var linAsk = document.getElementById("lin-ask");
@@ -2759,7 +2780,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function sectionLabel(name) {
     if (name === "rooms") return "Rooms";
     if (name === "history") return "History";
-    if (name === "chat") return "Chat";
+    if (name === "chat") return "Ask AI";
     if (name === "record") return "Decisions";
     if (name === "people") return "People";
     if (name === "files") return "Files";
@@ -3014,6 +3035,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
     }
     placeNewRoom();
     if (name === "files") loadFiles();
+    if (name === "chat") {
+      var askDialog = document.getElementById("ask-ai-dialog");
+      if (askDialog && askDialog.getAttribute("data-seen") !== "1") {
+        askDialog.setAttribute("data-seen", "1");
+        openDialog("ask-ai-dialog");
+      }
+    }
     if (!routeQuiet && window.history && window.history.pushState) {
       if (onFile && fileRoom) {
         var listPath = "/console/rooms" + roomQueryString();
@@ -4030,14 +4058,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var meeting = noun !== "decision";
     var when = chainWhen(proof.checkpointTime);
     if (status === "verified") {
-      var head = meeting ? "This meeting's record is stored on Walrus" : "This decision is stored on Walrus";
-      if (when) return head + " and was confirmed on the Sui network " + whenInSentence(when) + ". Nobody can change it.";
-      return head + " and was confirmed on the Sui network. Nobody can change it.";
+      var head = meeting ? "This meeting's record is kept" : "This decision is kept";
+      if (when) return head + " and was confirmed " + whenInSentence(when) + ". Nobody can change it.";
+      return head + ". Nobody can change it.";
     }
     if (status === "pending") {
-      return meeting ? "We're checking that this meeting's record is stored on Walrus." : "We're checking that this decision is stored on Walrus.";
+      return meeting ? "We're checking that this meeting's record is kept." : "We're checking that this decision is kept.";
     }
-    return meeting ? "We couldn't confirm this record on Walrus." : "We couldn't confirm this decision on Walrus.";
+    return meeting ? "We couldn't confirm this record yet." : "We couldn't confirm this decision yet.";
   }
 
   function proofWorthShowing(decision) {
@@ -4067,7 +4095,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var word = "Couldn't verify";
     var tone = "badge warn proof-chip";
     if (status === "verified") {
-      word = "Verified on Walrus";
+      word = "Verified";
       tone = "badge ok proof-chip is-verified";
     } else if (status === "pending") {
       word = "Verifying…";
@@ -4100,14 +4128,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (status) status.textContent = decision ? proofStatusCopy(decision) : "Proof is unknown until the chain is read.";
     if (status) status.setAttribute("data-proof", decision ? ((decision.proof && decision.proof.status) || decision.proofStatus || "unknown") : "none");
     var plain = document.getElementById(prefix + "-plain");
-    if (plain) plain.textContent = decision ? proofPlain(decision, noun) : "We couldn't confirm this record on Walrus.";
+    if (plain) plain.textContent = decision ? proofPlain(decision, noun) : "We couldn't confirm this record yet.";
     var panel = document.getElementById(prefix + "-panel");
     if (prefix === "decision-proof" && panel) panel.hidden = !proofWorthShowing(decision);
     if (prefix === "proof") paintProofChip(decision);
     var kept = document.getElementById(prefix + "-kept");
     if (kept) {
       var checkpoint = proofCheckpoint(decision);
-      kept.textContent = checkpoint ? ("Checkpoint " + checkpoint + " on the Sui network.") : "";
+      kept.textContent = checkpoint ? ("Confirmed as record " + checkpoint + ".") : "";
       kept.hidden = !kept.textContent;
     }
     var reasonNode = document.getElementById(prefix + "-reason");
@@ -5236,6 +5264,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
     showSection("home");
     document.getElementById("new-room").click();
   });
+  document.getElementById("ask-ai-connectors").addEventListener("click", function () {
+    closeDialog("ask-ai-dialog");
+    showSection("mcp");
+  });
   document.getElementById("history-next").addEventListener("click", function () {
     var act = document.getElementById("history-next").getAttribute("data-act");
     if (act === "home") {
@@ -6295,7 +6327,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
           var bits = [];
           if (memory && memory.text) bits.push(String(memory.text).trim());
           if (memory && memory.at) bits.push(chainWhen(memory.at) || memory.at);
-          var trust = memory && memory.verified === "verified" ? "Verified on Walrus." : (memory && memory.verified === "unverified" ? "Couldn't verify." : "");
+          var trust = memory && memory.verified === "verified" ? "Verified." : (memory && memory.verified === "unverified" ? "Couldn't verify." : "");
           var spoken = [];
           if (bits[0]) spoken.push(bits[0]);
           if (bits[1]) spoken.push("Kept " + whenInSentence(bits[1]) + ".");

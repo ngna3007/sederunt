@@ -1,3 +1,5 @@
+import { openRouterComplete, openRouterConfig } from "../openrouter.js";
+import { buildSystemPrompt } from "../bot/persona.js";
 import { looksLikeOpenQuestion } from "../parse.js";
 
 const RECALL = /what was decided|what happened/i;
@@ -40,6 +42,141 @@ export function slackAnswer(visible, question) {
     file: "",
   };
 }
+
+/**
+ * Slack Q&A, Walrus Memory chatbot shape (see withMemWal docs):
+ * remember on the write path already stored decisions; here we recall invite-visible
+ * rows, inject the top matches into the prompt, then generate. No auto-save on ask.
+ * OpenRouter when OPENROUTER_API_KEY is set; otherwise retrieval-only.
+ *
+ * @param {unknown} visible
+ * @param {string} question
+ * @param {{ env?: NodeJS.ProcessEnv, fetchImpl?: typeof fetch, botName?: string, maxMemories?: number }} [options]
+ */
+export async function answerSlackQuestion(visible, question, options = {}) {
+  const base = slackAnswer(visible, question);
+  const env = options.env ?? process.env;
+  const limit = options.maxMemories ?? 5;
+  let recalled = recallVisibleForAsk(visible, question, limit);
+  // withMemWal shape: optional MemWal.recall(query) before generate; invite-visible only.
+  if (typeof options.recall === "function") {
+    try {
+      const hits = await options.recall(String(question ?? "").trim());
+      const merged = mergeSemanticVisible(visible, hits, question, limit);
+      if (merged.length) recalled = merged;
+    } catch {
+      // Keep keyword rank when the relayer is down.
+    }
+  }
+  if (!openRouterConfig(env).enabled) {
+    return { ...base, source: "retrieval", recalled: recalled.length };
+  }
+  const facts = recalled.length
+    ? recalled.map((row) => plainFact(row.text, row.connectorId)).join("\n")
+    : String(base.text || "").trim();
+  const system = [
+    buildSystemPrompt({ mode: "slack", botName: options.botName || "" }),
+    "Walrus Memory recall ran before this reply. Only answer from the memories below.",
+    "Do not invent facts. Do not store anything from this question.",
+    "If nothing applies, say exactly: Nothing is stored that you can read.",
+    "Lead with the answer. Keep it short.",
+    "",
+    "Relevant memories:",
+    facts || "(none)",
+  ].join("\n");
+  const completed = await openRouterComplete({
+    env,
+    system,
+    messages: [{ role: "user", content: String(question ?? "").trim() || "What was decided?" }],
+    fetchImpl: options.fetchImpl,
+  });
+  if (!completed.used || !completed.text) {
+    return { ...base, source: "retrieval", recalled: recalled.length };
+  }
+  return { text: completed.text, file: base.file, source: "openrouter", recalled: recalled.length };
+}
+
+/**
+ * Rank invite-visible decisions for the question (withMemWal-style maxMemories).
+ * File questions stay pinned to the matching file row.
+ */
+export function recallVisibleForAsk(visible, question, maxMemories = 5) {
+  const limit = Math.max(1, Math.min(Number(maxMemories) || 5, 20));
+  const file = replyFile(visible, question);
+  const rows = (visible ?? []).filter((row) => {
+    const text = String(row?.text ?? "").trim();
+    if (!text) return false;
+    if (file) return row?.fileName === file || text.toLowerCase().includes(file.toLowerCase());
+    return !row?.fileName;
+  });
+  if (file) {
+    const row = rows.find((item) => item?.fileName === file) ?? rows[0];
+    return row ? [row] : [];
+  }
+  const words = questionWords(question);
+  const scored = rows.map((row) => {
+    const hay = String(row?.text ?? "").toLowerCase();
+    const hits = words.reduce((n, word) => n + (hay.includes(word) ? 1 : 0), 0);
+    return { row, hits };
+  });
+  scored.sort((a, b) => b.hits - a.hits);
+  const matched = scored.filter((item) => item.hits > 0).map((item) => item.row);
+  const picked = matched.length ? matched : scored.map((item) => item.row);
+  return picked.slice(0, limit);
+}
+
+/**
+ * Prefer invite-visible rows that MemWal.recall ranked (low distance first).
+ * Falls back to keyword rank so Slack never answers outside the invite set.
+ */
+export function mergeSemanticVisible(visible, hits, question, maxMemories = 5) {
+  const limit = Math.max(1, Math.min(Number(maxMemories) || 5, 20));
+  // Invite set first (file-scoped when needed); semantic order is applied next.
+  const file = replyFile(visible, question);
+  const invite = (visible ?? []).filter((row) => {
+    const text = String(row?.text ?? "").trim();
+    if (!text) return false;
+    if (file) return row?.fileName === file || text.toLowerCase().includes(file.toLowerCase());
+    return !row?.fileName;
+  });
+  if (!invite.length) return [];
+  const byId = new Map();
+  const byText = new Map();
+  for (const row of invite) {
+    if (row?.id) byId.set(String(row.id), row);
+    const key = String(row?.text ?? "").trim().toLowerCase();
+    if (key) byText.set(key, row);
+  }
+  const ordered = [];
+  const seen = new Set();
+  const list = Array.isArray(hits) ? hits : [];
+  const ranked = [...list].sort((a, b) => {
+    const da = typeof a?.distance === "number" ? a.distance : 1;
+    const db = typeof b?.distance === "number" ? b.distance : 1;
+    return da - db;
+  });
+  for (const hit of ranked) {
+    const id = hit?.decision?.id || hit?.id || "";
+    const text = String(hit?.decision?.text ?? hit?.text ?? "").trim().toLowerCase();
+    const row = (id && byId.get(String(id))) || (text && byText.get(text)) || null;
+    if (!row) continue;
+    const key = row.id || row.text;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    ordered.push(row);
+    if (ordered.length >= limit) return ordered;
+  }
+  const fallback = recallVisibleForAsk(invite, question, limit);
+  for (const row of fallback) {
+    const key = row.id || row.text;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    ordered.push(row);
+    if (ordered.length >= limit) break;
+  }
+  return ordered;
+}
+
 
 function plainFact(text, connectorId) {
   const sentence = String(text ?? "").trim();

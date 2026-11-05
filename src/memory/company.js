@@ -46,6 +46,48 @@ export async function recallHitCount({ client, env = process.env } = {}) {
   return Array.isArray(result?.results) ? result.results.length : 0;
 }
 
+
+/**
+ * Semantic recall for a natural-language question (Walrus Memory chatbot ask path).
+ * Returns parsed decision documents, newest-among-matches left to the caller to filter.
+ */
+export async function recallCompany({ query, topK = 10, client, env = process.env } = {}) {
+  const key = env.COMPANY_MEMWAL_KEY;
+  const accountId = env.COMPANY_MEMWAL_ACCOUNT_ID;
+  if (!key || !accountId) return [];
+  const q = String(query ?? "").trim() || DECISION_MARK;
+  const memwal = client ?? liveClient(env);
+  const result = await memwal.recall({
+    query: q.slice(0, 16384),
+    topK: Math.max(1, Math.min(Number(topK) || 10, 100)),
+    namespace: NAMESPACE,
+  });
+  const hits = Array.isArray(result?.results) ? result.results : [];
+  const rows = [];
+  for (const hit of hits) {
+    const parsed = readDecisionPayload(hit?.text);
+    if (!parsed) continue;
+    rows.push({
+      account: parsed.account ?? "company",
+      kind: parsed.kind ?? "decision",
+      blobId: typeof hit?.blob_id === "string" ? hit.blob_id : null,
+      distance: typeof hit?.distance === "number" ? hit.distance : null,
+      decision: parsed.decision ?? null,
+      preference: parsed.preference ?? null,
+      roomSetting: parsed.roomSetting ?? null,
+      expiry: parsed.expiry ?? null,
+      room: parsed.room ?? null,
+      access: parsed.access ?? null,
+      hearing: parsed.hearing ?? null,
+      activity: parsed.activity ?? null,
+      learned: parsed.learned ?? null,
+      minutes: parsed.minutes ?? null,
+      actionItem: parsed.actionItem ?? null,
+    });
+  }
+  return rows;
+}
+
 export async function indexCompany({ client, env = process.env } = {}) {
   const key = env.COMPANY_MEMWAL_KEY;
   const accountId = env.COMPANY_MEMWAL_ACCOUNT_ID;

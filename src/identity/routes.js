@@ -17,7 +17,7 @@ import {
   sealPending,
 } from "./pending.js";
 import { codeChallengeFor, createCodeVerifier } from "./pkce.js";
-import { displayNameFromUser, identityConfigured, providerFromUser } from "./shared.js";
+import { displayNameFromUser, identityConfigured, providerFromUser, resolveSignInProviders } from "./shared.js";
 import { CALENDAR_SCOPES, applyCalendarConnection } from "../calendar/mcp.js";
 import { FORMS_SCOPES } from "../connectors/google-person.js";
 
@@ -63,13 +63,13 @@ async function startProvider(ctx, provider) {
   try {
     enabled = await identity.providerEnabled(provider);
   } catch {
-    send(res, 200, "text/html; charset=utf-8", page(ctx, {
+    send(res, 200, "text/html; charset=utf-8", await page(ctx, {
       notice: "Sign-in couldn't be checked. Try again.",
     }));
     return;
   }
   if (!enabled) {
-    send(res, 200, "text/html; charset=utf-8", page(ctx, {
+    send(res, 200, "text/html; charset=utf-8", await page(ctx, {
       notice: providerNotice(provider),
       next: safeConsoleNext(url.searchParams.get("next") || "/console"),
     }));
@@ -106,7 +106,7 @@ async function fakeConsent(ctx, provider) {
   }
   const pending = readPending(req, sessionSecret(env));
   if (!pending.ok || pending.provider !== provider) {
-    send(res, 200, "text/html; charset=utf-8", page(ctx, {
+    send(res, 200, "text/html; charset=utf-8", await page(ctx, {
       notice: "Sign-in expired. Start again.",
     }), { "set-cookie": clearOAuthCookie(req) });
     return;
@@ -118,7 +118,7 @@ async function fakeConsent(ctx, provider) {
     enabled = false;
   }
   if (!enabled) {
-    send(res, 200, "text/html; charset=utf-8", page(ctx, { notice: providerNotice(provider) }));
+    send(res, 200, "text/html; charset=utf-8", await page(ctx, { notice: providerNotice(provider) }));
     return;
   }
   let code = "";
@@ -130,7 +130,7 @@ async function fakeConsent(ctx, provider) {
       scope: ctx.url.searchParams.get("scope") || "",
     });
   } catch {
-    send(res, 200, "text/html; charset=utf-8", page(ctx, {
+    send(res, 200, "text/html; charset=utf-8", await page(ctx, {
       notice: "Sign-in didn't complete. Try again.",
     }));
     return;
@@ -146,7 +146,7 @@ async function finishCallback(ctx) {
   }
   const error = url.searchParams.get("error");
   if (error) {
-    send(res, 200, "text/html; charset=utf-8", page(ctx, {
+    send(res, 200, "text/html; charset=utf-8", await page(ctx, {
       notice: oauthErrorNotice(error, url.searchParams.get("error_description")),
     }), { "set-cookie": clearOAuthCookie(req) });
     return;
@@ -154,7 +154,7 @@ async function finishCallback(ctx) {
   const code = url.searchParams.get("code") || "";
   const pending = readPending(req, sessionSecret(env));
   if (!pending.ok || !code) {
-    send(res, 200, "text/html; charset=utf-8", page(ctx, {
+    send(res, 200, "text/html; charset=utf-8", await page(ctx, {
       notice: "Sign-in didn't complete. Try again.",
     }), { "set-cookie": clearOAuthCookie(req) });
     return;
@@ -217,7 +217,7 @@ async function finishCallback(ctx) {
       ],
     });
   } catch {
-    send(res, 200, "text/html; charset=utf-8", page(ctx, {
+    send(res, 200, "text/html; charset=utf-8", await page(ctx, {
       notice: "Sign-in didn't complete. Try again.",
     }), { "set-cookie": clearOAuthCookie(req) });
   }
@@ -279,17 +279,20 @@ export function oauthErrorNotice(error, description) {
   return "Sign-in didn't complete. Try again.";
 }
 
-function page(ctx, extras) {
+async function page(ctx, extras) {
   const { env, identity, url } = ctx;
   const reason = extras.reason || "";
+  const oauth = Boolean(identity) || identityConfigured(env);
+  const providers = oauth ? await resolveSignInProviders(identity) : { google: false, github: false };
   return renderSignInPage({
     configured: Boolean(consoleSecret(env)),
-    oauth: Boolean(identity) || identityConfigured(env),
+    oauth,
     memberSet: Boolean(String(env.SEDERUNT_MEMBER || "").trim()),
     reason,
     notice: extras.notice || "",
     name: extras.name || "",
     next: extras.next || safeConsoleNext(url.searchParams.get("next") || "/console"),
+    providers,
   });
 }
 

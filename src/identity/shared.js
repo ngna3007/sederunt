@@ -52,3 +52,29 @@ export function providerFromUser(user) {
   const found = identities.find((row) => row?.provider === "google" || row?.provider === "github");
   return found?.provider || "";
 }
+
+/**
+ * Which Continuations show on the sign-in page. Google stays the demo path when
+ * settings cannot be read; GitHub only appears when the provider is actually on.
+ *
+ * @param {{ providerEnabled?: (name: string) => Promise<boolean> } | null | undefined} identity
+ * @returns {Promise<{ google: boolean, github: boolean }>}
+ */
+export async function resolveSignInProviders(identity) {
+  const providers = { google: false, github: false };
+  if (!identity || typeof identity.providerEnabled !== "function") {
+    return providers;
+  }
+  try {
+    providers.google = await identity.providerEnabled("google") === true;
+  } catch {
+    // Settings failed: keep Google as the demo path when OAuth is otherwise configured.
+    providers.google = true;
+  }
+  try {
+    providers.github = await identity.providerEnabled("github") === true;
+  } catch {
+    providers.github = false;
+  }
+  return providers;
+}

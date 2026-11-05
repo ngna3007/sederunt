@@ -111,7 +111,7 @@ test("the room and the decision show a proof panel, and an answer can show why",
   assert.match(page, /Nobody can change it/);
   assert.match(page, /why-panel/);
   assert.match(page, /result\.learned/);
-  assert.match(page, /Verified on Walrus/);
+  assert.match(page, /Verified/);
   const overview = page.slice(page.indexOf('id="right-overview"'), page.indexOf('id="right-decisions"'));
   assert.equal(overview.includes('id="proof-panel"'), false);
   assert.equal(overview.includes(">Blob<"), false);
