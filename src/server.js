@@ -1062,15 +1062,29 @@ export function createApp(options = {}) {
         if (!question && delivery.intent !== "delete" && !huddle) {
           const channel = delivery.room?.askChannel || "";
           const people = await slackPeople(env, deps, channel);
-          if (!people.length) {
+          // conversations.members sometimes returns empty (rate limit / scope blip).
+          // Falling back to the speaker keeps the channel file instead of going silent.
+          const memberIds = people.length
+            ? people
+            : (delivery.memberId ? [delivery.memberId] : []);
+          if (!memberIds.length) {
+            if (env.SLACK_BOT_TOKEN && channel) {
+              await postSlackReply({
+                token: env.SLACK_BOT_TOKEN,
+                fetchImpl: deps.slack?.fetch,
+                channel,
+                text: "I could not see who is in this channel, so nothing was kept.",
+                username: botName,
+              });
+            }
             replyHttp(200, "application/json; charset=utf-8", JSON.stringify({
               body: "The channel has not sent who is there.",
               decisions: current.decisions.filter((item) => !item.deleted).length,
             }));
             return;
           }
-          delivery.participants = people;
-          delivery.room.memberIds = people;
+          delivery.participants = memberIds;
+          delivery.room.memberIds = memberIds;
           if (delivery.file) {
             const loaded = await slackBytes(env, deps, delivery.file);
             storedFile = loaded;
