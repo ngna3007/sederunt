@@ -1446,8 +1446,11 @@ async function keepDecision(input, session, deps, draft) {
   const attachedName = typeof input.file?.name === "string" ? input.file.name.trim() : "";
   const attachedBytes = input.file?.bytes;
   const hasAttached = Boolean(attachedName) && attachedBytes != null && attachedBytes !== "";
-  const fileName = hasAttached ? attachedName : namedInText;
-  const file = fileName ? await nameFile(deps, fileName, hasAttached ? attachedBytes : undefined) : null;
+  const slackFileId = typeof input.file?.id === "string" ? input.file.id.trim() : "";
+  const fileName = hasAttached || (attachedName && slackFileId) ? attachedName : namedInText;
+  const file = fileName
+    ? await nameFile(deps, fileName, hasAttached ? attachedBytes : undefined, attachedName === fileName ? slackFileId : "")
+    : null;
   const stamp = stampOf(input);
   const decision = {
     id: nextId(session, "decision"),
@@ -1574,20 +1577,26 @@ async function forgetDelivery(input, session, deps) {
   });
 }
 
-async function nameFile(deps, name, bytes) {
-  if (bytes == null || bytes === "" || !deps.console?.upload) return null;
-  try {
-    const uploaded = await deps.console.upload({ name, bytes });
-    const id = typeof uploaded?.id === "string" ? uploaded.id.trim() : "";
-    if (!id) return null;
-    return {
-      name,
-      consoleFileId: id,
-      folderId: typeof uploaded?.folderId === "string" ? uploaded.folderId : null,
-    };
-  } catch {
-    return null;
+// The Slack attachment is always recorded by name (and Slack file id), so a
+// resend can find it. The Console copy is best-effort and fills in its ids.
+async function nameFile(deps, name, bytes, slackFileId = "") {
+  const hasBytes = bytes != null && bytes !== "";
+  if (!hasBytes && !slackFileId) return null;
+  const file = { name, consoleFileId: null, folderId: null };
+  if (slackFileId) file.slackFileId = slackFileId;
+  if (hasBytes && deps.console?.upload) {
+    try {
+      const uploaded = await deps.console.upload({ name, bytes });
+      const id = typeof uploaded?.id === "string" ? uploaded.id.trim() : "";
+      if (id) {
+        file.consoleFileId = id;
+        file.folderId = typeof uploaded?.folderId === "string" ? uploaded.folderId : null;
+      }
+    } catch {
+      // Kept by name; the bytes are fetched again from Slack on resend.
+    }
   }
+  return file;
 }
 
 function stampOf(input) {
@@ -1678,8 +1687,9 @@ function decisionDocument(decision) {
     facts: [...(decision.facts ?? [])],
     fileNames: decision.fileNames.map((file) => ({
       name: file.name,
-      consoleFileId: file.consoleFileId,
-      folderId: file.folderId,
+      consoleFileId: file.consoleFileId ?? null,
+      folderId: file.folderId ?? null,
+      ...(file.slackFileId ? { slackFileId: file.slackFileId } : {}),
     })),
     expiryEpoch: epochOf(decision.expiryEpoch),
     account: decision.account,
