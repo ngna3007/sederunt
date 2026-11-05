@@ -651,7 +651,7 @@ test("a signed slack channel stores one decision and a huddle stores none", asyn
         async members() { return ["U1"]; },
       },
     },
-    env: cleanEnv({ SLACK_SIGNING_SECRET: secret, SEDERUNT_MEMBER: "U1" }),
+    env: cleanEnv({ SLACK_SIGNING_SECRET: secret, SEDERUNT_MEMBER: "U1", SLACK_BOT_USER_ID: "UBOT" }),
     companyLoaded: true,
   });
   const port = await listen(app);
@@ -689,7 +689,7 @@ test("a signed slack channel stores one decision and a huddle stores none", asyn
       type: "message",
       user: "U1",
       channel: "C1",
-      text: "what was decided",
+      text: "<@UBOT> what was decided",
       client_msg_id: "ask-1",
       members: ["U1"],
     }, secret);
@@ -798,7 +798,7 @@ test("a Slack channel join is not stored", async () => {
   }
 });
 
-test("a repeated Slack question is posted once", async () => {
+test("a repeated channel mention is posted once", async () => {
   const memory = mockAccount({ accountId: "company-slack-retry", delegates: ["delegate-slack-retry"] });
   const secret = "slack-secret-sentinel";
   const posts = [];
@@ -811,7 +811,7 @@ test("a repeated Slack question is posted once", async () => {
         async members() { return ["U1"]; },
       },
     },
-    env: cleanEnv({ SLACK_SIGNING_SECRET: secret, SEDERUNT_MEMBER: "U1" }),
+    env: cleanEnv({ SLACK_SIGNING_SECRET: secret, SEDERUNT_MEMBER: "U1", SLACK_BOT_USER_ID: "UBOT" }),
     companyLoaded: true,
   });
   const port = await listen(app);
@@ -828,7 +828,7 @@ test("a repeated Slack question is posted once", async () => {
       type: "message",
       user: "U1",
       channel: "C1",
-      text: "what was decided",
+      text: "<@UBOT> what was decided",
       ts: "1700000005.000",
     }, secret);
     const first = await post(port, "/api/slack", asked.payload, asked.headers);
@@ -2168,7 +2168,7 @@ test("a Slack challenge is echoed and the console confirm uses the configured me
   };
   const app = createApp({
     deps: { memory, tatum: quietTatum(), linear },
-    env: cleanEnv({ SLACK_SIGNING_SECRET: secret, SEDERUNT_MEMBER: "U_MINA" }),
+    env: cleanEnv({ SLACK_SIGNING_SECRET: secret, SEDERUNT_MEMBER: "U_MINA", SLACK_BOT_USER_ID: "UBOT" }),
     companyLoaded: true,
   });
   const port = await listen(app);

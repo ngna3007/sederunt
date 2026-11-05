@@ -206,6 +206,7 @@ test("the demo runs eleven ordered steps through the real handler with every out
   const fileFetches = [];
   const env = {
     SLACK_SIGNING_SECRET: secret,
+    SLACK_BOT_USER_ID: "UBOT",
     RECALL_WEBHOOK_SECRET: webhook,
     COMPANY_MEMWAL_KEY: "key-sentinel-value",
     COMPANY_MEMWAL_ACCOUNT_ID: "account-id-sentinel",
@@ -310,7 +311,7 @@ test("the demo runs eleven ordered steps through the real handler with every out
     assert.equal(afterAssign.decisions.find((item) => BOOTH.test(item.text)).connectorId, "");
 
     // Step 7. Recall in every door.
-    const slackAsk = await slackAs({ user: "mina", channel: "CDEMO", text: "what was decided", client_msg_id: "ask-1" });
+    const slackAsk = await slackAs({ user: "mina", channel: "CDEMO", text: "<@UBOT> what was decided", client_msg_id: "ask-1" });
     assert.equal(posts.at(-1).channel, "CDEMO");
     threeFacts(posts.at(-1).text, "slack channel post");
     const decisionsBeforeChat = (await consoleBoard()).decisions.length;
@@ -410,7 +411,7 @@ test("the demo runs eleven ordered steps through the real handler with every out
     assert.equal(after.decisions.some((item) => /floor plan/i.test(item.text)), false);
     assert.equal(after.decisions.some((item) => BOOTH.test(item.text)), true);
     assert.equal(after.decisions.some((item) => ASSIGNED.test(item.text)), true);
-    await slackAs({ user: "mina", channel: "CDEMO", text: "what was decided", client_msg_id: "ask-gone" });
+    await slackAs({ user: "mina", channel: "CDEMO", text: "<@UBOT> what was decided", client_msg_id: "ask-gone" });
     assert.equal(posts.at(-1).channel, "CDEMO");
     threeFacts(posts.at(-1).text, "slack channel after delete");
     assert.equal(/floor plan|floor-plan\.pdf/i.test(posts.at(-1).text), false);

@@ -1,24 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { looksLikeOpenQuestion, parseUtterance } from "../src/parse.js";
-import { slackAnswer, slackFileBytes, slackQuestion } from "../src/slack/reply.js";
-
-test("summarize and resend file asks are Slack questions", () => {
-  assert.equal(
-    slackQuestion("Please summarize the important announcement I just posted in #new-channel, and resend/share the attached file demo-note.txt (or a working link to it)."),
-    true,
-  );
-  assert.equal(
-    slackQuestion("Hey Adam — please summarize the IMPORTANT ANNOUNCEMENT in #new-channel and resend demo-note.txt or a link."),
-    true,
-  );
-  assert.equal(slackQuestion("what was decided"), true);
-  assert.equal(slackQuestion("when does the booth open?"), true);
-  assert.equal(slackQuestion("What is on Monday?"), false);
-  assert.equal(slackQuestion("What tickets are open for the trip?"), false);
-  assert.equal(slackQuestion("The booth opens at nine."), false);
-  assert.equal(slackQuestion("The floor plan is floor-plan.pdf"), false);
-});
+import { slackAnswer, slackFileBytes } from "../src/slack/reply.js";
 
 test("calendar and trip reads stay parse reads, not open questions", () => {
   assert.equal(looksLikeOpenQuestion("What is on Monday?"), false);

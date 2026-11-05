@@ -58,8 +58,8 @@ import { createSession } from "./session.js";
 import { createAskStore, askLimit, settledStatus } from "./ask/store.js";
 import { ASK_UNAVAILABLE, askSpendsQuota, humanAskText, runAsk } from "./ask/run.js";
 import { openRouterConfig } from "./openrouter.js";
-import { answerSlackQuestion, postSlackReply, slackChannelMembers, slackFileBytes, slackQuestion } from "./slack/reply.js";
-import { slackDelivery, verifySlackRequest } from "./slack/sign.js";
+import { answerSlackQuestion, postSlackReply, slackChannelMembers, slackFileBytes } from "./slack/reply.js";
+import { slackBotUserIds, slackDelivery, verifySlackRequest } from "./slack/sign.js";
 import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded, warmProofs } from "./typed-path.js";
 import { wireCalls } from "./tatum/client.js";
 
@@ -1025,11 +1025,12 @@ export function createApp(options = {}) {
       const current = await prepareWorkspace(workspace, companyId);
       const botName = (await currentBot(workspace, req)).name;
       try {
-        const delivery = slackDelivery(event);
+        const delivery = slackDelivery(event, { botUserIds: slackBotUserIds(parsed, env) });
         if (filesRuntime && delivery.intent === "delete") {
           try { hideDeletedSlackMessages(filesRuntime, delivery.forgetIds); } catch { /* the event still acks */ }
         }
-        const question = delivery.intent !== "delete" && slackQuestion(delivery.text);
+        // A DM, or a channel @mention, recalls. Other channel lines are stored.
+        const question = delivery.ask === true;
         const huddle = delivery.room?.kind === "huddle" || delivery.room?.source === "slack-huddle";
         let storedFile = null;
         if (!question && delivery.intent !== "delete" && !huddle) {
