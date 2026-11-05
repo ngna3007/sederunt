@@ -1116,7 +1116,7 @@ export function createApp(options = {}) {
               : undefined,
           });
           if (typeof result.learned === "string" && result.learned) answer.text = result.learned;
-          const bytes = answer.file ? await consoleFileBytes(current, answer.file, deps) : null;
+          const bytes = answer.file ? await storedFileBytes(current, answer.file, deps, env) : null;
           const reply = {
             channel,
             text: answer.text,
@@ -2049,14 +2049,25 @@ async function slackBytes(env, deps, file) {
   return null;
 }
 
-async function consoleFileBytes(session, name, deps) {
+// Console copy first; when it is missing (upload failed or timed out), the
+// bytes are fetched again from Slack by the stored Slack file id.
+export async function storedFileBytes(session, name, deps, env = {}) {
   const decision = (session?.decisions ?? []).find((item) =>
     !item.deleted && item.fileNames?.some((file) => file?.name === name));
   const file = decision?.fileNames?.find((item) => item?.name === name);
-  if (!file || typeof deps.console?.download !== "function") return null;
+  if (!file) return null;
+  if (file.consoleFileId && typeof deps.console?.download === "function") {
+    try {
+      const bytes = await deps.console.download({ id: file.consoleFileId, name: file.name });
+      if (bytes != null && bytes !== "") return String(bytes);
+    } catch {
+      // Fall through to Slack.
+    }
+  }
+  if (!file.slackFileId) return null;
   try {
-    const bytes = await deps.console.download({ id: file.consoleFileId, name: file.name });
-    return bytes == null || bytes === "" ? null : String(bytes);
+    const loaded = await slackBytes(env, deps, { id: file.slackFileId, name: file.name });
+    return loaded?.bytes != null && loaded.bytes !== "" ? String(loaded.bytes) : null;
   } catch {
     return null;
   }

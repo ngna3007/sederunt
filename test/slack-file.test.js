@@ -4,6 +4,8 @@ import { looksLikeOpenQuestion, parseUtterance } from "../src/parse.js";
 import { answerSlackQuestion, slackAnswer, slackFileBytes } from "../src/slack/reply.js";
 import { createSession } from "../src/session.js";
 import { handleUtterance } from "../src/typed-path.js";
+import { storedFileBytes } from "../src/server.js";
+import { replyFile } from "../src/slack/reply.js";
 
 test("calendar and trip reads stay parse reads, not open questions", () => {
   assert.equal(looksLikeOpenQuestion("What is on Monday?"), false);
@@ -191,4 +193,78 @@ test("a Slack file download follows the signed redirect", async () => {
   assert.equal(loaded.bytes, "PLAN");
   assert.equal(seen.some((url) => url.endsWith("/files.info")), true);
   assert.equal(seen.at(-1), "https://downloads.slack.example/floor-plan.txt?sig=1");
+});
+
+test("a failed Console upload still keeps the Slack attachment by name and Slack file id", async () => {
+  const session = createSession();
+  await handleUtterance(
+    channelUtterance(session, "Live demo announcement — please keep the attached note.", {
+      file: { id: "F123", name: "demo-note.txt", bytes: "bring the demo note" },
+    }),
+    {
+      console: {
+        async upload() {
+          throw new Error("console timed out");
+        },
+      },
+    },
+  );
+  assert.equal(session.decisions.length, 1);
+  assert.deepEqual(session.decisions[0].fileNames, [{
+    name: "demo-note.txt",
+    consoleFileId: null,
+    folderId: null,
+    slackFileId: "F123",
+  }]);
+});
+
+test("a successful Console upload keeps the Slack file id too", async () => {
+  const session = createSession();
+  await handleUtterance(
+    channelUtterance(session, "Keep the note.", { file: { id: "F9", name: "demo-note.txt", bytes: "NOTE" } }),
+    { console: { async upload() { return { id: "file-9", folderId: "folder" }; } } },
+  );
+  assert.deepEqual(session.decisions[0].fileNames, [{
+    name: "demo-note.txt",
+    consoleFileId: "file-9",
+    folderId: "folder",
+    slackFileId: "F9",
+  }]);
+});
+
+test("resend bytes fall back to Slack by stored file id when Console has no copy", async () => {
+  const session = createSession();
+  session.decisions.push({
+    id: "d1",
+    deleted: false,
+    fileNames: [{ name: "demo-note.txt", consoleFileId: null, folderId: null, slackFileId: "F123" }],
+  });
+  const asked = [];
+  const deps = {
+    console: { async download() { throw new Error("should not be called without an id"); } },
+    slack: {
+      async downloadFile(file) {
+        asked.push(file);
+        return { name: file.name, bytes: "bring the demo note", id: file.id };
+      },
+    },
+  };
+  const bytes = await storedFileBytes(session, "demo-note.txt", deps, {});
+  assert.equal(bytes, "bring the demo note");
+  assert.deepEqual(asked, [{ id: "F123", name: "demo-note.txt" }]);
+
+  const missing = { console: { async download() { return null; } }, slack: deps.slack };
+  session.decisions[0].fileNames[0].consoleFileId = "file-gone";
+  assert.equal(await storedFileBytes(session, "demo-note.txt", missing, {}), "bring the demo note");
+
+  const fromConsole = { console: { async download() { return "CONSOLE"; } }, slack: deps.slack };
+  assert.equal(await storedFileBytes(session, "demo-note.txt", fromConsole, {}), "CONSOLE");
+});
+
+test("replyFile prefers the exact file named in the question", () => {
+  const visible = [
+    { text: "The demo plan is in plan.txt", fileName: "plan.txt" },
+    { text: "Live demo announcement — please keep the attached note.", fileName: "demo-note.txt" },
+  ];
+  assert.equal(replyFile(visible, "can you resend demo-note.txt"), "demo-note.txt");
 });

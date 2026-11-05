@@ -1,10 +1,20 @@
 import { openRouterComplete, openRouterConfig } from "../openrouter.js";
 import { buildSystemPrompt } from "../bot/persona.js";
 
+const FILE_NAME = /\b([\w.-]+\.(?:pdf|png|docx|txt|pptx))\b/i;
 const STOP = new Set(["what", "about", "that", "this", "with", "from", "your", "have", "does", "file", "when", "where", "who", "why", "how", "was", "decided", "the", "and", "for"]);
 
 /** The file name a question is about, or an empty string. */
 export function replyFile(visible, question) {
+  const named = FILE_NAME.exec(String(question ?? ""))?.[1]?.toLowerCase() || "";
+  if (named) {
+    for (const row of visible ?? []) {
+      if (row?.fileName && row.fileName.toLowerCase() === named) return row.fileName;
+    }
+    for (const row of visible ?? []) {
+      if (row?.fileName && String(row.text ?? "").toLowerCase().includes(named)) return row.fileName;
+    }
+  }
   const words = questionWords(question);
   if (words.length === 0) return "";
   for (const row of visible ?? []) {
