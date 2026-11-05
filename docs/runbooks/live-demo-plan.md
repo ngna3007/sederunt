@@ -17,7 +17,7 @@ does **not** replace this live path.
 - Grok Bot test Slack account uses the bot mailbox
   `adekunleraniya8407-p99wd9@mail.grokbot.com` (sign-ups only; never commit
   other secrets).
-- Meeting under test is scoped to Ngọc Anh (Rowan) only for the privacy check.
+- Meeting under test is scoped to the owner’s real Slack/Google identity (Ngọc Anh email account) only for the privacy check — not the Grok Bot test Slack user.
 
 ## A. Console setup
 
@@ -41,8 +41,8 @@ does **not** replace this live path.
 9. Invite that Slack user and the Sederunt bot into the Slack workspace.
 10. As the **Grok Bot test account**, ask in Slack about the meeting from B.
     **Expected:** the bot must **not** answer with meeting content (meeting is
-    only for Ngọc Anh).
-11. As an allowed member (Ngọc Anh), post an **important announcement with
+    only for the Ngọc Anh email account / owner; the Grok Bot test Slack user is an outsider).
+11. As the allowed owner (Ngọc Anh email account), post an **important announcement with
     files** in Slack.
 12. **DM the bot** asking for that announcement / file.
     **Expected:** bot can summarize and, if supported, **resend the file** (or

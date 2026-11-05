@@ -17,4 +17,4 @@ incident.
 
 ## Live demo / QA
 
-- [live-demo-kich-ban.md](./live-demo-kich-ban.md) — end-to-end browser kịch bản for QA and hackathon demos (console → meeting → Slack privacy/files → Ask AI / Files).
+- [live-demo-plan.md](./live-demo-plan.md) — end-to-end browser kịch bản for QA and hackathon demos (console → meeting → Slack privacy/files → Ask AI / Files).
