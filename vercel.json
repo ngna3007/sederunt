@@ -1,7 +1,7 @@
 {
   "functions": {
     "src/server.js": {
-      "includeFiles": "{public/**,src/hold.js}",
+      "includeFiles": "{public/**,src/**,prototype/**}",
       "maxDuration": 60
     }
   }

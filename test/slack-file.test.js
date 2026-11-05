@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { looksLikeOpenQuestion, parseUtterance } from "../src/parse.js";
-import { slackAnswer, slackFileBytes } from "../src/slack/reply.js";
+import { answerSlackQuestion, slackAnswer, slackFileBytes } from "../src/slack/reply.js";
+import { createSession } from "../src/session.js";
+import { handleUtterance } from "../src/typed-path.js";
 
 test("calendar and trip reads stay parse reads, not open questions", () => {
   assert.equal(looksLikeOpenQuestion("What is on Monday?"), false);
@@ -41,6 +43,121 @@ test("an unrelated question drops the file decision and its checkpoint", () => {
   assert.doesNotMatch(answer.text, /340943539/);
   assert.doesNotMatch(answer.text, /checkpoint/);
   assert.doesNotMatch(answer.text, /preference/);
+});
+
+function channelUtterance(session, text, extra = {}) {
+  return {
+    text,
+    session,
+    memberId: "anh",
+    door: "channel",
+    room: { id: "CNEW", kind: "channel", source: "slack", botPresent: true, memberIds: ["anh"] },
+    participants: ["anh"],
+    ...extra,
+  };
+}
+
+test("a channel attachment is stored when the sentence does not name the file", async () => {
+  const session = createSession();
+  const uploads = [];
+  await handleUtterance(
+    channelUtterance(session, "Live demo announcement — please keep the attached note.", {
+      file: { name: "demo-note.txt", bytes: "bring the demo note" },
+    }),
+    {
+      console: {
+        async upload(input) {
+          uploads.push(input);
+          return { id: "file-demo", folderId: "folder" };
+        },
+      },
+    },
+  );
+  assert.deepEqual(uploads, [{ name: "demo-note.txt", bytes: "bring the demo note" }]);
+  assert.equal(session.decisions.length, 1);
+  assert.equal(session.decisions[0].text, "Live demo announcement — please keep the attached note.");
+  assert.deepEqual(session.decisions[0].fileNames, [{
+    name: "demo-note.txt",
+    consoleFileId: "file-demo",
+    folderId: "folder",
+  }]);
+});
+
+test("an attached file is kept under its own name when the sentence names a different file", async () => {
+  const session = createSession();
+  const uploads = [];
+  await handleUtterance(
+    channelUtterance(session, "The floor plan is floor-plan.txt", {
+      file: { name: "demo-note.txt", bytes: "NOTE" },
+    }),
+    {
+      console: {
+        async upload(input) {
+          uploads.push({ name: input.name, bytes: input.bytes });
+          return { id: "file-note", folderId: "folder" };
+        },
+      },
+    },
+  );
+  assert.deepEqual(uploads, [{ name: "demo-note.txt", bytes: "NOTE" }]);
+  assert.equal(session.decisions[0].fileNames[0].name, "demo-note.txt");
+});
+
+test("a filename in the sentence is uploaded when that file is attached, and stored without a file when nothing is", async () => {
+  const session = createSession();
+  const uploads = [];
+  await handleUtterance(
+    channelUtterance(session, "The floor plan is floor-plan.txt", {
+      file: { name: "floor-plan.txt", bytes: "PLAN" },
+    }),
+    {
+      console: {
+        async upload(input) {
+          uploads.push({ name: input.name, bytes: input.bytes });
+          return { id: "file-plan", folderId: "folder" };
+        },
+      },
+    },
+  );
+  assert.deepEqual(uploads, [{ name: "floor-plan.txt", bytes: "PLAN" }]);
+  assert.equal(session.decisions[0].fileNames[0].name, "floor-plan.txt");
+
+  const bare = createSession();
+  await handleUtterance(
+    channelUtterance(bare, "The badge list is badges.pdf"),
+    {
+      console: {
+        async upload() {
+          throw new Error("no bytes to upload");
+        },
+      },
+    },
+  );
+  assert.equal(bare.decisions.length, 1);
+  assert.deepEqual(bare.decisions[0].fileNames, []);
+});
+
+test("answerSlackQuestion returns a stored file and does not ask to confirm", async () => {
+  let called = false;
+  const fetchImpl = async () => {
+    called = true;
+    return {
+      ok: true,
+      async json() {
+        return { choices: [{ message: { content: "Please confirm before I resend demo-note.txt." } }] };
+      },
+    };
+  };
+  const answer = await answerSlackQuestion(
+    [{ text: "Live demo announcement — please keep the attached note.", fileName: "demo-note.txt" }],
+    "can you resend demo-note.txt",
+    { env: { OPENROUTER_API_KEY: "sk-or-test" }, fetchImpl },
+  );
+  assert.equal(called, false);
+  assert.equal(answer.source, "retrieval");
+  assert.equal(answer.file, "demo-note.txt");
+  assert.match(answer.text, /demo-note\.txt/);
+  assert.doesNotMatch(answer.text, /confirm/i);
 });
 
 test("a Slack file download follows the signed redirect", async () => {
