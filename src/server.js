@@ -720,7 +720,7 @@ export function createApp(options = {}) {
           return;
         }
       }
-      const doors = doorReport(env, false);
+      const doors = doorReport(env, workspace.linearReady === true);
       const roomPath = /^\/console\/rooms\/([^/]+)$/.exec(url.pathname);
       const consolePage = url.pathname === "/console"
         || url.pathname === "/console/rooms"
