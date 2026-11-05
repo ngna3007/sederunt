@@ -348,8 +348,38 @@ test("resend bytes fall back to Slack by stored file id when Console has no copy
   session.decisions[0].fileNames[0].consoleFileId = "file-gone";
   assert.equal(await storedFileBytes(session, "demo-note.txt", missing, {}), "bring the demo note");
 
-  const fromConsole = { console: { async download() { return "CONSOLE"; } }, slack: deps.slack };
+  const consoleArgs = [];
+  const fromConsole = {
+    console: {
+      async download(input) {
+        consoleArgs.push(input);
+        return "CONSOLE";
+      },
+    },
+    slack: deps.slack,
+  };
+  session.decisions[0].fileNames[0].folderId = "folder-from-file";
   assert.equal(await storedFileBytes(session, "demo-note.txt", fromConsole, {}), "CONSOLE");
+  assert.deepEqual(consoleArgs, [{
+    id: "file-gone",
+    name: "demo-note.txt",
+    folderId: "folder-from-file",
+  }]);
+});
+
+test("replyFile pin covers a named stored file when the model attach is empty", () => {
+  const visible = [
+    { text: "The booth opens at nine.", fileName: null },
+    { text: "Live demo announcement demo-note.txt — please keep.", fileName: "demo-note.txt" },
+  ];
+  assert.equal(replyFile(visible, "can you resend demo-note.txt"), "demo-note.txt");
+  // Same pin the Slack ask path uses when answer.file is empty after OpenRouter.
+  const answer = { text: "Here you go.", file: "" };
+  if (!answer.file) {
+    const named = replyFile(visible, "can you resend demo-note.txt");
+    if (named) answer.file = named;
+  }
+  assert.equal(answer.file, "demo-note.txt");
 });
 
 test("replyFile prefers the exact file named in the question", () => {

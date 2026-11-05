@@ -59,11 +59,15 @@ export function createConsoleAdapter(options = {}) {
       return { id: fileId, folderId, state };
     },
     async download(input) {
-      if (!apiKey || !serviceKey || !folderId) return null;
+      if (!apiKey || !serviceKey) return null;
+      // Prefer the file's own folder when recorded; fall back to the adapter/env folder.
+      const targetFolder = (typeof input?.folderId === "string" && input.folderId.trim())
+        || folderId;
+      if (!targetFolder) return null;
       const fileId = input?.id;
       if (!fileId) return null;
-      const policyId = await folderPolicy(fetchImpl, apiKey, folderId, options.wait);
-      const ciphertext = await downloadCiphertext(fetchImpl, apiKey, folderId, fileId, options.wait);
+      const policyId = await folderPolicy(fetchImpl, apiKey, targetFolder, options.wait);
+      const ciphertext = await downloadCiphertext(fetchImpl, apiKey, targetFolder, fileId, options.wait);
       const plain = options.decrypt
         ? await options.decrypt(ciphertext, { policyId, apiKey, serviceKey })
         : await decryptForFolder(ciphertext, policyId, apiKey, serviceKey);

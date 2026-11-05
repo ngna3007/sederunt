@@ -4,6 +4,7 @@ import { once } from "node:events";
 import { request } from "node:http";
 import test from "node:test";
 import { mockAccount } from "../src/memory/mock-account.js";
+import { createSession } from "../src/session.js";
 import { createApp } from "../src/server.js";
 
 const secret = "slack-keep-ask-secret";
@@ -38,6 +39,7 @@ function post(port, body, headers) {
 function slackApi() {
   const texts = [];
   const uploads = [];
+  const comments = [];
   const fetch = async (url, init = {}) => {
     const href = String(url);
     if (href.includes("/conversations.members")) {
@@ -51,10 +53,16 @@ function slackApi() {
       texts.push(JSON.parse(init.body));
       return { ok: true, status: 200, async json() { return { ok: true }; } };
     }
+    if (href.endsWith("/files.completeUploadExternal") && init.body) {
+      try {
+        const body = JSON.parse(init.body);
+        if (typeof body.initial_comment === "string") comments.push(body.initial_comment);
+      } catch { /* ignore */ }
+    }
     uploads.push(href);
     return { ok: true, status: 200, async json() { return { ok: true, upload_url: "https://files.slack.com/upload/v1/x", file_id: "FUP" }; }, async text() { return "OK"; } };
   };
-  return { fetch, texts, uploads };
+  return { fetch, texts, uploads, comments };
 }
 
 test("a channel announcement that names its file is kept, Kept posts once, and a duplicate does not post Kept", async () => {
@@ -101,6 +109,87 @@ test("a channel announcement that names its file is kept, Kept posts once, and a
     assert.equal(dm.status, 200);
     assert.equal(dm.body.posted, true);
     assert.ok(api.uploads.length > 0, "the stored file is uploaded back to the DM");
+  } finally {
+    await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
+
+test("Slack ask keeps the model reply (not result.learned) and pins a named file when attach is null", async () => {
+  const api = slackApi();
+  const openrouterCalls = [];
+  const fetch = async (url, init = {}) => {
+    const href = String(url);
+    if (href.includes("openrouter.ai")) {
+      openrouterCalls.push(JSON.parse(init.body || "{}"));
+      // Model answers naturally but forgets attach — server must pin via replyFile.
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            choices: [{ message: { content: '{"text":"Here is demo-note.txt from the announcement.","attach":null}' } }],
+          };
+        },
+      };
+    }
+    return api.fetch(url, init);
+  };
+  const session = createSession();
+  // An action-item that overlaps the ask so shapeAnswer would set result.learned
+  // to a raw sentence dump — the old bug overwrote Adam's reply with that dump.
+  session.learned = [{
+    kind: "action-item",
+    text: "Resend the demo note to #new-channel after each huddle.",
+    at: "2026-11-05T00:00:00.000Z",
+    key: "learned:action-item:demo",
+  }];
+  const memory = mockAccount({ accountId: "company-keep-ask-pin", delegates: ["delegate-keep-ask-pin"] });
+  const app = createApp({
+    session,
+    deps: {
+      memory,
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+      slack: { fetch, async members() { return ["U1"]; } },
+      console: {
+        async download() { return null; },
+        async upload() { return { id: "file-console", folderId: "folder-x" }; },
+      },
+    },
+    env: {
+      COMPANY_MEMWAL_KEY: "key-sentinel-value",
+      COMPANY_MEMWAL_ACCOUNT_ID: "account-id-sentinel",
+      SLACK_SIGNING_SECRET: secret,
+      SLACK_BOT_TOKEN: "xoxb-test",
+      SEDERUNT_MEMBER: "U1",
+      OPENROUTER_API_KEY: "sk-or-test",
+    },
+    companyLoaded: true,
+  });
+  app.listen(0, "127.0.0.1");
+  await once(app, "listening");
+  const port = app.address().port;
+  const send = async (event) => {
+    const message = signed({ type: "message", user: "U1", ...event });
+    const reply = await post(port, message.payload, message.headers);
+    return { ...reply, body: JSON.parse(reply.raw) };
+  };
+  const file = [{ id: "F1", name: "demo-note.txt", url_private_download: "https://files.slack.com/files-pri/T/F1/download/demo-note.txt" }];
+  try {
+    const kept = await send({ subtype: "file_share", channel: "C1", text: ANNOUNCEMENT, client_msg_id: "keep-pin-1", files: file });
+    assert.equal(kept.status, 200, kept.raw);
+    assert.equal(kept.body.decisions, 1);
+
+    const dm = await send({ channel: "D1", channel_type: "im", text: "can you resend demo-note.txt", client_msg_id: "dm-pin-1" });
+    assert.equal(dm.status, 200);
+    assert.equal(dm.body.posted, true);
+    assert.ok(openrouterCalls.length >= 1, "OpenRouter was asked");
+    // File replies carry Adam's text as initial_comment, not chat.postMessage.
+    assert.deepEqual(api.comments, ["Here is demo-note.txt from the announcement."]);
+    // The learned dump includes the action-item line; that must not replace the reply.
+    assert.equal(api.comments.some((text) => text.includes("Resend the demo note to #new-channel")), false);
+    assert.ok(api.uploads.some((href) => href.includes("completeUploadExternal")),
+      "named file is pinned and uploaded even when attach was null");
   } finally {
     await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
   }

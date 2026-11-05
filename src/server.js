@@ -58,7 +58,7 @@ import { createSession } from "./session.js";
 import { createAskStore, askLimit, settledStatus } from "./ask/store.js";
 import { ASK_UNAVAILABLE, askSpendsQuota, humanAskText, runAsk } from "./ask/run.js";
 import { openRouterConfig } from "./openrouter.js";
-import { answerSlackQuestion, postSlackReply, slackChannelMembers, slackFileBytes } from "./slack/reply.js";
+import { answerSlackQuestion, postSlackReply, replyFile, slackChannelMembers, slackFileBytes } from "./slack/reply.js";
 import { slackBotUserIds, slackDelivery, verifySlackRequest } from "./slack/sign.js";
 import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded, warmProofs } from "./typed-path.js";
 import { wireCalls } from "./tatum/client.js";
@@ -1124,7 +1124,13 @@ export function createApp(options = {}) {
               ? async (query) => doorDeps.memory.recall(query)
               : undefined,
           });
-          if (typeof result.learned === "string" && result.learned) answer.text = result.learned;
+          // Keep the model's Slack reply. result.learned is Ask AI / chat shaping
+          // (shapeAnswer sentence dump) and must not overwrite Adam's text here.
+          // If the model forgot attach, pin a stored file the question already names.
+          if (!answer.file) {
+            const named = replyFile(result.visible, delivery.text);
+            if (named) answer.file = named;
+          }
           const bytes = answer.file ? await storedFileBytes(current, answer.file, deps, env) : null;
           const reply = {
             channel,
@@ -2067,7 +2073,11 @@ export async function storedFileBytes(session, name, deps, env = {}) {
   if (!file) return null;
   if (file.consoleFileId && typeof deps.console?.download === "function") {
     try {
-      const bytes = await deps.console.download({ id: file.consoleFileId, name: file.name });
+      const bytes = await deps.console.download({
+        id: file.consoleFileId,
+        name: file.name,
+        folderId: typeof file.folderId === "string" ? file.folderId : "",
+      });
       if (bytes != null && bytes !== "") return String(bytes);
     } catch {
       // Fall through to Slack.

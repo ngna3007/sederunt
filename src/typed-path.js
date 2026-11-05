@@ -153,7 +153,11 @@ export async function downloadFile(input, deps = {}) {
   const file = decision.fileNames.find((item) => item.name === name);
   if (!file || !deps.console?.download) return { name: file?.name ?? null, bytes: null, allow: "read" };
   try {
-    const bytes = await deps.console.download({ id: file.consoleFileId, name: file.name });
+    const bytes = await deps.console.download({
+      id: file.consoleFileId,
+      name: file.name,
+      folderId: typeof file.folderId === "string" ? file.folderId : "",
+    });
     return { name: file.name, bytes: bytes ?? null, allow: "read" };
   } catch {
     return { name: file.name, bytes: null, allow: "read" };
