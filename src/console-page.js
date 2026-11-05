@@ -64,7 +64,7 @@ export function renderConsolePage(state = {}) {
   const editIcon = glyph('<path d="M9.6 2.7 13.3 6.4 6.4 13.3H2.7V9.6z"/>');
   const outIcon = glyph('<path d="M6.2 2.8H3.4v10.4h2.8"/><path d="M6.6 8h6.2"/><path d="M10.6 5.4 13.2 8l-2.6 2.6"/>');
   const accountMenu = signedIn
-    ? `<button type="button" role="menuitem" id="edit-profile">${editIcon}Edit profile</button><div class="menu-rule" role="separator"></div><form id="sign-out-form" method="post" action="/console/sign-out"><button id="sign-out" type="submit" role="menuitem">${outIcon}Sign out</button></form>`
+    ? `<button type="button" class="menu-item" role="menuitem" id="edit-profile">${editIcon}Edit profile</button><div class="menu-rule" role="separator"></div><form id="sign-out-form" method="post" action="/console/sign-out"><button id="sign-out" class="menu-item danger" type="submit" role="menuitem">${outIcon}Sign out</button></form>`
     : `<p class="account-note" role="note">Sign-in is not set up.</p>`;
   const signInOff = state.signInOff === true;
   const signInBanner = signInOff
@@ -554,11 +554,11 @@ ${slack}
             <button type="button" id="file-id-chip" class="id-chip"><span id="file-id" class="mono"></span></button>
             <span class="meta-item header-only" hidden><span class="meta-label">Status</span><span id="file-status-badge" class="badge"></span></span>
             <span class="meta-item header-only" hidden><span class="meta-label">Platform</span><span id="file-platform-pill"></span></span>
-            <span class="meta-item"><span class="meta-label">Started</span><span id="file-started" class="meta"></span></span>
+            <span class="meta-item" id="file-started-item" hidden><span class="meta-label">Started</span><span id="file-started" class="meta"></span></span>
             <span class="meta-item header-only" id="file-usage-item" hidden><span class="meta-label">Usage</span><span id="file-usage" class="usage-chip"></span></span>
             <p id="file-lead" class="page-lede" hidden></p>
             <p id="file-lead-status" class="meta"></p>
-            <p id="file-proof" class="meta" hidden></p>
+            <a id="file-proof" class="badge ok proof-chip" href="#proof-panel" hidden></a>
           </div>
         </div>
         <div class="room-body">
@@ -3102,9 +3102,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
       status.textContent = "";
       status.hidden = true;
     }
-    var proof = lead && typeof lead.checkpoint === "number" ? proofExplain(lead) : "";
-    var ticket = lead ? ticketLine(lead) : "";
-    showLine("file-proof", [proof, ticket].filter(Boolean).join(" "));
+    var chip = document.getElementById("file-proof");
+    if (chip) {
+      var kept = lead && typeof lead.checkpoint === "number";
+      chip.textContent = kept ? "On Walrus" : "";
+      chip.title = kept ? proofExplain(lead) : "";
+      chip.hidden = !kept;
+    }
   }
 
   function fileMark(name) {
@@ -3767,7 +3771,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (platformName) pill.append(platformBadge(platformName));
     }
     var startedAt = (room && (room.startedAt || room.recordingStart)) || "";
-    text("file-started", startedAt ? (relativeWhen(startedAt) || whenLabel(startedAt) || blankMark()) : blankMark());
+    if (!startedAt && fileRoom) {
+      var spokenTimes = decisionsFor(fileRoom).map(function (row) { return row.spokenAt; }).filter(function (v) { return !isNaN(Date.parse(v || "")); }).sort();
+      startedAt = spokenTimes[0] || "";
+    }
+    var startedLabel = startedAt ? (relativeWhen(startedAt) || whenLabel(startedAt) || "") : "";
+    text("file-started", startedLabel);
+    var startedItem = document.getElementById("file-started-item");
+    if (startedItem) startedItem.hidden = !startedLabel;
     document.querySelectorAll("#file-meta .header-only").forEach(function (node) {
       if (node.id === "file-usage-item") return;
       node.hidden = !knownRoom;
@@ -4116,10 +4127,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (video.getAttribute("src") !== media.videoUrl) video.src = media.videoUrl;
       video.hidden = false;
       if (fallback) fallback.hidden = true;
+      var leftOn = document.getElementById("room-left");
+      if (leftOn) leftOn.classList.remove("no-recording");
     } else if (video) {
       video.removeAttribute("src");
       video.hidden = true;
       if (fallback) fallback.hidden = false;
+      var leftOff = document.getElementById("room-left");
+      if (leftOff) leftOff.classList.add("no-recording");
     }
   }
 
@@ -4399,6 +4414,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
         }
         var stamp = relativeWhen(media.startedAt) || whenLabel(media.startedAt) || blankMark();
         text("file-started", stamp);
+        var startedRow = document.getElementById("file-started-item");
+        if (startedRow) startedRow.hidden = !stamp || stamp === blankMark();
         renderFacts(roomLive || room || {}, { when: media.startedAt }, fileRoom ? decisionsFor(fileRoom) : []);
       }
       renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
@@ -6229,6 +6246,15 @@ if (sessionWhen && sessionWhen.dataset.at) {
       seekTo((playing && playing.currentTime ? playing.currentTime : 0) + 10);
     }
   });
+  var proofChip = document.getElementById("file-proof");
+  if (proofChip) proofChip.addEventListener("click", function (event) {
+    var panel = document.getElementById("proof-panel");
+    if (!panel) return;
+    event.preventDefault();
+    var overviewTab = document.querySelector('[data-right-tab="overview"]');
+    if (overviewTab && overviewTab.getAttribute("aria-selected") !== "true") overviewTab.click();
+    panel.scrollIntoView({ block: "start", behavior: "smooth" });
+  });
   var transcriptSearch = document.getElementById("transcript-search");
   if (transcriptSearch) transcriptSearch.addEventListener("input", function () {
     transcriptQuery = transcriptSearch.value || "";
@@ -6353,6 +6379,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         list.append(head);
       }
       var button = document.createElement("button");
+      button.className = "menu-item";
       button.type = "button";
       button.textContent = label;
       button.setAttribute("aria-selected", count === 0 ? "true" : "false");
@@ -7196,9 +7223,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
     menu.className = "file-menu";
     menu.hidden = true;
     menu.setAttribute("role", "menu");
-    menu.append(fileButton("Download", "secondary", function () { downloadListedFile(file); }));
-    if (file.canDelete) menu.append(fileButton("Delete", "danger", function () { deleteListedFile(file.id); }));
-    if (file.canRequest) menu.append(fileButton("Ask owner to delete", "secondary", function () { askFileDelete(file.id); }));
+    menu.append(fileMenuItem("Download", false, function () { downloadListedFile(file); }));
+    if (file.canDelete) menu.append(fileMenuItem("Delete", true, function () { deleteListedFile(file.id); }));
+    if (file.canRequest) menu.append(fileMenuItem("Ask owner to delete", false, function () { askFileDelete(file.id); }));
     actions.append(trigger, menu);
     row.append(copy, actions);
     return row;
@@ -7214,6 +7241,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
       event.stopPropagation();
       run(event);
     });
+    return button;
+  }
+
+  function fileMenuItem(label, danger, run) {
+    var button = fileButton(label, danger ? "menu-item danger" : "menu-item", run);
+    button.setAttribute("role", "menuitem");
     return button;
   }
 
@@ -7330,6 +7363,7 @@ export function speakerLabel(speaker, displayName, memberId) {
   if (/^ROW-\d+$/i.test(value)) return "";
   if (/^U[A-Z0-9_]{2,}$/.test(value)) return "";
   if (/^0x[0-9a-fA-F]+$/.test(value)) return "";
+  if (/^[a-z][a-z0-9]*([._-][a-z0-9]+)*$/.test(value)) return value.split(/[._-]+/).map(function (part) { return part.charAt(0).toUpperCase() + part.slice(1); }).join(" ");
   return value;
 }
 
@@ -7414,10 +7448,10 @@ function renderWorkspaceSwitcher(spaces, switchIcon) {
           ${switchIcon}
         </button>
         <div id="workspace-menu" class="menu" role="menu" aria-labelledby="workspace-chip" hidden>
-          <button type="button" role="menuitemradio" data-workspace="company" aria-checked="true"><span class="tile-mark co" aria-hidden="true">C</span><span class="ws-copy"><span>Company</span><span class="menu-hint"></span></span></button>
-          <button type="button" role="menuitemradio" data-workspace="personal" aria-checked="false"><span class="tile-mark pe" aria-hidden="true">P</span><span class="ws-copy"><span>Personal</span><span class="menu-hint">A separate workspace</span></span></button>
+          <button class="menu-item" type="button" role="menuitemradio" data-workspace="company" aria-checked="true"><span class="tile-mark co" aria-hidden="true">C</span><span class="ws-copy"><span>Company</span><span class="menu-hint"></span></span></button>
+          <button class="menu-item" type="button" role="menuitemradio" data-workspace="personal" aria-checked="false"><span class="tile-mark pe" aria-hidden="true">P</span><span class="ws-copy"><span>Personal</span><span class="menu-hint">A separate workspace</span></span></button>
           <div class="menu-rule" role="separator"></div>
-          <button id="create-workspace" type="button" role="menuitem"><span class="ws-copy"><span>About Company</span><span class="menu-hint">What Company is</span></span></button>
+          <button class="menu-item" id="create-workspace" type="button" role="menuitem"><span class="ws-copy"><span>About Company</span><span class="menu-hint">What Company is</span></span></button>
         </div>`;
   }
   const items = Array.isArray(spaces.items) ? spaces.items : [];
@@ -7431,7 +7465,7 @@ function renderWorkspaceSwitcher(spaces, switchIcon) {
     const itemPersonal = item.kind === "personal";
     return `<form class="space-form" method="post" action="/console/space">
           <input type="hidden" name="tenant" value="${escapeHtml(item.id)}">
-          <button type="submit" role="menuitemradio" data-tenant="${escapeHtml(item.id)}" data-kind="${escapeHtml(item.kind)}" aria-checked="${on ? "true" : "false"}" tabindex="${on ? "0" : "-1"}">
+          <button class="menu-item" type="submit" role="menuitemradio" data-tenant="${escapeHtml(item.id)}" data-kind="${escapeHtml(item.kind)}" aria-checked="${on ? "true" : "false"}" tabindex="${on ? "0" : "-1"}">
             <span class="${itemPersonal ? "tile-mark pe" : "tile-mark"}" aria-hidden="true">${escapeHtml(item.mark || "S")}</span>
             <span class="ws-copy"><span>${escapeHtml(item.name)}</span><span class="menu-hint">${escapeHtml(item.hint || "")}</span></span>
           </button>
@@ -7449,7 +7483,7 @@ function renderWorkspaceSwitcher(spaces, switchIcon) {
           ${error}
           ${rows}
           <div class="menu-rule" role="separator"></div>
-          <button id="create-workspace" type="button" role="menuitem" tabindex="${items.length ? "-1" : "0"}"><span class="ws-copy"><span>Create workspace</span><span class="menu-hint">For another company or team</span></span></button>
+          <button class="menu-item" id="create-workspace" type="button" role="menuitem" tabindex="${items.length ? "-1" : "0"}"><span class="ws-copy"><span>Create workspace</span><span class="menu-hint">For another company or team</span></span></button>
         </div>`;
 }
 
