@@ -80,7 +80,7 @@ test("local env fills meeting, calendar, console, and slack files and does not o
     if (name === "console.env") return "CONSOLE_API_KEY=present\n";
     if (name === "slack.env") return "SLACK_BOT_TOKEN=present\n";
     if (name === "tatum.env") return "TATUM_API_KEY=present\n";
-    if (name === "openrouter.env") return "OPENROUTER_API_KEY=present\nOPENROUTER_MODEL=openai/gpt-oss-120b\n";
+    if (name === "openrouter.env") return "OPENROUTER_API_KEY=present\nOPENROUTER_MODEL=google/gemma-4-31b-it:free\n";
     throw new Error(`unexpected file ${name}`);
   });
   assert.deepEqual(seen, ["recall.env", "calendar-oauth.env", "public.env", "console.env", "slack.env", "tatum.env", "openrouter.env"]);
@@ -91,7 +91,7 @@ test("local env fills meeting, calendar, console, and slack files and does not o
   assert.equal(env.SLACK_BOT_TOKEN, "present");
   assert.equal(env.TATUM_API_KEY, "present");
   assert.equal(env.OPENROUTER_API_KEY, "present");
-  assert.equal(env.OPENROUTER_MODEL, "openai/gpt-oss-120b");
+  assert.equal(env.OPENROUTER_MODEL, "google/gemma-4-31b-it:free");
   assert.equal(env.COMPANY_MEMWAL_KEY, undefined);
   assert.equal(env.PERSONAL_MEMWAL_KEY, undefined);
   const company = {};

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { openRouterComplete, openRouterConfig } from "../src/openrouter.js";
+import { openRouterComplete, openRouterConfig, openRouterModels, openRouterStream } from "../src/openrouter.js";
 import { answerSlackQuestion, mergeSemanticVisible, recallVisibleForAsk, slackAnswer } from "../src/slack/reply.js";
 
 const FACTS = [
@@ -9,11 +9,27 @@ const FACTS = [
 
 test("openRouterConfig defaults model and requires a key", () => {
   assert.equal(openRouterConfig({}).enabled, false);
-  assert.equal(openRouterConfig({}).model, "openai/gpt-oss-120b");
+  assert.equal(openRouterConfig({}).model, "google/gemma-4-31b-it:free");
+  assert.deepEqual(openRouterModels({}), [
+    "google/gemma-4-31b-it:free",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+  ]);
   assert.equal(openRouterConfig({ OPENROUTER_API_KEY: " sk-or-test " }).enabled, true);
   assert.equal(
     openRouterConfig({ OPENROUTER_API_KEY: "k", OPENROUTER_MODEL: "openai/gpt-oss-120b" }).model,
     "openai/gpt-oss-120b",
+  );
+  assert.deepEqual(
+    openRouterModels({ OPENROUTER_MODEL: "openai/gpt-oss-120b" }),
+    ["openai/gpt-oss-120b", "openai/gpt-oss-20b"],
+  );
+  assert.deepEqual(
+    openRouterModels({
+      OPENROUTER_MODEL: "google/gemma-4-31b-it:free",
+      OPENROUTER_MODEL_FALLBACKS: "openai/gpt-oss-120b, openai/gpt-oss-20b",
+    }),
+    ["google/gemma-4-31b-it:free", "openai/gpt-oss-120b", "openai/gpt-oss-20b"],
   );
 });
 
@@ -68,6 +84,39 @@ test("openRouterComplete does not throw when fetch rejects", async () => {
   });
   assert.equal(result.used, false);
   assert.equal(result.text, "");
+});
+
+test("openRouterComplete tries gemma then gpt-oss fallbacks on failure", async () => {
+  const seen = [];
+  const fetchImpl = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    seen.push(body.model);
+    if (body.model === "google/gemma-4-31b-it:free") {
+      return { ok: false, status: 429, async json() { return { error: { message: "rate" } }; } };
+    }
+    if (body.model === "openai/gpt-oss-120b") {
+      return { ok: false, status: 503, async json() { return {}; } };
+    }
+    return {
+      ok: true,
+      async json() { return { choices: [{ message: { content: "Hello from 20b." } }] }; },
+    };
+  };
+  const result = await openRouterComplete({
+    env: { OPENROUTER_API_KEY: "sk-or-test" },
+    system: "Be brief.",
+    messages: [{ role: "user", content: "hi" }],
+    fetchImpl,
+  });
+  assert.equal(result.used, true);
+  assert.equal(result.text, "Hello from 20b.");
+  assert.equal(result.model, "openai/gpt-oss-20b");
+  assert.deepEqual(seen, [
+    "google/gemma-4-31b-it:free",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+  ]);
+  assert.deepEqual(result.tried, seen);
 });
 
 test("recallVisibleForAsk ranks and caps memories like withMemWal maxMemories", () => {
@@ -125,4 +174,39 @@ test("answerSlackQuestion uses options.recall before OpenRouter", async () => {
   assert.equal(recalledQuery, "booth open?");
   assert.match(seen[0].messages[0].content, /booth opens at nine/);
   assert.doesNotMatch(seen[0].messages[0].content, /lunch is at noon/);
+});
+
+test("openRouterStream tries next model after rate-limit, without reasoning on gemma", async () => {
+  const seen = [];
+  const encoder = new TextEncoder();
+  const fetchImpl = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    seen.push({ model: body.model, reasoning: Boolean(body.reasoning) });
+    if (body.model === "google/gemma-4-31b-it:free") {
+      return { ok: false, status: 429, body: null };
+    }
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "Nine." } }] })}\n\n`));
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    return { ok: true, body: stream, status: 200 };
+  };
+  const deltas = [];
+  const result = await openRouterStream({
+    env: { OPENROUTER_API_KEY: "sk-or-test" },
+    messages: [{ role: "user", content: "when?" }],
+    fetchImpl,
+    onDelta: (t) => deltas.push(t),
+  });
+  assert.equal(result.used, true);
+  assert.equal(result.text, "Nine.");
+  assert.equal(result.model, "openai/gpt-oss-120b");
+  assert.deepEqual(deltas, ["Nine."]);
+  assert.equal(seen[0].model, "google/gemma-4-31b-it:free");
+  assert.equal(seen[0].reasoning, false);
+  assert.equal(seen[1].model, "openai/gpt-oss-120b");
+  assert.equal(seen[1].reasoning, true);
 });

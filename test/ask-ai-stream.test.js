@@ -206,7 +206,7 @@ test("runAsk recalls before generating and writes deltas to the store", async ()
   });
   assert.deepEqual(order.map((row) => row[0]), ["recall", "generate"]);
   const request = order[1][2];
-  assert.equal(request.model, "openai/gpt-oss-120b");
+  assert.equal(request.model, "google/gemma-4-31b-it:free");
   assert.equal(request.stream, true);
   assert.match(request.messages[0].content, /The booth opens at nine\./);
   assert.equal((await store.chunks(id, 0)).join(""), "The booth opens at nine.");
