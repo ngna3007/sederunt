@@ -641,6 +641,9 @@ h1.page-title, .page-title {
   font-size: var(--text-sm);
   line-height: 1.45;
 }
+#files .page-lede span {
+  white-space: nowrap;
+}
 .page-head {
   display: flex;
   flex-wrap: wrap;
@@ -5868,7 +5871,7 @@ body.ob-page {
 
 /* ===================================================================
    Design system components. Documented in docs/design/design-system.md.
-   These come last so they settle the older per-page passes above.
+   These settle the older per-page passes above. The files layout follows.
    =================================================================== */
 
 /* Flow cards (sign-in and onboarding) use the large control size. */
@@ -6044,4 +6047,71 @@ body.room-open .room-right .kv dt { padding-right: 12px; }
   body.room-open .room-screen .room-right,
   body.room-open #file-dialog.room-screen .detail-side.room-right { padding: 16px !important; }
   body.room-open #file-meta.meta-strip { gap: 8px 16px; }
+}
+
+/* Files. Kept after the last media query so a missing brace cannot restyle the desktop page.
+   Menu rows use the design-system .menu-item; this block is only the files layout. */
+#files {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+  width: 100%;
+}
+.files-group, #files-requests, #files-unanswered {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.files-channel {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--muted-foreground);
+}
+.file-row, .file-request, .file-unanswered {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3) 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--card);
+  box-sizing: border-box;
+}
+.file-copy { min-width: 0; flex: 1; }
+.file-name { margin: 0; font-weight: var(--weight-semibold); overflow-wrap: anywhere; }
+.file-meta, #files-error { margin: var(--space-1) 0 0; font-size: var(--text-xs); color: var(--muted-foreground); overflow-wrap: anywhere; }
+.file-request-copy { min-width: 0; flex: 1; }
+.file-request p, .file-unanswered p { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.file-request .file-meta, .file-unanswered .file-meta { margin-top: var(--space-1); }
+.file-actions { position: relative; flex: none; }
+.file-request-actions, .file-unanswered .file-request-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.files-deleting { margin: 0; color: var(--muted-foreground); font-size: var(--text-sm); font-weight: var(--weight-semibold); }
+.file-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--space-1));
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 12rem;
+  max-width: calc(100vw - var(--space-8));
+  padding: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--card);
+  box-shadow: var(--shadow-md);
+  box-sizing: border-box;
+}
+@media (max-width: 700px) {
+  .file-row, .file-request, .file-unanswered { flex-wrap: wrap; }
+  .file-actions { margin-left: auto; }
+  .file-menu { right: 0; left: auto; }
+  .file-request-actions { width: 100%; }
+  .file-request-actions button { flex: 1; }
 }

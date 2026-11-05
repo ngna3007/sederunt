@@ -20,6 +20,10 @@ docs/
 └── templates/       # document templates
 ```
 
+## File storage
+
+Channel files live on one Walrus Console account. By default every workspace shares one private folder. An isolated workspace uses its own folder and a child key sealed with `MCP_SECRETS_KEY_V1`. The server environment names are `CONSOLE_API_KEY`, `CONSOLE_SERVICE_PRIVATE_KEY`, `CONSOLE_SPACE_ID` (optional), `CONSOLE_FOLDER_ID` (optional; an existing folder, never created), `CONSOLE_FILES_FOLDER_NAME` (optional; default `sederunt-files`), `MCP_SECRETS_KEY_V1` (opens an isolated child key), and `FILES_DEMO`. Memory cleanup also reads `SEDERUNT_MEMWAL_KEY`, `SEDERUNT_MEMWAL_ACCOUNT_ID`, `SEDERUNT_MEMWAL_OWNER_KEY`, and `SEDERUNT_MEMWAL_SERVER`. Provisioning-only names, not loaded by the runtime, are `CONSOLE_ADMIN_KEY`, `CONSOLE_ADMIN_SERVICE_PRIVATE_KEY`, `CONSOLE_WEB_ACCOUNT_ADDRESS`, and `CONSOLE_KEY_ADMIN_ADDRESS`. The design is [design/walrus-files.md](./design/walrus-files.md).
+
 ## When to read what
 
 - **Any task:** [`ai/`](./ai/) — find the right source files for a topic.

@@ -131,7 +131,7 @@ export async function slackFileBytes({ token, file, fetchImpl }) {
   if (!name || !url) return null;
   const bytes = await slackDownload(fetchFn, token, url);
   if (!bytes) return null;
-  return { name, bytes };
+  return { name, bytes, id: typeof file?.id === "string" ? file.id : "" };
 }
 
 async function slackDownload(fetchFn, token, url, hops = 0) {

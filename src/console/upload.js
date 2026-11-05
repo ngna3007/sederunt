@@ -3,7 +3,7 @@ import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
 import { SuiGrpcClient } from "@mysten/sui/grpc";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { Transaction } from "@mysten/sui/transactions";
-import { fromHex } from "@mysten/sui/utils";
+import { fromBase64, fromHex } from "@mysten/sui/utils";
 import { EncryptedObject, SealClient, SessionKey } from "@mysten/seal";
 
 const API = "https://api.console.walrus.xyz";
@@ -15,6 +15,9 @@ const SEAL_COMMITTEE_OBJECT_ID = "0x686098f1439237fff9f36b99c7329683c22979d2005c
 // The committee object is one key server. Its internal threshold stays inside that object.
 const SEAL_THRESHOLD = 1;
 export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+export const METADATA_MAX_BYTES = 8 * 1024;
+const RATE_RETRIES = 3;
+const RATE_WAIT_CAP_MS = 60_000;
 
 const SealIdentity = bcs.struct("SealIdentity", {
   policyObjectId: bcs.Address,
@@ -47,7 +50,7 @@ export function createConsoleAdapter(options = {}) {
       const name = String(input?.name || "note.txt");
       const plain = toBytes(input?.bytes ?? "");
       if (plain.byteLength > maxBytes) throw new Error("payload_too_large");
-      const policyId = await folderPolicy(fetchImpl, apiKey, folderId);
+      const policyId = await folderPolicy(fetchImpl, apiKey, folderId, options.wait);
       const ciphertext = options.encrypt
         ? await options.encrypt(plain, { policyId, apiKey })
         : await encryptForFolder(plain, policyId, apiKey);
@@ -60,8 +63,8 @@ export function createConsoleAdapter(options = {}) {
       if (!apiKey || !serviceKey || !folderId) return null;
       const fileId = input?.id;
       if (!fileId) return null;
-      const policyId = await folderPolicy(fetchImpl, apiKey, folderId);
-      const ciphertext = await downloadCiphertext(fetchImpl, apiKey, folderId, fileId);
+      const policyId = await folderPolicy(fetchImpl, apiKey, folderId, options.wait);
+      const ciphertext = await downloadCiphertext(fetchImpl, apiKey, folderId, fileId, options.wait);
       const plain = options.decrypt
         ? await options.decrypt(ciphertext, { policyId, apiKey, serviceKey })
         : await decryptForFolder(ciphertext, policyId, apiKey, serviceKey);
@@ -77,10 +80,30 @@ function toBytes(value) {
   return new TextEncoder().encode(String(value));
 }
 
-async function folderPolicy(fetchImpl, apiKey, folderId) {
-  const response = await fetchImpl(`${API}/api/v1/buckets/${folderId}`, {
+export function retryAfterMs(header, now = Date.now()) {
+  if (header == null || String(header).trim() === "") return 1000;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, RATE_WAIT_CAP_MS);
+  const date = Date.parse(String(header));
+  if (Number.isFinite(date)) return Math.min(Math.max(0, date - now), RATE_WAIT_CAP_MS);
+  return 1000;
+}
+
+async function send(fetchImpl, url, init, wait) {
+  let response;
+  for (let attempt = 0; attempt <= RATE_RETRIES; attempt += 1) {
+    response = await fetchImpl(url, init);
+    if (response.status !== 429 || attempt === RATE_RETRIES) return response;
+    const header = response.headers?.get?.("retry-after") ?? response.headers?.get?.("Retry-After");
+    await pause(wait, retryAfterMs(header));
+  }
+  return response;
+}
+
+export async function folderPolicy(fetchImpl, apiKey, folderId, wait) {
+  const response = await send(fetchImpl, `${API}/api/v1/buckets/${encodeURIComponent(folderId)}`, {
     headers: auth(apiKey),
-  });
+  }, wait);
   if (!response.ok) throw new Error("Console folder is not readable");
   const body = await response.json();
   const policyId = body?.data?.seal_policy_id;
@@ -88,23 +111,123 @@ async function folderPolicy(fetchImpl, apiKey, folderId) {
   return policyId;
 }
 
-async function postFile(fetchImpl, apiKey, folderId, name, contentSize, ciphertext, wait) {
+export async function listConsoleSpaces(fetchImpl, apiKey, wait) {
+  const response = await send(fetchImpl, `${API}/api/v1/spaces`, { headers: auth(apiKey) }, wait);
+  if (!response.ok) throw new Error("Console space is not readable");
+  const body = await response.json();
+  return Array.isArray(body?.data) ? body.data : [];
+}
+
+export function pickConsoleSpace(spaces) {
+  const list = Array.isArray(spaces) ? spaces : [];
+  return list.find((space) => space?.type === "personal" && space.id) || list.find((space) => space?.id) || null;
+}
+
+export async function listConsoleFolders(fetchImpl, apiKey, spaceId, name, wait) {
+  const query = new URLSearchParams({ limit: "100" });
+  if (name) query.set("q", name);
+  const response = await send(fetchImpl, `${API}/api/v1/spaces/${encodeURIComponent(spaceId)}/buckets?${query}`, {
+    headers: auth(apiKey),
+  }, wait);
+  if (!response.ok) throw new Error("Console folders are not readable");
+  const body = await response.json();
+  return Array.isArray(body?.buckets) ? body.buckets : [];
+}
+
+export async function reserveConsoleFolder(fetchImpl, apiKey, spaceId, name, wait) {
+  const response = await send(fetchImpl, `${API}/api/v1/spaces/${encodeURIComponent(spaceId)}/buckets`, {
+    method: "POST",
+    headers: { ...auth(apiKey), "content-type": "application/json" },
+    body: JSON.stringify({ name, scope: "private" }),
+  }, wait);
+  if (response.status === 409) return { conflict: true };
+  if (response.status === 422) {
+    const error = new Error("plan_limit_exceeded");
+    error.code = "plan_limit_exceeded";
+    throw error;
+  }
+  if (response.status !== 201) throw new Error("Console folder was not reserved");
+  const body = await response.json();
+  if (!body?.bucket_id || !body?.bytes) throw new Error("Console folder was not reserved");
+  return {
+    conflict: false,
+    folderId: body.bucket_id,
+    bytes: body.bytes,
+    digest: body.digest || "",
+    state: body.state || body.provisioning_state || "pending_policy",
+  };
+}
+
+export async function signConsoleReserve(serviceKey, bytesB64) {
+  const { secretKey } = decodeSuiPrivateKey(serviceKey);
+  const keypair = Ed25519Keypair.fromSecretKey(secretKey);
+  const { signature } = await keypair.signTransaction(fromBase64(bytesB64));
+  return signature;
+}
+
+export async function finalizeConsoleFolder(fetchImpl, apiKey, folderId, signature, wait) {
+  const response = await send(fetchImpl, `${API}/api/v1/buckets/${encodeURIComponent(folderId)}/finalize`, {
+    method: "POST",
+    headers: { ...auth(apiKey), "content-type": "application/json" },
+    body: JSON.stringify({ signature }),
+  }, wait);
+  if (!response.ok) throw new Error("Console folder was not finalized");
+  const body = await response.json();
+  return {
+    folderId: body?.bucket_id || folderId,
+    sealPolicyId: body?.seal_policy_id || "",
+    state: body?.state || "",
+  };
+}
+
+async function postFile(fetchImpl, apiKey, folderId, name, contentSize, ciphertext, wait, extra = {}) {
+  return postCiphertext(fetchImpl, apiKey, folderId, {
+    name,
+    ciphertext,
+    contentSize,
+    metadata: extra.metadata,
+    includeContentSize: extra.includeContentSize !== false,
+  }, wait);
+}
+
+export async function postCiphertext(fetchImpl, apiKey, folderId, input, wait) {
+  const encodedMeta = input.metadata == null
+    ? ""
+    : (typeof input.metadata === "string" ? input.metadata : JSON.stringify(input.metadata));
+  if (encodedMeta && Buffer.byteLength(encodedMeta) > METADATA_MAX_BYTES) {
+    const error = new Error("metadata_too_large");
+    error.code = "metadata_too_large";
+    throw error;
+  }
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const form = new FormData();
-    form.append("file", new Blob([ciphertext]), name);
-    form.append("name", name);
-    form.append("contentSize", String(contentSize));
-    const response = await fetchImpl(`${API}/api/v1/buckets/${folderId}/files`, {
+    form.append("file", new Blob([input.ciphertext]), input.name);
+    form.append("name", input.name);
+    if (input.includeContentSize !== false && input.contentSize != null) {
+      form.append("contentSize", String(input.contentSize));
+    }
+    if (encodedMeta) form.append("metadata", encodedMeta);
+    const response = await send(fetchImpl, `${API}/api/v1/buckets/${encodeURIComponent(folderId)}/files`, {
       method: "POST",
       headers: auth(apiKey),
       body: form,
-    });
+    }, wait);
     if (response.status === 403) {
       const body = await response.json().catch(() => ({}));
       if (body?.code === "mirror_missing_grant" && attempt < 7) {
         await pause(wait, 2000);
         continue;
       }
+    }
+    if (response.status === 413) {
+      const error = new Error("payload_too_large");
+      error.code = "payload_too_large";
+      throw error;
+    }
+    if (response.status === 422) {
+      const error = new Error("plan_limit_exceeded");
+      error.code = "plan_limit_exceeded";
+      throw error;
     }
     if (response.status !== 202) throw new Error("Console upload was not accepted");
     const body = await response.json();
@@ -115,39 +238,78 @@ async function postFile(fetchImpl, apiKey, folderId, name, contentSize, cipherte
   throw new Error("Console upload was not accepted");
 }
 
-async function pollFile(fetchImpl, apiKey, folderId, fileId, wait) {
+export async function patchConsoleFileTags(fetchImpl, apiKey, fileId, tags, wait) {
+  const response = await send(fetchImpl, `${API}/api/v1/files/${encodeURIComponent(fileId)}`, {
+    method: "PATCH",
+    headers: { ...auth(apiKey), "content-type": "application/json" },
+    body: JSON.stringify({ tags }),
+  }, wait);
+  if (!response.ok) throw new Error("Console tags were not saved");
+  return response.json().catch(() => ({}));
+}
+
+export async function pollFile(fetchImpl, apiKey, folderId, fileId, wait) {
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    const response = await fetchImpl(`${API}/api/v1/buckets/${folderId}/files/${fileId}/status`, {
+    const response = await send(fetchImpl, `${API}/api/v1/buckets/${encodeURIComponent(folderId)}/files/${encodeURIComponent(fileId)}/status`, {
       headers: auth(apiKey),
-    });
+    }, wait);
     if (response.status === 404) {
-      const meta = await fetchImpl(`${API}/api/v1/buckets/${folderId}/files/${fileId}`, {
-        headers: auth(apiKey),
-      });
-      if (meta.ok) {
-        const body = await meta.json();
-        if (body?.data?.status === "active") return "completed";
-      }
+      const record = await readConsoleFile(fetchImpl, apiKey, folderId, fileId, wait);
+      const ready = metadataReady(record);
+      if (ready === "completed" || ready === "failed") return ready;
+    } else if (!response.ok) {
       throw new Error("Console upload did not complete");
+    } else {
+      const body = await response.json();
+      const state = body?.data?.state;
+      if (state === "completed" || state === "failed") return state;
     }
-    if (!response.ok) throw new Error("Console upload did not complete");
-    const body = await response.json();
-    const state = body?.data?.state;
-    if (state === "completed" || state === "failed") return state;
     await pause(wait, 1000);
   }
   throw new Error("Console upload did not complete");
 }
 
-async function downloadCiphertext(fetchImpl, apiKey, folderId, fileId) {
-  const response = await fetchImpl(`${API}/api/v1/buckets/${folderId}/files/${fileId}/download`, {
+export async function readConsoleFile(fetchImpl, apiKey, folderId, fileId, wait) {
+  const response = await send(fetchImpl, `${API}/api/v1/buckets/${encodeURIComponent(folderId)}/files/${encodeURIComponent(fileId)}`, {
+    headers: auth(apiKey),
+  }, wait);
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error("Console file is not readable");
+  const body = await response.json();
+  return body?.data || null;
+}
+
+export function metadataReady(record) {
+  if (!record) return "";
+  const values = [record.status, record.state].filter(Boolean).map((value) => String(value).toLowerCase());
+  if (values.includes("failed")) return "failed";
+  if (values.includes("deleted")) return "deleted";
+  if (values.includes("active") || values.includes("completed")) return "completed";
+  return "";
+}
+
+export async function deleteConsoleFile(fetchImpl, apiKey, folderId, fileId, wait) {
+  const response = await send(fetchImpl, `${API}/api/v1/buckets/${encodeURIComponent(folderId)}/files/${encodeURIComponent(fileId)}`, {
+    method: "DELETE",
+    headers: auth(apiKey),
+  }, wait);
+  if (response.status === 204 || response.status === 404) return { accepted: true, missing: response.status === 404 };
+  throw new Error("Console delete was not accepted");
+}
+
+export async function downloadCiphertext(fetchImpl, apiKey, folderId, fileId, wait) {
+  const response = await send(fetchImpl, `${API}/api/v1/buckets/${encodeURIComponent(folderId)}/files/${encodeURIComponent(fileId)}/download`, {
     headers: auth(apiKey),
     redirect: "manual",
-  });
+  }, wait);
   if (response.status !== 307 && response.status !== 302) throw new Error("Console download was not ready");
   const location = response.headers.get("location");
   if (!location) throw new Error("Console download was not ready");
-  const file = await fetchImpl(location);
+  const target = location.startsWith("http://") || location.startsWith("https://")
+    ? location
+    : new URL(location, API).toString();
+  // The signed URL is the ciphertext. The API key must not follow the redirect.
+  const file = await fetchImpl(target);
   if (!file.ok) throw new Error("Console download was not ready");
   return new Uint8Array(await file.arrayBuffer());
 }
@@ -162,6 +324,7 @@ function pause(wait, ms) {
 }
 
 function sealClient(apiKey) {
+  // TODO(tatum): route this Sui client through the Tatum gRPC gateway once feat/hackathon-tatum lands.
   const suiClient = new SuiGrpcClient({ network: "mainnet", baseUrl: FULLNODE_URL });
   const seal = new SealClient({
     suiClient,
@@ -183,7 +346,7 @@ function identityFor(policyId) {
   return id;
 }
 
-async function encryptForFolder(plain, policyId, apiKey) {
+export async function encryptForFolder(plain, policyId, apiKey) {
   const { seal } = sealClient(apiKey);
   const { encryptedObject } = await seal.encrypt({
     threshold: SEAL_THRESHOLD,
@@ -199,7 +362,7 @@ function serviceKeypair(serviceKey) {
   return Ed25519Keypair.fromSecretKey(secretKey);
 }
 
-async function decryptForFolder(ciphertext, policyId, apiKey, serviceKey) {
+export async function decryptForFolder(ciphertext, policyId, apiKey, serviceKey) {
   const { suiClient, seal } = sealClient(apiKey);
   const keypair = serviceKeypair(serviceKey);
   const parsed = EncryptedObject.parse(ciphertext);
