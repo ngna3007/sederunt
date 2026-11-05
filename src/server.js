@@ -53,6 +53,9 @@ import { hideDeletedSlackMessages, ingestSlackFile } from "./files/slack.js";
 import { loadCompanyEnv, loadLocalEnv } from "./local-env.js";
 import { looksLikeOpenQuestion } from "./parse.js";
 import { createSession } from "./session.js";
+import { createAskStore, askLimit, settledStatus } from "./ask/store.js";
+import { runAsk } from "./ask/run.js";
+import { openRouterConfig } from "./openrouter.js";
 import { answerSlackQuestion, postSlackReply, slackChannelMembers, slackFileBytes, slackQuestion } from "./slack/reply.js";
 import { slackDelivery, verifySlackRequest } from "./slack/sign.js";
 import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded, warmProofs } from "./typed-path.js";
@@ -329,6 +332,8 @@ export function createApp(options = {}) {
     recall: options.recall || null,
     botPreferences,
     identity: null,
+    ask: options.askStore || createAskStore(env),
+    openrouterFetch: options.openrouterFetch || null,
   };
   if (proofWarmOn(env) && workspace.companyLoaded && deps.tatum) {
     // Read the company proofs once at start so the first room load is
@@ -964,99 +969,13 @@ export function createApp(options = {}) {
       }));
       return;
     }
+    if (url.pathname === "/api/ask" || /^\/api\/ask\/[A-Za-z0-9_]+\/stream$/.test(url.pathname)) {
+      await handleAsk(workspace, req, res, url);
+      return;
+    }
     if (req.method === "POST" && url.pathname === "/api/chat") {
       const body = await readJson(req);
-      const companyId = typeof body.company === "string" ? body.company : "";
-      const current = await prepareWorkspace(workspace, companyId);
-      const text = typeof body.text === "string" ? body.text.trim() : "";
-      const requested = typeof body.workspace === "string" ? body.workspace : "";
-      const scope = requested === "personal" || requested === "company" ? requested : "";
-      const before = current.decisions.length;
-      if (!text) {
-        send(res, 200, "application/json; charset=utf-8", JSON.stringify({
-          body: "The question is missing.",
-          decisions: before,
-          stored: false,
-        }));
-        return;
-      }
-      const recall = /what was decided|what happened/i.test(text) || looksLikeOpenQuestion(text);
-      if (!recall) {
-        send(res, 200, "application/json; charset=utf-8", JSON.stringify({
-          body: "A decision is kept from a room.",
-          decisions: before,
-          stored: false,
-        }));
-        return;
-      }
-      const bound = bindMember(env, body.memberId);
-      if (!bound.ok) {
-        send(res, 200, "application/json; charset=utf-8", JSON.stringify({
-          body: memberRefusal(bound.reason).body,
-          decisions: before,
-          stored: false,
-        }));
-        return;
-      }
-      let namedRooms = roomsMatching(text, current.rooms || []);
-      if (!namedRooms.length && contentWords(text).length) {
-        namedRooms = decisionRoomIds(text, current.decisions || []);
-        if (!namedRooms.length) {
-          send(res, 200, "application/json; charset=utf-8", JSON.stringify({
-            body: "Nothing stored matches that.",
-            decisions: 0,
-            stored: false,
-          }));
-          return;
-        }
-      }
-      if (namedRooms.length > 1) {
-        const parts = [];
-        const why = [];
-        let learned = "";
-        let matched = 0;
-        for (const id of namedRooms) {
-          const part = await handleUtterance({
-            text,
-            intent: "recall",
-            door: "mcp",
-            memberId: bound.memberId,
-            workspace: scope,
-            room: { id },
-            session: current,
-          }, depsFor(workspace, companyId));
-          parts.push(part.body);
-          if (part.learned) learned = part.learned;
-          if (Array.isArray(part.why)) why.push(...part.why);
-          matched += current.decisions.filter((decision) => decision.roomId === id && !decision.deleted).length;
-        }
-        send(res, 200, "application/json; charset=utf-8", JSON.stringify(chatJson({
-          body: parts.filter(Boolean).join("\n"),
-          learned,
-          why,
-        }, {
-          decisions: matched,
-          stored: false,
-        })));
-        return;
-      }
-      const namedRoom = namedRooms[0] || "";
-      const result = await handleUtterance({
-        text,
-        intent: "recall",
-        door: "mcp",
-        memberId: bound.memberId,
-        workspace: scope,
-        room: namedRoom ? { id: namedRoom } : undefined,
-        session: current,
-      }, depsFor(workspace, companyId));
-      const matched = namedRoom
-        ? current.decisions.filter((decision) => decision.roomId === namedRoom && !decision.deleted).length
-        : current.decisions.filter((decision) => !decision.deleted).length;
-      send(res, 200, "application/json; charset=utf-8", JSON.stringify(chatJson(result, {
-        decisions: matched,
-        stored: false,
-      })));
+      send(res, 200, "application/json; charset=utf-8", JSON.stringify(await chatReply(workspace, body)));
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/slack") {
@@ -1444,6 +1363,272 @@ function loadedCompany(options, deps, env, companies) {
 function displayActor(env) {
   const name = typeof env.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
   return name || "Someone";
+}
+
+const ASK_MAX_CHARS = 2000;
+const ASK_POLL_MS = 150;
+const ASK_STREAM_MS = 50_000;
+
+function askUser(gate, env) {
+  const raw = String(gate.session?.userId || gate.session?.memberId || env.SEDERUNT_MEMBER || "local");
+  return raw.replace(/[^A-Za-z0-9_.@-]/g, "_").slice(0, 120) || "local";
+}
+
+function askView({ meta, chunks }) {
+  if (!meta) return null;
+  return {
+    id: meta.id,
+    question: meta.question,
+    text: chunks.join(""),
+    count: chunks.length,
+    status: settledStatus(meta),
+    source: meta.source,
+    sources: meta.sources,
+    result: meta.result,
+    createdAt: meta.createdAt,
+    user: meta.user,
+  };
+}
+
+async function askViews(store, ids) {
+  return (await store.reads(ids, 0)).map(askView);
+}
+
+/**
+ * Ask AI on the web. Durable streams live in the ask store (Redis in deploys), so a
+ * reloaded page reads what was already written and keeps following the same answer.
+ * Each signed-in person gets askLimit(env) prompts (5 by default), counted server-side.
+ */
+async function handleAsk(workspace, req, res, url) {
+  const env = workspace.env;
+  const json = (code, body) => send(res, code, "application/json; charset=utf-8", JSON.stringify(body));
+  const gate = guardConsole(req, env);
+  if (gate.required && !gate.session) {
+    json(401, { error: "Sign in." });
+    return;
+  }
+  const store = workspace.ask;
+  const user = askUser(gate, env);
+  const limit = askLimit(env);
+  const live = openRouterConfig(env).enabled;
+  try {
+    if (req.method === "GET" && url.pathname === "/api/ask") {
+      const { quota, ids } = await store.overview(user, limit);
+      const asks = [];
+      for (const view of await askViews(store, ids.slice().reverse())) {
+        if (view && view.user === user) {
+          delete view.user;
+          asks.push(view);
+        }
+      }
+      json(200, { ...quota, live, asks });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/ask") {
+      if (!activitySameOrigin(req)) {
+        json(403, { error: "Ask from the console." });
+        return;
+      }
+      const body = await readJson(req);
+      const question = typeof body.text === "string" ? body.text.trim() : "";
+      if (!question) {
+        json(400, { error: "Type a question first." });
+        return;
+      }
+      if (question.length > ASK_MAX_CHARS) {
+        json(400, { error: `Keep the question under ${ASK_MAX_CHARS} characters.` });
+        return;
+      }
+      const claimed = await store.claim(user, limit);
+      if (!claimed.ok) {
+        json(429, { error: "limit", limit, used: claimed.used, remaining: 0 });
+        return;
+      }
+      let id = "";
+      try {
+        id = await store.create(user, question);
+      } catch (error) {
+        await store.refund(user).catch(() => {});
+        throw error;
+      }
+      const companyId = typeof body.company === "string" ? body.company : "";
+      const scope = body.workspace === "personal" ? "personal" : "company";
+      const work = (async () => {
+        const previous = [];
+        const priorIds = (await store.list(user).catch(() => [])).filter((prior) => prior !== id).slice(0, 3).reverse();
+        for (const view of await askViews(store, priorIds).catch(() => [])) {
+          if (view && view.user === user && view.status === "done" && view.text) previous.push({ question: view.question, answer: view.text });
+        }
+        const current = await prepareWorkspace(workspace, companyId);
+        const memberId = consoleBoardMember(gate.session, env, "company", typeof body.memberId === "string" ? body.memberId : "");
+        const visible = companyBoard(current, memberId).decisions || [];
+        const doorDeps = depsFor(workspace, companyId);
+        const bot = await currentBot(workspace, req).catch(() => null);
+        return runAsk({
+          store,
+          id,
+          question,
+          visible,
+          history: previous,
+          env,
+          fetchImpl: workspace.openrouterFetch || undefined,
+          botName: bot?.name || "",
+          // withMemWal ask path: MemWal.recall(query) before generate.
+          recall: doorDeps.memory?.recall ? async (query) => doorDeps.memory.recall(query) : undefined,
+          retrieval: () => chatReply(workspace, { text: question, workspace: scope, company: companyId, memberId: body.memberId }),
+        });
+      })().catch(() => store.finish(id, { status: "error" }).catch(() => {}));
+      if (env.VERCEL) {
+        try {
+          const { waitUntil } = await import("@vercel/functions");
+          if (typeof waitUntil === "function") waitUntil(work);
+        } catch {
+          // Local runs keep the promise alive on their own.
+        }
+      }
+      json(200, { id, limit, used: claimed.used, remaining: claimed.remaining, live });
+      return;
+    }
+    const streamMatch = /^\/api\/ask\/([A-Za-z0-9_]+)\/stream$/.exec(url.pathname);
+    if (req.method === "GET" && streamMatch) {
+      const id = streamMatch[1];
+      const first = await store.meta(id);
+      if (!first || first.user !== user) {
+        json(404, { error: "That answer is gone." });
+        return;
+      }
+      let from = Math.max(0, Number.parseInt(url.searchParams.get("from") || "0", 10) || 0);
+      res.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache, no-transform",
+        connection: "keep-alive",
+        "x-accel-buffering": "no",
+      });
+      let closed = false;
+      req.on("close", () => { closed = true; });
+      const write = (event, data) => { if (!closed) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); };
+      const started = Date.now();
+      let beat = Date.now();
+      while (!closed) {
+        const [{ meta, chunks }] = await store.reads([id], from);
+        const status = settledStatus(meta);
+        for (const text of chunks) {
+          write("chunk", { i: from, t: text });
+          from += 1;
+        }
+        if (status !== "streaming") {
+          write("done", { status, source: meta?.source || "", sources: meta?.sources || [], result: meta?.result || null, count: from });
+          break;
+        }
+        if (Date.now() - started > ASK_STREAM_MS) {
+          write("again", { from });
+          break;
+        }
+        if (Date.now() - beat > 10_000) {
+          if (!closed) res.write(": keep-alive\n\n");
+          beat = Date.now();
+        }
+        await new Promise((done) => setTimeout(done, ASK_POLL_MS));
+      }
+      res.end();
+      return;
+    }
+    json(405, { error: "Not allowed." });
+  } catch {
+    if (!res.headersSent) json(503, { error: "Ask AI is busy. Try again in a minute." });
+    else res.end();
+  }
+}
+
+/** The kept-decision answer that /api/chat returns, also the Ask AI fallback. */
+async function chatReply(workspace, body) {
+  const env = workspace.env;
+  const companyId = typeof body.company === "string" ? body.company : "";
+  const current = await prepareWorkspace(workspace, companyId);
+  const text = typeof body.text === "string" ? body.text.trim() : "";
+  const requested = typeof body.workspace === "string" ? body.workspace : "";
+  const scope = requested === "personal" || requested === "company" ? requested : "";
+  const before = current.decisions.length;
+  if (!text) {
+    return {
+      body: "The question is missing.",
+      decisions: before,
+      stored: false,
+    };
+  }
+  const recall = /what was decided|what happened/i.test(text) || looksLikeOpenQuestion(text);
+  if (!recall) {
+    return {
+      body: "A decision is kept from a room.",
+      decisions: before,
+      stored: false,
+    };
+  }
+  const bound = bindMember(env, body.memberId);
+  if (!bound.ok) {
+    return {
+      body: memberRefusal(bound.reason).body,
+      decisions: before,
+      stored: false,
+    };
+  }
+  let namedRooms = roomsMatching(text, current.rooms || []);
+  if (!namedRooms.length && contentWords(text).length) {
+    namedRooms = decisionRoomIds(text, current.decisions || []);
+    if (!namedRooms.length) {
+      return {
+        body: "Nothing stored matches that.",
+        decisions: 0,
+        stored: false,
+      };
+    }
+  }
+  if (namedRooms.length > 1) {
+    const parts = [];
+    const why = [];
+    let learned = "";
+    let matched = 0;
+    for (const id of namedRooms) {
+      const part = await handleUtterance({
+        text,
+        intent: "recall",
+        door: "mcp",
+        memberId: bound.memberId,
+        workspace: scope,
+        room: { id },
+        session: current,
+      }, depsFor(workspace, companyId));
+      parts.push(part.body);
+      if (part.learned) learned = part.learned;
+      if (Array.isArray(part.why)) why.push(...part.why);
+      matched += current.decisions.filter((decision) => decision.roomId === id && !decision.deleted).length;
+    }
+    return chatJson({
+      body: parts.filter(Boolean).join("\n"),
+      learned,
+      why,
+    }, {
+      decisions: matched,
+      stored: false,
+    });
+  }
+  const namedRoom = namedRooms[0] || "";
+  const result = await handleUtterance({
+    text,
+    intent: "recall",
+    door: "mcp",
+    memberId: bound.memberId,
+    workspace: scope,
+    room: namedRoom ? { id: namedRoom } : undefined,
+    session: current,
+  }, depsFor(workspace, companyId));
+  const matched = namedRoom
+    ? current.decisions.filter((decision) => decision.roomId === namedRoom && !decision.deleted).length
+    : current.decisions.filter((decision) => !decision.deleted).length;
+  return chatJson(result, {
+    decisions: matched,
+    stored: false,
+  });
 }
 
 function chatJson(result, extra) {

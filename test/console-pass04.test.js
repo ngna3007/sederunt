@@ -531,15 +531,7 @@ test("home and rooms columns line up, and the pass 04 fixes hold in the browser"
 
   await page.goto(`http://127.0.0.1:${port}/console/chat`, { waitUntil: "networkidle" });
   await page.waitForSelector("#chat-text", { timeout: 45000 });
-  await page.waitForFunction(() => {
-    const d = document.getElementById("ask-ai-dialog");
-    return d && !d.hidden;
-  }, null, { timeout: 45000 });
-  await page.locator("#ask-ai-kept").click();
-  await page.waitForFunction(() => {
-    const d = document.getElementById("ask-ai-dialog");
-    return d && d.hidden;
-  }, null, { timeout: 45000 });
+  assert.equal(await page.locator("#ask-ai-dialog").isHidden(), true, "Ask AI opens straight to the composer");
   await page.fill("#chat-text", "When does the booth open?");
   await page.locator("#chat-form button").click();
   await page.waitForSelector(".chat-clash", { timeout: 15000 });

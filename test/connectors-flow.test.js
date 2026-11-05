@@ -74,7 +74,8 @@ test("connector page is reachable and keeps tokens out of HTML", async (t) => {
   assert.match(page.raw, /Google Forms/);
   assert.match(page.raw, /Google Calendar/);
   assert.match(page.raw, /Uses your Google account/);
-  assert.match(page.raw, /Ask AI[\s\S]*Coming soon/);
+  assert.match(page.raw, /Ask AI/);
+  assert.doesNotMatch(page.raw, /Coming soon/);
   assert.doesNotMatch(page.raw, /OpenRouter|paid model/i);
   assert.equal(page.raw.includes(TOKEN), false);
 });

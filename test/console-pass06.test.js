@@ -295,15 +295,7 @@ serial("empty home and chat offer a next step", async (t) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(`http://127.0.0.1:${opened.port}/console/chat`, { waitUntil: "networkidle" });
   await page.waitForSelector("#chat-suggests .suggest-chip", { timeout: 45000 });
-  await page.waitForFunction(() => {
-    const d = document.getElementById("ask-ai-dialog");
-    return d && !d.hidden;
-  }, null, { timeout: 45000 });
-  await page.locator("#ask-ai-kept").click();
-  await page.waitForFunction(() => {
-    const d = document.getElementById("ask-ai-dialog");
-    return d && d.hidden;
-  }, null, { timeout: 45000 });
+  assert.equal(await page.locator("#ask-ai-dialog").isHidden(), true, "Ask AI opens straight to the composer");
   const prompt = await page.locator("#chat-suggests .suggest-chip").first().textContent();
   await page.locator("#chat-suggests .suggest-chip").first().click();
   const filled = await page.locator("#chat-text").inputValue();

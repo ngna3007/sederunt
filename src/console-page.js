@@ -141,7 +141,7 @@ ${brandSprite()}
       <a href="/console/rooms" data-show="rooms" data-label="Rooms">${roomsIcon}Rooms</a>
       <a href="/console/history" data-show="history" data-label="History">${historyIcon}History</a>
       <a href="/console/decisions" data-show="record" data-label="Decisions">${recordIcon}Decisions</a>
-      <a href="/console/chat" data-show="chat" data-label="Ask AI">${chatIcon}Ask AI<span class="rail-soon" aria-label="Coming soon">Soon</span></a>
+      <a href="/console/chat" data-show="chat" data-label="Ask AI">${chatIcon}Ask AI</a>
       <a href="/console/files" data-show="files" data-label="Files">${filesIcon}Files</a>
       <p class="rail-label">Setup</p>
       <a href="/console/setup" id="show-connectors" data-label="Setup">${plugIcon}Setup</a>
@@ -447,7 +447,7 @@ ${slack}
       </div>
     </section>
     <section id="chat" hidden>
-      <div class="page-head"><div><p class="page-title">Ask AI <span class="soon-chip">Coming soon</span></p><p class="page-lede">Built-in Ask AI is not on yet. You can still ask what this workspace already kept, or plug in your own agent under Connectors.</p></div></div>
+      <div class="page-head"><div><p class="page-title">Ask AI</p><p class="page-lede">Ask about your meetings and decisions. Answers come only from what this workspace kept, with the sources shown.</p></div><div class="page-actions"><span id="ask-quota" class="ask-quota" hidden></span></div></div>
       <div class="talk-panel ai-chat">
         <div class="thread" id="chat-log">
           <div id="chat-empty" class="chat-hello">
@@ -458,7 +458,7 @@ ${slack}
         </div>
         <p id="chat-next-row" class="section-next"><button id="chat-next" class="primary" type="button" hidden>New room</button></p>
         <form id="chat-form" class="composer">
-          <label><span class="sr">Ask the workspace</span><textarea id="chat-text" name="chat" rows="1" placeholder="Ask about a room's decision"></textarea></label>
+          <label><span class="sr">Ask the workspace</span><textarea id="chat-text" name="chat" rows="1" placeholder="Ask about a meeting or decision"></textarea></label>
           <button class="primary" type="submit" aria-label="Ask">Ask</button>
         </form>
         <p class="composer-hint">Enter sends. Shift+Enter adds a line.</p>
@@ -715,14 +715,14 @@ ${slack}
   <div class="shade" data-close="ask-ai-dialog"></div>
   <div class="panel">
     <div class="panel-bar">
-      <h2 id="ask-ai-title">Ask AI is coming soon</h2>
+      <h2 id="ask-ai-title">That's today's questions</h2>
       <button type="button" class="close" data-close="ask-ai-dialog" aria-label="Close">${closeIcon}</button>
     </div>
     <div class="panel-body">
-      <p>There is no built-in model on this page yet. To ask with your own tools, add an agent under Connectors (MCP).</p>
-      <p class="meta">You can still ask what a room already kept without a model.</p>
+      <p id="ask-limit-copy">Each person gets 5 Ask AI questions a day. They come back at midnight.</p>
+      <p class="meta">To keep asking now, plug your own agent in under Connectors (MCP).</p>
       <div class="wait-actions">
-        <button type="button" class="secondary" id="ask-ai-kept" data-close="ask-ai-dialog">Ask about kept decisions</button>
+        <button type="button" class="secondary" id="ask-ai-kept" data-close="ask-ai-dialog">Close</button>
         <button type="button" class="primary" id="ask-ai-connectors">Open Connectors</button>
       </div>
     </div>
@@ -2741,8 +2741,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (chatButton) chatButton.disabled = noKept;
     if (chatInput) {
       chatInput.disabled = noKept;
-      chatInput.placeholder = noKept ? "" : "Ask about a room's decision";
+      chatInput.placeholder = noKept ? "" : "Ask about a meeting or decision";
     }
+    if (!noKept && typeof paintAskQuota === "function") paintAskQuota();
     syncRoomLabels();
     if (fileRoom) renderFile();
     if (!routed) {
@@ -3035,13 +3036,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     }
     placeNewRoom();
     if (name === "files") loadFiles();
-    if (name === "chat") {
-      var askDialog = document.getElementById("ask-ai-dialog");
-      if (askDialog && askDialog.getAttribute("data-seen") !== "1") {
-        askDialog.setAttribute("data-seen", "1");
-        openDialog("ask-ai-dialog");
-      }
-    }
+    if (name === "chat") loadAsks();
     if (!routeQuiet && window.history && window.history.pushState) {
       if (onFile && fileRoom) {
         var listPath = "/console/rooms" + roomQueryString();
@@ -6195,20 +6190,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
   if (decisionAgain) decisionAgain.addEventListener("click", function () {
     verifyDecision(openDecisionRow);
   });
-  document.getElementById("chat-form").addEventListener("submit", function (event) {
-    event.preventDefault();
-    var sentence = document.getElementById("chat-text").value;
-    var emptyLine = document.getElementById("chat-empty");
-    if (emptyLine) emptyLine.hidden = true;
-    var askedNow = sentence.trim();
-    lastQuestion = askedNow;
-    addChatTurn("You", askedNow || "The question is missing.", "");
-    addChatTurn("Sederunt", "Reading.", "");
-    fetch("/api/chat", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: sentence, workspace: workspaceKind })
-    }).then(function (response) { return response.json(); }).then(function (result) {
+  /** The kept-decision answer (no model, or the model was unreachable), drawn into one turn. */
+  function renderChatResult(result, turn, quiet) {
       var learned = typeof result.learned === "string" ? result.learned.trim() : "";
       var answer = learned || result.body || "";
       if (!learned && answer === "A decision is kept from a room.") {
@@ -6217,9 +6200,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var parts = learned ? { answer: answer, detail: "", cites: [], clash: [] } : chatParts(answer);
       var purpose = document.getElementById("chat-purpose");
       if (purpose) purpose.hidden = true;
-      var reading = document.querySelector("#chat-log .chat-turn:last-child .chat-body > span");
-      var pending = document.querySelector("#chat-log .chat-turn:last-child");
-      if (pending) pending.classList.remove("chat-pending");
+      var pending = turn;
+      var reading = turn ? turn.querySelector(".chat-body > span") : null;
+      if (pending) pending.classList.remove("chat-pending", "chat-streaming");
       if (reading && parts.clash && parts.clash.length > 1) {
         reading.textContent = parts.lead || dropTrail(parts.answer) || "These decisions clash.";
         reading.classList.add("chat-answer");
@@ -6340,17 +6323,245 @@ if (sessionWhen && sessionWhen.dataset.at) {
         });
         reading.parentNode.append(why);
       }
-      document.getElementById("chat-text").value = "";
-      growChat();
-      placeChatAnswer((pending && pending.querySelector(".cite-row")) || pending);
-      return load();
+      if (!quiet) placeChatAnswer((pending && pending.querySelector(".cite-row")) || pending);
+  }
+
+  var askState = { limit: 5, remaining: null, live: false, loaded: false, resetAt: "", streams: {} };
+  function askResetLabel() {
+    return "They come back at midnight.";
+  }
+  function paintAskQuota() {
+    var pill = document.getElementById("ask-quota");
+    var input = document.getElementById("chat-text");
+    var button = document.querySelector("#chat-form button[type=submit]");
+    if (!pill || !askState || askState.remaining === null) return;
+    var out = askState.remaining <= 0;
+    pill.hidden = false;
+    pill.textContent = out ? "No questions left today" : (askState.remaining + " of " + askState.limit + " questions left today");
+    pill.classList.toggle("ask-quota-out", out);
+    if (input) {
+      input.disabled = out;
+      input.placeholder = out ? "No questions left. Back at midnight." : "Ask about a meeting or decision";
+    }
+    if (button) button.disabled = out;
+    var copy = document.getElementById("ask-limit-copy");
+    if (copy) copy.textContent = "Each person gets " + askState.limit + " Ask AI questions a day. " + askResetLabel();
+  }
+  function takeAskQuota(data) {
+    if (!data) return;
+    if (typeof data.limit === "number") askState.limit = data.limit;
+    if (typeof data.remaining === "number") askState.remaining = data.remaining;
+    if (typeof data.live === "boolean") askState.live = data.live;
+    if (data.resetAt) askState.resetAt = data.resetAt;
+    paintAskQuota();
+  }
+  function loadAsks() {
+    fetch("/api/ask", { headers: { accept: "application/json" } }).then(function (response) {
+      return response.ok ? response.json() : null;
+    }).then(function (data) {
+      if (!data) return;
+      takeAskQuota(data);
+      if (askState.loaded) return;
+      askState.loaded = true;
+      var asks = Array.isArray(data.asks) ? data.asks : [];
+      asks.forEach(function (ask) {
+        if (!ask || !ask.id || document.querySelector('#chat-log [data-ask="' + ask.id + '"]')) return;
+        showAskThread();
+        addChatTurn("You", ask.question || "", "");
+        var turn = addChatTurn("Sederunt", ask.text ? "" : "Reading.", "");
+        turn.setAttribute("data-ask", ask.id);
+        var span = turn.querySelector(".chat-body > span");
+        if (ask.text) span.textContent = ask.text;
+        if (ask.status === "streaming") {
+          turn.classList.add("chat-streaming");
+          followAsk(ask.id, turn, ask.count || 0);
+        } else settleAsk(turn, ask, true);
+      });
+      var log = document.getElementById("chat-log");
+      if (log && asks.length) log.scrollTop = log.scrollHeight;
+    }).catch(function () {});
+  }
+  function showAskThread() {
+    var emptyLine = document.getElementById("chat-empty");
+    if (emptyLine) emptyLine.hidden = true;
+    var purpose = document.getElementById("chat-purpose");
+    if (purpose) purpose.hidden = true;
+  }
+  function keepAskInView(turn) {
+    var log = document.getElementById("chat-log");
+    if (!log || !turn) return;
+    var near = log.scrollHeight - log.scrollTop - log.clientHeight < 160;
+    if (near) log.scrollTop = log.scrollHeight;
+  }
+  function followAsk(id, turn, from) {
+    if (askState.streams[id] || typeof EventSource !== "function") return;
+    var got = from || 0;
+    var span = turn.querySelector(".chat-body > span");
+    var source = new EventSource("/api/ask/" + encodeURIComponent(id) + "/stream?from=" + got);
+    askState.streams[id] = source;
+    function stop() {
+      source.close();
+      delete askState.streams[id];
+    }
+    source.addEventListener("chunk", function (event) {
+      var data = JSON.parse(event.data || "{}");
+      if (typeof data.i !== "number" || data.i < got) return;
+      if (turn.classList.contains("chat-pending")) {
+        turn.classList.remove("chat-pending");
+        span.textContent = "";
+      }
+      turn.classList.add("chat-streaming");
+      span.textContent += data.t || "";
+      got = data.i + 1;
+      turn.removeAttribute("data-tries");
+      keepAskInView(turn);
+    });
+    source.addEventListener("done", function (event) {
+      stop();
+      settleAsk(turn, JSON.parse(event.data || "{}"));
+    });
+    source.addEventListener("again", function () {
+      stop();
+      followAsk(id, turn, got);
+    });
+    source.onerror = function () {
+      stop();
+      var tries = Number(turn.getAttribute("data-tries") || "0") + 1;
+      turn.setAttribute("data-tries", String(tries));
+      if (tries > 5) {
+        settleAsk(turn, { status: "stopped" });
+        return;
+      }
+      setTimeout(function () { followAsk(id, turn, got); }, 800 * tries);
+    };
+  }
+  function drawAnswer(span, value) {
+    span.textContent = "";
+    span.classList.add("chat-answer-md");
+    var list = null;
+    String(value || "").split(/\\n/).forEach(function (raw) {
+      var line = raw.replace(/\\s+$/, "");
+      var bullet = /^\\s*(?:[-*•]|\\d+[.)])\\s+(.*)$/.exec(line);
+      if (bullet) {
+        if (!list) {
+          list = document.createElement(/^\\s*\\d/.test(line) ? "ol" : "ul");
+          span.append(list);
+        }
+        var item = document.createElement("li");
+        inline(item, bullet[1]);
+        list.append(item);
+        return;
+      }
+      list = null;
+      if (!line.trim()) return;
+      var para = document.createElement("span");
+      para.className = "md-line";
+      inline(para, line.replace(/^#+\\s*/, ""));
+      span.append(para);
+    });
+    function inline(node, textValue) {
+      String(textValue).split(/(\\*\\*[^*]+\\*\\*)/).forEach(function (bit) {
+        if (!bit) return;
+        if (/^\\*\\*[^*]+\\*\\*$/.test(bit)) {
+          var strong = document.createElement("strong");
+          strong.textContent = bit.slice(2, -2);
+          node.append(strong);
+        } else node.append(document.createTextNode(bit.replace(/\\x60/g, "")));
+      });
+    }
+  }
+  function settleAsk(turn, done, quiet) {
+    if (!turn || turn.getAttribute("data-settled") === "1") return;
+    turn.setAttribute("data-settled", "1");
+    turn.classList.remove("chat-pending", "chat-streaming");
+    var span = turn.querySelector(".chat-body > span");
+    if (!span) return;
+    if (done && done.source === "retrieval" && done.result) {
+      span.textContent = "";
+      renderChatResult(done.result, turn, quiet);
+      if (!quiet) load();
+      return;
+    }
+    var said = String(span.textContent || "").trim();
+    var status = done && done.status;
+    if (!said) {
+      span.textContent = status === "done" ? "Nothing kept in this workspace matches that yet." : "The answer stopped. Ask again.";
+      return;
+    }
+    drawAnswer(span, said);
+    if (status === "stopped" || status === "error") {
+      var cut = document.createElement("span");
+      cut.className = "chat-detail";
+      cut.textContent = "The answer stopped early.";
+      span.parentNode.append(cut);
+    }
+    var sources = (done && Array.isArray(done.sources) ? done.sources : []).filter(function (item) { return item && item.text; });
+    if (sources.length) {
+      var label = document.createElement("span");
+      label.className = "ask-sources-label";
+      label.textContent = sources.length === 1 ? "From 1 kept decision" : "From " + sources.length + " kept decisions";
+      span.parentNode.append(label);
+      appendCites(span.parentNode, sources.map(function (item) {
+        return { label: String(item.speaker || "someone").trim().toLowerCase() || "someone", roomId: item.roomId || "", spokenAt: item.spokenAt || "" };
+      }));
+    }
+    var actions = document.createElement("div");
+    actions.className = "ask-actions";
+    var copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "ask-copy";
+    copy.textContent = "Copy";
+    copy.addEventListener("click", function () {
+      var ok = function () { toast("Copied."); };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(said).then(ok, function () { toast("Copy did not work."); });
+      else toast("Copy did not work.");
+    });
+    actions.append(copy);
+    span.parentNode.append(actions);
+    if (!quiet) keepAskInView(turn);
+  }
+  document.getElementById("chat-form").addEventListener("submit", function (event) {
+    event.preventDefault();
+    var input = document.getElementById("chat-text");
+    var askedNow = input.value.trim();
+    if (!askedNow) return;
+    if (askState.remaining !== null && askState.remaining <= 0) {
+      openDialog("ask-ai-dialog");
+      return;
+    }
+    showAskThread();
+    lastQuestion = askedNow;
+    addChatTurn("You", askedNow, "");
+    var turn = addChatTurn("Sederunt", "Reading.", "");
+    input.value = "";
+    growChat();
+    fetch("/api/ask", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: askedNow, workspace: workspaceKind })
+    }).then(function (response) {
+      return response.json().then(function (body) { return { status: response.status, body: body || {} }; });
+    }).then(function (reply) {
+      var span = turn.querySelector(".chat-body > span");
+      if (reply.status === 429) {
+        turn.classList.remove("chat-pending");
+        span.textContent = "You've used today's " + (reply.body.limit || askState.limit) + " questions. " + askResetLabel();
+        takeAskQuota({ limit: reply.body.limit, remaining: 0 });
+        openDialog("ask-ai-dialog");
+        return;
+      }
+      if (reply.status !== 200 || !reply.body.id) {
+        turn.classList.remove("chat-pending");
+        span.textContent = reply.body.error && reply.body.error !== "limit" ? reply.body.error : "Ask AI did not answer. Send the question again.";
+        return;
+      }
+      takeAskQuota(reply.body);
+      turn.setAttribute("data-ask", reply.body.id);
+      followAsk(reply.body.id, turn, 0);
     }).catch(function () {
-      var pending = document.querySelector("#chat-log .chat-turn.chat-pending");
-      var reading = pending ? pending.querySelector(".chat-body > span") : null;
-      if (reading) {
-        reading.textContent = "The room did not answer. Send the sentence again.";
-        pending.classList.remove("chat-pending");
-      } else addChatTurn("Sederunt", "The room did not answer. Send the sentence again.");
+      var span = turn.querySelector(".chat-body > span");
+      turn.classList.remove("chat-pending");
+      if (span) span.textContent = "Ask AI did not answer. Send the question again.";
     });
   });
   document.getElementById("meet-form").addEventListener("submit", function (event) {
@@ -6481,6 +6692,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var log = document.getElementById("chat-log");
     log.append(line);
     log.scrollTop = log.scrollHeight;
+    return line;
   }
 
   var accountButton = document.getElementById("account");
