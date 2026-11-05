@@ -769,6 +769,9 @@ export function createApp(options = {}) {
             : !env.RECALL_WEBHOOK_SECRET
               ? "Set RECALL_WEBHOOK_SECRET to the Recall workspace verification secret, then restart."
               : "Check that SEDERUNT_PUBLIC_ORIGIN is a public https address, then restart.",
+        calendarConnected: doors.calendar === true,
+        linearConnected: doors.linear === true,
+        slackConnected: doors.slack === true,
         slackReady: Boolean(env.SLACK_SIGNING_SECRET && env.SLACK_BOT_TOKEN),
         signedIn: Boolean(gate.session),
         signInOff: !consoleSecret(env) && !identity,

@@ -36,3 +36,21 @@ test("connector cards place the status badge beside Manage, not in the title", (
   assert.doesNotMatch(card, /who\.append\([^)]*\bpill\b/);
   assert.match(css, /\.mcp-card-actions\s*\{[^}]*margin-left:\s*auto/);
 });
+
+test("Setup tools SSR Connected when doors are on, and MCP presets stay hidden until paint", () => {
+  const off = renderConsolePage({});
+  assert.match(off, /id="cal-conn" class="conn-state off">Not connected/);
+  assert.match(off, /id="mcp-presets" hidden/);
+
+  const on = renderConsolePage({
+    calendarConnected: true,
+    linearConnected: true,
+    slackConnected: true,
+  });
+  assert.match(on, /id="cal-conn" class="conn-state">Connected/);
+  assert.match(on, /id="lin-conn" class="conn-state">Connected/);
+  assert.match(on, /id="slack-conn" class="conn-state">Connected/);
+  assert.match(on, /id="cal-connect"[^>]*hidden/);
+  assert.match(on, /id="cal-manage"(?! hidden)/);
+  assert.match(on, /id="mcp-presets" hidden/);
+});

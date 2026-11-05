@@ -27,6 +27,9 @@ export const DECISION_COLUMNS = ["Decision", "Room", "Status", ""];
  */
 export function renderConsolePage(state = {}) {
   const askDaily = Number.isInteger(state.askLimit) && state.askLimit >= 0 ? state.askLimit : 5;
+  const calendarConnected = state.calendarConnected === true;
+  const linearConnected = state.linearConnected === true;
+  const slackConnected = state.slackConnected === true || state.slackReady === true;
   const signedIn = state.signedIn === true;
   const accountMember = String(state.accountMember || "").trim();
   const givenName = String(state.accountName || "").trim();
@@ -288,15 +291,15 @@ ${slack}
           ${calendarIcon}
           <div class="set-copy" data-col="tool">
             <strong>Calendar</strong>
-            <p id="cal-conn" class="conn-state off">Not connected</p>
+            <p id="cal-conn" class="conn-state${calendarConnected ? "" : " off"}">${calendarConnected ? "Connected" : "Not connected"}</p>
             <p id="cal-line" class="sr">Calendar runs automatically.</p>
           </div>
           <div class="conn-actions" data-col="action">
-            <button type="button" class="conn-connect" id="cal-connect" data-connect="calendar">Connect</button>
-            <button type="button" class="secondary conn-manage" id="cal-manage" data-connect="calendar" hidden>Manage</button>
+            <button type="button" class="conn-connect" id="cal-connect" data-connect="calendar"${calendarConnected ? " hidden" : ""}>Connect</button>
+            <button type="button" class="secondary conn-manage" id="cal-manage" data-connect="calendar"${calendarConnected ? "" : " hidden"}>Manage</button>
           </div>
         </div>
-        <div class="tool-ask ask-quiet" id="cal-ask-row">
+        <div class="tool-ask${calendarConnected ? "" : " ask-quiet"}" id="cal-ask-row">
           <div class="set-copy" data-col="tool"><span class="ask-name">Run automatically</span><span class="ask-tool"> for Calendar</span></div>
           <div class="conn-ask" data-col="action"><label class="switch"><input id="cal-ask" type="checkbox" checked aria-label="Run automatically for Calendar" aria-describedby="ask-help"></label></div>
         </div>
@@ -304,15 +307,15 @@ ${slack}
           ${linearIcon}
           <div class="set-copy" data-col="tool">
             <strong>Linear</strong>
-            <p id="lin-conn" class="conn-state off">Not connected</p>
+            <p id="lin-conn" class="conn-state${linearConnected ? "" : " off"}">${linearConnected ? "Connected" : "Not connected"}</p>
             <p id="lin-line" class="sr">Linear runs automatically.</p>
           </div>
           <div class="conn-actions" data-col="action">
-            <button type="button" class="conn-connect" id="lin-connect" data-connect="linear">Connect</button>
-            <button type="button" class="secondary conn-manage" id="lin-manage" data-connect="linear" hidden>Manage</button>
+            <button type="button" class="conn-connect" id="lin-connect" data-connect="linear"${linearConnected ? " hidden" : ""}>Connect</button>
+            <button type="button" class="secondary conn-manage" id="lin-manage" data-connect="linear"${linearConnected ? "" : " hidden"}>Manage</button>
           </div>
         </div>
-        <div class="tool-ask ask-quiet" id="lin-ask-row">
+        <div class="tool-ask${linearConnected ? "" : " ask-quiet"}" id="lin-ask-row">
           <div class="set-copy" data-col="tool"><span class="ask-name">Run automatically</span><span class="ask-tool"> for Linear</span></div>
           <div class="conn-ask" data-col="action"><label class="switch"><input id="lin-ask" type="checkbox" checked aria-label="Run automatically for Linear" aria-describedby="ask-help"></label></div>
         </div>
@@ -320,16 +323,16 @@ ${slack}
           ${channelIcon}
           <div class="set-copy" data-col="tool">
             <strong>Slack</strong>
-            <p id="slack-conn" class="conn-state off">Not connected</p>
+            <p id="slack-conn" class="conn-state${slackConnected ? "" : " off"}">${slackConnected ? "Connected" : "Not connected"}</p>
             <p id="slack-line" class="conn-hint">Slack runs automatically.</p>
             <p id="slack-note" class="sr">Sederunt answers in a channel it has already joined.</p>
           </div>
           <div class="conn-actions" data-col="action">
-            <button type="button" class="conn-connect" id="slack-connect" data-connect="slack">Connect</button>
-            <button type="button" class="secondary conn-manage" id="slack-manage" data-connect="slack" hidden>Manage</button>
+            <button type="button" class="conn-connect" id="slack-connect" data-connect="slack"${slackConnected ? " hidden" : ""}>Connect</button>
+            <button type="button" class="secondary conn-manage" id="slack-manage" data-connect="slack"${slackConnected ? "" : " hidden"}>Manage</button>
           </div>
         </div>
-        <div class="tool-ask ask-quiet" id="slack-ask-row">
+        <div class="tool-ask${slackConnected ? "" : " ask-quiet"}" id="slack-ask-row">
           <div class="set-copy" data-col="tool"><span class="ask-name">Run automatically</span><span class="ask-tool"> for Slack</span></div>
           <div class="conn-ask" data-col="action"><label class="switch"><input id="slack-ask" type="checkbox" checked aria-label="Run automatically for Slack" aria-describedby="ask-help"></label></div>
         </div>
@@ -372,7 +375,7 @@ ${slack}
         <p>Add an MCP server to use its tools in this space. New tools stay off until you enable them.</p>
         <button type="button" class="primary" id="mcp-add">Add a connector</button>
       </div>
-      <div id="mcp-presets">
+      <div id="mcp-presets" hidden>
         <p class="section-label">Presets</p>
         <div class="preset-row">
           <button type="button" class="preset-card" data-preset="google-forms" data-state="add">
