@@ -1,6 +1,5 @@
 import { openRouterComplete, openRouterConfig } from "../openrouter.js";
 import { buildSystemPrompt } from "../bot/persona.js";
-import { looksLikeOpenQuestion, looksLikeRecallAsk } from "../parse.js";
 
 const STOP = new Set(["what", "about", "that", "this", "with", "from", "your", "have", "does", "file", "when", "where", "who", "why", "how", "was", "decided", "the", "and", "for"]);
 
@@ -185,13 +184,6 @@ function plainFact(text, connectorId) {
 
 function questionWords(question) {
   return String(question ?? "").toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length >= 4 && !STOP.has(word));
-}
-
-/** A Slack message that should be answered, not stored. */
-export function slackQuestion(text) {
-  const trimmed = String(text ?? "").trim();
-  if (!trimmed) return false;
-  return looksLikeOpenQuestion(trimmed) || looksLikeRecallAsk(trimmed);
 }
 
 /**
