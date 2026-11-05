@@ -5827,6 +5827,7 @@ body.ob-page {
   .preset-card .preset-action { grid-column: 2; grid-row: 1 / span 2; }
 }
 
+/* ===================================================================
    Design system components. Documented in docs/design/design-system.md.
    These come last so they settle the older per-page passes above.
    =================================================================== */
@@ -5925,7 +5926,6 @@ body.ob-page {
   #decision-dialog .panel { max-height: calc(100dvh - 24px); width: 100%; }
 }
 
-/* ============================================================
 /* Room polish: one container, one gutter, one divider. Later rules win. */
 body.room-open #file-dialog.room-screen {
   padding: 0 !important;
