@@ -44,6 +44,23 @@ export function createSlackClient(env = {}, fetchImpl = globalThis.fetch) {
     async resolveChannel(name) {
       return resolveChannelName(fetchImpl, token, env, name);
     },
+    /**
+     * A channel id becomes its Slack name. A name is returned as given.
+     * A lookup that fails returns "" so the page never shows a raw id.
+     */
+    async channelLabel(id) {
+      const raw = String(id || "").trim().replace(/^#/, "");
+      if (!raw) return "";
+      if (!CHANNEL_ID.test(raw)) return raw;
+      if (!token) return "";
+      try {
+        const channels = await listChannels(fetchImpl, token);
+        const hit = channels.find((item) => item?.id === raw);
+        return String(hit?.name || "").replace(/^#/, "").trim();
+      } catch {
+        return "";
+      }
+    },
   };
 }
 

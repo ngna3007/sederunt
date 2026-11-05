@@ -5,6 +5,7 @@ import { renderConsolePage } from "../src/console-page.js";
 import { renderSignInPage } from "../src/console-sign-in.js";
 import { renderRoomPage } from "../src/room-page.js";
 import { renderFlowMessage, renderInvitePage, renderWelcomePage } from "../src/console-welcome.js";
+import { renderFakeFormPage } from "../src/mcp-forms/http.js";
 import { sederuntMark } from "../src/sederunt-mark.js";
 
 function shapes(svg) {
@@ -28,6 +29,7 @@ for (const [name, html] of [
   ["calendar step", () => renderWelcomePage({ step: "calendar" })],
   ["flow message", () => renderFlowMessage("Link expired", "Ask for a new invite.")],
   ["invite page", () => renderInvitePage({})],
+  ["forms preview", () => renderFakeFormPage({ title: "Launch questions", questions: [], published: false })],
 ]) {
   test(`the ${name} shows the real Sederunt logo next to the wordmark`, () => {
     const page = html();

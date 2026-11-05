@@ -21,6 +21,7 @@ test("client connects, pages tools, and calls the fake server", async (t) => {
   const called = await callTool({ url: fake.url, token: TOKEN, headerName: "Authorization" }, "lookup_customer", { id: "acme", z: 1 }, { env, timeoutMs: 4000 });
   assert.equal(called.ok, true, called.message);
   assert.equal(called.text, `lookup_customer:${JSON.stringify({ id: "acme", z: 1 })}`);
+  assert.deepEqual(called.structuredContent, { id: "acme", note: "demo" });
   assert.equal(JSON.stringify(connected).includes(TOKEN), false);
 });
 

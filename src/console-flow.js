@@ -92,11 +92,7 @@ export async function handleWelcome(ctx) {
   if (req.method === "GET") {
     const asked = url.searchParams.get("step") || "";
     if (!active || asked === "workspace") {
-      if (active && asked === "workspace" && !manage) {
-        redirect(res, "/console/welcome?step=calendar");
-        return;
-      }
-      await renderWorkspaceStep(ctx, session, {});
+      await renderWorkspaceStep(ctx, session, active && asked === "workspace" ? { renaming: active } : {});
       return;
     }
     if (asked === "calendar" || asked === "chat" || asked === "team") {
@@ -116,6 +112,10 @@ export async function handleWelcome(ctx) {
   const action = one(body.action);
   if (typeof body.join === "string" && body.join) {
     await joinWorkspace(ctx, session, body.join);
+    return;
+  }
+  if (action === "rename" && active) {
+    await renameWorkspace(ctx, session, active, body);
     return;
   }
   if (action === "create" || !active) {
@@ -151,8 +151,9 @@ function sendWelcome(ctx, status, state, headers = {}) {
 }
 
 async function renderWorkspaceStep(ctx, session, extra) {
+  const renaming = extra.renaming || null;
   let joinable = [];
-  if (typeof ctx.identity.joinableTenants === "function") {
+  if (!renaming && typeof ctx.identity.joinableTenants === "function") {
     try {
       joinable = await ctx.identity.joinableTenants(session.accessToken);
     } catch {
@@ -161,8 +162,9 @@ async function renderWorkspaceStep(ctx, session, extra) {
   }
   sendWelcome(ctx, extra.status || 200, {
     step: "workspace",
+    renaming: Boolean(renaming),
     email: session.email,
-    name: typeof extra.name === "string" ? extra.name : suggestedWorkspaceName({ name: session.name, email: session.email }),
+    name: typeof extra.name === "string" ? extra.name : (renaming?.name || suggestedWorkspaceName({ name: session.name, email: session.email })),
     botName: typeof extra.botName === "string" ? extra.botName : DEFAULT_BOT_NAME,
     botInvalid: extra.botInvalid === true,
     joinable,
@@ -207,7 +209,11 @@ async function renderStep(ctx, session, active, step, extra = {}) {
       notice: extra.asked || (!live.slack && prefs.slack === "connect")
         ? "Slack connects for the whole workspace in Setup → Tools. Your choice is saved, so Home will remind you."
         : "",
-      chat: { slack: live.slack, channel: live.slack ? (ctx.slackChannel || (doors.slack ? "" : "sederunt")) : "", asked: !live.slack && prefs.slack === "connect" },
+      chat: {
+        slack: live.slack,
+        channel: live.slack ? await slackChannelLabel(ctx, ctx.slackChannel || (doors.slack ? "" : "sederunt")) : "",
+        asked: !live.slack && prefs.slack === "connect",
+      },
     });
     return;
   }
@@ -327,6 +333,50 @@ export async function upcomingMeetings(ctx, pretend) {
     }
   }
   return { rows: rows.slice(0, 4), unavailable: unavailable && rows.length === 0 };
+}
+
+const CHANNEL_ID = /^[CDGW][A-Z0-9]{2,}$/;
+
+/** A Slack channel id is shown only after it resolves to a name. */
+async function slackChannelLabel(ctx, raw) {
+  const value = String(raw || "").replace(/^#/, "").trim();
+  if (!value) return "";
+  if (ctx.slack && typeof ctx.slack.channelLabel === "function") {
+    try {
+      const named = await ctx.slack.channelLabel(value);
+      if (named) return String(named).replace(/^#/, "").trim();
+    } catch {
+      // A failed lookup must not fall back to the raw id.
+    }
+  }
+  if (CHANNEL_ID.test(value)) return "";
+  return value;
+}
+
+async function renameWorkspace(ctx, session, active, body) {
+  const { res, redirect, identity } = ctx;
+  const named = validateSpaceName(one(body.name));
+  if (named.error) {
+    await renderWorkspaceStep(ctx, session, { status: 400, name: one(body.name), error: named.error, renaming: active });
+    return;
+  }
+  if (active.role !== "owner" && active.role !== "admin") {
+    await renderWorkspaceStep(ctx, session, { status: 400, name: named.name, error: "Only an owner or admin can rename this workspace.", renaming: active });
+    return;
+  }
+  if (named.name !== active.name) {
+    if (typeof identity.renameTenant !== "function") {
+      await renderWorkspaceStep(ctx, session, { status: 400, name: named.name, error: "This workspace could not be renamed.", renaming: active });
+      return;
+    }
+    try {
+      await identity.renameTenant(session.accessToken, active.id, named.name);
+    } catch (error) {
+      await renderWorkspaceStep(ctx, session, { status: 400, name: named.name, error: identityMessage(error), renaming: active });
+      return;
+    }
+  }
+  redirect(res, "/console/welcome?step=calendar");
 }
 
 async function createWorkspace(ctx, session, body) {

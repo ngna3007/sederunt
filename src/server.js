@@ -7,6 +7,7 @@ import { redact } from "./domain/redact.js";
 import { handleCalendarEvent } from "./calendar/route.js";
 import { handleConnectorRoutes } from "./connectors/route.js";
 import { createFormsApp, handleNodeForms } from "./mcp-forms/http.js";
+import { createFakeCalendarMcp } from "./connectors/calendar-fake.js";
 import { createConnectorStore } from "./connectors/store.js";
 import { createPersonGoogleStore } from "./connectors/google-person.js";
 import { calendarPresentedConnected, calendarTimeZone, createCalendarAdapter } from "./calendar/mcp.js";
@@ -37,7 +38,7 @@ import {
 } from "./console-auth.js";
 import { createIdentity, identityConfigured } from "./identity/client.js";
 import { clearOAuthCookie } from "./identity/pending.js";
-import { handleAuthRoute } from "./identity/routes.js";
+import { handleAuthRoute, requestOrigin } from "./identity/routes.js";
 import { refreshOAuthSession, rememberRefreshCookie } from "./identity/session.js";
 import { createMemoryPreferenceStore } from "./bot/preferences.js";
 import { canEditBot, handleBotSettings, readBot } from "./console/bot-settings.js";
@@ -317,11 +318,23 @@ export function createApp(options = {}) {
   workspace.identity = identity;
   workspace.forms = createFormsApp({ env, fetchImpl: options.fetch });
   workspace.googleGrants = options.googleGrants || createPersonGoogleStore({ env, fetchImpl: options.fetch });
+  workspace.calendarMcp = createFakeCalendarMcp();
+  workspace.calendarSave = typeof options.calendarSave === "function" ? options.calendarSave : null;
   async function mcpCallContext(req) {
     const gate = guardConsole(req, env);
     const tenantId = await resolveMcpSpace(gate, identity, workspace.deps.connectors);
     const personId = String(gate.session?.userId || gate.session?.memberId || env.SEDERUNT_MEMBER || "").trim();
-    return { tenantId, env, personId, googleGrants: workspace.googleGrants };
+    return {
+      tenantId,
+      env,
+      personId,
+      googleGrants: workspace.googleGrants,
+      forms: workspace.forms,
+      calendarMcp: workspace.calendarMcp,
+      calendarSave: workspace.calendarSave,
+      fetch: options.fetch,
+      origin: requestOrigin(req, env),
+    };
   }
   const server = createServer(async (req, res) => {
   try {
@@ -380,7 +393,7 @@ export function createApp(options = {}) {
       return;
     }
     if (url.pathname === "/console/auth" || url.pathname.startsWith("/console/auth/")) {
-      await handleAuthRoute({ req, res, url, env, identity, send, redirect, googleGrants: workspace.googleGrants });
+      await handleAuthRoute({ req, res, url, env, identity, send, redirect, googleGrants: workspace.googleGrants, calendarSave: workspace.calendarSave });
       return;
     }
     if (req.method === "GET" && url.pathname === "/console/sign-in") {
@@ -590,6 +603,7 @@ export function createApp(options = {}) {
         botPreferences: workspace.botPreferences,
         calendar: workspace.deps.calendar,
         doors: doorReport(env, workspace.linearReady === true),
+        slack: workspace.deps.slack,
         slackChannel: workspace.deps.app?.slackChannel || "",
       });
       return;
@@ -755,14 +769,13 @@ export function createApp(options = {}) {
       }
       const companyId = url.searchParams.get("company") || "";
       const current = await prepareWorkspace(workspace, companyId, false, 2000);
-      const requested = (url.searchParams.get("member") || "").trim();
-      const configured = typeof env.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
-      const memberId = gate.session ? (gate.session.memberId || configured) : (requested || configured);
+      const workspaceKind = url.searchParams.get("workspace") || "";
+      const memberId = consoleBoardMember(gate.session, env, workspaceKind, url.searchParams.get("member") || "");
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(await consolePayload(
         workspace,
         current,
         memberId,
-        url.searchParams.get("workspace") || "",
+        workspaceKind,
       )));
       return;
     }
@@ -774,12 +787,12 @@ export function createApp(options = {}) {
       }
       const companyId = url.searchParams.get("company") || "";
       const current = await prepareWorkspace(workspace, companyId, true);
-      const configured = typeof env.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
+      const workspaceKind = url.searchParams.get("workspace") || "";
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(await consolePayload(
         workspace,
         current,
-        gate.session ? (gate.session.memberId || configured) : configured,
-        url.searchParams.get("workspace") || "",
+        consoleBoardMember(gate.session, env, workspaceKind, ""),
+        workspaceKind,
       )));
       return;
     }
@@ -1277,7 +1290,11 @@ let publicServer;
 if (isDirectRun() || process.env.VERCEL) {
   loadLocalEnv();
   loadCompanyEnv();
-  publicServer = createApp({ liveLinear: true, calendar: createCalendarAdapter(process.env, { save: saveCalendarEnv }) });
+  publicServer = createApp({
+    liveLinear: true,
+    calendar: createCalendarAdapter(process.env, { save: saveCalendarEnv }),
+    calendarSave: saveCalendarEnv,
+  });
 }
 if (isDirectRun() && !process.env.VERCEL && publicServer) {
   publicServer.listen(port, "127.0.0.1", () => {
@@ -1379,6 +1396,20 @@ async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0)
     new Promise((resolve) => setTimeout(resolve, waitMs)),
   ]);
   return current;
+}
+
+/**
+ * Who the company board is read as. An OAuth user id is not a meeting
+ * participant, so a company board uses SEDERUNT_MEMBER when it is set.
+ * A personal board stays on the signed-in user. A passphrase session keeps
+ * its own member id, and an unsigned read can still ask with ?member=.
+ */
+export function consoleBoardMember(session, env, workspace, requested = "") {
+  const configured = typeof env?.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
+  const asked = String(requested || "").trim();
+  const signed = session ? (String(session.memberId || "").trim() || configured) : (asked || configured);
+  if (session?.kind === "oauth" && workspace !== "personal" && configured) return configured;
+  return signed;
 }
 
 async function consolePayload(workspace, current, memberId, kind = "company") {

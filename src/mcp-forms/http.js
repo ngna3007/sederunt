@@ -1,6 +1,6 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/server";
 import { requestOrigin } from "../identity/routes.js";
-import { sederuntMark } from "../sederunt-mark.js";
+import { sederuntMark, FAVICON_LINK } from "../sederunt-mark.js";
 import { createFormsService, formsFakeEnabled } from "./api.js";
 import { runWithFormsContext } from "./context.js";
 import { createFormsMcpServer } from "./server.js";
@@ -70,6 +70,7 @@ export function renderFakeFormPage(form) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title}</title>
+${FAVICON_LINK}
 <style>
   :root {
     color-scheme: light;
@@ -96,7 +97,7 @@ export function renderFakeFormPage(form) {
   }
   .wrap { width: min(640px, 100%); margin: 0 auto; padding: 32px 20px 64px; }
   header { display: flex; align-items: center; gap: 10px; margin-bottom: 28px; }
-  header span { font-weight: 600; }
+  header .brand-word { font-weight: 600; }
   h1, p, li { overflow-wrap: anywhere; }
   h1 { margin: 0 0 8px; font-size: 28px; line-height: 1.2; }
   .lede, .note, .q-type { color: var(--muted-foreground); }
@@ -110,7 +111,7 @@ export function renderFakeFormPage(form) {
 </head>
 <body class="forms-preview">
   <div class="wrap">
-    <header>${sederuntMark({ size: 28 })}<span>Sederunt</span></header>
+    <header>${sederuntMark({ size: 28 })}<span class="brand-word">Sederunt</span></header>
     <h1>${title}</h1>
     ${body}
   </div>

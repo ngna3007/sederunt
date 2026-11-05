@@ -5,7 +5,7 @@ import { request } from "node:http";
 import test from "node:test";
 import { openSession } from "../src/console-auth.js";
 import { createIdentity } from "../src/identity/client.js";
-import { createApp } from "../src/server.js";
+import { createApp, defaultDeps } from "../src/server.js";
 import { upcomingMeetings } from "../src/console-flow.js";
 
 const SECRET = "session-secret";
@@ -176,6 +176,25 @@ test("fake auth onboarding stays on localhost", async (t) => {
         assert.equal(team.role, "owner");
         assert.equal(ada.tenantId, team.id);
 
+        const renamePage = await call(port, "GET", "/console/welcome?step=workspace", { cookie: header(jar) });
+        assert.equal(renamePage.status, 200);
+        assert.match(renamePage.raw, /Your workspace/);
+        assert.match(renamePage.raw, /value="Analytical Engines"/);
+        assert.match(renamePage.raw, /name="action" value="rename"/);
+        assert.doesNotMatch(renamePage.raw, /id="ob-skip"/);
+        assert.doesNotMatch(renamePage.raw, /id="ob-joinable"/);
+        const sameName = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=rename&name=Analytical+Engines" });
+        assert.equal(sameName.status, 302);
+        assert.equal(sameName.location, "/console/welcome?step=calendar");
+        const renamed = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=rename&name=Engines" });
+        assert.equal(renamed.status, 302);
+        assert.equal(renamed.location, "/console/welcome?step=calendar");
+        const engines = await identity.myTenants(ada.accessToken);
+        assert.equal(engines.find((row) => row.id === team.id).name, "Engines");
+        const restored = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=rename&name=Analytical+Engines" });
+        assert.equal(restored.status, 302);
+        assert.equal((await identity.myTenants(ada.accessToken)).find((row) => row.id === team.id).name, "Analytical Engines");
+
         const calendar = await call(port, "GET", "/console/welcome?step=calendar", { cookie: header(jar) });
         assert.equal(calendar.status, 200);
         assert.match(calendar.raw, /Step 2 of 4/);
@@ -183,6 +202,7 @@ test("fake auth onboarding stays on localhost", async (t) => {
         assert.match(calendar.raw, /id="calendar-outlook"[\s\S]*Coming soon/);
         assert.match(calendar.raw, /id="calendar-status">Not connected/);
         assert.match(calendar.raw, /id="calendar-connect"[^>]*data-docs="https:/);
+        assert.match(calendar.raw, /href="\/console\/welcome\?step=workspace"[^>]*id="ob-back"/);
         assert.doesNotMatch(calendar.raw, /id="auto-join"/);
         const askedCalendar = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=calendar&choice=connect" });
         assert.equal(askedCalendar.status, 302);
@@ -199,6 +219,7 @@ test("fake auth onboarding stays on localhost", async (t) => {
         for (const id of ["chat-slack", "chat-teams", "chat-gchat", "chat-discord", "chat-email"]) assert.match(chat.raw, new RegExp(`id="${id}"`));
         assert.match(chat.raw, /Coming soon/);
         assert.match(chat.raw, /id="ob-skip"[^>]*>Not now</);
+        assert.match(chat.raw, /href="\/console\/welcome\?step=calendar"[^>]*id="ob-back"/);
         const laterChat = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=chat&choice=later" });
         assert.equal(laterChat.location, "/console/welcome?step=team");
 
@@ -208,8 +229,10 @@ test("fake auth onboarding stays on localhost", async (t) => {
         assert.match(step.raw, /id="invite-add-row"/);
         assert.match(step.raw, /id="invite-role"[\s\S]*Member[\s\S]*Admin/);
         assert.doesNotMatch(step.raw, /Viewer/);
-        assert.match(step.raw, /Nobody added yet/);
-        assert.match(step.raw, /id="invite-link"[^>]*value="http:\/\/[^"]+\/console\/join\/[A-Za-z0-9_-]{16,}"/);
+        assert.match(step.raw, /No one on the list yet/);
+        assert.match(step.raw, /Or share this link/);
+        assert.match(step.raw, /href="\/console\/welcome\?step=chat"[^>]*id="ob-back"/);
+        assert.match(step.raw, /id="invite-link"[^>]*>http:\/\/[^<]+\/console\/join\/[A-Za-z0-9_-]{16,}<\/textarea>/);
         assert.doesNotMatch(step.raw, /id="domain-join"/);
         assert.match(step.raw, /I'll do this later/);
         assert.match(step.raw, /id="invite-send"[^>]*>Finish</);
@@ -481,6 +504,45 @@ async function browserPath(chromium) {
     return "";
   }
 }
+
+test("welcome shows the slack channel name, not a channel id", async () => {
+  async function chatPage(label) {
+    const env = {
+      SEDERUNT_AUTH_FAKE: "1",
+      SEDERUNT_SESSION_SECRET: SECRET,
+      SEDERUNT_MEMBER: "Mina",
+      SLACK_BOT_TOKEN: "xoxb-test",
+      SLACK_SIGNING_SECRET: "test-signing",
+      SLACK_DEFAULT_CHANNEL: "C0DEMO",
+    };
+    const identity = createIdentity(env);
+    const deps = defaultDeps({ env });
+    deps.slack = { async channelLabel() { return label; } };
+    const app = createApp({ companyLoaded: true, env, identity, deps });
+    const port = await listen(app);
+    try {
+      const jar = {};
+      await followProvider(port, jar, "google", "/console");
+      const welcome = await call(port, "GET", "/console", { cookie: header(jar) });
+      assert.equal(welcome.status, 302);
+      absorb(jar, welcome.cookie);
+      const created = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=create&name=Channel+Check" });
+      assert.equal(created.status, 302);
+      absorb(jar, created.cookie);
+      return await call(port, "GET", "/console/welcome?step=chat", { cookie: header(jar) });
+    } finally {
+      app.close();
+    }
+  }
+  const named = await chatPage("sederunt-demo");
+  assert.equal(named.status, 200);
+  assert.match(named.raw, /Posts to #sederunt-demo/);
+  assert.doesNotMatch(named.raw, /#C0DEMO/);
+  const blank = await chatPage("");
+  assert.equal(blank.status, 200);
+  assert.match(blank.raw, /Recaps, decisions and action items/);
+  assert.doesNotMatch(blank.raw, /#C0DEMO|Posts to #/);
+});
 
 test("onboarding screens fit at desktop and phone widths", { timeout: 180000 }, async (t) => {
   let chromium;

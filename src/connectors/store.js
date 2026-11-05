@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { connectorError, connectorMessage } from "./errors.js";
+import { connectorError, connectorResultMessage } from "./errors.js";
 import { decodeSecret, encodeSecret, openSecret, sealSecret } from "./secrets.js";
 import {
   mergeDiscoveredTools,
@@ -11,6 +11,9 @@ import {
   validToolName,
   withEnabled,
 } from "./tools.js";
+import { CALENDAR_SCOPES } from "../calendar/mcp.js";
+import { GOOGLE_CALENDAR_MCP_URL, isGoogleCalendarPreset } from "./builtin-calendar.js";
+import { BUILTIN_GOOGLE_FORMS_URL, isBuiltinGoogleForms } from "./builtin-forms.js";
 import { guardConnectorUrl } from "./url-guard.js";
 import { FORMS_SCOPES } from "./google-person.js";
 
@@ -71,7 +74,7 @@ export function createMemoryConnectorStore(env = process.env) {
     async create(tenantId, input) {
       const name = String(input?.name || "").trim();
       if (!name || name.length > 120) throw connectorError("invalid-url", "Enter a name.");
-      const url = await guardConnectorUrl(input?.url, { env, lookup: input?.lookup });
+      const url = await resolveConnectorUrl(input, env);
       const headerName = input?.token ? validHeaderName(input?.headerName || "Authorization") : "";
       if (input?.token && !headerName) throw connectorError("invalid-url", "Enter a header name.");
       const base = slugFromName(name);
@@ -84,7 +87,7 @@ export function createMemoryConnectorStore(env = process.env) {
         tenantId,
         slug,
         name,
-        url: url.href,
+        url,
         transport: "streamable_http",
         authType: storedAuthType(input),
         preset: storedPreset(input),
@@ -109,8 +112,7 @@ export function createMemoryConnectorStore(env = process.env) {
       if (!row) return null;
       if (typeof patch?.name === "string" && patch.name.trim()) row.name = patch.name.trim().slice(0, 120);
       if (typeof patch?.url === "string") {
-        const url = await guardConnectorUrl(patch.url, { env, lookup: patch.lookup });
-        row.url = url.href;
+        row.url = await resolveConnectorUrl({ url: patch.url, preset: row.preset, lookup: patch.lookup }, env);
         row.status = "draft";
         row.lastTestedAt = null;
       }
@@ -154,7 +156,7 @@ export function createMemoryConnectorStore(env = process.env) {
         tools.set(id, mergeDiscoveredTools(tools.get(id) || [], result.tools || []));
       } else {
         row.status = result?.code === "unauthorized" ? "needs_auth" : "error";
-        row.lastError = connectorMessage(result?.code || "protocol");
+        row.lastError = connectorResultMessage(result);
       }
       return present(row);
     },
@@ -184,12 +186,31 @@ export function createMemoryConnectorStore(env = process.env) {
   };
 }
 
+/**
+ * Forms keeps a marker. Calendar stores the fixed Google MCP URL and skips DNS.
+ * Every other connector still goes through the URL guard.
+ *
+ * @param {{ url?: string, preset?: string, lookup?: Function }} input
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
+ */
+async function resolveConnectorUrl(input, env) {
+  if (isBuiltinGoogleForms(input)) return BUILTIN_GOOGLE_FORMS_URL;
+  if (isGoogleCalendarPreset(input)) return GOOGLE_CALENDAR_MCP_URL;
+  const url = await guardConnectorUrl(input?.url, { env, lookup: input?.lookup });
+  return url.href;
+}
+
 function storedPreset(input) {
-  return input?.preset === "google-forms" ? "google-forms" : null;
+  if (input?.preset === "google-forms") return "google-forms";
+  if (input?.preset === "google-calendar") return "google-calendar";
+  return null;
 }
 
 function storedAuthType(input) {
-  if (storedPreset(input) === "google-forms" && input?.authType === "google_oauth" && !input?.token) return "google_oauth";
+  const preset = storedPreset(input);
+  if ((preset === "google-forms" || preset === "google-calendar") && input?.authType === "google_oauth" && !input?.token) {
+    return "google_oauth";
+  }
   if (input?.token) return "bearer";
   return "none";
 }
@@ -197,7 +218,8 @@ function storedAuthType(input) {
 function storedScopes(input) {
   if (storedAuthType(input) !== "google_oauth") return [];
   const given = Array.isArray(input?.scopes) ? input.scopes : [];
-  return FORMS_SCOPES.filter((scope) => given.includes(scope));
+  const allowed = storedPreset(input) === "google-calendar" ? CALENDAR_SCOPES : FORMS_SCOPES;
+  return allowed.filter((scope) => given.includes(scope));
 }
 
 function bytea(buffer) {
@@ -340,7 +362,7 @@ export function createSupabaseConnectorStore({ url, key, fetchImpl, env }) {
     async create(tenantId, input) {
       const name = String(input?.name || "").trim();
       if (!name || name.length > 120) throw connectorError("invalid-url", "Enter a name.");
-      const guarded = await guardConnectorUrl(input?.url, { env, lookup: input?.lookup });
+      const guarded = await resolveConnectorUrl(input, env);
       const headerName = input?.token ? validHeaderName(input?.headerName || "Authorization") : "";
       if (input?.token && !headerName) throw connectorError("invalid-url", "Enter a header name.");
       const base = slugFromName(name);
@@ -359,7 +381,7 @@ export function createSupabaseConnectorStore({ url, key, fetchImpl, env }) {
         display_name: name,
         preset: storedPreset(input),
         transport: "streamable_http",
-        url: guarded.href,
+        url: guarded,
         command: null,
         auth_type: storedAuthType(input),
         headers_public: input?.token ? { header_name: headerName, token_last4: tokenLast4(input.token) } : {},
@@ -378,7 +400,9 @@ export function createSupabaseConnectorStore({ url, key, fetchImpl, env }) {
       if (!current) return null;
       const body = {};
       if (typeof patch?.name === "string" && patch.name.trim()) body.display_name = patch.name.trim().slice(0, 120);
-      if (typeof patch?.url === "string") body.url = (await guardConnectorUrl(patch.url, { env, lookup: patch.lookup })).href;
+      if (typeof patch?.url === "string") {
+        body.url = await resolveConnectorUrl({ url: patch.url, preset: current.preset, lookup: patch.lookup }, env);
+      }
       if (!Object.keys(body).length) return current;
       await call("mcp_connectors", { method: "PATCH", query: { id: `eq.${id}`, tenant_id: `eq.${tenantId}` }, body });
       return this.get(tenantId, id);
@@ -452,7 +476,7 @@ export function createSupabaseConnectorStore({ url, key, fetchImpl, env }) {
         };
       } else {
         body.status = result?.code === "unauthorized" ? "needs_auth" : "error";
-        body.last_error = connectorMessage(result?.code || "protocol");
+        body.last_error = connectorResultMessage(result);
       }
       await call("mcp_connectors", { method: "PATCH", query: { id: `eq.${id}`, tenant_id: `eq.${tenantId}` }, body });
       if (result?.ok) return this.upsertTools(tenantId, id, result.tools || []);

@@ -84,6 +84,7 @@ export function createSupabaseIdentity(env, options = {}) {
       expiresAt: now + seconds * 1000,
       providerAccessToken: typeof data?.provider_token === "string" ? data.provider_token : "",
       providerRefreshToken: typeof data?.provider_refresh_token === "string" ? data.provider_refresh_token : "",
+      scope: typeof data?.scope === "string" ? data.scope : "",
     };
   }
 
@@ -189,6 +190,15 @@ export function createSupabaseIdentity(env, options = {}) {
       });
       if (!user || typeof user.id !== "string") throw new IdentityError("upstream", "Profile could not be saved.");
       return user;
+    },
+
+    async renameTenant(accessToken, tenantId, name) {
+      await call(`/rest/v1/tenants?id=eq.${encodeURIComponent(tenantId)}`, {
+        method: "PATCH",
+        token: accessToken,
+        profile: true,
+        body: { name },
+      });
     },
 
     async setAllowedDomain(accessToken, tenantId, domain) {

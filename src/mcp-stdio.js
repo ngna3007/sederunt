@@ -1,7 +1,10 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { appendConnectorCall, ledgerMemory } from "./memory/ledger.js";
+import { createFakeCalendarMcp } from "./connectors/calendar-fake.js";
+import { createPersonGoogleStore } from "./connectors/google-person.js";
 import { createConnectorStore } from "./connectors/store.js";
+import { createFormsApp } from "./mcp-forms/http.js";
 import { bindToolMember, dispatchMcp, memberRefusal } from "./mcp.js";
 import { createSession } from "./session.js";
 import { defaultDeps } from "./server.js";
@@ -34,7 +37,15 @@ export function serveMcpStdio({ input, output, session, deps, memberId }) {
     : String(process.env.SEDERUNT_MEMBER || "").trim();
   if (deps && !deps.connectors) deps.connectors = createConnectorStore(process.env);
   const tenantId = String(process.env.SEDERUNT_TENANT_ID || "").trim() || deps?.connectors?.soleTenantId?.() || "";
-  const context = { tenantId, env: process.env };
+  const context = {
+    tenantId,
+    env: process.env,
+    personId: configured,
+    forms: createFormsApp({ env: process.env }),
+    calendarMcp: createFakeCalendarMcp(),
+    origin: String(process.env.SEDERUNT_PUBLIC_ORIGIN || "http://127.0.0.1").replace(/\/$/, ""),
+    googleGrants: createPersonGoogleStore({ env: process.env }),
+  };
   const take = async (message) => {
     await ready;
     if (message?.id == null) return;

@@ -1,10 +1,22 @@
+import { GOOGLE_CALENDAR_MCP_URL } from "../connectors/builtin-calendar.js";
 import { toUtcIso } from "../instant.js";
 import { calendarFakeEnabled, calendarPresentedConnected, createFakeCalendarAdapter } from "./fake.js";
 import { CalendarError, asCalendarError, eventUpdateArgs, validateEventUpdate } from "./validate.js";
 
 export { CalendarError, calendarFakeEnabled, calendarPresentedConnected, eventUpdateArgs, validateEventUpdate };
+export { GOOGLE_CALENDAR_MCP_URL };
 
-const CALENDAR_URL = "https://calendarmcp.googleapis.com/mcp/v1";
+/**
+ * Scopes for the shared Calendar grant. Event write covers create, update, and delete.
+ * The list and free/busy scopes match the Calendar MCP consent screen.
+ */
+export const CALENDAR_SCOPES = Object.freeze([
+  "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+  "https://www.googleapis.com/auth/calendar.events.freebusy",
+  "https://www.googleapis.com/auth/calendar.events",
+]);
+
+const CALENDAR_URL = GOOGLE_CALENDAR_MCP_URL;
 
 /** Workspace calendar zone. Override with CALENDAR_TIME_ZONE. */
 export const CALENDAR_TIME_ZONE = "Asia/Ho_Chi_Minh";
@@ -284,6 +296,80 @@ async function currentToken(env, fetchImpl, save) {
   if (env.CALENDAR_MCP_TOKEN && !accessExpired(env)) return env.CALENDAR_MCP_TOKEN;
   if (!env.CALENDAR_OAUTH_REFRESH_TOKEN) return env.CALENDAR_MCP_TOKEN || "";
   return refreshAccessToken(env, fetchImpl, save);
+}
+
+/**
+ * The access token calendar-edit already refreshes. Callers must not log or return it.
+ *
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
+ * @param {{ fetch?: typeof fetch, save?: (env: NodeJS.ProcessEnv) => void, force?: boolean }} [options]
+ * @returns {Promise<string>}
+ */
+export async function calendarAccessToken(env = process.env, options = {}) {
+  const fetchImpl = options.fetch || globalThis.fetch;
+  if (options.force === true) return refreshAccessToken(env, fetchImpl, options.save);
+  return currentToken(env, fetchImpl, options.save);
+}
+
+/**
+ * @param {unknown} value
+ * @returns {string[]}
+ */
+function scopeList(value) {
+  if (Array.isArray(value)) return value.map((scope) => String(scope || "").trim()).filter(Boolean);
+  return String(value || "").split(/[\s,]+/).map((scope) => scope.trim()).filter(Boolean);
+}
+
+/**
+ * @param {unknown} scopes
+ */
+export function calendarScopesGranted(scopes) {
+  const list = scopeList(scopes);
+  return CALENDAR_SCOPES.every((scope) => list.includes(scope));
+}
+
+/**
+ * Whether a declined Calendar consent should be explained on the preset card.
+ * A full grant is not partial. Tokens are not part of this view.
+ *
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
+ */
+export function calendarGrantPartial(env = process.env) {
+  if (calendarPresentedConnected(env)) return false;
+  if (String(env.CALENDAR_OAUTH_DECLINED || "").trim() === "1") return true;
+  const scopes = scopeList(env.CALENDAR_OAUTH_SCOPES);
+  return scopes.length > 0 && !calendarScopesGranted(scopes);
+}
+
+/**
+ * Store the Calendar OAuth grant on the same env fields calendar-edit reads.
+ * A partial consent does not set the refresh token, so Calendar stays disconnected.
+ * The plaintext tokens are not returned.
+ *
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
+ * @param {{ accessToken?: string, refreshToken?: string, expiresAt?: number, scopes?: string[] | string }} record
+ * @param {(env: NodeJS.ProcessEnv | Record<string, string | undefined>) => void} [save]
+ * @returns {boolean}
+ */
+export function applyCalendarConnection(env, record, save) {
+  const scopes = scopeList(record?.scopes);
+  const refreshToken = String(record?.refreshToken || "");
+  env.CALENDAR_OAUTH_SCOPES = scopes.join(" ");
+  if (!refreshToken || !calendarScopesGranted(scopes)) {
+    env.CALENDAR_OAUTH_DECLINED = "1";
+    return false;
+  }
+  delete env.CALENDAR_OAUTH_DECLINED;
+  const accessToken = String(record?.accessToken || "");
+  if (accessToken) env.CALENDAR_MCP_TOKEN = accessToken;
+  env.CALENDAR_OAUTH_REFRESH_TOKEN = refreshToken;
+  const expiresAt = Number(record?.expiresAt);
+  if (Number.isFinite(expiresAt) && expiresAt > 0) env.CALENDAR_OAUTH_EXPIRES_AT = String(expiresAt);
+  if (calendarFakeEnabled(env)) env.SEDERUNT_CALENDAR_FAKE_CONNECTED = "1";
+  if (typeof save === "function") {
+    try { save(env); } catch { /* the grant is already on env */ }
+  }
+  return true;
 }
 
 async function refreshAccessToken(env, fetchImpl, save) {

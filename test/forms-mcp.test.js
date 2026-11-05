@@ -364,12 +364,18 @@ test("mcp client talks to the forms server over streamable http", async (t) => {
   assert.equal(byName.list_responses.annotations.readOnlyHint, true);
   assert.equal(byName.create_form.inputSchema.type, "object");
   assert.equal(typeof byName.create_form.inputSchema.properties.title, "object");
+  assert.equal(byName.create_form.outputSchema.type, "object");
+  assert.equal(byName.create_form.outputSchema.properties.formId.type, "string");
+  assert.equal(byName.create_form.outputSchema.properties.questionCount.type, "number");
+  assert.equal(byName.get_form.outputSchema.properties.questions.type, "array");
+  assert.equal(byName.list_responses.outputSchema.properties.responses.type, "array");
   const created = await client.callTool({
     name: "create_form",
     arguments: { title: "Standup", questions: [{ title: "Name", type: "short_text" }] },
   });
   assert.notEqual(created.isError, true);
-  const body = JSON.parse(created.content[0].text);
+  const body = created.structuredContent;
+  assert.equal(created.content[0].text, 'Created "Standup" (fake-form-1).');
   assert.equal(body.formId, "fake-form-1");
   assert.equal(body.title, "Standup");
   assert.equal(body.published, true);
@@ -382,10 +388,12 @@ test("mcp client talks to the forms server over streamable http", async (t) => {
   assert.match(page.raw, /sederunt-mark/);
   assert.equal(page.raw.includes(">S<"), false);
   const read = await client.callTool({ name: "get_form", arguments: { formId: "fake-form-seed" } });
-  const seed = JSON.parse(read.content[0].text);
+  const seed = read.structuredContent;
   assert.equal(seed.title, "Weekly feedback");
+  assert.match(read.content[0].text, /Weekly feedback \(fake-form-seed\), 2 questions\./);
   const responses = await client.callTool({ name: "list_responses", arguments: { formId: "fake-form-seed" } });
-  const listedResponses = JSON.parse(responses.content[0].text);
+  const listedResponses = responses.structuredContent;
+  assert.equal(responses.content[0].text, "2 responses.");
   assert.equal(listedResponses.responses[0].answers["Anything else?"], "Ship it");
   const invalid = await client.callTool({
     name: "create_form",
@@ -393,6 +401,8 @@ test("mcp client talks to the forms server over streamable http", async (t) => {
   });
   assert.equal(invalid.isError, true);
   assert.match(invalid.content[0].text, /^invalid-argument:/);
+  assert.equal(invalid.structuredContent.code, "invalid-argument");
+  assert.match(invalid.structuredContent.message, /unique/);
   assert.equal(calls, 0);
   const missing = await httpCall(port, "GET", "/forms/fake/fake-form-9/viewform");
   assert.equal(missing.status, 404);
@@ -415,8 +425,12 @@ test("live mcp errors redact the bearer token", async (t) => {
   const result = await client.callTool({ name: "create_form", arguments: { title: "Nope" } });
   assert.equal(result.isError, true);
   assert.match(result.content[0].text, /^unauthorized:/);
+  assert.equal(result.structuredContent.code, "unauthorized");
+  assert.equal(result.structuredContent.message.includes(TOKEN), false);
   assert.equal(result.content[0].text.includes(TOKEN), false);
   assert.equal(result.content[0].text.includes("ya29."), false);
+  assert.equal(JSON.stringify(result.structuredContent).includes(TOKEN), false);
+  assert.equal(JSON.stringify(result.structuredContent).includes("ya29."), false);
   const preview = await httpCall(port, "GET", "/forms/fake/fake-form-1/viewform");
   assert.equal(preview.status, 404);
 });

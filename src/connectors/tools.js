@@ -44,6 +44,41 @@ export function actionClassFromAnnotations(annotations) {
 }
 
 /**
+ * Name rules used when a tool sends no read or destructive annotation.
+ * list_, get_, search_, and suggest_ are read. create_, update_, and respond_ are write. delete_ is delete.
+ *
+ * @param {string} name
+ * @returns {"read" | "write" | "delete" | ""}
+ */
+export function actionClassFromName(name) {
+  const text = String(name || "");
+  if (text.startsWith("delete_")) return "delete";
+  if (text.startsWith("list_") || text.startsWith("get_") || text.startsWith("search_") || text.startsWith("suggest_")) return "read";
+  if (text.startsWith("create_") || text.startsWith("update_") || text.startsWith("respond_")) return "write";
+  return "";
+}
+
+/**
+ * Annotations win when they classify the tool. Otherwise the name rules apply.
+ * A name that matches neither stays write.
+ *
+ * @param {string} name
+ * @param {unknown} annotations
+ * @returns {"read" | "write" | "delete"}
+ */
+export function actionClassForTool(name, annotations) {
+  const notes = annotations && typeof annotations === "object" ? annotations : null;
+  const annotated = Boolean(notes) && (
+    notes.destructiveHint === true
+    || notes.readOnlyHint === true
+    || notes.readOnlyHint === false
+    || notes.destructiveHint === false
+  );
+  if (annotated) return actionClassFromAnnotations(notes);
+  return actionClassFromName(name) || "write";
+}
+
+/**
  * @param {string} name
  */
 export function slugFromName(name) {
@@ -114,7 +149,7 @@ export function mergeDiscoveredTools(existing, discovered) {
     const inputSchema = found.inputSchema && typeof found.inputSchema === "object" ? found.inputSchema : { type: "object" };
     const annotations = found.annotations && typeof found.annotations === "object" ? found.annotations : {};
     const hash = definitionHash({ name, description, inputSchema, annotations });
-    const actionClass = actionClassFromAnnotations(annotations);
+    const actionClass = actionClassForTool(name, annotations);
     const old = prior.get(name);
     if (!old) {
       next.push({

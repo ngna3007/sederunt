@@ -3,6 +3,8 @@ import { loadSpaceView } from "../console-flow.js";
 import { authorize } from "../domain/allow.js";
 import { resolvePreference } from "../domain/preference.js";
 import { redact } from "../domain/redact.js";
+import { calendarAccessToken } from "../calendar/mcp.js";
+import { calendarFakeEnabled } from "../calendar/fake.js";
 import { formsFakeEnabled } from "../mcp-forms/api.js";
 import { callTool } from "./client.js";
 
@@ -106,14 +108,29 @@ export async function callCustomTool(input) {
       text: `Needs confirmation before ${name} runs.`,
     };
   }
-  const fakeForms = connector.authType === "google_oauth" && formsFakeEnabled(input.env);
+  const calendarPreset = connector.preset === "google-calendar";
+  const fakeCalendar = calendarPreset && calendarFakeEnabled(input.env);
+  const fakeForms = !calendarPreset && connector.authType === "google_oauth" && formsFakeEnabled(input.env);
   let token = "";
   let headerName = connector.headerName || "Authorization";
   try {
     if (connector.authType === "google_oauth") {
-      if (!fakeForms) {
-        token = await input.googleGrants?.accessToken(input.personId) || "";
-        if (!token) return failed(name, "unauthorized: Google needs you to sign in again.", "unauthorized");
+      if (calendarPreset) {
+        if (!fakeCalendar) {
+          const opened = await takeCalendarAccess(input);
+          token = opened.accessToken;
+          if (!token) {
+            if (opened.needsAccess) return failed(name, "Google needs you to sign in again.", "needs_access");
+            return failed(name, "unauthorized: Google needs you to sign in again.", "unauthorized");
+          }
+        }
+      } else if (!fakeForms) {
+        const opened = await takeAccess(input);
+        token = opened.accessToken;
+        if (!token) {
+          if (opened.needsAccess) return failed(name, "Google needs you to sign in again.", "needs_access");
+          return failed(name, "unauthorized: Google needs you to sign in again.", "unauthorized");
+        }
       }
       headerName = "Authorization";
     } else if (connector.hasToken && store.openToken) {
@@ -134,17 +151,24 @@ export async function callCustomTool(input) {
   }
   const invoke = (bearer) => callTool({
     url: connector.url,
+    preset: connector.preset,
     token: bearer,
     headerName,
     transport: connector.transport,
-  }, tool.name, cleanArgs(input.args), { env: input.env, timeoutMs: 10000 });
+    forms: input.forms,
+    calendarMcp: input.calendarMcp,
+    origin: input.origin,
+  }, tool.name, cleanArgs(input.args), { env: input.env, timeoutMs: 10000, fetch: input.fetch, calendarMcp: input.calendarMcp });
   let bearer = token;
   let called = await invoke(bearer);
-  if (!fakeForms && connector.authType === "google_oauth" && unauthorizedTool(called)) {
+  if (!fakeForms && !fakeCalendar && connector.authType === "google_oauth" && unauthorizedTool(called)) {
     try {
-      const refreshed = await input.googleGrants?.accessToken(input.personId, { force: true }) || "";
-      if (refreshed) {
-        bearer = refreshed;
+      const refreshed = calendarPreset ? await takeCalendarAccess(input, true) : await takeAccess(input, true);
+      if (!refreshed.accessToken && refreshed.needsAccess) {
+        return failed(name, "Google needs you to sign in again.", "needs_access");
+      }
+      if (refreshed.accessToken) {
+        bearer = refreshed.accessToken;
         called = await invoke(bearer);
       }
     } catch {
@@ -164,13 +188,21 @@ export async function callCustomTool(input) {
     return failed(name, detail || "The tool call failed.", called.code || "protocol");
   }
   const text = redactToolText(called.text || "", token, bearer).slice(0, TEXT_CAP);
+  const structuredContent = redactStructured(called.structuredContent, token, bearer);
   const verb = tool.actionClass === "read" ? "read" : "call";
   const id = nextId(input.session, "mcp-call");
   safeLog(() => {
     logAction(input.session, activityInput({ id, verb, connector, tool, summary }));
     logResult(input.session, activityInput({ id: `${id}:result`, requestId: id, verb, connector, tool, summary }));
   });
-  return { ok: true, held: false, needsConfirmation: false, text, tool: name };
+  return {
+    ok: true,
+    held: false,
+    needsConfirmation: false,
+    text,
+    tool: name,
+    ...(structuredContent ? { structuredContent } : {}),
+  };
 }
 
 /**
@@ -214,8 +246,66 @@ function takeConfirmation(session, toolName, confirmId) {
   return found.id;
 }
 
+/**
+ * The calendar-edit access token. It is not logged or returned to the client.
+ *
+ * @param {{ env?: NodeJS.ProcessEnv | Record<string, string | undefined>, fetch?: typeof fetch, calendarSave?: Function }} input
+ * @param {boolean} [force]
+ */
+async function takeCalendarAccess(input, force = false) {
+  const accessToken = await calendarAccessToken(input.env, {
+    fetch: input.fetch,
+    save: input.calendarSave,
+    force,
+  });
+  return { accessToken, needsAccess: !accessToken };
+}
+
+/**
+ * @param {{ personId?: string, tenantId?: string, googleGrants?: { openAccess?: Function, accessToken?: Function } }} input
+ * @param {boolean} [force]
+ */
+async function takeAccess(input, force = false) {
+  const grants = input.googleGrants;
+  const personId = input.personId;
+  const tenantId = input.tenantId || "";
+  if (grants && typeof grants.openAccess === "function") {
+    const opened = await grants.openAccess(personId, { tenantId, force });
+    return {
+      accessToken: typeof opened?.accessToken === "string" ? opened.accessToken : "",
+      needsAccess: opened?.needsAccess === true,
+    };
+  }
+  const token = await grants?.accessToken(personId, { tenantId, force }) || "";
+  return { accessToken: token, needsAccess: !token };
+}
+
 function unauthorizedTool(called) {
   return called?.isError === true && /^unauthorized\b/i.test(String(called.text || ""));
+}
+
+/**
+ * Drop bearer values from a structured tool result. The shape stays otherwise.
+ *
+ * @param {unknown} value
+ * @param {...string} tokens
+ */
+export function redactStructured(value, ...tokens) {
+  if (!value || typeof value !== "object") return undefined;
+  let raw = JSON.stringify(value);
+  let cleaned = raw;
+  for (const token of tokens) {
+    if (token) cleaned = cleaned.split(token).join("");
+  }
+  cleaned = cleaned.replace(/\bya29\.[A-Za-z0-9._\-]+/g, "");
+  cleaned = cleaned.replace(/\bBearer\s+/gi, "");
+  if (cleaned === raw) return value;
+  try {
+    const parsed = JSON.parse(cleaned);
+    return parsed && typeof parsed === "object" ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function redactToolText(text, ...tokens) {

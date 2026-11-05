@@ -58,13 +58,14 @@ export function renderConsolePage(state = {}) {
   const panelIcon = glyph('<rect x="2.6" y="3" width="10.8" height="10" rx="1.4"/><path d="M6.4 3v10"/>');
   const plugIcon = glyph('<path d="M6 2.6v3M10 2.6v3M4.2 5.6h7.6v2.4a3.8 3.8 0 0 1-7.6 0V5.6Z"/><path d="M8 11.8V14"/>');
   const calendarIcon = brandLogo("google-calendar");
+  const formsIcon = brandLogo("google-forms");
   const linearIcon = brandLogo("linear-icon");
   const channelIcon = brandLogo("slack-icon");
   const searchIcon = glyph('<circle cx="7" cy="7" r="3.2"/><path d="M9.4 9.4 12.5 12.5"/>');
   const editIcon = glyph('<path d="M9.6 2.7 13.3 6.4 6.4 13.3H2.7V9.6z"/>');
   const outIcon = glyph('<path d="M6.2 2.8H3.4v10.4h2.8"/><path d="M6.6 8h6.2"/><path d="M10.6 5.4 13.2 8l-2.6 2.6"/>');
   const accountMenu = signedIn
-    ? `<button type="button" role="menuitem" id="edit-profile">${editIcon}Edit profile</button><div class="menu-rule" role="separator"></div><form id="sign-out-form" method="post" action="/console/sign-out"><button id="sign-out" type="submit" role="menuitem">${outIcon}Sign out</button></form>`
+    ? `<button type="button" class="menu-item" role="menuitem" id="edit-profile">${editIcon}Edit profile</button><div class="menu-rule" role="separator"></div><form id="sign-out-form" method="post" action="/console/sign-out"><button id="sign-out" class="menu-item danger" type="submit" role="menuitem">${outIcon}Sign out</button></form>`
     : `<p class="account-note" role="note">Sign-in is not set up.</p>`;
   const signInOff = state.signInOff === true;
   const signInBanner = signInOff
@@ -218,7 +219,7 @@ ${slack}
     <div class="page-head" id="home-head">
     <div>
     <p id="home-title" class="page-title">Home</p>
-    <p class="page-lede">Decisions this workspace kept, and the actions that followed.</p>
+    <p class="page-lede">Meetings, decisions, and follow-ups for this workspace.</p>
     </div>
     <div class="page-actions">
       <button type="button" class="secondary" id="home-add-to-meeting">Add to a meeting</button>
@@ -356,7 +357,7 @@ ${slack}
       <div class="page-head" id="mcp-head">
         <div>
           <p class="page-title">Connectors</p>
-          <p class="page-lede">MCP servers whose tools this space can call.</p>
+          <p class="page-lede">Tools this workspace can use.</p>
         </div>
         <div class="page-actions">
           <button type="button" class="primary" id="mcp-add-head" hidden>Add a connector</button>
@@ -371,9 +372,14 @@ ${slack}
         <p class="section-label">Presets</p>
         <div class="preset-row">
           <button type="button" class="preset-card" data-preset="google-forms" data-state="add">
-            <span class="preset-name">Google Forms</span>
-            <span class="preset-detail">Uses this person's Google account.</span>
-            <span class="badge" data-preset-badge>Add</span>
+            <span class="preset-head">${formsIcon}<span class="preset-name">Google Forms</span></span>
+            <span class="preset-detail">Uses your Google account.</span>
+            <span class="preset-action" data-preset-badge>Add</span>
+          </button>
+          <button type="button" class="preset-card" data-preset="google-calendar" data-state="add">
+            <span class="preset-head">${calendarIcon}<span class="preset-name">Google Calendar</span></span>
+            <span class="preset-detail">Uses your Google account.</span>
+            <span class="preset-action" data-preset-badge>Add</span>
           </button>
         </div>
       </div>
@@ -395,7 +401,10 @@ ${slack}
         <label class="search">${searchIcon}<span class="sr">Search rooms</span><input id="room-search" type="search" placeholder="Search" autocomplete="off"></label>
       </div>
       <section id="meeting-rows" class="meeting-rows" hidden>
-        <h2 class="section-label">Meetings</h2>
+        <div class="meeting-head">
+          <h2 class="section-label" id="meeting-heading">Meetings</h2>
+          <a class="meetings-more" id="meetings-more" href="/console/rooms" hidden>All meetings</a>
+        </div>
         <div id="meeting-list" class="meeting-list"></div>
       </section>
       <div class="explorer">
@@ -473,7 +482,7 @@ ${slack}
       </div>
     </section>
     <section id="account-page" hidden>
-      <div class="page-head"><div><p class="page-title">Account</p><p class="page-lede">Who is signed in, and how long this sign-in lasts.</p></div></div>
+      <div class="page-head"><div><p class="page-title">Account</p><p class="page-lede">The person signed in to this workspace.</p></div></div>
       <div class="account-layout">
         <div class="overview-card account-hero" id="account-card">
           <span id="account-page-avatar" class="account-avatar lg" aria-hidden="true">${heroAvatar}</span>
@@ -489,7 +498,7 @@ ${slack}
             <dt class="account-name-row">Name</dt><dd id="account-detail-name" class="account-name-row">${detailName}</dd>
             ${profileRows}
             <dt>Workspace</dt><dd id="account-detail-workspace">${workspaceDetail}</dd>
-            <dt id="account-session-label">${state.accountExpiry ? "Expires" : "Session"}</dt><dd id="account-detail-expiry"${state.accountExpiry ? ` data-at="${escapeHtml(new Date(state.accountExpiry).toISOString())}" data-kind="expiry"` : ""}>${escapeHtml(signedIn ? "This sign-in does not list an expiry." : "Sign-in is not set up.")}</dd>
+            <dt id="account-session-label">${state.accountExpiry ? "Signed in until" : "Session"}</dt><dd id="account-detail-expiry"${state.accountExpiry ? ` data-at="${escapeHtml(new Date(state.accountExpiry).toISOString())}" data-kind="expiry"` : ""}>${escapeHtml(signedIn ? "This sign-in does not list an expiry." : "Sign-in is not set up.")}</dd>
           </dl>
         </div>
         <div class="settings-card">
@@ -540,11 +549,11 @@ ${slack}
             <button type="button" id="file-id-chip" class="id-chip"><span id="file-id" class="mono"></span></button>
             <span class="meta-item header-only" hidden><span class="meta-label">Status</span><span id="file-status-badge" class="badge"></span></span>
             <span class="meta-item header-only" hidden><span class="meta-label">Platform</span><span id="file-platform-pill"></span></span>
-            <span class="meta-item"><span class="meta-label">Started</span><span id="file-started" class="meta"></span></span>
+            <span class="meta-item" id="file-started-item" hidden><span class="meta-label">Started</span><span id="file-started" class="meta"></span></span>
             <span class="meta-item header-only" id="file-usage-item" hidden><span class="meta-label">Usage</span><span id="file-usage" class="usage-chip"></span></span>
             <p id="file-lead" class="page-lede" hidden></p>
             <p id="file-lead-status" class="meta"></p>
-            <p id="file-proof" class="meta" hidden></p>
+            <a id="file-proof" class="badge ok proof-chip" href="#proof-panel" hidden></a>
           </div>
         </div>
         <div class="room-body">
@@ -622,7 +631,10 @@ ${slack}
                   <label class="switch"><input id="ask-first" type="checkbox" checked aria-label="Run automatically"><span class="sr">Run automatically</span></label>
                 </div>
                 <div class="room-set">
-                  <div class="set-copy"><strong>Voice</strong></div>
+                  <div class="set-copy">
+                    <strong>Voice</strong>
+                    <p class="field-hint" id="voice-hint">Short is one sentence. Plain adds who heard it. Formal also says what is waiting.</p>
+                  </div>
                   <div class="choices voices" role="group" aria-label="How this room reads">
                     <button type="button" data-voice="short">Short</button>
                     <button type="button" data-voice="plain" aria-pressed="true">Plain</button>
@@ -632,6 +644,7 @@ ${slack}
                 <div class="room-set">
                   <div class="set-copy">
                     <strong>Raise a clash</strong>
+                    <p class="field-hint" id="clash-hint">When two decisions disagree, say so in this room. Both stay.</p>
                     <p id="clash-note"></p>
                   </div>
                   <label class="switch"><input id="raise-clash" type="checkbox" aria-label="Raise a clash"><span class="sr">Raise a clash</span></label>
@@ -847,6 +860,16 @@ ${spaceDialog}
         <button type="submit" class="primary" id="mcp-save">Save</button>
       </div>
     </form>
+  </div>
+</div>
+<div id="mcp-manage-dialog" class="dialog mcp-manage-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="mcp-manage-title">
+  <div class="shade" data-manage-close></div>
+  <div class="panel">
+    <div class="panel-bar">
+      <h2 id="mcp-manage-title">Connector</h2>
+      <button type="button" class="close" data-manage-close aria-label="Close">${closeIcon}</button>
+    </div>
+    <div id="mcp-manage-body" class="panel-body"></div>
   </div>
 </div>
 <div id="mcp-token-dialog" class="dialog" hidden role="dialog" aria-modal="true" aria-labelledby="mcp-token-title">
@@ -1575,6 +1598,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     roomCol.dataset.col = "room";
     var title = document.createElement("strong");
     title.textContent = spec.title || "Room";
+    title.title = spec.fullTitle || spec.title || "Room";
     title.classList.remove("mono");
     var count = document.createElement("span");
     count.className = "ex-count";
@@ -1604,7 +1628,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
     heard.className = "avatar-stack";
     heard.dataset.col = "speakers";
     var people = spec.people || [];
-    heard.title = people.map(function (person) { return personLabel(person) || person; }).join(", ");
+    heard.title = people.length ? people.map(function (person) { return personLabel(person) || person; }).join(", ") : "No speakers yet";
+    if (!people.length) {
+      var noneSpeaker = document.createElement("span");
+      noneSpeaker.className = "speaker-none";
+      noneSpeaker.textContent = "None";
+      noneSpeaker.title = "No speakers yet";
+      heard.append(noneSpeaker);
+    }
     people.slice(0, 2).forEach(function (person) { heard.append(face(personLabel(person) || person)); });
     if (people.length > 2) {
       var more = document.createElement("span");
@@ -2180,11 +2211,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var box = document.getElementById("counts");
     clear("counts");
     var counts = (state && state.counts) || {};
-    addCount(box, "Decisions kept", counts.kept || 0, "Sentences kept in this workspace.", null, false);
-    addCount(box, "Actions today", counts.actionsToday || 0, "Changes that ran today.", null, false);
+    addCount(box, "Decisions", counts.kept || 0, "Sentences kept in this workspace.", null, false);
+    addCount(box, "Actions", counts.actionsToday || 0, "Changes that ran today.", null, false);
     if (counts.failed) {
       var failedNote = counts.failed === 1 ? "1 change did not go through." : (counts.failed + " changes did not go through.");
-      addCount(box, "Failed actions", counts.failed, failedNote, null, "danger");
+      addCount(box, "Failed", counts.failed, failedNote, null, "danger");
     }
     if (counts.sent) addCount(box, "Sent", counts.sent, "The tool accepted the change.", null, false);
   }
@@ -2212,11 +2243,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
     ((state && state.activity) || []).forEach(function (row) {
       if (!row || row.kind !== "failure" || row.outcome !== "failed" || row.resolved) return;
+      var origin = row.origin || {};
       items.push({
         kind: "failed",
         text: row.sentence || "A change did not go through.",
         href: "/console/history#activity-" + encodeURIComponent(row.id || ""),
         activityId: row.id || "",
+        roomId: origin.roomId || "",
+        retryable: row.retryable === true,
         at: attentionStamp(row.ts)
       });
     });
@@ -2228,9 +2262,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var quiet = !state || state.reading === true || state.read === "failed" || sectionName !== "home";
     section.hidden = quiet || items.length === 0;
     items.forEach(function (item) {
+      var wrap = document.createElement("div");
+      wrap.className = "attention-item";
       var link = document.createElement("a");
       link.className = "attention-row";
       link.href = item.href;
+      link.title = item.text;
       var badge = document.createElement("span");
       badge.className = item.kind === "failed" ? "badge attention-failed" : "badge warn";
       badge.textContent = item.kind === "failed" ? "Failed" : "Clashing";
@@ -2253,7 +2290,33 @@ if (sessionWhen && sessionWhen.dataset.at) {
         var node = document.getElementById(target);
         if (node && node.scrollIntoView) node.scrollIntoView({ block: "center" });
       });
-      list.append(link);
+      wrap.append(link);
+      if (item.kind === "failed" && (item.roomId || item.retryable)) {
+        var actions = document.createElement("span");
+        actions.className = "attention-actions";
+        if (item.roomId) {
+          var roomLink = document.createElement("a");
+          roomLink.className = "attention-room";
+          roomLink.href = "/console/rooms/" + encodeURIComponent(item.roomId);
+          roomLink.textContent = "Room";
+          roomLink.addEventListener("click", function (event) {
+            if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+            event.preventDefault();
+            openFile(item.roomId);
+          });
+          actions.append(roomLink);
+        }
+        if (item.retryable && item.activityId) {
+          var retry = document.createElement("button");
+          retry.type = "button";
+          retry.className = "attention-retry";
+          retry.textContent = "Retry";
+          retry.addEventListener("click", function () { postActivity("retry", item.activityId, retry); });
+          actions.append(retry);
+        }
+        wrap.append(actions);
+      }
+      list.append(wrap);
     });
   }
 
@@ -2865,6 +2928,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (homeTools) homeTools.hidden = name !== "home";
     if (homeStats && name !== "home") homeStats.hidden = true;
     paintAttention();
+    paintMeetings();
     var label = onFile ? ((document.getElementById("file-title") || {}).textContent || "Room") : sectionLabel(name);
     setViewTitle(label);
     placeNotice();
@@ -2917,7 +2981,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function dialogOpen() {
-    var ids = ["event-dialog", "profile-dialog", "decision-dialog", "create-dialog", "workspace-dialog", "space-dialog", "mcp-dialog", "mcp-token-dialog", "mcp-remove-dialog"];
+    var ids = ["event-dialog", "profile-dialog", "decision-dialog", "create-dialog", "workspace-dialog", "space-dialog", "mcp-dialog", "mcp-manage-dialog", "mcp-token-dialog", "mcp-remove-dialog"];
     for (var i = 0; i < ids.length; i += 1) {
       var node = document.getElementById(ids[i]);
       if (node && !node.hidden) return true;
@@ -3023,9 +3087,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
       status.textContent = "";
       status.hidden = true;
     }
-    var proof = lead && typeof lead.checkpoint === "number" ? proofExplain(lead) : "";
-    var ticket = lead ? ticketLine(lead) : "";
-    showLine("file-proof", [proof, ticket].filter(Boolean).join(" "));
+    var chip = document.getElementById("file-proof");
+    if (chip) {
+      var kept = lead && typeof lead.checkpoint === "number";
+      chip.textContent = kept ? "On Walrus" : "";
+      chip.title = kept ? proofExplain(lead) : "";
+      chip.hidden = !kept;
+    }
   }
 
   function fileMark(name) {
@@ -3688,7 +3756,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (platformName) pill.append(platformBadge(platformName));
     }
     var startedAt = (room && (room.startedAt || room.recordingStart)) || "";
-    text("file-started", startedAt ? (relativeWhen(startedAt) || whenLabel(startedAt) || blankMark()) : blankMark());
+    if (!startedAt && fileRoom) {
+      var spokenTimes = decisionsFor(fileRoom).map(function (row) { return row.spokenAt; }).filter(function (v) { return !isNaN(Date.parse(v || "")); }).sort();
+      startedAt = spokenTimes[0] || "";
+    }
+    var startedLabel = startedAt ? (relativeWhen(startedAt) || whenLabel(startedAt) || "") : "";
+    text("file-started", startedLabel);
+    var startedItem = document.getElementById("file-started-item");
+    if (startedItem) startedItem.hidden = !startedLabel;
     document.querySelectorAll("#file-meta .header-only").forEach(function (node) {
       if (node.id === "file-usage-item") return;
       node.hidden = !knownRoom;
@@ -3831,6 +3906,17 @@ if (sessionWhen && sessionWhen.dataset.at) {
     box.hidden = facts.length === 0;
   }
 
+  function transcriptEmptyCopy(hasRows) {
+    if (hasRows) return "No matching lines.";
+    var media = roomMediaState;
+    var word = meetingWord(roomOf(fileRoom)).word;
+    if (media && (media.state === "processing" || word === "Live")) return "No transcript yet.";
+    if (media && (media.state === "ready" || media.state === "novideo") && word !== "Ended" && word !== "No recording" && word !== "Channel") return "No transcript yet.";
+    if (!media) return "No transcript yet.";
+    if (media.state === "none" || media.state === "channel" || media.state === "expired" || word === "Ended" || word === "No recording" || word === "Channel") return "Nothing was recorded.";
+    return "No transcript yet.";
+  }
+
   function renderTranscript(rows) {
     var box = document.getElementById("file-transcript");
     if (!box) return;
@@ -3883,7 +3969,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (!shown) {
       var empty = document.createElement("p");
       empty.className = "meta";
-      empty.textContent = (rows && rows.length) ? "No matching lines." : "No transcript yet.";
+      empty.textContent = transcriptEmptyCopy(rows && rows.length);
       box.append(empty);
     }
   }
@@ -4016,7 +4102,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var people = fileRoom ? peopleFor(fileRoom) : [];
     var named = media && (media.state === "ready" || media.state === "novideo");
     if (name) name.textContent = named && people.length ? (personLabel(people[0]) || people[0]) : "No recording for this room";
-    var copy = "No recording was made";
+    var copy = "";
     if (media && media.state === "processing") copy = "Recording is still processing.";
     else if (media && media.state === "expired") copy = "Recording expired";
     else if (media && media.state === "channel") copy = "Slack channels aren't recorded";
@@ -4026,10 +4112,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (video.getAttribute("src") !== media.videoUrl) video.src = media.videoUrl;
       video.hidden = false;
       if (fallback) fallback.hidden = true;
+      var leftOn = document.getElementById("room-left");
+      if (leftOn) leftOn.classList.remove("no-recording");
     } else if (video) {
       video.removeAttribute("src");
       video.hidden = true;
       if (fallback) fallback.hidden = false;
+      var leftOff = document.getElementById("room-left");
+      if (leftOff) leftOff.classList.add("no-recording");
     }
   }
 
@@ -4065,12 +4155,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
         save.setAttribute("download", "");
         view.target = "_blank";
         view.rel = "noopener";
+        actions.append(view, save);
       } else {
-        view.setAttribute("aria-disabled", "true");
-        save.setAttribute("aria-disabled", "true");
-        item.title = "No " + row[0].toLowerCase() + " for this room.";
+        var none = document.createElement("span");
+        none.className = "artifact-none";
+        none.textContent = "None";
+        actions.append(none);
       }
-      actions.append(view, save);
       item.append(label, actions);
       list.append(item);
     });
@@ -4278,6 +4369,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       roomMediaState = channel ? { state: "channel", title: roomName(room) } : { state: "none" };
       paintPlayer(roomMediaState);
       paintArtifacts(roomMediaState);
+      renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
       paintTimeline();
       return;
     }
@@ -4307,6 +4399,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
         }
         var stamp = relativeWhen(media.startedAt) || whenLabel(media.startedAt) || blankMark();
         text("file-started", stamp);
+        var startedRow = document.getElementById("file-started-item");
+        if (startedRow) startedRow.hidden = !stamp || stamp === blankMark();
         renderFacts(roomLive || room || {}, { when: media.startedAt }, fileRoom ? decisionsFor(fileRoom) : []);
       }
       renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
@@ -4315,6 +4409,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       roomMediaState = { state: "none" };
       paintPlayer(roomMediaState);
       paintArtifacts(roomMediaState);
+      renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
     }).finally(function () {
       if (mediaFlight === asked) mediaFlight = "";
     });
@@ -4936,10 +5031,16 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (!box || !list) return;
     var meetings = (state && state.meetings) || [];
     var failed = state && state.read === "failed";
+    var onHome = sectionName === "home";
+    var heading = document.getElementById("meeting-heading");
+    var more = document.getElementById("meetings-more");
+    if (heading) heading.textContent = onHome ? "Next meeting" : "Meetings";
+    if (more) more.hidden = !onHome || meetings.length < 2;
+    var shown = onHome ? meetings.slice(0, 1) : meetings;
     box.hidden = failed || meetings.length === 0;
     list.replaceChildren();
     if (box.hidden) return;
-    meetings.forEach(function (meeting) {
+    shown.forEach(function (meeting) {
       if (!meeting || !meeting.id) return;
       var row = document.createElement("div");
       row.className = "meeting-row";
@@ -5511,6 +5612,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (mcpTokenDialog && !mcpTokenDialog.hidden) { closeDialog("mcp-token-dialog"); return; }
     var mcpRemoveDialog = document.getElementById("mcp-remove-dialog");
     if (mcpRemoveDialog && !mcpRemoveDialog.hidden) { closeDialog("mcp-remove-dialog"); return; }
+    var mcpManageDialog = document.getElementById("mcp-manage-dialog");
+    if (mcpManageDialog && !mcpManageDialog.hidden) { closeMcpManage(); return; }
     if (!document.getElementById("account-menu").hidden) closeAccountMenu();
     else if (!document.getElementById("profile-dialog").hidden) closeDialog("profile-dialog");
     else if (!document.getElementById("palette").hidden) closePalette();
@@ -6128,6 +6231,15 @@ if (sessionWhen && sessionWhen.dataset.at) {
       seekTo((playing && playing.currentTime ? playing.currentTime : 0) + 10);
     }
   });
+  var proofChip = document.getElementById("file-proof");
+  if (proofChip) proofChip.addEventListener("click", function (event) {
+    var panel = document.getElementById("proof-panel");
+    if (!panel) return;
+    event.preventDefault();
+    var overviewTab = document.querySelector('[data-right-tab="overview"]');
+    if (overviewTab && overviewTab.getAttribute("aria-selected") !== "true") overviewTab.click();
+    panel.scrollIntoView({ block: "start", behavior: "smooth" });
+  });
   var transcriptSearch = document.getElementById("transcript-search");
   if (transcriptSearch) transcriptSearch.addEventListener("input", function () {
     transcriptQuery = transcriptSearch.value || "";
@@ -6252,6 +6364,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         list.append(head);
       }
       var button = document.createElement("button");
+      button.className = "menu-item";
       button.type = "button";
       button.textContent = label;
       button.setAttribute("aria-selected", count === 0 ? "true" : "false");
@@ -6404,8 +6517,16 @@ if (sessionWhen && sessionWhen.dataset.at) {
     return "Write";
   }
 
-  function paintPreset(preset) {
-    var card = document.querySelector("[data-preset='google-forms']");
+  function presetTone(state) {
+    if (state === "connected" || state === "ready") return "ok";
+    if (state === "error") return "bad";
+    if (state === "needs_access") return "warn";
+    if (state === "connecting") return "neutral";
+    return "accent";
+  }
+
+  function paintPreset(id, preset, accessDetail) {
+    var card = document.querySelector("[data-preset='" + id + "']");
     if (!card) return;
     var state = preset && preset.state ? preset.state : "add";
     if (card.getAttribute("data-state") === "connecting" && state !== "connected") return;
@@ -6413,23 +6534,52 @@ if (sessionWhen && sessionWhen.dataset.at) {
     card.disabled = state === "connected";
     var badge = card.querySelector("[data-preset-badge]");
     var detail = card.querySelector(".preset-detail");
+    if (badge) badge.className = state === "add" ? "preset-action" : ("badge " + presetTone(state));
     if (state === "needs_access") {
       if (badge) badge.textContent = "Needs Google access";
-      if (detail) detail.textContent = "Connect Google Forms";
+      if (detail) detail.textContent = preset && preset.message ? preset.message : accessDetail;
     } else if (state === "connected") {
       if (badge) badge.textContent = "Connected";
-      if (detail) detail.textContent = "Uses this person's Google account.";
+      if (detail) detail.textContent = "Uses your Google account.";
+    } else if (state === "error") {
+      if (badge) badge.textContent = "Couldn't add";
     } else if (state === "connecting") {
       if (badge) badge.textContent = "Connecting";
+    } else if (state === "ready") {
+      if (badge) badge.textContent = "Connected";
+      if (detail) detail.textContent = "Uses your Google account.";
     } else {
       if (badge) badge.textContent = "Add";
-      if (detail) detail.textContent = "Uses this person's Google account.";
+      if (detail) detail.textContent = "Uses your Google account.";
     }
+  }
+
+  function presetTaken(id, connectors) {
+    return connectors.some(function (connector) {
+      if (!connector) return false;
+      if (connector.preset === id) return true;
+      if (id === "google-forms" && connector.url === "builtin:google-forms") return true;
+      if (id === "google-calendar" && /calendarmcp\\.googleapis\\.com/.test(connector.url || "")) return true;
+      return false;
+    });
+  }
+
+  function hideConnectedPresets(connectors) {
+    var any = false;
+    document.querySelectorAll(".preset-card[data-preset]").forEach(function (card) {
+      var id = card.getAttribute("data-preset") || "";
+      var hide = card.getAttribute("data-state") === "connected" && presetTaken(id, connectors);
+      card.hidden = hide;
+      if (!hide) any = true;
+    });
+    var box = document.getElementById("mcp-presets");
+    if (box) box.hidden = !any;
   }
 
   function paintMcp(data) {
     if (data && data.presets) mcpPresets = data.presets;
-    paintPreset(mcpPresets["google-forms"]);
+    paintPreset("google-forms", mcpPresets["google-forms"], "Connect Google Forms");
+    paintPreset("google-calendar", mcpPresets["google-calendar"], "Connect Google Calendar");
     var connectors = Array.isArray(data.connectors) ? data.connectors : [];
     mcpRows = connectors;
     mcpDemoUrl = typeof data.demoUrl === "string" ? data.demoUrl : "";
@@ -6447,6 +6597,30 @@ if (sessionWhen && sessionWhen.dataset.at) {
     connectors.forEach(function (connector) {
       list.appendChild(mcpCard(connector));
     });
+    hideConnectedPresets(connectors);
+    var manageDialog = document.getElementById("mcp-manage-dialog");
+    if (mcpManageId && manageDialog && !manageDialog.hidden) paintMcpManage();
+  }
+
+  function mcpIcon(connector) {
+    var key = connector.preset || (connector.url === "builtin:google-forms" ? "google-forms" : /calendarmcp\\.googleapis\\.com/.test(connector.url || "") ? "google-calendar" : "");
+    var source = key ? document.querySelector(".preset-card[data-preset='" + key + "'] .conn-mark") : null;
+    if (source) {
+      var copy = source.cloneNode(true);
+      copy.setAttribute("aria-hidden", "true");
+      return copy;
+    }
+    var mark = document.createElement("span");
+    mark.className = "conn-mark mcp-generic-mark";
+    mark.setAttribute("aria-hidden", "true");
+    mark.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/></svg>';
+    return mark;
+  }
+
+  function mcpSummary(connector) {
+    var tools = connector.tools || [];
+    var on = tools.filter(function (tool) { return tool.enabled === true; }).length;
+    return tools.length + (tools.length === 1 ? " tool" : " tools") + " · " + on + " on";
   }
 
   function mcpCard(connector) {
@@ -6455,6 +6629,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
     card.setAttribute("data-connector", connector.id || "");
     var head = document.createElement("div");
     head.className = "mcp-card-head";
+    var who = document.createElement("div");
+    who.className = "mcp-card-who";
     var title = document.createElement("h2");
     title.className = "mcp-name";
     title.textContent = connector.name || "Connector";
@@ -6462,14 +6638,19 @@ if (sessionWhen && sessionWhen.dataset.at) {
     pill.className = mcpBadgeClass(connector.status);
     pill.setAttribute("data-status", connector.status || "draft");
     pill.textContent = mcpStatusLabel(connector.status);
-    head.append(title, pill);
-    var url = document.createElement("p");
-    url.className = "mcp-url";
-    url.textContent = connector.url || "";
-    var tested = document.createElement("p");
-    tested.className = "meta";
-    tested.textContent = mcpWhen(connector.lastTestedAt);
-    card.append(head, url, tested);
+    who.append(mcpIcon(connector), title, pill);
+    var manage = document.createElement("button");
+    manage.type = "button";
+    manage.className = "secondary mcp-manage";
+    manage.textContent = "Manage";
+    manage.setAttribute("aria-haspopup", "dialog");
+    manage.setAttribute("aria-label", "Manage " + (connector.name || "connector"));
+    manage.addEventListener("click", function () { openMcpManage(connector.id); });
+    head.append(who, manage);
+    var summary = document.createElement("p");
+    summary.className = "mcp-summary";
+    summary.textContent = mcpSummary(connector);
+    card.append(head, summary);
     if (connector.lastError) {
       var error = document.createElement("p");
       error.className = "alert";
@@ -6477,23 +6658,82 @@ if (sessionWhen && sessionWhen.dataset.at) {
       error.textContent = connector.lastError;
       card.append(error);
     }
-    var tokenLine = document.createElement("p");
-    tokenLine.className = "mcp-token-line";
-    var tokenButton = document.createElement("button");
-    tokenButton.type = "button";
-    tokenButton.className = "secondary";
-    tokenButton.setAttribute("data-token", connector.id || "");
-    if (connector.hasToken) tokenButton.textContent = "Set ••••" + String(connector.tokenLast4 || "") + " · Replace";
-    else tokenButton.textContent = "Add token";
-    tokenButton.addEventListener("click", function () { openMcpToken(connector); });
-    tokenLine.append(tokenButton);
+    return card;
+  }
+
+  var mcpManageId = "";
+  var mcpManageOpener = null;
+
+  function openMcpManage(id) {
+    mcpManageId = id || "";
+    mcpManageOpener = document.activeElement;
+    if (!paintMcpManage()) return;
+    openDialog("mcp-manage-dialog");
+  }
+
+  function closeMcpManage() {
+    closeDialog("mcp-manage-dialog");
+    mcpManageId = "";
+    var target = mcpManageOpener;
+    if (target && !document.body.contains(target) ) target = null;
+    if (!target) target = document.querySelector("#mcp-list .mcp-manage");
+    if (target && target.focus) target.focus();
+  }
+
+  function paintMcpManage() {
+    var connector = null;
+    mcpRows.forEach(function (row) { if (row.id === mcpManageId) connector = row; });
+    var dialog = document.getElementById("mcp-manage-dialog");
+    if (!connector) {
+      if (dialog && !dialog.hidden) closeMcpManage();
+      return false;
+    }
+    var titleNode = document.getElementById("mcp-manage-title");
+    if (titleNode) titleNode.textContent = connector.name || "Connector";
+    var body = document.getElementById("mcp-manage-body");
+    if (!body) return false;
+    var keep = body.scrollTop;
+    var focusTool = document.activeElement && body.contains(document.activeElement) && document.activeElement.closest("[data-tool]");
+    var focusName = focusTool ? focusTool.getAttribute("data-tool") : "";
+    body.replaceChildren();
+    var top = document.createElement("div");
+    top.className = "mcp-manage-top";
+    var pill = document.createElement("span");
+    pill.className = mcpBadgeClass(connector.status);
+    pill.setAttribute("data-status", connector.status || "draft");
+    pill.textContent = mcpStatusLabel(connector.status);
+    var url = document.createElement("p");
+    url.className = "mcp-url";
+    url.textContent = (connector.preset === "google-forms" || connector.url === "builtin:google-forms") ? "Built in" : (connector.url || "");
+    top.append(pill, url);
+    var tested = document.createElement("p");
+    tested.className = "meta";
+    tested.textContent = mcpWhen(connector.lastTestedAt);
+    body.append(top, tested);
+    if (connector.lastError) {
+      var error = document.createElement("p");
+      error.className = "alert";
+      error.setAttribute("role", "alert");
+      error.textContent = connector.lastError;
+      body.append(error);
+    }
     if (connector.authType === "google_oauth") {
       var account = document.createElement("p");
       account.className = "meta";
-      account.textContent = "Uses this person's Google account.";
-      card.append(account);
+      account.textContent = "Uses your Google account.";
+      body.append(account);
     } else {
-      card.append(tokenLine);
+      var tokenLine = document.createElement("p");
+      tokenLine.className = "mcp-token-line";
+      var tokenButton = document.createElement("button");
+      tokenButton.type = "button";
+      tokenButton.className = "secondary";
+      tokenButton.setAttribute("data-token", connector.id || "");
+      if (connector.hasToken) tokenButton.textContent = "Set ••••" + String(connector.tokenLast4 || "") + " · Replace";
+      else tokenButton.textContent = "Add token";
+      tokenButton.addEventListener("click", function () { openMcpToken(connector); });
+      tokenLine.append(tokenButton);
+      body.append(tokenLine);
     }
     var actions = document.createElement("div");
     actions.className = "wait-actions";
@@ -6508,14 +6748,41 @@ if (sessionWhen && sessionWhen.dataset.at) {
     remove.textContent = "Remove";
     remove.addEventListener("click", function () { openMcpRemove(connector); });
     actions.append(again, remove);
-    card.append(actions);
-    var tools = document.createElement("div");
-    tools.className = "mcp-tools";
-    (connector.tools || []).forEach(function (tool) {
-      tools.appendChild(mcpToolRow(connector, tool));
+    body.append(actions);
+    var tools = connector.tools || [];
+    var groups = [["read", "Read"], ["write", "Write"], ["delete", "Delete"]];
+    var wrap = document.createElement("div");
+    wrap.className = "mcp-tools";
+    groups.forEach(function (group) {
+      var members = tools.filter(function (tool) {
+        var kind = tool.actionClass === "read" || tool.actionClass === "delete" ? tool.actionClass : "write";
+        return kind === group[0];
+      });
+      if (!members.length) return;
+      var section = document.createElement("section");
+      section.className = "mcp-tool-group";
+      section.setAttribute("data-group", group[0]);
+      var heading = document.createElement("h3");
+      heading.id = "mcp-group-" + group[0];
+      heading.textContent = group[1] + " · " + members.length;
+      section.setAttribute("aria-labelledby", heading.id);
+      section.append(heading);
+      members.forEach(function (tool) { section.appendChild(mcpToolRow(connector, tool)); });
+      wrap.append(section);
     });
-    card.append(tools);
-    return card;
+    if (!tools.length) {
+      var none = document.createElement("p");
+      none.className = "meta";
+      none.textContent = "No tools found. Test again to refresh.";
+      wrap.append(none);
+    }
+    body.append(wrap);
+    body.scrollTop = keep;
+    if (focusName) {
+      var back = body.querySelector("[data-tool='" + focusName + "'] input");
+      if (back) back.focus();
+    }
+    return true;
   }
 
   function mcpToolRow(connector, tool) {
@@ -6533,7 +6800,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var badges = document.createElement("p");
     badges.className = "mcp-tool-badges";
     var action = document.createElement("span");
-    action.className = tool.actionClass === "delete" ? "badge bad" : tool.actionClass === "read" ? "badge ok" : "badge warn";
+    action.className = tool.actionClass === "delete" ? "badge bad" : tool.actionClass === "read" ? "badge info" : "badge warn";
     action.textContent = mcpActionLabel(tool.actionClass);
     badges.append(action);
     if (tool.changed) {
@@ -6728,32 +6995,41 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
   }
 
-  function addGoogleForms() {
-    var card = document.querySelector("[data-preset='google-forms']");
+  function addPreset(id) {
+    var card = document.querySelector("[data-preset='" + id + "']");
     if (!card) return;
     var state = card.getAttribute("data-state") || "add";
+    var previous = state;
     if (state === "connecting" || state === "connected") return;
-    var preset = mcpPresets["google-forms"] || {};
+    var preset = mcpPresets[id] || {};
+    var accessDetail = id === "google-calendar" ? "Connect Google Calendar" : "Connect Google Forms";
+    var fallback = id === "google-calendar"
+      ? "/console/auth/google?intent=calendar&next=/console/connectors"
+      : "/console/auth/google?intent=forms&next=/console/connectors";
     if (state === "needs_access") {
-      window.location.assign(preset.connectUrl || "/console/auth/google?intent=forms&next=/console/connectors");
+      window.location.assign(preset.connectUrl || fallback);
       return;
     }
     card.setAttribute("data-state", "connecting");
     card.disabled = true;
     var badge = card.querySelector("[data-preset-badge]");
     if (badge) badge.textContent = "Connecting";
-    mcpPost("/console/connectors/presets/google-forms", {}).then(function (result) {
+    mcpPost("/console/connectors/presets/" + id, {}).then(function (result) {
       if (result && result.code === "needs_access") {
-        mcpPresets["google-forms"] = { state: "needs_access", connectUrl: result.connectUrl || "" };
+        mcpPresets[id] = {
+          state: "needs_access",
+          connectUrl: result.connectUrl || "",
+          message: result.detail || "",
+        };
         card.setAttribute("data-state", "add");
-        paintPreset(mcpPresets["google-forms"]);
+        paintPreset(id, mcpPresets[id], accessDetail);
         if (result.connectUrl) window.location.assign(result.connectUrl);
         return;
       }
       if (!result || result.ok !== true) {
         card.disabled = false;
         card.setAttribute("data-state", "add");
-        if (badge) badge.textContent = "Add";
+        paintPreset(id, { state: "error" }, accessDetail);
         toast((result && result.message) || "That could not be saved.");
         return;
       }
@@ -6763,7 +7039,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   var formsPreset = document.querySelector("[data-preset='google-forms']");
-  if (formsPreset) formsPreset.addEventListener("click", addGoogleForms);
+  if (formsPreset) formsPreset.addEventListener("click", function () { addPreset("google-forms"); });
+  var calendarPreset = document.querySelector("[data-preset='google-calendar']");
+  if (calendarPreset) calendarPreset.addEventListener("click", function () { addPreset("google-calendar"); });
   var mcpAdd = document.getElementById("mcp-add");
   var mcpAddHead = document.getElementById("mcp-add-head");
   if (mcpAdd) mcpAdd.addEventListener("click", openMcpDialog);
@@ -6782,6 +7060,28 @@ if (sessionWhen && sessionWhen.dataset.at) {
   if (mcpTokenForm) mcpTokenForm.addEventListener("submit", function (event) { saveMcpToken(event, false); });
   var mcpTokenClear = document.getElementById("mcp-token-clear");
   if (mcpTokenClear) mcpTokenClear.addEventListener("click", function () { saveMcpToken(null, true); });
+  document.querySelectorAll("[data-manage-close]").forEach(function (node) {
+    node.addEventListener("click", function (event) { event.stopPropagation(); closeMcpManage(); });
+  });
+  document.addEventListener("keydown", function (event) {
+    if (event.key !== "Tab") return;
+    var top = null;
+    ["mcp-remove-dialog", "mcp-token-dialog", "mcp-manage-dialog"].forEach(function (id) {
+      var node = document.getElementById(id);
+      if (!top && node && !node.hidden) top = node;
+    });
+    if (!top) return;
+    var list = Array.prototype.filter.call(top.querySelectorAll("button, input, select, textarea, a[href], [tabindex]:not([tabindex='-1'])"), function (node) {
+      return !node.disabled && node.offsetParent !== null;
+    });
+    if (!list.length) return;
+    var first = list[0];
+    var last = list[list.length - 1];
+    var active = document.activeElement;
+    if (!top.contains(active)) { event.preventDefault(); (event.shiftKey ? last : first).focus(); return; }
+    if (event.shiftKey && active === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && active === last) { event.preventDefault(); first.focus(); }
+  });
   var mcpRemoveConfirm = document.getElementById("mcp-remove-confirm");
   if (mcpRemoveConfirm) mcpRemoveConfirm.addEventListener("click", confirmMcpRemove);
 
@@ -6811,6 +7111,7 @@ export function speakerLabel(speaker, displayName, memberId) {
   if (/^ROW-\d+$/i.test(value)) return "";
   if (/^U[A-Z0-9_]{2,}$/.test(value)) return "";
   if (/^0x[0-9a-fA-F]+$/.test(value)) return "";
+  if (/^[a-z][a-z0-9]*([._-][a-z0-9]+)*$/.test(value)) return value.split(/[._-]+/).map(function (part) { return part.charAt(0).toUpperCase() + part.slice(1); }).join(" ");
   return value;
 }
 
@@ -6895,10 +7196,10 @@ function renderWorkspaceSwitcher(spaces, switchIcon) {
           ${switchIcon}
         </button>
         <div id="workspace-menu" class="menu" role="menu" aria-labelledby="workspace-chip" hidden>
-          <button type="button" role="menuitemradio" data-workspace="company" aria-checked="true"><span class="tile-mark co" aria-hidden="true">C</span><span class="ws-copy"><span>Company</span><span class="menu-hint"></span></span></button>
-          <button type="button" role="menuitemradio" data-workspace="personal" aria-checked="false"><span class="tile-mark pe" aria-hidden="true">P</span><span class="ws-copy"><span>Personal</span><span class="menu-hint">A separate workspace</span></span></button>
+          <button class="menu-item" type="button" role="menuitemradio" data-workspace="company" aria-checked="true"><span class="tile-mark co" aria-hidden="true">C</span><span class="ws-copy"><span>Company</span><span class="menu-hint"></span></span></button>
+          <button class="menu-item" type="button" role="menuitemradio" data-workspace="personal" aria-checked="false"><span class="tile-mark pe" aria-hidden="true">P</span><span class="ws-copy"><span>Personal</span><span class="menu-hint">A separate workspace</span></span></button>
           <div class="menu-rule" role="separator"></div>
-          <button id="create-workspace" type="button" role="menuitem"><span class="ws-copy"><span>About Company</span><span class="menu-hint">What Company is</span></span></button>
+          <button class="menu-item" id="create-workspace" type="button" role="menuitem"><span class="ws-copy"><span>About Company</span><span class="menu-hint">What Company is</span></span></button>
         </div>`;
   }
   const items = Array.isArray(spaces.items) ? spaces.items : [];
@@ -6912,7 +7213,7 @@ function renderWorkspaceSwitcher(spaces, switchIcon) {
     const itemPersonal = item.kind === "personal";
     return `<form class="space-form" method="post" action="/console/space">
           <input type="hidden" name="tenant" value="${escapeHtml(item.id)}">
-          <button type="submit" role="menuitemradio" data-tenant="${escapeHtml(item.id)}" data-kind="${escapeHtml(item.kind)}" aria-checked="${on ? "true" : "false"}" tabindex="${on ? "0" : "-1"}">
+          <button class="menu-item" type="submit" role="menuitemradio" data-tenant="${escapeHtml(item.id)}" data-kind="${escapeHtml(item.kind)}" aria-checked="${on ? "true" : "false"}" tabindex="${on ? "0" : "-1"}">
             <span class="${itemPersonal ? "tile-mark pe" : "tile-mark"}" aria-hidden="true">${escapeHtml(item.mark || "S")}</span>
             <span class="ws-copy"><span>${escapeHtml(item.name)}</span><span class="menu-hint">${escapeHtml(item.hint || "")}</span></span>
           </button>
@@ -6930,7 +7231,7 @@ function renderWorkspaceSwitcher(spaces, switchIcon) {
           ${error}
           ${rows}
           <div class="menu-rule" role="separator"></div>
-          <button id="create-workspace" type="button" role="menuitem" tabindex="${items.length ? "-1" : "0"}"><span class="ws-copy"><span>Create workspace</span><span class="menu-hint">For another company or team</span></span></button>
+          <button class="menu-item" id="create-workspace" type="button" role="menuitem" tabindex="${items.length ? "-1" : "0"}"><span class="ws-copy"><span>Create workspace</span><span class="menu-hint">For another company or team</span></span></button>
         </div>`;
 }
 

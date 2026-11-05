@@ -1,10 +1,11 @@
 import { formsFakeEnabled } from "../mcp-forms/api.js";
 import { requestOrigin } from "../identity/routes.js";
+import { BUILTIN_GOOGLE_FORMS_URL, GOOGLE_FORMS_PRESET } from "./builtin-forms.js";
 import { testConnection } from "./client.js";
 import { connectorMessage } from "./errors.js";
 import { FORMS_SCOPES } from "./google-person.js";
 
-export const GOOGLE_FORMS_PRESET = "google-forms";
+export { BUILTIN_GOOGLE_FORMS_URL, GOOGLE_FORMS_PRESET };
 
 export const GOOGLE_FORMS_TOOLS = Object.freeze([
   "create_form",
@@ -15,6 +16,7 @@ export const GOOGLE_FORMS_TOOLS = Object.freeze([
 ]);
 
 export const FORMS_CONNECT_PATH = "/console/auth/google?intent=forms&next=/console/connectors";
+export const FORMS_PARTIAL_MESSAGE = "Google did not grant Forms access. Connect again and allow Forms.";
 
 /**
  * @param {{
@@ -31,14 +33,33 @@ export async function googleFormsPresetState(input) {
     return { state: "connected", connectUrl: "" };
   }
   if (formsFakeEnabled(input.env)) return { state: "add", connectUrl: "" };
-  let granted = false;
-  try {
-    granted = Boolean(input.personId && input.grants && await input.grants.granted(input.personId));
-  } catch {
-    granted = false;
+  const access = await formsAccess(input);
+  if (!access.granted) {
+    return {
+      state: "needs_access",
+      connectUrl: FORMS_CONNECT_PATH,
+      ...(access.partial ? { message: FORMS_PARTIAL_MESSAGE } : {}),
+    };
   }
-  if (!granted) return { state: "needs_access", connectUrl: FORMS_CONNECT_PATH };
   return { state: "add", connectUrl: "" };
+}
+
+/**
+ * @param {{ personId?: string, tenantId?: string, grants?: { granted?: Function, describe?: Function } }} input
+ */
+async function formsAccess(input) {
+  if (!input.personId || !input.grants) return { granted: false, partial: false };
+  const tenantId = input.tenantId || "";
+  try {
+    if (typeof input.grants.describe === "function") {
+      const described = await input.grants.describe(input.personId, { tenantId });
+      return { granted: described?.granted === true, partial: described?.partial === true };
+    }
+    const granted = Boolean(await input.grants.granted(input.personId, { tenantId }));
+    return { granted, partial: false };
+  } catch {
+    return { granted: false, partial: false };
+  }
 }
 
 /**
@@ -63,10 +84,11 @@ export async function addGoogleFormsPreset(input) {
       ok: false,
       code: "needs_access",
       connectUrl: state.connectUrl,
-      message: "Connect Google Forms before adding it.",
+      message: state.message || "Connect Google Forms before adding it.",
+      detail: state.message || "",
     };
   }
-  const url = `${requestOrigin(input.req, input.env)}/mcp/forms`;
+  const url = BUILTIN_GOOGLE_FORMS_URL;
   const connector = await input.store.create(input.tenantId, {
     name: "Google Forms",
     url,
@@ -74,7 +96,13 @@ export async function addGoogleFormsPreset(input) {
     authType: "google_oauth",
     scopes: FORMS_SCOPES,
   });
-  const test = await testConnection({ url, env: input.env });
+  const test = await testConnection({
+    url,
+    preset: GOOGLE_FORMS_PRESET,
+    env: input.env,
+    forms: input.forms,
+    origin: requestOrigin(input.req, input.env),
+  });
   if (!test?.ok) {
     await input.store.remove(input.tenantId, connector.id);
     return {

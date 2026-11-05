@@ -49,12 +49,66 @@ export async function dispatchMcp(message, session, deps, context) {
       arguments: { ...args, session },
       _meta: message?.params?._meta,
     }, deps, context);
+    if (typeof name === "string" && name.includes("__")) return presentCustomToolResult(result);
     return {
       content: [{ type: "text", text: JSON.stringify(result) }],
       structuredContent: result,
     };
   }
   return null;
+}
+
+/**
+ * Custom connector tools keep the upstream structured result.
+ * recall and act stay on the decision-record wrapper.
+ *
+ * @param {{
+ *   ok?: boolean,
+ *   held?: boolean,
+ *   needsConfirmation?: boolean,
+ *   unavailable?: boolean,
+ *   actionId?: string,
+ *   tool?: string,
+ *   actionClass?: string,
+ *   preference?: string,
+ *   text?: string,
+ *   code?: string,
+ *   message?: string,
+ *   structuredContent?: Record<string, unknown>,
+ * }} result
+ */
+export function presentCustomToolResult(result) {
+  if (result?.held === true) {
+    const structuredContent = {
+      held: true,
+      needsConfirmation: true,
+      actionId: result.actionId || "",
+      tool: result.tool || "",
+      actionClass: result.actionClass || "",
+      preference: result.preference || "ask",
+    };
+    const text = result.text || `Needs confirmation before ${structuredContent.tool || "this tool"} runs.`;
+    return {
+      content: [{ type: "text", text }],
+      structuredContent,
+    };
+  }
+  if (result?.ok !== true) {
+    const code = String(result?.code || (result?.unavailable ? "unavailable" : "protocol"));
+    const message = String(result?.text || result?.message || "The tool call failed.");
+    return {
+      isError: true,
+      content: [{ type: "text", text: message }],
+      structuredContent: { code, message },
+    };
+  }
+  const structured = result?.structuredContent;
+  const fallback = structured && typeof structured === "object" ? JSON.stringify(structured) : "";
+  const payload = {
+    content: [{ type: "text", text: String(result?.text || fallback) }],
+  };
+  if (structured && typeof structured === "object") payload.structuredContent = structured;
+  return payload;
 }
 
 /** Streamable HTTP response for one JSON-RPC message. Agents that speak MCP can POST here. */
@@ -154,6 +208,11 @@ export async function handleMcpRequest(message, deps, context) {
       meta: message?._meta || message?.params?._meta || {},
       personId: context?.personId || "",
       googleGrants: context?.googleGrants,
+      forms: context?.forms,
+      calendarMcp: context?.calendarMcp,
+      calendarSave: context?.calendarSave,
+      fetch: context?.fetch,
+      origin: context?.origin,
     });
   }
   return {

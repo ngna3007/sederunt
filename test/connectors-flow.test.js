@@ -70,8 +70,10 @@ test("connector page is reachable and keeps tokens out of HTML", async (t) => {
   assert.match(page.raw, /id="mcp-add"/);
   assert.match(page.raw, /Add a connector/);
   assert.match(page.raw, /data-preset="google-forms"/);
+  assert.match(page.raw, /data-preset="google-calendar"/);
   assert.match(page.raw, /Google Forms/);
-  assert.match(page.raw, /Uses this person's Google account/);
+  assert.match(page.raw, /Google Calendar/);
+  assert.match(page.raw, /Uses your Google account/);
   assert.doesNotMatch(page.raw, /Coming soon/);
   assert.equal(page.raw.includes(TOKEN), false);
 });
@@ -133,14 +135,18 @@ test("connector flow on the fake server", async (t) => {
   assert.equal(lookup.inputSchema.properties.id.type, "string");
 
   const read = json(await track(await mcp(port, 2, "tools/call", { name: "demo__lookup_customer", arguments: { id: "acme" } })));
-  assert.equal(read.result.structuredContent.ok, true);
-  assert.match(read.result.structuredContent.text, /lookup_customer/);
-  assert.match(read.result.structuredContent.text, /acme/);
+  assert.deepEqual(read.result.structuredContent, { id: "acme", note: "demo" });
+  assert.match(read.result.content[0].text, /lookup_customer/);
+  assert.match(read.result.content[0].text, /acme/);
 
   const before = fake.calls.filter((entry) => entry.method === "tools/call" && entry.name === "create_note").length;
   const held = json(await track(await mcp(port, 3, "tools/call", { name: "demo__create_note", arguments: { text: "hello" } })));
   assert.equal(held.result.structuredContent.held, true);
   assert.equal(held.result.structuredContent.needsConfirmation, true);
+  assert.equal(held.result.structuredContent.tool, "demo__create_note");
+  assert.equal(held.result.structuredContent.actionClass, "write");
+  assert.equal(held.result.structuredContent.preference, "ask");
+  assert.match(held.result.content[0].text, /Needs confirmation/);
   assert.equal(fake.calls.filter((entry) => entry.method === "tools/call" && entry.name === "create_note").length, before);
 
   fake.setMode("changed");
@@ -277,7 +283,8 @@ test("connector page flow and layout", { timeout: 180000 }, async (t) => {
     return card && /refused the token/i.test(card.textContent);
   });
   assert.equal((await page.content()).includes(WRONG), false);
-  await page.click("#mcp-list .danger");
+  if (await page.locator("#mcp-manage-dialog").isHidden()) await page.click("#mcp-list .mcp-manage");
+  await page.click("#mcp-manage-dialog .danger");
   await page.waitForSelector("#mcp-remove-dialog:not([hidden])");
   await page.click("#mcp-remove-confirm");
   await page.waitForSelector("#mcp-add:not([hidden])");
@@ -290,7 +297,9 @@ test("connector page flow and layout", { timeout: 180000 }, async (t) => {
   await page.waitForSelector("#mcp-ok:not([hidden])");
   assert.match(await page.locator("#mcp-ok").innerText(), /Demo tools/);
   await page.click("#mcp-save");
-  await page.waitForSelector("#mcp-list [data-tool='lookup_customer']");
+  await page.waitForSelector("#mcp-list .mcp-manage");
+  await page.click("#mcp-list .mcp-manage");
+  await page.waitForSelector("#mcp-manage-dialog:not([hidden]) [data-tool='lookup_customer']");
   const disabled = await page.locator("[data-tool='lookup_customer'] input").isChecked();
   assert.equal(disabled, false);
   assert.equal((await page.content()).includes(TOKEN), false);
@@ -310,8 +319,10 @@ test("connector page flow and layout", { timeout: 180000 }, async (t) => {
     return { listed, read, held };
   });
   assert.ok(called.listed.result.tools.some((tool) => tool.name === "demo__lookup_customer"));
-  assert.equal(called.read.result.structuredContent.ok, true);
+  assert.deepEqual(called.read.result.structuredContent, { id: "acme", note: "demo" });
+  assert.match(called.read.result.content[0].text, /lookup_customer/);
   assert.equal(called.held.result.structuredContent.held, true);
+  assert.equal(called.held.result.structuredContent.needsConfirmation, true);
   assert.equal(fake.calls.filter((entry) => entry.method === "tools/call" && entry.name === "create_note").length, 0);
   fake.setMode("changed");
   await page.getByRole("button", { name: "Test again" }).click();
@@ -325,7 +336,8 @@ test("connector page flow and layout", { timeout: 180000 }, async (t) => {
     return response.json();
   });
   assert.equal(still.result.tools.some((tool) => tool.name === "demo__lookup_customer"), false);
-  await page.click("#mcp-list .danger");
+  if (await page.locator("#mcp-manage-dialog").isHidden()) await page.click("#mcp-list .mcp-manage");
+  await page.click("#mcp-manage-dialog .danger");
   await page.click("#mcp-remove-confirm");
   await page.waitForSelector("#mcp-empty:not([hidden]) #mcp-add");
   const after = await page.evaluate(async () => {

@@ -466,6 +466,8 @@ test("console edit dialog, ask, and layout", { timeout: 180000 }, async (t) => {
   });
   assert.match(when, / – \d{1,2}:\d{2}\s?[AP]M$/, `same-day range repeats the date: ${when}`);
 
+  await page.goto(`${origin}/console/rooms`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector("body:not(.is-reading) #meeting-list [data-edit-event='board-readout']", { timeout: 45000 });
   await page.click("#meeting-list [data-edit-event='board-readout']");
   await page.waitForSelector("#event-readonly:not([hidden])");
   const locked = await page.evaluate(() => ({

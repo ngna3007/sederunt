@@ -517,15 +517,19 @@ serial("setup and account keep their actions in the right cards", async (t) => {
   assert.deepEqual(connected.errors, []);
 });
 
-test("console type scale is 12/13/14/16/28 and weights 400/500/600", () => {
+test("console type scale is 12/13/14/16/20/28 and weights 400/500/600, all through tokens", () => {
   const css = readFileSync(new URL("../src/console.css", import.meta.url), "utf8");
+  const tokens = css.slice(css.indexOf("/* @tokens start"), css.indexOf("/* @tokens end"));
+  const scale = Object.fromEntries([...tokens.matchAll(/--text-(xs|sm|base|lg|xl|2xl):\s*(\d+px)/g)].map((m) => [m[1], m[2]]));
+  assert.deepEqual(scale, { xs: "12px", sm: "13px", base: "14px", lg: "16px", xl: "20px", "2xl": "28px" });
   const sizes = [...css.matchAll(/font-size:\s*([^;]+)/g)].map((match) => match[1].replace(/!important/g, "").trim());
-  const allowedSizes = new Set(["0", "12px", "13px", "14px", "16px", "28px"]);
+  const allowedSizes = new Set(["0", "var(--text-xs)", "var(--text-sm)", "var(--text-base)", "var(--text-lg)", "var(--text-xl)", "var(--text-2xl)"]);
   for (const size of sizes) assert.ok(allowedSizes.has(size), `font-size ${size}`);
+  assert.match(tokens, /--weight-regular: 400;[\s\S]*--weight-medium: 500;[\s\S]*--weight-semibold: 600;/);
   const weights = [...css.matchAll(/font-weight:\s*([^;]+)/g)].map((match) => match[1].replace(/!important/g, "").trim());
   for (const weight of weights) {
     if (weight === "100 900") continue;
-    assert.ok(weight === "400" || weight === "500" || weight === "600", `font-weight ${weight}`);
+    assert.ok(/^var\(--weight-(regular|medium|semibold)\)$/.test(weight), `font-weight ${weight}`);
   }
 });
 

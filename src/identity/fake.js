@@ -122,7 +122,7 @@ export function createFakeIdentity(env = {}) {
       return query ? `${base}?${query}` : base;
     },
 
-    issueConsentCode({ provider, codeChallenge, intent }) {
+    issueConsentCode({ provider, codeChallenge, intent, scope }) {
       if (store.providers[provider] !== true) {
         throw new IdentityError("provider_disabled", "That sign-in provider is not turned on.");
       }
@@ -130,7 +130,12 @@ export function createFakeIdentity(env = {}) {
         throw new IdentityError("invalid_challenge", "Missing code challenge.");
       }
       const code = randomBytes(24).toString("base64url");
-      store.codes.set(code, { provider, challenge: codeChallenge, intent: intent === "forms" ? "forms" : "" });
+      store.codes.set(code, {
+        provider,
+        challenge: codeChallenge,
+        intent: intent === "forms" || intent === "calendar" ? intent : "",
+        scope: typeof scope === "string" ? scope : "",
+      });
       return code;
     },
 
@@ -146,9 +151,11 @@ export function createFakeIdentity(env = {}) {
       }
       const user = ensureUser(pending.provider);
       const tokens = issueTokens(user.id);
-      if (pending.intent === "forms") {
+      if (pending.intent === "forms" || pending.intent === "calendar") {
         tokens.providerAccessToken = `fa.google.${user.id}`;
         tokens.providerRefreshToken = `fr.google.${user.id}`;
+        const override = String(env.SEDERUNT_AUTH_FAKE_SCOPE || "").trim();
+        tokens.scope = override || String(pending.scope || "");
       }
       return tokens;
     },
@@ -260,6 +267,23 @@ export function createFakeIdentity(env = {}) {
       }
       user.user_metadata = next;
       return { ...user, user_metadata: { ...next } };
+    },
+
+    async renameTenant(accessToken, tenantId, name) {
+      const user = requireUser(accessToken);
+      const tenant = store.tenants.get(tenantId);
+      const membership = roleOn(tenantId, user.id);
+      if (!tenant || (membership !== "owner" && membership !== "admin")) {
+        throw new IdentityError("forbidden", "Only an owner or admin can change the space.");
+      }
+      if (tenant.kind === "personal") {
+        throw new IdentityError("invalid_tenant", "A personal tenant has no shared name.");
+      }
+      const trimmed = typeof name === "string" ? name.trim() : "";
+      if (trimmed.length < 1 || trimmed.length > 120) {
+        throw new IdentityError("invalid_tenant", "Tenant name must be 1 to 120 characters.");
+      }
+      tenant.name = trimmed;
     },
 
     async setAllowedDomain(accessToken, tenantId, domain) {

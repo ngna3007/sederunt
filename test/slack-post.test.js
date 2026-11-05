@@ -50,6 +50,10 @@ test("a channel name resolves from conversations.list or the default channel", a
   });
   assert.equal(await named.resolveChannel("#no-such-room"), "");
   assert.equal(missed.some((url) => url.includes("conversations.list")), true);
+  assert.equal(await slack.channelLabel("C0DESIGN"), "design");
+  assert.equal(await slack.channelLabel("#design"), "design");
+  assert.equal(await slack.channelLabel("C0MISSING"), "");
+  assert.equal(await fallback.channelLabel("CDEFAULT"), "");
 });
 
 test("a slack post and reply can carry the bot display name", async () => {
