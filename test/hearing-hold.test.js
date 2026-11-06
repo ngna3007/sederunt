@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { addressesHearing, splitAddressedKeepSentences, stripHearing } from "../src/hearing.js";
+import { addressesHearing, isRememberThisKeep, splitAddressedKeepSentences, stripHearing } from "../src/hearing.js";
 import { handleUtterance } from "../src/typed-path.js";
 import { createSession } from "../src/session.js";
 
@@ -141,3 +141,150 @@ test("one transcript with three maple remember-this sentences stores three keeps
   assert.ok(texts.some((row) => /cedar 92/i.test(row) && /ops only/i.test(row)));
 });
 
+
+
+test("isRememberThisKeep requires a remember-this payload", () => {
+  assert.equal(isRememberThisKeep("remember this"), false);
+  assert.equal(isRememberThisKeep("I'll remember this later"), false);
+  assert.equal(isRememberThisKeep("the launch code is cedar92"), false);
+  assert.equal(isRememberThisKeep("remember this the new hcmc office is District 7"), true);
+  assert.equal(isRememberThisKeep("Remember this: launch stays November 18 only if billing is green by November 12"), true);
+});
+
+test("addressesHearing still ignores a bare remember-this keep", () => {
+  assert.equal(addressesHearing("remember this the new hcmc office is District 7", null), false);
+});
+
+test("bare remember-this in a meeting keeps without a wake name or hold", async () => {
+  const session = createSession();
+  const room = { id: "bot-bare-remember", botPresent: true, source: "recall", kind: "meeting", memberIds: ["anh"] };
+  const text = "remember this the new hcmc office is District 7, Building B, floors 8 and 9, move-in December 2";
+  const kept = await handleUtterance({
+    text,
+    memberId: "anh",
+    door: "meeting",
+    addressed: false,
+    deliveryId: "t-bare-d7",
+    participants: ["anh"],
+    room,
+    session,
+  }, {
+    async remember() { return { ok: true }; },
+  });
+  assert.notEqual(kept.kind, "silence");
+  const texts = (session.decisions || []).map((d) => d.text);
+  assert.ok(
+    texts.some((row) => /district 7/i.test(row) && /floors 8 and 9/i.test(row)),
+    `expected District 7 keep, got ${JSON.stringify(texts)}`,
+  );
+});
+
+test("named keep refreshes hold so a later bare remember-this still enters", async () => {
+  const session = createSession();
+  const room = { id: "bot-session-arm", botPresent: true, source: "recall", kind: "meeting", memberIds: ["anh"] };
+  const first = await handleUtterance({
+    text: "Maple, remember this: the new hcmc office is District 7, Building B, floors 8 and 9, move-in December 2",
+    memberId: "anh",
+    door: "meeting",
+    addressed: true,
+    deliveryId: "t-arm-d7",
+    participants: ["anh"],
+    room,
+    session,
+  }, {
+    async remember() { return { ok: true }; },
+  });
+  assert.notEqual(first.kind, "silence");
+  assert.ok(session.hearingArmedRooms instanceof Set && session.hearingArmedRooms.has(room.id));
+  assert.ok(session.hearingHold?.roomId === room.id);
+
+  const second = await handleUtterance({
+    text: "remember this launch stays November 18 only if billing is green by November 12; otherwise we slip to November 25",
+    memberId: "anh",
+    door: "meeting",
+    addressed: false,
+    deliveryId: "t-arm-launch",
+    participants: ["anh"],
+    room,
+    session,
+  }, {
+    async remember() { return { ok: true }; },
+  });
+  assert.notEqual(second.kind, "silence");
+  const texts = (session.decisions || []).filter((row) => !row.deleted).map((row) => row.text);
+  assert.ok(texts.some((row) => /district 7/i.test(row)));
+  assert.ok(
+    texts.some((row) => /november 18/i.test(row) && /november 12/i.test(row)),
+    `expected launch keep, got ${JSON.stringify(texts)}`,
+  );
+});
+
+test("addressed keep refreshes hold so a split continuation still enters", async () => {
+  const session = createSession();
+  const room = { id: "bot-launch-split", botPresent: true, source: "recall", kind: "meeting", memberIds: ["anh"] };
+  const first = await handleUtterance({
+    text: "Maple, remember this: launch stays November 18 only if billing",
+    memberId: "anh",
+    door: "meeting",
+    addressed: true,
+    deliveryId: "t-launch-partial",
+    participants: ["anh"],
+    room,
+    session,
+  }, {
+    async remember() { return { ok: true }; },
+  });
+  assert.notEqual(first.kind, "silence");
+
+  const second = await handleUtterance({
+    text: "is green by November 12; otherwise we slip to November 25",
+    memberId: "anh",
+    door: "meeting",
+    addressed: false,
+    deliveryId: "t-launch-rest",
+    participants: ["anh"],
+    room,
+    session,
+  }, {
+    async remember() { return { ok: true }; },
+  });
+  assert.notEqual(second.kind, "silence");
+  const texts = (session.decisions || []).filter((row) => !row.deleted).map((row) => row.text);
+  assert.ok(texts.some((row) => /november 18/i.test(row)));
+  assert.ok(
+    texts.some((row) => /november 12/i.test(row) && /november 25/i.test(row)),
+    `expected launch continuation, got ${JSON.stringify(texts)}`,
+  );
+});
+
+test("splitAddressedKeepSentences splits bare remember-this clauses", () => {
+  const raw = "remember this the new hcmc office is district 7 building b floors 8 and 9 move in december 2 remember this launch stays november 18 only if billing is green by november 12 otherwise we slip to november 25 remember this ops only the booth staging unlock is cedar 92";
+  const parts = splitAddressedKeepSentences(raw, null);
+  assert.equal(parts.length, 3, `expected 3 parts, got ${JSON.stringify(parts)}`);
+  assert.match(parts[0], /district 7/i);
+  assert.match(parts[1], /november 18/i);
+  assert.match(parts[2], /cedar 92/i);
+});
+
+test("channel please-keep still stores without a meeting address", async () => {
+  const session = createSession();
+  const text = "Northline decision (pack-catchup) — please keep: the new HCMC office is District 7, Building B, floors 8 and 9, move-in December 2.";
+  const kept = await handleUtterance({
+    text,
+    memberId: "rowan",
+    door: "channel",
+    intent: "keep",
+    deliveryId: "slack-catchup-d7",
+    participants: ["rowan"],
+    room: { id: "C-ops", kind: "channel", source: "slack", botPresent: true, memberIds: ["rowan"] },
+    session,
+  }, {
+    async remember() { return { ok: true }; },
+  });
+  assert.notEqual(kept.kind, "silence");
+  const texts = (session.decisions || []).map((d) => d.text);
+  assert.ok(
+    texts.some((row) => /district 7/i.test(row) && /please keep/i.test(row)),
+    `expected channel keep, got ${JSON.stringify(texts)}`,
+  );
+});

@@ -66,9 +66,29 @@ export function stripHearing(text, hearing) {
 }
 
 /**
+ * True when the line is a remember-this keep with a real payload.
+ * Used on the meeting door so a dropped wake name still stores the decision.
+ * A lone "remember this" or casual "I'll remember this later" does not match.
+ *
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function isRememberThisKeep(text) {
+  const raw = String(text ?? "").trim();
+  if (!raw) return false;
+  const match = raw.match(/\bremember\s+this\b[:\s,-]+(.+)/i);
+  if (!match) return false;
+  const payload = String(match[1] || "").trim();
+  const words = payload.split(/\s+/).filter(Boolean);
+  return payload.length >= 8 || words.length >= 2;
+}
+
+/**
  * One Recall chunk can concatenate several "Maple/Adam remember this …"
  * lines into a single utterance. Split so each addressed keep can be stored
  * on its own. A line with one address, or none, is returned unchanged.
+ * Bare "remember this … remember this …" clauses also split, so a dropped
+ * wake name does not glue two decisions together.
  * stripHearing still cuts at the last name inside each part.
  *
  * @param {string} text
@@ -81,7 +101,7 @@ export function splitAddressedKeepSentences(text, hearing) {
   const names = addressLabels(hearing);
   if (!names.length) return [raw];
   const namePattern = names.map(escapeRegExp).join("|");
-  const pattern = new RegExp(`(?:^|\\s)(?:${namePattern})[,:\\s-]*remember\\s+this\\b`, "gi");
+  const pattern = new RegExp(`(?:^|\\s)(?:(?:${namePattern})[,:\\s-]*)?remember\\s+this\\b`, "gi");
   const starts = [];
   for (const hit of raw.matchAll(pattern)) {
     let start = hit.index ?? 0;

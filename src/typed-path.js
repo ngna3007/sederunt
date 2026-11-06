@@ -11,7 +11,7 @@ import { redact } from "./domain/redact.js";
 import { acceptCheckpoint } from "./domain/stamp.js";
 import { itemStatus } from "./domain/status.js";
 import { splitPassage } from "./memory/analyze.js";
-import { addressesHearing, normalizeHearing, splitAddressedKeepSentences, stripHearing } from "./hearing.js";
+import { addressesHearing, isRememberThisKeep, normalizeHearing, splitAddressedKeepSentences, stripHearing } from "./hearing.js";
 import { learnedKey, memoriesFor, parseLearnedUtterance, shapeAnswer } from "./memory/learn.js";
 import { draftMinutes, rememberMeetingOutcome } from "./memory/outcome.js";
 import { looksLikeOpenQuestion, parseUtterance } from "./parse.js";
@@ -63,10 +63,37 @@ const FILE_NAME = /\b([\w.-]+\.(?:pdf|png|docx|txt|pptx))\b/i;
  */
 /** Recall often streams the guest name alone, then the rest.
  * An address-only meeting chunk arms a short hold so the next line still enters.
+ * Hearing a name also marks the room for the rest of the session, and a
+ * remember-this keep refreshes the hold so a dropped wake or a split
+ * continuation can still enter.
  * @type {Map<string, number>}
  */
 const hearingHolds = new Map();
 const HEARING_HOLD_MS = 15_000;
+
+function meetingRoomId(input) {
+  return typeof input.room?.id === "string" ? input.room.id.trim() : "";
+}
+
+function armMeetingHearing(session, roomId) {
+  if (!roomId) return;
+  const until = Date.now() + HEARING_HOLD_MS;
+  hearingHolds.set(roomId, until);
+  session.hearingHold = { roomId, until };
+  session.hearingArmedRooms ??= new Set();
+  session.hearingArmedRooms.add(roomId);
+}
+
+function roomHearingArmed(session, roomId) {
+  if (!roomId || !session) return false;
+  if (session.hearingArmedRooms instanceof Set && session.hearingArmedRooms.has(roomId)) return true;
+  const hold = session.hearingHold;
+  return Boolean(hold && hold.roomId === roomId);
+}
+
+function meetingRememberKeep(text, hearing) {
+  return isRememberThisKeep(text) || isRememberThisKeep(stripHearing(text, hearing));
+}
 
 export async function handleUtterance(input, deps = {}) {
   const session = ensureSession(input.session);
@@ -74,18 +101,28 @@ export async function handleUtterance(input, deps = {}) {
   if (!enters(input)) return silence();
 
   // Address-only ("Maple.") is not a decision. Arm a hold for the next chunk.
+  // A remember-this keep refreshes that hold so a split continuation can
+  // still enter. Other named lines consume it.
   if (input.door === "meeting") {
-    const roomId = typeof input.room?.id === "string" ? input.room.id.trim() : "";
-    const stripped = withoutAddress(input.text, input.session?.hearing);
-    const addressedNow = input.addressed === true || addressesHearing(input.text, input.session?.hearing);
+    const roomId = meetingRoomId(input);
+    const hearing = input.session?.hearing;
+    const stripped = withoutAddress(input.text, hearing);
+    const addressedNow = input.addressed === true || addressesHearing(input.text, hearing);
+    const rememberKeep = meetingRememberKeep(input.text, hearing);
+    if (addressedNow && roomId) {
+      session.hearingArmedRooms ??= new Set();
+      session.hearingArmedRooms.add(roomId);
+    }
     if (addressedNow && !String(stripped).trim()) {
-      if (roomId) {
-        hearingHolds.set(roomId, Date.now() + HEARING_HOLD_MS);
-        session.hearingHold = { roomId, until: Date.now() + HEARING_HOLD_MS };
-      }
+      armMeetingHearing(session, roomId);
       return silence();
     }
-    if (roomId) {
+    // Refresh the short hold after a remember-this keep so a split
+    // continuation can still enter. Other addressed lines consume it,
+    // matching Slack-adjacent meeting tests and avoiding leftover holds.
+    if (roomId && rememberKeep) {
+      armMeetingHearing(session, roomId);
+    } else if (roomId) {
       hearingHolds.delete(roomId);
       if (session.hearingHold) delete session.hearingHold;
     }
@@ -249,12 +286,16 @@ function ensureSession(session) {
 function enters(input) {
   if (input.door !== "meeting") return true;
   if (input.addressed === true) return true;
-  if (addressesHearing(input.text, input.session?.hearing)) return true;
-  const roomId = typeof input.room?.id === "string" ? input.room.id.trim() : "";
+  const hearing = input.session?.hearing;
+  if (addressesHearing(input.text, hearing)) return true;
+  // A clear remember-this keep enters on the meeting door even when STT
+  // dropped Maple/Adam. Slack channel keep does not use this door.
+  if (meetingRememberKeep(input.text, hearing)) return true;
+  const roomId = meetingRoomId(input);
   if (!roomId) return false;
   const until = hearingHolds.get(roomId) || input.session?.hearingHold?.until || 0;
   if (typeof until === "number" && until > Date.now()) return true;
-  return false;
+  return roomHearingArmed(input.session, roomId) && meetingRememberKeep(input.text, hearing);
 }
 
 function withoutAddress(text, hearing) {

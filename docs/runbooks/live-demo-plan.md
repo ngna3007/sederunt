@@ -58,6 +58,19 @@ keeps decisions, resends the floor brief, and answers Ask AI from the record.
 
 **Pass:** All three decisions recallable; staging unlock not leaked later to Khoa.
 
+### B catch-up — Slack keep if Meet STT drops a wake
+
+Do **not** invent MemWal blobs offline. If the live Meet missed District 7 or
+the launch gate, have the browser post these as **Rowan** in `#new-channel`
+(no @mention). Adam should Keep each line the same way as any other channel
+keep:
+
+- `Northline decision (pack-catchup) — please keep: the new HCMC office is District 7, Building B, floors 8 and 9, move-in December 2.`
+- `Northline decision (pack-catchup) — please keep: launch stays November 18 only if billing is green by November 12; otherwise we slip to November 25.`
+
+Cedar-92 should already be on the record from the meeting. Do not re-post it
+in Slack if Khoa can read the channel.
+
 ## C. Slack — contractor privacy + ops announcement
 
 8. Khoa (Grok Bot email Slack user) is in the same workspace / channel as Adam.
