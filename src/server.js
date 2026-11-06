@@ -1100,14 +1100,22 @@ export function createApp(options = {}) {
             ? delivery.files
             : (delivery.file ? [delivery.file] : []);
           const storedFiles = [];
-          for (const item of incoming) {
-            const loaded = await slackBytes(env, deps, item);
+          const downloaded = await Promise.all(incoming.map(async (item) => {
+            try {
+              return await withinMs(slackBytes(env, deps, item), 12_000);
+            } catch {
+              return null;
+            }
+          }));
+          for (let i = 0; i < incoming.length; i += 1) {
+            const item = incoming[i];
+            const loaded = downloaded[i];
             if (!loaded?.bytes) continue;
             const slackFileId = loaded.id || item?.id || "";
             storedFiles.push({ ...loaded, id: slackFileId });
             if (filesRuntime) {
               try {
-                await ingestSlackFile(filesRuntime, {
+                await withinMs(ingestSlackFile(filesRuntime, {
                   externalChannelId: channel,
                   slackUserId: delivery.memberId,
                   slackName: delivery.memberId,
@@ -1116,7 +1124,7 @@ export function createApp(options = {}) {
                   mimeType: loaded.mimeType || "application/octet-stream",
                   bytes: loaded.bytes,
                   externalMessageId: delivery.deliveryId,
-                });
+                }), 4_000);
               } catch {
                 // The Slack reply still goes out. A stashed upload retries from the worker.
               }
@@ -2186,6 +2194,16 @@ async function slackBytes(env, deps, file) {
   if (env.SLACK_BOT_TOKEN) return slackFileBytes({ token: env.SLACK_BOT_TOKEN, file, fetchImpl: deps.slack?.fetch });
   if (typeof deps.slack?.downloadFile === "function") return deps.slack.downloadFile(file);
   return null;
+}
+
+function withinMs(promise, ms) {
+  let timer;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("timed out")), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 // Console copy first; when it is missing (upload failed or timed out), the

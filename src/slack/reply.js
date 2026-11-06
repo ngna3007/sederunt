@@ -484,22 +484,27 @@ export async function slackFileBytes({ token, file, fetchImpl }) {
 
 async function slackDownload(fetchFn, token, url, hops = 0) {
   if (!url || hops > 3) return "";
-  const response = await fetchFn(url, {
-    headers: { authorization: `Bearer ${token}` },
-    redirect: "manual",
-  });
-  const status = Number(response?.status || 0);
-  if (status >= 300 && status < 400) {
-    const location = typeof response.headers?.get === "function" ? response.headers.get("location") : "";
-    if (!location) return "";
-    if (slackFileUrl(location)) return slackDownload(fetchFn, token, location, hops + 1);
-    if (!location.startsWith("https://")) return "";
-    const followed = await fetchFn(location);
-    if (!followed?.ok) return "";
-    return typeof followed.text === "function" ? await followed.text() : "";
+  try {
+    const response = await fetchFn(url, {
+      headers: { authorization: `Bearer ${token}` },
+      redirect: "manual",
+      signal: AbortSignal.timeout(10_000),
+    });
+    const status = Number(response?.status || 0);
+    if (status >= 300 && status < 400) {
+      const location = typeof response.headers?.get === "function" ? response.headers.get("location") : "";
+      if (!location) return "";
+      if (slackFileUrl(location)) return slackDownload(fetchFn, token, location, hops + 1);
+      if (!location.startsWith("https://")) return "";
+      const followed = await fetchFn(location, { signal: AbortSignal.timeout(10_000) });
+      if (!followed?.ok) return "";
+      return typeof followed.text === "function" ? await followed.text() : "";
+    }
+    if (response?.ok === false || (status && status >= 400)) return "";
+    return typeof response?.text === "function" ? await response.text() : "";
+  } catch {
+    return "";
   }
-  if (response?.ok === false || (status && status >= 400)) return "";
-  return typeof response?.text === "function" ? await response.text() : "";
 }
 
 async function postSlackFile({ token, channel, text, thread, file, fetchImpl }) {

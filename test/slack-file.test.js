@@ -238,8 +238,8 @@ test("a channel keep with the file named in the sentence stores the file and its
   assert.equal(session.decisions.length, 1);
   assert.deepEqual(session.decisions[0].fileNames, [{
     name: "demo-note.txt",
-    consoleFileId: "file-777",
-    folderId: "folder",
+    consoleFileId: null,
+    folderId: null,
     slackFileId: "F777",
   }]);
 });
@@ -309,16 +309,18 @@ test("a failed Console upload still keeps the Slack attachment by name and Slack
   }]);
 });
 
-test("a successful Console upload keeps the Slack file id too", async () => {
+test("a Slack file is kept by id without waiting for a Console copy", async () => {
   const session = createSession();
+  const uploads = [];
   await handleUtterance(
     channelUtterance(session, "Keep the note.", { file: { id: "F9", name: "demo-note.txt", bytes: "NOTE" } }),
-    { console: { async upload() { return { id: "file-9", folderId: "folder" }; } } },
+    { console: { async upload(input) { uploads.push(input.name); return { id: "file-9", folderId: "folder" }; } } },
   );
+  assert.deepEqual(uploads, []);
   assert.deepEqual(session.decisions[0].fileNames, [{
     name: "demo-note.txt",
-    consoleFileId: "file-9",
-    folderId: "folder",
+    consoleFileId: null,
+    folderId: null,
     slackFileId: "F9",
   }]);
 });
@@ -394,8 +396,8 @@ test("replyFile prefers the exact file named in the question", () => {
 
 test("a channel post with several attachments keeps every file", async () => {
   const session = createSession();
-  const uploads = [];
-  await handleUtterance(
+  let started = 0;
+  const kept = handleUtterance(
     channelUtterance(session, "Northline ops note — please keep the announcement and both attachments.", {
       files: [
         { name: "northline-ops-announcement.txt", bytes: "OPS", id: "F1" },
@@ -405,20 +407,20 @@ test("a channel post with several attachments keeps every file", async () => {
     }),
     {
       console: {
-        async upload(input) {
-          uploads.push({ name: input.name, bytes: input.bytes });
-          return { id: `file-${input.name}`, folderId: "folder" };
+        async upload() {
+          started += 1;
+          await new Promise(() => {});
         },
       },
     },
   );
+  await Promise.race([
+    kept,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("keep waited on Console upload")), 50)),
+  ]);
+  assert.equal(started, 0);
   assert.equal(session.decisions.length, 1);
   assert.deepEqual(session.decisions[0].fileNames.map((file) => file.name), [
-    "northline-ops-announcement.txt",
-    "northline-d7-floor-brief.txt",
-    "northline-launch-gate.txt",
-  ]);
-  assert.deepEqual(uploads.map((item) => item.name), [
     "northline-ops-announcement.txt",
     "northline-d7-floor-brief.txt",
     "northline-launch-gate.txt",

@@ -1640,8 +1640,15 @@ async function namedFiles(input, deps, draft) {
       const hasBytes = bytes != null && bytes !== "";
       const slackFileId = typeof item.id === "string" ? item.id.trim() : "";
       if (!hasBytes && !slackFileId) continue;
-      const file = await nameFile(deps, name, hasBytes ? bytes : undefined, slackFileId);
-      if (file) out.push(file);
+      try {
+        const file = await nameFile(deps, name, hasBytes ? bytes : undefined, slackFileId);
+        if (file) out.push(file);
+      } catch {
+        // One file must not abort the rest of a multi-file keep.
+        if (name && slackFileId) {
+          out.push({ name, consoleFileId: null, folderId: null, slackFileId });
+        }
+      }
     }
     return out;
   }
@@ -1653,12 +1660,15 @@ async function namedFiles(input, deps, draft) {
 
 // The Slack attachment is always recorded by name (and Slack file id), so a
 // resend can find it. The Console copy is best-effort and fills in its ids.
+// When Slack already gave us a file id, do not wait for Console/Walrus publish
+// (encrypt + poll can take up to 40s per file and a multi-file keep would
+// overrun the function time limit before it can post "Kept …").
 async function nameFile(deps, name, bytes, slackFileId = "") {
   const hasBytes = bytes != null && bytes !== "";
   if (!hasBytes && !slackFileId) return null;
   const file = { name, consoleFileId: null, folderId: null };
   if (slackFileId) file.slackFileId = slackFileId;
-  if (hasBytes && deps.console?.upload) {
+  if (hasBytes && deps.console?.upload && !slackFileId) {
     try {
       const uploaded = await deps.console.upload({ name, bytes });
       const id = typeof uploaded?.id === "string" ? uploaded.id.trim() : "";

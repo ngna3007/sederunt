@@ -365,6 +365,7 @@ test("a channel post with several attachments keeps every file and a floor-brief
       memory,
       tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
       slack: { fetch, async members() { return ["U1"]; } },
+      console: { async upload() { await new Promise(() => {}); } },
     },
     env: {
       COMPANY_MEMWAL_KEY: "key-sentinel-value",
@@ -411,6 +412,61 @@ test("a channel post with several attachments keeps every file and a floor-brief
     assert.equal(dm.status, 200, dm.raw);
     assert.equal(dm.body.posted, true);
     assert.ok(uploadNames.includes("northline-d7-floor-brief.txt"), `expected floor brief upload, got ${JSON.stringify(uploadNames)}`);
+  } finally {
+    await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
+
+test("a multi-file keep still stores the files that downloaded when one download fails", async () => {
+  const api = slackApi();
+  const fetch = async (url, init = {}) => {
+    const href = String(url);
+    if (href.includes("/download/northline-d7-floor-brief.txt")) {
+      return { ok: false, status: 500, async text() { return ""; } };
+    }
+    return api.fetch(url, init);
+  };
+  const memory = mockAccount({ accountId: "company-keep-partial", delegates: ["delegate-keep-partial"] });
+  const app = createApp({
+    deps: {
+      memory,
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+      slack: { fetch, async members() { return ["U1"]; } },
+    },
+    env: {
+      COMPANY_MEMWAL_KEY: "key-sentinel-value",
+      COMPANY_MEMWAL_ACCOUNT_ID: "account-id-sentinel",
+      SLACK_SIGNING_SECRET: secret,
+      SLACK_BOT_TOKEN: "xoxb-test",
+      SEDERUNT_MEMBER: "U1",
+    },
+    companyLoaded: true,
+  });
+  app.listen(0, "127.0.0.1");
+  await once(app, "listening");
+  const port = app.address().port;
+  try {
+    const message = signed({
+      type: "message",
+      subtype: "file_share",
+      user: "U1",
+      channel: "C1",
+      text: "Northline ops note — please keep the announcement and both attachments.",
+      client_msg_id: "keep-partial-1",
+      files: [
+        { id: "F1", name: "northline-ops-announcement.txt", url_private_download: "https://files.slack.com/files-pri/T/F1/download/northline-ops-announcement.txt" },
+        { id: "F2", name: "northline-d7-floor-brief.txt", url_private_download: "https://files.slack.com/files-pri/T/F2/download/northline-d7-floor-brief.txt" },
+        { id: "F3", name: "northline-launch-gate.txt", url_private_download: "https://files.slack.com/files-pri/T/F3/download/northline-launch-gate.txt" },
+      ],
+    });
+    const reply = await post(port, message.payload, message.headers);
+    const body = JSON.parse(reply.raw);
+    assert.equal(reply.status, 200, reply.raw);
+    assert.equal(body.decisions, 1);
+    assert.deepEqual(api.texts.map((item) => item.text), [
+      "Kept northline-ops-announcement.txt and northline-launch-gate.txt.",
+    ]);
   } finally {
     await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
   }
