@@ -65,7 +65,8 @@ export function slackDelivery(event, options = {}) {
   const botUserIds = Array.isArray(options?.botUserIds) ? options.botUserIds : [];
   const ask = !deleted && !huddle && slackAsks(nested || event, botUserIds);
   const text = cleanText(raw, botUserIds);
-  const file = attachedFile(body) || attachedFile(event) || attachedFile(previous);
+  const files = attachedFiles(body, event, previous);
+  const file = files[0];
   const storedId = firstId(event?.ts, event?.client_msg_id);
   const forgetIds = deleted
     ? uniqueIds([event?.deleted_ts, previous?.ts, previous?.client_msg_id])
@@ -83,6 +84,7 @@ export function slackDelivery(event, options = {}) {
     deliveryId: deleted ? `delete:${forgetIds[0] || storedId}` : storedId,
     participants: [],
     file,
+    files,
     room: {
       // An ask recalls every room this person was in. The reply still posts to askChannel.
       // Who is in the channel comes from Slack, not from fields on this event.
@@ -154,16 +156,23 @@ function uniqueIds(values) {
   return [...new Set(values.map((value) => (typeof value === "string" ? value.trim() : "")).filter(Boolean))];
 }
 
-function attachedFile(event) {
-  const files = Array.isArray(event?.files) ? event.files : [];
-  const file = files.find((item) => item && typeof item.name === "string" && item.name.trim());
-  if (!file) return undefined;
-  const url = typeof file.url_private_download === "string" && file.url_private_download
-    ? file.url_private_download
-    : (typeof file.url_private === "string" ? file.url_private : "");
-  return {
-    name: file.name.trim(),
-    id: typeof file.id === "string" ? file.id : "",
-    url,
-  };
+function attachedFiles(...events) {
+  const out = [];
+  const seen = new Set();
+  for (const event of events) {
+    const files = Array.isArray(event?.files) ? event.files : [];
+    for (const file of files) {
+      if (!file || typeof file.name !== "string" || !file.name.trim()) continue;
+      const name = file.name.trim();
+      const id = typeof file.id === "string" ? file.id : "";
+      const key = id || name;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const url = typeof file.url_private_download === "string" && file.url_private_download
+        ? file.url_private_download
+        : (typeof file.url_private === "string" ? file.url_private : "");
+      out.push({ name, id, url });
+    }
+  }
+  return out;
 }

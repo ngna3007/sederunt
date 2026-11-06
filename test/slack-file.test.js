@@ -391,3 +391,52 @@ test("replyFile prefers the exact file named in the question", () => {
   assert.equal(replyFile(visible, "can you resend the plan"), "plan.txt");
   assert.equal(replyFile(visible, "can you resend the planning doc"), "");
 });
+
+test("a channel post with several attachments keeps every file", async () => {
+  const session = createSession();
+  const uploads = [];
+  await handleUtterance(
+    channelUtterance(session, "Northline ops note — please keep the announcement and both attachments.", {
+      files: [
+        { name: "northline-ops-announcement.txt", bytes: "OPS", id: "F1" },
+        { name: "northline-d7-floor-brief.txt", bytes: "FLOOR", id: "F2" },
+        { name: "northline-launch-gate.txt", bytes: "GATE", id: "F3" },
+      ],
+    }),
+    {
+      console: {
+        async upload(input) {
+          uploads.push({ name: input.name, bytes: input.bytes });
+          return { id: `file-${input.name}`, folderId: "folder" };
+        },
+      },
+    },
+  );
+  assert.equal(session.decisions.length, 1);
+  assert.deepEqual(session.decisions[0].fileNames.map((file) => file.name), [
+    "northline-ops-announcement.txt",
+    "northline-d7-floor-brief.txt",
+    "northline-launch-gate.txt",
+  ]);
+  assert.deepEqual(uploads.map((item) => item.name), [
+    "northline-ops-announcement.txt",
+    "northline-d7-floor-brief.txt",
+    "northline-launch-gate.txt",
+  ]);
+  assert.equal(session.decisions[0].fileNames[1].slackFileId, "F2");
+});
+
+test("replyFile matches a stored file from a distinctive stem suffix", () => {
+  const visible = [{
+    text: "Northline ops note — please keep the announcement and both attachments.",
+    fileName: "northline-ops-announcement.txt",
+    fileNames: [
+      "northline-ops-announcement.txt",
+      "northline-d7-floor-brief.txt",
+      "northline-launch-gate.txt",
+    ],
+  }];
+  assert.equal(replyFile(visible, "Send me the District 7 floor brief we kept."), "northline-d7-floor-brief.txt");
+  assert.equal(replyFile(visible, "resend the launch gate"), "northline-launch-gate.txt");
+  assert.equal(replyFile(visible, "can you resend the planning doc"), "");
+});

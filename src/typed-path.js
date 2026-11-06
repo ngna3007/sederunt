@@ -49,7 +49,8 @@ const FILE_NAME = /\b([\w.-]+\.(?:pdf|png|docx|txt|pptx))\b/i;
  *   join?: unknown,
  *   checkpoint?: number,
  *   knowableAtCheckpoint?: number,
- *   file?: { name?: string, bytes?: string },
+ *   file?: { name?: string, bytes?: string, id?: string },
+ *   files?: Array<{ name?: string, bytes?: string, id?: string }>,
  * }} input
  * @param {{
  *   linear?: { readOpenTripTickets(): Promise<unknown>, createIssue(input: { title: string }): Promise<{ identifier?: string, id?: string }> },
@@ -1483,17 +1484,9 @@ async function keepLearned(session, deps, learned, roomId) {
 }
 
 async function keepDecision(input, session, deps, draft) {
-  // An upload is the file even when the sentence never names it.
+  // Uploads are kept even when the sentence never names them.
   // With no upload, a filename written in the sentence is still the candidate.
-  const namedInText = FILE_NAME.exec(draft.text)?.[1] || "";
-  const attachedName = typeof input.file?.name === "string" ? input.file.name.trim() : "";
-  const attachedBytes = input.file?.bytes;
-  const hasAttached = Boolean(attachedName) && attachedBytes != null && attachedBytes !== "";
-  const slackFileId = typeof input.file?.id === "string" ? input.file.id.trim() : "";
-  const fileName = hasAttached || (attachedName && slackFileId) ? attachedName : namedInText;
-  const file = fileName
-    ? await nameFile(deps, fileName, hasAttached ? attachedBytes : undefined, attachedName === fileName ? slackFileId : "")
-    : null;
+  const named = await namedFiles(input, deps, draft);
   const stamp = stampOf(input);
   const decision = {
     id: nextId(session, "decision"),
@@ -1513,7 +1506,7 @@ async function keepDecision(input, session, deps, draft) {
     facts: [...(draft.facts ?? [])],
     checkpoint: stamp,
     spokenAt: new Date().toISOString(),
-    fileNames: file ? [file] : [],
+    fileNames: named,
     expiryEpoch: null,
     account: draft.account,
     sourceDeliveryId: byteTrim(String(input.deliveryId ?? "").trim(), 255),
@@ -1618,6 +1611,44 @@ async function forgetDelivery(input, session, deps) {
     preference: "ask",
     decisionId: decision.id,
   });
+}
+
+function attachedUploads(input) {
+  const list = [];
+  const seen = new Set();
+  const push = (item) => {
+    if (!item || typeof item.name !== "string") return;
+    const name = item.name.trim();
+    if (!name || seen.has(name)) return;
+    seen.add(name);
+    list.push(item);
+  };
+  if (Array.isArray(input?.files)) {
+    for (const item of input.files) push(item);
+  }
+  if (!list.length) push(input?.file);
+  return list;
+}
+
+async function namedFiles(input, deps, draft) {
+  const attached = attachedUploads(input);
+  if (attached.length) {
+    const out = [];
+    for (const item of attached) {
+      const name = item.name.trim();
+      const bytes = item.bytes;
+      const hasBytes = bytes != null && bytes !== "";
+      const slackFileId = typeof item.id === "string" ? item.id.trim() : "";
+      if (!hasBytes && !slackFileId) continue;
+      const file = await nameFile(deps, name, hasBytes ? bytes : undefined, slackFileId);
+      if (file) out.push(file);
+    }
+    return out;
+  }
+  const namedInText = FILE_NAME.exec(draft.text)?.[1] || "";
+  if (!namedInText) return [];
+  const file = await nameFile(deps, namedInText, undefined, "");
+  return file ? [file] : [];
 }
 
 // The Slack attachment is always recorded by name (and Slack file id), so a
@@ -2105,12 +2136,17 @@ function renderVisible(session, memberId, roomId, proofs, failed = false, scope 
 }
 
 function visibleRow(decision, text, status, known) {
-  const file = known ? decision.fileNames?.find((item) => item?.name) : null;
+  const names = known
+    ? (Array.isArray(decision.fileNames) ? decision.fileNames : [])
+      .map((item) => (typeof item?.name === "string" ? item.name.trim() : ""))
+      .filter(Boolean)
+    : [];
   return {
     id: decision.id,
     text: redact(text || ""),
     status,
-    fileName: file ? file.name : null,
+    fileName: names[0] || null,
+    fileNames: names,
     connectorId: known && decision.connectorId ? decision.connectorId : null,
   };
 }

@@ -14,15 +14,52 @@ export function replyFile(visible, question) {
   const spaced = ` ${spacedWords(asked)} `;
   let best = "";
   for (const row of visible ?? []) {
-    const name = typeof row?.fileName === "string" ? row.fileName : "";
-    if (!name) continue;
-    const dot = name.lastIndexOf(".");
-    const stem = spacedWords((dot > 0 ? name.slice(0, dot) : name).toLowerCase());
-    // The exact stored name, or its stem said as words ("floor plan" for floor-plan.pdf).
-    const said = asked.includes(name.toLowerCase()) || (stem.length >= 3 && spaced.includes(` ${stem} `));
-    if (said && name.length > best.length) best = name;
+    for (const name of rowFileNames(row)) {
+      if (fileNameSaid(name, asked, spaced) && name.length > best.length) best = name;
+    }
   }
   return best;
+}
+
+/** Stored file names on a visible row: fileNames[], then fileName. */
+export function rowFileNames(row) {
+  const names = [];
+  const seen = new Set();
+  const push = (value) => {
+    const name = typeof value === "string" ? value.trim() : (value && typeof value.name === "string" ? value.name.trim() : "");
+    if (!name) return;
+    const key = name.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    names.push(name);
+  };
+  if (Array.isArray(row?.fileNames)) {
+    for (const item of row.fileNames) push(item);
+  }
+  push(row?.fileName);
+  return names;
+}
+
+function fileNameSaid(name, asked, spaced) {
+  if (asked.includes(name.toLowerCase())) return true;
+  const dot = name.lastIndexOf(".");
+  const stem = spacedWords((dot > 0 ? name.slice(0, dot) : name).toLowerCase());
+  if (stem.length < 3) return false;
+  // The full stem as words ("floor plan" for floor-plan.pdf), or a
+  // distinctive suffix ("floor brief" for northline-d7-floor-brief.txt).
+  if (spaced.includes(` ${stem} `)) return true;
+  const words = stem.split(" ").filter(Boolean);
+  for (let i = 0; i < words.length - 1; i++) {
+    const part = words.slice(i).join(" ");
+    if (part.length >= 8 && spaced.includes(` ${part} `)) return true;
+  }
+  return false;
+}
+
+function rowHasFile(row, name) {
+  if (!name) return false;
+  const wanted = name.toLowerCase();
+  return rowFileNames(row).some((item) => item.toLowerCase() === wanted);
 }
 
 /** Lowercase words joined by one space; punctuation and separators become spaces. */
@@ -44,11 +81,11 @@ export function slackAnswer(visible, question) {
   const rows = (visible ?? []).filter((row) => {
     const text = String(row?.text ?? "").trim();
     if (!text) return false;
-    if (file) return row?.fileName === file || text.toLowerCase().includes(file.toLowerCase());
-    return !row?.fileName;
+    if (file) return rowHasFile(row, file) || text.toLowerCase().includes(file.toLowerCase());
+    return rowFileNames(row).length === 0;
   });
   if (file) {
-    const row = rows.find((item) => item?.fileName === file) ?? rows[0];
+    const row = rows.find((item) => rowHasFile(item, file)) ?? rows[0];
     const fact = String(row?.text ?? "").trim();
     if (!fact) return { text: "Nothing is stored that you can read.", file: "" };
     const text = fact.toLowerCase().includes(file.toLowerCase()) ? fact : `${fact}\n${file}`;
@@ -120,7 +157,7 @@ export async function answerSlackQuestion(visible, question, options = {}) {
   const asked = String(question ?? "").trim();
   const limit = Math.max(1, Math.min(Number(options.maxMemories) || 20, 50));
   const rows = (Array.isArray(visible) ? visible : []).filter((row) =>
-    String(row?.text ?? "").trim() || (typeof row?.fileName === "string" && row.fileName.trim()));
+    String(row?.text ?? "").trim() || rowFileNames(row).length > 0);
   let hits = null;
   if (typeof options.recall === "function" && asked) {
     try {
@@ -186,7 +223,7 @@ export function askMemories(rows, hits, limit = 20) {
     add(list.find((row) => (id && String(row?.id || "") === id) || (text && String(row?.text ?? "").trim().toLowerCase() === text)));
   }
   if (picked.length) {
-    for (const row of list) if (row?.fileName) add(row);
+    for (const row of list) if (rowFileNames(row).length) add(row);
     return picked;
   }
   for (const row of list) add(row);
@@ -216,8 +253,11 @@ export function readAskReply(raw) {
 function listedFile(memories, attach) {
   if (!attach) return "";
   const wanted = attach.toLowerCase();
-  const row = (memories ?? []).find((item) => typeof item?.fileName === "string" && item.fileName.toLowerCase() === wanted);
-  return row ? row.fileName : "";
+  for (const row of memories ?? []) {
+    const name = rowFileNames(row).find((item) => item.toLowerCase() === wanted);
+    if (name) return name;
+  }
+  return "";
 }
 
 /**
@@ -229,9 +269,9 @@ export function mentionedFile(memories, text) {
   if (!hay) return "";
   let best = "";
   for (const row of memories ?? []) {
-    const name = typeof row?.fileName === "string" ? row.fileName.trim() : "";
-    if (!name) continue;
-    if (hay.includes(name.toLowerCase()) && name.length > best.length) best = name;
+    for (const name of rowFileNames(row)) {
+      if (hay.includes(name.toLowerCase()) && name.length > best.length) best = name;
+    }
   }
   return best;
 }
@@ -246,11 +286,11 @@ export function recallVisibleForAsk(visible, question, maxMemories = 5) {
   const rows = (visible ?? []).filter((row) => {
     const text = String(row?.text ?? "").trim();
     if (!text) return false;
-    if (file) return row?.fileName === file || text.toLowerCase().includes(file.toLowerCase());
-    return !row?.fileName;
+    if (file) return rowHasFile(row, file) || text.toLowerCase().includes(file.toLowerCase());
+    return rowFileNames(row).length === 0;
   });
   if (file) {
-    const row = rows.find((item) => item?.fileName === file) ?? rows[0];
+    const row = rows.find((item) => rowHasFile(item, file)) ?? rows[0];
     return row ? [row] : [];
   }
   const words = questionWords(question);
@@ -276,8 +316,8 @@ export function mergeSemanticVisible(visible, hits, question, maxMemories = 5) {
   const invite = (visible ?? []).filter((row) => {
     const text = String(row?.text ?? "").trim();
     if (!text) return false;
-    if (file) return row?.fileName === file || text.toLowerCase().includes(file.toLowerCase());
-    return !row?.fileName;
+    if (file) return rowHasFile(row, file) || text.toLowerCase().includes(file.toLowerCase());
+    return rowFileNames(row).length === 0;
   });
   if (!invite.length) return [];
   const byId = new Map();

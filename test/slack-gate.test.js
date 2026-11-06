@@ -272,3 +272,24 @@ test("the slack route answers a DM or a mention and stores an untagged channel l
     await close(app);
   }
 });
+
+test("a file_share with several attachments delivers every file", () => {
+  const delivery = slackDelivery({
+    type: "message",
+    subtype: "file_share",
+    user: "U1",
+    channel: "C1",
+    text: "Please keep the announcement and both attachments.",
+    files: [
+      { id: "F1", name: "northline-ops-announcement.txt", url_private_download: "https://files.slack.com/a" },
+      { id: "F2", name: "northline-d7-floor-brief.txt", url_private_download: "https://files.slack.com/b" },
+      { id: "F3", name: "northline-launch-gate.txt", url_private_download: "https://files.slack.com/c" },
+    ],
+  });
+  assert.equal(delivery.file.name, "northline-ops-announcement.txt");
+  assert.deepEqual(delivery.files.map((file) => file.name), [
+    "northline-ops-announcement.txt",
+    "northline-d7-floor-brief.txt",
+    "northline-launch-gate.txt",
+  ]);
+});

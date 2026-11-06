@@ -1096,28 +1096,16 @@ export function createApp(options = {}) {
           }
           delivery.participants = memberIds;
           delivery.room.memberIds = memberIds;
-          if (delivery.file) {
-            const loaded = await slackBytes(env, deps, delivery.file);
-            storedFile = loaded;
-            if (!loaded?.bytes) {
-              if (env.SLACK_BOT_TOKEN && channel) {
-                await postSlackReply({
-                  token: env.SLACK_BOT_TOKEN,
-                  fetchImpl: deps.slack?.fetch,
-                  channel,
-                  text: "The file did not arrive.",
-                  username: botName,
-                });
-              }
-              replyHttp(200, "application/json; charset=utf-8", JSON.stringify({
-                body: "The file did not arrive.",
-                decisions: current.decisions.filter((item) => !item.deleted).length,
-              }));
-              return;
-            }
-            const slackFileId = loaded.id || delivery.file?.id || "";
-            delivery.file = loaded;
-            if (filesRuntime && loaded?.bytes) {
+          const incoming = Array.isArray(delivery.files) && delivery.files.length
+            ? delivery.files
+            : (delivery.file ? [delivery.file] : []);
+          const storedFiles = [];
+          for (const item of incoming) {
+            const loaded = await slackBytes(env, deps, item);
+            if (!loaded?.bytes) continue;
+            const slackFileId = loaded.id || item?.id || "";
+            storedFiles.push({ ...loaded, id: slackFileId });
+            if (filesRuntime) {
               try {
                 await ingestSlackFile(filesRuntime, {
                   externalChannelId: channel,
@@ -1134,6 +1122,27 @@ export function createApp(options = {}) {
               }
             }
           }
+          if (incoming.length && !storedFiles.length) {
+            if (env.SLACK_BOT_TOKEN && channel) {
+              await postSlackReply({
+                token: env.SLACK_BOT_TOKEN,
+                fetchImpl: deps.slack?.fetch,
+                channel,
+                text: "The file did not arrive.",
+                username: botName,
+              });
+            }
+            replyHttp(200, "application/json; charset=utf-8", JSON.stringify({
+              body: "The file did not arrive.",
+              decisions: current.decisions.filter((item) => !item.deleted).length,
+            }));
+            return;
+          }
+          if (storedFiles.length) {
+            storedFile = storedFiles[0];
+            delivery.file = storedFiles[0];
+            delivery.files = storedFiles;
+          }
         }
         const doorDeps = depsFor(workspace, companyId);
         const keptBefore = current.decisions.length;
@@ -1145,11 +1154,21 @@ export function createApp(options = {}) {
           intent,
           session: current,
         }, doorDeps);
-        // "Kept <file>" only when this utterance actually recorded a decision with that file.
-        const keptFile = storedFile?.name
-          ? current.decisions.slice(keptBefore).some((item) =>
-            !item.deleted && item.fileNames?.some((file) => file?.name === storedFile.name))
-          : false;
+        // "Kept <file>" only when this utterance actually recorded a decision with those files.
+        const keptNames = [];
+        const seenKept = new Set();
+        for (const item of current.decisions.slice(keptBefore)) {
+          if (item?.deleted || !Array.isArray(item.fileNames)) continue;
+          for (const file of item.fileNames) {
+            const name = typeof file?.name === "string" ? file.name.trim() : "";
+            if (!name) continue;
+            const key = name.toLowerCase();
+            if (seenKept.has(key)) continue;
+            seenKept.add(key);
+            keptNames.push(name);
+          }
+        }
+        const keptFile = keptNames.length > 0;
         const repeat = result?.allow === "duplicate-delivery" || result?.outcome === "duplicate-delivery" || result?.outcome === "duplicate";
         if (!question && keptFile && !repeat && result?.allow !== "not-invited" && result?.allow !== "missing-member" && env.SLACK_BOT_TOKEN) {
           const channel = delivery.room?.askChannel || (typeof event.channel === "string" ? event.channel : "");
@@ -1158,7 +1177,7 @@ export function createApp(options = {}) {
               token: env.SLACK_BOT_TOKEN,
               fetchImpl: deps.slack?.fetch,
               channel,
-              text: `Kept ${storedFile.name}.`,
+              text: keptNotice(keptNames),
               username: botName,
             });
           }
@@ -2155,6 +2174,12 @@ async function slackPeople(env, deps, channel) {
     return Array.isArray(people) ? people.map(String).filter(Boolean) : [];
   }
   return [];
+}
+
+function keptNotice(names) {
+  if (names.length === 1) return `Kept ${names[0]}.`;
+  if (names.length === 2) return `Kept ${names[0]} and ${names[1]}.`;
+  return `Kept ${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}.`;
 }
 
 async function slackBytes(env, deps, file) {

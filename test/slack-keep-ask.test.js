@@ -349,6 +349,74 @@ test("message_changed with files is kept", async () => {
 });
 
 
+test("a channel post with several attachments keeps every file and a floor-brief ask resends it", async () => {
+  const api = slackApi();
+  const uploadNames = [];
+  const fetch = async (url, init = {}) => {
+    const href = String(url);
+    if (href.endsWith("/files.getUploadURLExternal") && init.body) {
+      uploadNames.push(new URLSearchParams(String(init.body)).get("filename") || "");
+    }
+    return api.fetch(url, init);
+  };
+  const memory = mockAccount({ accountId: "company-keep-multi", delegates: ["delegate-keep-multi"] });
+  const app = createApp({
+    deps: {
+      memory,
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+      slack: { fetch, async members() { return ["U1"]; } },
+    },
+    env: {
+      COMPANY_MEMWAL_KEY: "key-sentinel-value",
+      COMPANY_MEMWAL_ACCOUNT_ID: "account-id-sentinel",
+      SLACK_SIGNING_SECRET: secret,
+      SLACK_BOT_TOKEN: "xoxb-test",
+      SEDERUNT_MEMBER: "U1",
+    },
+    companyLoaded: true,
+  });
+  app.listen(0, "127.0.0.1");
+  await once(app, "listening");
+  const port = app.address().port;
+  const send = async (event) => {
+    const message = signed({ type: "message", user: "U1", ...event });
+    const reply = await post(port, message.payload, message.headers);
+    return { ...reply, body: JSON.parse(reply.raw) };
+  };
+  const files = [
+    { id: "F1", name: "northline-ops-announcement.txt", url_private_download: "https://files.slack.com/files-pri/T/F1/download/northline-ops-announcement.txt" },
+    { id: "F2", name: "northline-d7-floor-brief.txt", url_private_download: "https://files.slack.com/files-pri/T/F2/download/northline-d7-floor-brief.txt" },
+    { id: "F3", name: "northline-launch-gate.txt", url_private_download: "https://files.slack.com/files-pri/T/F3/download/northline-launch-gate.txt" },
+  ];
+  try {
+    const kept = await send({
+      subtype: "file_share",
+      channel: "C1",
+      text: "Northline ops note — please keep the announcement and both attachments.",
+      client_msg_id: "keep-multi-1",
+      files,
+    });
+    assert.equal(kept.status, 200, kept.raw);
+    assert.equal(kept.body.decisions, 1);
+    assert.deepEqual(api.texts.map((item) => item.text), [
+      "Kept northline-ops-announcement.txt, northline-d7-floor-brief.txt, and northline-launch-gate.txt.",
+    ]);
+
+    const dm = await send({
+      channel: "D1",
+      channel_type: "im",
+      text: "Send me the District 7 floor brief we kept.",
+      client_msg_id: "dm-floor-1",
+    });
+    assert.equal(dm.status, 200, dm.raw);
+    assert.equal(dm.body.posted, true);
+    assert.ok(uploadNames.includes("northline-d7-floor-brief.txt"), `expected floor brief upload, got ${JSON.stringify(uploadNames)}`);
+  } finally {
+    await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
+
 test("two deliveries of the same DM post only one Slack answer", async () => {
   const { createSlackClient } = await import("../src/slack/post.js");
   const { claimSlackAsk } = await import("../src/slack/reply.js");
