@@ -1192,13 +1192,17 @@ export function createApp(options = {}) {
           else if (explicitKeep && storedNew) notice = downloadFailed ? "Kept. The files did not arrive." : "Kept.";
           else if (downloadFailed) notice = "The file did not arrive.";
           if (channel && notice) {
-            await postSlackReply({
-              token: env.SLACK_BOT_TOKEN,
-              fetchImpl: deps.slack?.fetch,
-              channel,
-              text: notice,
-              username: botName,
-            });
+            const keepClaim = delivery.deliveryId || (typeof event.ts === "string" ? event.ts : "");
+            const wonKeep = await claimSlackAsk(env, keepClaim, deps.slack?.fetch || deps.fetch, "keep");
+            if (wonKeep) {
+              await postSlackReply({
+                token: env.SLACK_BOT_TOKEN,
+                fetchImpl: deps.slack?.fetch,
+                channel,
+                text: notice,
+                username: botName,
+              });
+            }
           }
         }
         if (question && result?.body && !repeat && result.allow !== "not-invited" && result.allow !== "missing-member") {

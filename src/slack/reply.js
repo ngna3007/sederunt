@@ -544,26 +544,44 @@ const askClaims = new Set();
  * @param {typeof fetch} [fetchImpl]
  * @returns {Promise<boolean>} true when this caller should post
  */
-export async function claimSlackAsk(env = process.env, deliveryId = "", fetchImpl = fetch) {
+export async function claimSlackAsk(env = process.env, deliveryId = "", fetchImpl = fetch, kind = "ask") {
   const id = String(deliveryId || "").trim();
   if (!id) return true;
-  const key = `sederunt:slack:ask:${id}`;
+  const prefix = kind === "keep" ? "keep" : "ask";
+  const key = `sederunt:slack:${prefix}:${id}`;
   if (askClaims.has(key)) return false;
   askClaims.add(key);
   const url = String(env.UPSTASH_REDIS_REST_URL || env.KV_REST_API_URL || "").trim().replace(/\/$/, "");
   const token = String(env.UPSTASH_REDIS_REST_TOKEN || env.KV_REST_API_TOKEN || "").trim();
-  if (!url || !token) return true;
-  try {
-    const response = await (fetchImpl || fetch)(`${url}/set/${encodeURIComponent(key)}/1?NX=true&EX=600`, {
-      headers: { authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) return true;
-    const body = await response.json().catch(() => null);
-    // Upstash REST SET NX returns result null when the key already exists.
-    if (body && Object.prototype.hasOwnProperty.call(body, "result") && body.result == null) {
-      return false;
+  if (url && token) {
+    try {
+      const response = await (fetchImpl || fetch)(`${url}/set/${encodeURIComponent(key)}/1?NX=true&EX=600`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) return true;
+      const body = await response.json().catch(() => null);
+      // Upstash REST SET NX returns result null when the key already exists.
+      if (body && Object.prototype.hasOwnProperty.call(body, "result") && body.result == null) {
+        return false;
+      }
+      return true;
+    } catch {
+      return true;
     }
-    return true;
+  }
+  const redisUrl = String(env.REDIS_URL || env.KV_URL || "").trim();
+  if (!redisUrl) return true;
+  try {
+    const { createClient } = await import("redis");
+    const client = createClient({ url: redisUrl, socket: { connectTimeout: 3000 } });
+    client.on("error", () => {});
+    await client.connect();
+    try {
+      const result = await client.set(key, "1", { NX: true, EX: 600 });
+      return result === "OK";
+    } finally {
+      await client.quit().catch(() => {});
+    }
   } catch {
     return true;
   }
