@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { looksLikeOpenQuestion, parseUtterance } from "../src/parse.js";
-import { answerSlackQuestion, findReplyFile, replyFile, slackAnswer, slackFileBytes } from "../src/slack/reply.js";
+import { answerSlackQuestion, findReplyFile, prepareSlackCaption, readAskReply, replyFile, slackAnswer, slackFileBytes } from "../src/slack/reply.js";
 import { createSession } from "../src/session.js";
 import { handleUtterance } from "../src/typed-path.js";
 import { storedFileBytes } from "../src/server.js";
@@ -531,6 +531,70 @@ test("answerSlackQuestion pins northline from an invited recall hit when visible
     recall: async () => hits,
   });
   assert.equal(outsider.file, "floor-plan.txt");
+});
+
+const NORTHLINE_ROWS = [
+  { text: "The floor plan is floor-plan.txt", fileName: "floor-plan.txt" },
+  {
+    text: "Northline ops note — please keep the announcement and both attachments.",
+    fileNames: [
+      "northline-ops-announcement.txt",
+      "northline-d7-floor-brief.txt",
+      "northline-launch-gate.txt",
+    ],
+  },
+];
+
+test("readAskReply splits a leaked attach fragment from the caption", () => {
+  const leaked = "Here’s the District 7 floor brief you requested.,\"attach\":\"floor-plan.txt\"}";
+  const reply = readAskReply(leaked);
+  assert.equal(reply.text, "Here’s the District 7 floor brief you requested.");
+  assert.equal(reply.attach, "floor-plan.txt");
+  assert.equal(reply.text.includes("attach"), false);
+  assert.equal(reply.text.includes("floor-plan.txt"), false);
+  const clean = readAskReply('{"text":"Here is the floor brief.","attach":"floor-plan.txt"}');
+  assert.equal(clean.text, "Here is the floor brief.");
+  assert.equal(clean.attach, "floor-plan.txt");
+});
+
+test("prepareSlackCaption strips attach fragments and replaces the empty fallback when a file is pinned", () => {
+  assert.equal(
+    prepareSlackCaption("Here’s the District 7 floor brief you requested.,\"attach\":\"floor-plan.txt\"}", "northline-d7-floor-brief.txt"),
+    "Here’s the District 7 floor brief you requested.",
+  );
+  assert.equal(
+    prepareSlackCaption("Nothing is stored that you can read about that.", "northline-d7-floor-brief.txt"),
+    "Here's the District 7 floor brief.",
+  );
+  assert.equal(
+    prepareSlackCaption("Nothing is stored that you can read.", "northline-d7-floor-brief.txt"),
+    "Here's the District 7 floor brief.",
+  );
+  assert.equal(
+    prepareSlackCaption("Nothing is stored that you can read about that.", ""),
+    "Nothing is stored that you can read about that.",
+  );
+});
+
+test("answerSlackQuestion scrubs a leaked attach fragment and pins the District 7 file", async () => {
+  const answer = await answerSlackQuestion(NORTHLINE_ROWS, "Send me the District 7 floor brief we kept.", {
+    env: { OPENROUTER_API_KEY: "sk-or-test" },
+    fetchImpl: modelReply("Here’s the District 7 floor brief you requested.,\"attach\":\"floor-plan.txt\"}"),
+  });
+  assert.equal(answer.file, "northline-d7-floor-brief.txt");
+  assert.equal(answer.text, "Here’s the District 7 floor brief you requested.");
+  assert.equal(answer.text.includes("attach"), false);
+  assert.equal(answer.text.includes("floor-plan.txt"), false);
+});
+
+test("answerSlackQuestion replaces the persona fallback when a file is pinned", async () => {
+  const answer = await answerSlackQuestion(NORTHLINE_ROWS, "northline-d7-floor-brief", {
+    env: { OPENROUTER_API_KEY: "sk-or-test" },
+    fetchImpl: modelReply('{"text":"Nothing is stored that you can read about that.","attach":null}'),
+  });
+  assert.equal(answer.file, "northline-d7-floor-brief.txt");
+  assert.equal(answer.text, "Here's the District 7 floor brief.");
+  assert.doesNotMatch(answer.text, /Nothing is stored/i);
 });
 
 test("storedFileBytes uses a hint slackFileId when the session row omitted it", async () => {

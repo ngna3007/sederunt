@@ -870,3 +870,105 @@ test("a floor-brief DM attaches northline from recall when the session only kept
     await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
   }
 });
+
+
+test("a file-pin DM caption strips leaked JSON and replaces the empty fallback", async () => {
+  const api = slackApi();
+  const uploadNames = [];
+  const fetch = async (url, init = {}) => {
+    const href = String(url);
+    if (href.includes("openrouter.ai")) {
+      const body = JSON.parse(init.body || "{}");
+      const asked = String(body.messages?.at(-1)?.content || "");
+      const content = /northline-d7-floor-brief\s*$/.test(asked)
+        ? '{"text":"Nothing is stored that you can read about that.","attach":null}'
+        : "Here’s the District 7 floor brief you requested.,\"attach\":\"floor-plan.txt\"}";
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { choices: [{ message: { content } }] };
+        },
+      };
+    }
+    if (href.endsWith("/files.getUploadURLExternal") && init.body) {
+      uploadNames.push(new URLSearchParams(String(init.body)).get("filename") || "");
+    }
+    return api.fetch(url, init);
+  };
+  const memory = mockAccount({ accountId: "company-keep-caption", delegates: ["delegate-keep-caption"] });
+  const app = createApp({
+    deps: {
+      memory,
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+      slack: { fetch, async members() { return ["U1"]; } },
+    },
+    env: {
+      COMPANY_MEMWAL_KEY: "key-sentinel-value",
+      COMPANY_MEMWAL_ACCOUNT_ID: "account-id-sentinel",
+      SLACK_SIGNING_SECRET: secret,
+      SLACK_BOT_TOKEN: "xoxb-test",
+      SEDERUNT_MEMBER: "U1",
+      OPENROUTER_API_KEY: "sk-or-test",
+    },
+    companyLoaded: true,
+  });
+  app.listen(0, "127.0.0.1");
+  await once(app, "listening");
+  const port = app.address().port;
+  const send = async (event) => {
+    const message = signed({ type: "message", user: "U1", ...event });
+    const reply = await post(port, message.payload, message.headers);
+    return { ...reply, body: JSON.parse(reply.raw) };
+  };
+  try {
+    const junk = await send({
+      subtype: "file_share",
+      channel: "C1",
+      text: "The floor plan is floor-plan.txt — please keep.",
+      client_msg_id: "keep-caption-plan",
+      files: [{ id: "F0", name: "floor-plan.txt", url_private_download: "https://files.slack.com/files-pri/T/F0/download/floor-plan.txt" }],
+    });
+    assert.equal(junk.status, 200, junk.raw);
+    const kept = await send({
+      subtype: "file_share",
+      channel: "C1",
+      text: "Northline ops note — please keep the announcement and both attachments.",
+      client_msg_id: "keep-caption-northline",
+      files: [
+        { id: "F1", name: "northline-ops-announcement.txt", url_private_download: "https://files.slack.com/files-pri/T/F1/download/northline-ops-announcement.txt" },
+        { id: "F2", name: "northline-d7-floor-brief.txt", url_private_download: "https://files.slack.com/files-pri/T/F2/download/northline-d7-floor-brief.txt" },
+        { id: "F3", name: "northline-launch-gate.txt", url_private_download: "https://files.slack.com/files-pri/T/F3/download/northline-launch-gate.txt" },
+      ],
+    });
+    assert.equal(kept.status, 200, kept.raw);
+
+    const leaked = await send({
+      channel: "D1",
+      channel_type: "im",
+      text: "Send me the District 7 floor brief we kept.",
+      client_msg_id: "dm-caption-leak",
+    });
+    assert.equal(leaked.status, 200, leaked.raw);
+    assert.equal(leaked.body.posted, true);
+    assert.ok(uploadNames.includes("northline-d7-floor-brief.txt"), `expected floor brief upload, got ${JSON.stringify(uploadNames)}`);
+    assert.equal(uploadNames.includes("floor-plan.txt"), false, `old floor-plan.txt must not be attached, got ${JSON.stringify(uploadNames)}`);
+    assert.deepEqual(api.comments, ["Here’s the District 7 floor brief you requested."]);
+    assert.equal(api.comments.some((text) => text.includes("attach") || text.includes("floor-plan.txt")), false);
+
+    const fallback = await send({
+      channel: "D1",
+      channel_type: "im",
+      text: "northline-d7-floor-brief",
+      client_msg_id: "dm-caption-fallback",
+    });
+    assert.equal(fallback.status, 200, fallback.raw);
+    assert.equal(fallback.body.posted, true);
+    assert.equal(uploadNames.filter((name) => name === "northline-d7-floor-brief.txt").length >= 2, true,
+      `expected a second floor brief upload, got ${JSON.stringify(uploadNames)}`);
+    assert.equal(api.comments.at(-1), "Here's the District 7 floor brief.");
+    assert.equal(api.comments.some((text) => /Nothing is stored/i.test(text)), false);
+  } finally {
+    await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
+  }
+});

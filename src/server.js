@@ -58,7 +58,7 @@ import { createSession } from "./session.js";
 import { createAskStore, askLimit, settledStatus } from "./ask/store.js";
 import { ASK_UNAVAILABLE, askSpendsQuota, humanAskText, runAsk } from "./ask/run.js";
 import { openRouterConfig } from "./openrouter.js";
-import { answerSlackQuestion, claimSlackAsk, findReplyFile, invitedFileRows, postSlackReply, slackChannelMembers, slackFileBytes } from "./slack/reply.js";
+import { answerSlackQuestion, claimSlackAsk, findReplyFile, invitedFileRows, postSlackReply, prepareSlackCaption, slackChannelMembers, slackFileBytes } from "./slack/reply.js";
 import { slackBotUserIds, slackDelivery, slackEventHasFiles, verifySlackRequest } from "./slack/sign.js";
 import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded, warmProofs } from "./typed-path.js";
 import { wireCalls } from "./tatum/client.js";
@@ -1220,6 +1220,7 @@ export function createApp(options = {}) {
             answer.file = named.name;
             answer.fileMeta = named;
           }
+          answer.text = prepareSlackCaption(answer.text, answer.file);
           const hint = named?.name ? named : answer.fileMeta;
           const bytes = answer.file ? await storedFileBytes(current, answer.file, deps, env, hint) : null;
           const reply = {

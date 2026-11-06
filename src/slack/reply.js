@@ -183,7 +183,7 @@ export function slackAnswer(visible, question) {
   if (file) {
     const row = rows.find((item) => rowHasFile(item, file)) ?? rows[0];
     const fact = String(row?.text ?? "").trim();
-    if (!fact) return { text: "Nothing is stored that you can read.", file: "" };
+    if (!fact) return { text: slackFileCaption(file), file };
     const text = fact.toLowerCase().includes(file.toLowerCase()) ? fact : `${fact}\n${file}`;
     return { text, file };
   }
@@ -284,7 +284,6 @@ export async function answerSlackQuestion(visible, question, options = {}) {
   });
   if (!completed.used || !completed.text) return fallback();
   const reply = readAskReply(completed.text);
-  if (!reply.text) return fallback();
   // Question-named files win over the model's attach so "District 7 floor
   // brief" picks northline-d7-floor-brief.txt, not a leftover floor-plan.txt.
   // Session-visible rows plus invite-checked recall hits. A warm isolate
@@ -293,8 +292,9 @@ export async function answerSlackQuestion(visible, question, options = {}) {
   const catalog = fileCatalog(rows, hits, options.memberId);
   const picked = findReplyFile(catalog, asked);
   const attached = picked?.name || listedFile(memories, reply.attach) || mentionedFile(memories, reply.text);
+  if (!reply.text && !attached) return fallback();
   return {
-    text: reply.text,
+    text: prepareSlackCaption(reply.text, attached),
     file: attached,
     fileMeta: picked && picked.name === attached ? picked : fileMeta(catalog, attached),
     source: "openrouter",
@@ -334,6 +334,9 @@ export function askMemories(rows, hits, limit = 20) {
   return picked;
 }
 
+const EMPTY_ASK_FALLBACK = /^(?:nothing(?: is)? stored(?: that you can read)?(?: about that)?|nothing stored matches that|there are no notes yet)\.?$/i;
+const ATTACH_FRAGMENT = /(?:^|[,{])\s*"attach"\s*:\s*(?:"([^"]*)"|null)\s*\}?\s*$/i;
+
 /** Parse the model's {"text","attach"} reply. Plain prose is the text with no attach. */
 export function readAskReply(raw) {
   const body = String(raw ?? "").trim();
@@ -342,15 +345,71 @@ export function readAskReply(raw) {
   if (open !== -1 && close > open) {
     try {
       const parsed = JSON.parse(body.slice(open, close + 1));
-      if (parsed && typeof parsed === "object" && typeof parsed.text === "string") {
+      if (parsed && typeof parsed === "object") {
         const attach = typeof parsed.attach === "string" && parsed.attach.trim() ? parsed.attach.trim() : null;
-        return { text: parsed.text.trim(), attach };
+        if (typeof parsed.text === "string") {
+          return { text: scrubSlackCaption(parsed.text), attach };
+        }
+        const prefix = scrubSlackCaption(body.slice(0, open));
+        if (prefix) return { text: prefix, attach };
       }
     } catch {
-      // Not JSON. The prose is the reply.
+      // Broken JSON. Split a trailing attach fragment from the prose.
     }
   }
-  return { text: body, attach: null };
+  const fragment = body.match(ATTACH_FRAGMENT);
+  if (fragment) {
+    const attach = fragment[1] && fragment[1].trim() ? fragment[1].trim() : null;
+    return { text: scrubSlackCaption(body.slice(0, fragment.index)), attach };
+  }
+  return { text: scrubSlackCaption(body), attach: null };
+}
+
+/** Drop leaked {"text","attach"} fragments so they never land in Slack. */
+export function scrubSlackCaption(text) {
+  let out = String(text ?? "").trim();
+  if (!out) return "";
+  out = out.replace(ATTACH_FRAGMENT, "").trim();
+  out = out.replace(/^\{?\s*"text"\s*:\s*"?/i, "");
+  out = out.replace(/"\s*\}?\s*$/, "");
+  out = out.replace(/[,{\s]+$/, "");
+  return out.trim();
+}
+
+function isEmptyAskFallback(text) {
+  const line = String(text ?? "").trim();
+  if (!line) return true;
+  return EMPTY_ASK_FALLBACK.test(line);
+}
+
+/** A short natural caption for a pinned file, e.g. northline-d7-floor-brief.txt. */
+export function slackFileCaption(name) {
+  const raw = String(name || "").trim();
+  if (!raw) return "Here's the file.";
+  const dot = raw.lastIndexOf(".");
+  const stem = (dot > 0 ? raw.slice(0, dot) : raw);
+  const label = stem.split(/[-_]+/).filter(Boolean)
+    .filter((word) => !/^northline$/i.test(word))
+    .map((word) => {
+      const district = word.match(/^d(\d+)$/i);
+      if (district) return `District ${district[1]}`;
+      return word.toLowerCase();
+    })
+    .join(" ")
+    .trim();
+  if (!label) return `Here's ${raw}.`;
+  return `Here's the ${label}.`;
+}
+
+/**
+ * Caption posted with a Slack ask reply. Strips leaked attach JSON. When a
+ * file was pinned, never leave the "Nothing is stored..." persona fallback.
+ */
+export function prepareSlackCaption(text, file) {
+  const caption = scrubSlackCaption(text);
+  const name = typeof file === "string" ? file.trim() : "";
+  if (name && isEmptyAskFallback(caption)) return slackFileCaption(name);
+  return caption;
 }
 
 /** The stored name of a listed file, or "" when the model named anything else. */
@@ -519,10 +578,10 @@ export async function claimSlackAsk(env = process.env, deliveryId = "", fetchImp
 export async function postSlackReply(input) {
   const token = input.token;
   const channel = input.channel;
-  const text = input.text;
+  const file = input.file;
+  const text = prepareSlackCaption(input.text, file?.name);
   if (!token || !channel || !text) return { posted: false, file: "" };
   const fetchImpl = input.fetchImpl || fetch;
-  const file = input.file;
   if (file?.name && file.bytes != null) {
     return postSlackFile({ token, channel, text, thread: input.thread, file, fetchImpl });
   }
