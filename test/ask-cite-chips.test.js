@@ -22,3 +22,11 @@ test("Ask cite path uses personLabel and strips raw Slack ids", () => {
   const chunk = askMap.slice(0, 500);
   assert.equal(chunk.includes("toLowerCase()"), false, chunk);
 });
+
+test("Ask cite chips join speaker and when once", () => {
+  const start = page.indexOf("function citeReadable(cite)");
+  assert.ok(start > 0);
+  const chunk = page.slice(start, start + 900);
+  assert.match(chunk, /if \(head && when && head === when\) head = ""/);
+  assert.match(page, /Label is the friendly speaker only/);
+});

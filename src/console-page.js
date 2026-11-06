@@ -6695,12 +6695,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
       label.textContent = sources.length === 1 ? "From 1 kept decision" : "From " + sources.length + " kept decisions";
       span.parentNode.append(label);
       appendCites(span.parentNode, sources.map(function (item) {
-        var when = relativeWhen(item.spokenAt) || whenLabel(item.spokenAt);
-        var who = personLabel(item.speaker) || "";
-        var label = who || when || "";
-        if (who && when) label = who + " · " + when;
-        return { label: label, roomId: item.roomId || "", spokenAt: item.spokenAt || "" };
-      }).filter(function (cite) { return cite.label; }));
+        // Label is the friendly speaker only; appendCites adds the time once.
+        return { label: personLabel(item.speaker) || "", roomId: item.roomId || "", spokenAt: item.spokenAt || "" };
+      }));
     }
     var actions = document.createElement("div");
     actions.className = "ask-actions";
@@ -6889,14 +6886,16 @@ if (sessionWhen && sessionWhen.dataset.at) {
 
   function appendCites(body, cites) {
     function citeReadable(cite) {
-      if (!cite || !cite.label) return "";
-      var parts = String(cite.label).split(" · ");
-      var head = String(parts[0] || "").trim();
-      var when = relativeWhen(cite.spokenAt) || whenLabel(cite.spokenAt) || (parts[1] || "").trim();
+      if (!cite) return "";
+      var head = String(cite.label || "").split(" · ")[0].trim();
+      var when = relativeWhen(cite.spokenAt) || whenLabel(cite.spokenAt) || "";
       // Never show raw Slack user/channel ids or UUIDs on Ask chips.
       if (/^u[a-z0-9_]{2,}$/i.test(head)) head = "";
       if (/^[cgd][a-z0-9]{8,}$/i.test(head)) head = "";
       if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(head)) head = "";
+      // If label was already a when-string, prefer spokenAt once.
+      if (head && when && head === when) head = "";
+      if (/^(today|yesterday|tomorrow)\b/i.test(head) && when) head = "";
       if (head && when) return head + " · " + when;
       return head || when || "";
     }
