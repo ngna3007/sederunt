@@ -354,3 +354,59 @@ test("memory failure releases deliveryId for retry", async () => {
   assert.notEqual(second.outcome, "duplicate-delivery");
   assert.ok((session.decisions || []).some((row) => /november 18/i.test(row.text)));
 });
+
+test("stable deliveryId avoids MemWal id collision", async () => {
+  const session = createSession();
+  const keys = [];
+  const texts = [];
+  const deps = {
+    memory: {
+      async remember(input) {
+        keys.push(input.idempotencyKey);
+        texts.push(input.text);
+        return { ok: true, blobId: `blob_${keys.length}` };
+      },
+    },
+    log() {},
+  };
+  const deliveryId = "1793965685.096989";
+  const first = await handleUtterance({
+    text: "Northline decision (pack-a) — please keep: office is District 7.",
+    memberId: "rowan",
+    door: "channel",
+    intent: "keep",
+    deliveryId,
+    participants: ["rowan"],
+    room: { id: "C-ops", kind: "channel", source: "slack", botPresent: true, memberIds: ["rowan"] },
+    session,
+  }, deps);
+  assert.ok((session.decisions || []).some((row) => /district 7/i.test(row.text)));
+  const id = session.decisions.find((row) => /district 7/i.test(row.text)).id;
+  assert.equal(id, "decision-1793965685_096989");
+  assert.equal(keys[0], deliveryId);
+  // A second isolate-style session with a depleted nextId still reuses the delivery key.
+  const session2 = createSession();
+  session2.nextId = 1;
+  const deps2 = {
+    memory: {
+      async remember(input) {
+        keys.push(input.idempotencyKey);
+        return { ok: true, blobId: "blob_other" };
+      },
+    },
+    log() {},
+  };
+  await handleUtterance({
+    text: "Northline decision (pack-b) — please keep: launch is November 18.",
+    memberId: "rowan",
+    door: "channel",
+    intent: "keep",
+    deliveryId: "1793965700.111111",
+    participants: ["rowan"],
+    room: { id: "C-ops", kind: "channel", source: "slack", botPresent: true, memberIds: ["rowan"] },
+    session: session2,
+  }, deps2);
+  assert.equal(keys[1], "1793965700.111111");
+  assert.notEqual(keys[0], keys[1]);
+  assert.equal(first.outcome !== "memory-remember-failed", true);
+});

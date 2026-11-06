@@ -1587,8 +1587,9 @@ async function keepDecision(input, session, deps, draft) {
   // With no upload, a filename written in the sentence is still the candidate.
   const named = await namedFiles(input, deps, draft);
   const stamp = stampOf(input);
+  const sourceDeliveryId = byteTrim(String(input.deliveryId ?? "").trim(), 255);
   const decision = {
-    id: nextId(session, "decision"),
+    id: stableDecisionId(session, sourceDeliveryId),
     roomId: draft.roomId,
     text: draft.text,
     speakerMemberId: input.memberId,
@@ -1604,11 +1605,11 @@ async function keepDecision(input, session, deps, draft) {
     kind: draft.kind || "decision",
     facts: [...(draft.facts ?? [])],
     checkpoint: stamp,
-    spokenAt: new Date().toISOString(),
+    spokenAt: spokenAtFor(sourceDeliveryId),
     fileNames: named,
     expiryEpoch: null,
     account: draft.account,
-    sourceDeliveryId: byteTrim(String(input.deliveryId ?? "").trim(), 255),
+    sourceDeliveryId,
     deleted: false,
   };
   if (deps.memory?.remember) {
@@ -1616,7 +1617,8 @@ async function keepDecision(input, session, deps, draft) {
       account: draft.account,
       kind: decision.kind,
       text: decision.text,
-      idempotencyKey: decision.id,
+      // Slack deliveryId is stable across retries/isolates; nextId counters are not.
+      idempotencyKey: sourceDeliveryId || decision.id,
       decision: decisionDocument(decision),
     });
     if (!saved) {
@@ -1635,7 +1637,7 @@ async function keepDecision(input, session, deps, draft) {
         account: draft.account,
         kind: decision.kind,
         text: decision.text,
-        idempotencyKey: `${decision.id}:chain`,
+        idempotencyKey: `${sourceDeliveryId || decision.id}:chain`,
         decision: decisionDocument(decision),
       });
     }
@@ -2518,6 +2520,26 @@ function nextId(session, prefix) {
   const id = `${prefix}-${session.nextId}`;
   session.nextId += 1;
   return id;
+}
+
+/** Slack (and similar) delivery ids must mint one stable decision id so MemWal
+ * idempotency keys do not collide across cold isolates that all restart nextId at 1. */
+function stableDecisionId(session, deliveryId) {
+  const src = byteTrim(String(deliveryId ?? "").trim(), 255);
+  if (!src) return nextId(session, "decision");
+  const safe = src.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80);
+  return `decision-${safe}`;
+}
+
+/** Derive spokenAt from a Slack message ts (seconds.micros) so retries share one payload. */
+function spokenAtFor(deliveryId) {
+  const src = String(deliveryId ?? "").trim();
+  const match = /^(\d{10})(?:\.(\d+))?$/.exec(src);
+  if (match) {
+    const ms = Number(match[1]) * 1000;
+    if (Number.isFinite(ms) && ms > 0) return new Date(ms).toISOString();
+  }
+  return new Date().toISOString();
 }
 
 function byteTrim(value, max) {
