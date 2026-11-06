@@ -42,8 +42,9 @@ function bytea(buffer) {
   return `\\x${Buffer.from(buffer).toString("hex")}`;
 }
 
-function cacheKey(tenantId, personId) {
-  return `${tenantId}\0${personId}`;
+function cacheKey(tenantId, personId, scopes = []) {
+  const scopeKey = normalizeScopes(scopes).slice().sort().join(" ");
+  return `${tenantId}\0${personId}\0${scopeKey}`;
 }
 
 function rowKey(tenantId, personId, provider) {
@@ -300,7 +301,10 @@ export function createPersonGoogleStore(options = {}) {
   }
 
   async function clear(tenantId, personId) {
-    cache.delete(cacheKey(tenantId, personId));
+    const prefix = `${tenantId}\0${personId}\0`;
+    for (const key of [...cache.keys()]) {
+      if (key.startsWith(prefix) || key === `${tenantId}\0${personId}`) cache.delete(key);
+    }
     await rows.delete(tenantId, personId, "google");
   }
 
@@ -322,9 +326,9 @@ export function createPersonGoogleStore(options = {}) {
       const accessToken = String(record?.accessToken || "");
       const expiresAt = Number(record?.expiresAt) || 0;
       if (accessToken && expiresAt > Date.now() + FRESH_MS) {
-        cache.set(cacheKey(tenantId, id), { accessToken, expiresAt });
+        cache.set(cacheKey(tenantId, id, scopes), { accessToken, expiresAt });
       } else {
-        cache.delete(cacheKey(tenantId, id));
+        cache.delete(cacheKey(tenantId, id, scopes));
       }
       return true;
     },
@@ -374,7 +378,7 @@ export function createPersonGoogleStore(options = {}) {
       const record = await load(tenantId, id);
       const status = described(record, required);
       if (!record?.refreshToken || !status.granted) return { accessToken: "", needsAccess: true };
-      const cached = cache.get(cacheKey(tenantId, id));
+      const cached = cache.get(cacheKey(tenantId, id, required));
       const fresh = tokenOptions.force !== true && cached?.accessToken && Number(cached.expiresAt) > Date.now() + FRESH_MS;
       if (fresh) return { accessToken: cached.accessToken, needsAccess: false };
       const next = await refresh(record.refreshToken, record.scopes);
@@ -386,7 +390,7 @@ export function createPersonGoogleStore(options = {}) {
       if (next.refreshToken !== record.refreshToken) {
         await persist(tenantId, id, next.refreshToken, record.scopes);
       }
-      cache.set(cacheKey(tenantId, id), { accessToken: next.accessToken, expiresAt: next.expiresAt });
+      cache.set(cacheKey(tenantId, id, required), { accessToken: next.accessToken, expiresAt: next.expiresAt });
       return { accessToken: next.accessToken, needsAccess: false };
     },
     /**

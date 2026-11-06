@@ -62,7 +62,7 @@ import { answerSlackQuestion, claimSlackAsk, findReplyFile, invitedFileRows, pos
 import { slackBotUserIds, slackDelivery, slackEventHasFiles, verifySlackRequest } from "./slack/sign.js";
 import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded, warmProofs } from "./typed-path.js";
 import { wireCalls } from "./tatum/client.js";
-import { createTenantBind } from "./tenant-bind.js";
+import { createTenantBind, requiresDurableBind } from "./tenant-bind.js";
 
 const port = Number(process.env.PORT || 8787);
 
@@ -284,39 +284,51 @@ async function calendarForRequest(workspace, { companyId = "", personId = "", re
   const grants = workspace.googleGrants;
   const tenantId = typeof companyId === "string" ? companyId.trim() : "";
   const person = typeof personId === "string" ? personId.trim() : "";
-  const oauthConsole = identityConfigured(env) && Boolean(person && tenantId);
-  if (tenantId && person && grants && typeof grants.openAccess === "function") {
-    const { createCalendarAdapter } = await import("./calendar/mcp.js");
-    const { calendarFakeEnabled } = await import("./calendar/fake.js");
-    if (!calendarFakeEnabled(env)) {
-      const adapter = createCalendarAdapter(env, {
-        save: workspace.calendarSave,
-        fetch: workspace.fetchImpl,
-        accessToken: async ({ force } = {}) => {
-          const opened = await grants.openAccess(person, {
-            tenantId,
-            force: force === true,
-            scopes: CALENDAR_SCOPES,
-          });
-          return opened?.accessToken || "";
-        },
-      });
-      return { adapter, personGrant: true, tenantId, personId: person };
+  const { createCalendarAdapter } = await import("./calendar/mcp.js");
+  const { calendarFakeEnabled } = await import("./calendar/fake.js");
+  const unavailable = {
+    adapter: {
+      async listUpcoming() { return { unavailable: true }; },
+      async readDay(day) { return { day, events: [], unavailable: true }; },
+      async readEventDetails() { throw Object.assign(new Error("Calendar is not connected."), { code: "not-connected" }); },
+      async updateEventDetails() { throw Object.assign(new Error("Calendar is not connected."), { code: "not-connected" }); },
+    },
+    personGrant: false,
+    tenantId,
+    personId: person,
+    connected: false,
+  };
+  // OAuth identity: only the signed-in person's scope-checked grant. Never env.
+  // AUTH_FAKE turns calendar fake on by default — still require calendar scopes.
+  if (identityConfigured(env)) {
+    if (!tenantId || !person || !grants || typeof grants.openAccess !== "function") {
+      return unavailable;
     }
-  }
-  // OAuth production never falls back to deployment calendar credentials.
-  if (oauthConsole) {
-    return {
-      adapter: {
-        async listUpcoming() { return { unavailable: true }; },
-        async readDay(day) { return { day, events: [], unavailable: true }; },
+    let granted = false;
+    try {
+      granted = await grants.granted(person, { tenantId, scopes: CALENDAR_SCOPES }) === true;
+    } catch {
+      return unavailable;
+    }
+    if (!granted) return unavailable;
+    if (calendarFakeEnabled(env)) {
+      return { adapter: createCalendarAdapter(env), personGrant: true, tenantId, personId: person, connected: true };
+    }
+    const adapter = createCalendarAdapter(env, {
+      save: null, // never persist oauth tokens into process env
+      fetch: workspace.fetchImpl,
+      accessToken: async ({ force } = {}) => {
+        const opened = await grants.openAccess(person, {
+          tenantId,
+          force: force === true,
+          scopes: CALENDAR_SCOPES,
+        });
+        return opened?.accessToken || "";
       },
-      personGrant: false,
-      tenantId,
-      personId: person,
-    };
+    });
+    return { adapter, personGrant: true, tenantId, personId: person, connected: true };
   }
-  return { adapter: workspace.deps.calendar, personGrant: false, tenantId, personId: person };
+  return { adapter: workspace.deps.calendar, personGrant: false, tenantId, personId: person, connected: calendarPresentedConnected(env) };
 }
 
 async function doorsForRequest(workspace, { companyId = "", personId = "", req } = {}) {
@@ -779,10 +791,15 @@ export function createApp(options = {}) {
     }
     if ((req.method === "GET" || req.method === "POST") && url.pathname === "/console/welcome") {
       const resolved = await resolveCompanyId(workspace, req, "");
+      if (resolved.denied || resolved.unauthorized) {
+        sendCompanyDenied(res, send, resolved);
+        return;
+      }
+      const personSpace = await resolvePersonTenantId(workspace, req, "");
       const companyId = resolved.companyId;
       const personId = String(guardConsole(req, env).session?.userId || "").trim();
-      const calendar = await calendarForRequest(workspace, { companyId, personId, req });
-      const doors = await doorsForRequest(workspace, { companyId, personId, req });
+      const calendar = await calendarForRequest(workspace, { companyId: personSpace.tenantId || companyId, personId, req });
+      const doors = await doorsForRequest(workspace, { companyId: personSpace.tenantId || companyId, personId, req });
       await handleWelcome({
         req, res, url, env, identity, send, redirect,
         readPosted: readPostedAll,
@@ -794,6 +811,7 @@ export function createApp(options = {}) {
         googleGrants: workspace.googleGrants,
         tenantId: companyId,
         personId,
+        tenantBind: workspace.tenantBind,
       });
       return;
     }
@@ -820,13 +838,22 @@ export function createApp(options = {}) {
     if (eventPath && (req.method === "GET" || req.method === "POST")) {
       let eventId = eventPath[1];
       try { eventId = decodeURIComponent(eventId); } catch { eventId = eventPath[1]; }
+      const gate = guardConsole(req, env);
+      const resolved = await resolvePersonTenantId(workspace, req, "");
+      if (resolved.denied || resolved.unauthorized) {
+        sendCompanyDenied(res, send, resolved);
+        return;
+      }
+      const personId = String(gate.session?.userId || gate.session?.memberId || "").trim();
+      const calendar = await calendarForRequest(workspace, { companyId: resolved.tenantId, personId, req });
       await handleCalendarEvent({
         req,
         res,
         env,
         send,
         readJson,
-        calendar: deps.calendar,
+        calendar: calendar.adapter,
+        connected: calendar.connected === true,
         sameOrigin: activitySameOrigin,
         id: eventId,
       });
@@ -1036,9 +1063,25 @@ export function createApp(options = {}) {
         send(res, 200, "application/json; charset=utf-8", JSON.stringify({ join }));
         return;
       }
+      const resolved = await resolveCompanyId(workspace, req, typeof body.company === "string" ? body.company : "");
+      if (resolved.denied || resolved.unauthorized) {
+        sendCompanyDenied(res, send, resolved);
+        return;
+      }
+      const joinCompanyId = resolved.companyId;
+      // OAuth with remote bind store: refuse empty-tenant sends (unbound callbacks).
+      if (identityConfigured(env) && !joinCompanyId) {
+        send(res, 409, "application/json; charset=utf-8", JSON.stringify({ join: "failed", reason: "no-workspace" }));
+        return;
+      }
+      if (identityConfigured(env) && requiresDurableBind(env) && !workspace.tenantBind) {
+        send(res, 503, "application/json; charset=utf-8", JSON.stringify({ join: "failed", reason: "bind-unavailable" }));
+        return;
+      }
       if (!workspace.joinInFlight) workspace.joinInFlight = new Map();
       const pending = workspace.joinInFlight;
-      const prior = pending.get(meetingUrl);
+      const flightKey = `${joinCompanyId}\0${meetingUrl}`;
+      const prior = pending.get(flightKey);
       if (prior) {
         const reused = await prior;
         send(res, 200, "application/json; charset=utf-8", JSON.stringify(reused));
@@ -1048,23 +1091,27 @@ export function createApp(options = {}) {
         let botId = "";
         let startedAt = "";
         let status = "not-configured";
-        let joinCompanyId = "";
-        const resolved = await resolveCompanyId(workspace, req, typeof body.company === "string" ? body.company : "");
-        if (resolved.denied || resolved.unauthorized) {
-          return { join: "denied", denied: true, unauthorized: resolved.unauthorized === true };
-        }
-        joinCompanyId = resolved.companyId;
         if (deps.meeting?.join) {
           try {
             const ready = await prepareWorkspace(workspace, joinCompanyId);
             const guest = normalizeHearing(ready?.hearing).name;
             const bot = await currentBot(workspace, req);
             const sent = await deps.meeting.join({ url: meetingUrl, name: guest, botName: bot.name });
-            status = "sent";
             botId = typeof sent?.id === "string" ? sent.id : "";
             startedAt = typeof sent?.startedAt === "string" ? sent.startedAt : (typeof sent?.started_at === "string" ? sent.started_at : "");
-            if (botId && joinCompanyId && workspace.tenantBind) {
-              await workspace.tenantBind.bind("bot", botId, joinCompanyId);
+            if (!botId) {
+              status = "failed";
+            } else if (joinCompanyId && workspace.tenantBind) {
+              const bound = await workspace.tenantBind.bind("bot", botId, joinCompanyId, {
+                requireRemote: requiresDurableBind(env),
+              });
+              if (!bound?.ok || (requiresDurableBind(env) && !bound.durable)) {
+                status = "failed";
+                return { join: status, reason: bound?.conflict ? "bind-conflict" : "bind-failed", botId };
+              }
+              status = "sent";
+            } else {
+              status = "sent";
             }
           } catch (error) {
             const message = error instanceof Error ? error.message : "";
@@ -1087,18 +1134,13 @@ export function createApp(options = {}) {
         }
         return { join: status };
       })();
-      pending.set(meetingUrl, work);
+      pending.set(flightKey, work);
       try {
         const result = await work;
-        if (result?.denied) {
-          sendCompanyDenied(res, send, result);
-          return;
-        }
-        send(res, 200, "application/json; charset=utf-8", JSON.stringify({ join: result.join }));
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify({ join: result.join, reason: result.reason || undefined }));
       } finally {
-        // Keep the promise briefly so a double-click shares one bot, then clear.
         setTimeout(() => {
-          if (pending.get(meetingUrl) === work) pending.delete(meetingUrl);
+          if (pending.get(flightKey) === work) pending.delete(flightKey);
         }, 15_000);
       }
       return;
@@ -2142,6 +2184,45 @@ function depsFor(workspace, companyId) {
 }
 
 /**
+ * Active space id for person-scoped grants (calendar), including personal.
+ * Membership-checked. Distinct from company memory tenancy.
+ *
+ * @returns {Promise<{ tenantId: string, denied: boolean, unauthorized: boolean }>}
+ */
+async function resolvePersonTenantId(workspace, req, explicit = "") {
+  const asked = typeof explicit === "string" ? explicit.trim() : "";
+  const env = workspace.env;
+  const gate = guardConsole(req, env);
+  const oauthOn = identityConfigured(env) && Boolean(workspace.identity);
+  if (!oauthOn) return { tenantId: asked, denied: false, unauthorized: false };
+  if (!gate.session) return { tenantId: "", denied: Boolean(asked), unauthorized: true };
+  if (gate.session.kind !== "oauth") {
+    if (asked) return { tenantId: "", denied: true, unauthorized: false };
+    return { tenantId: "", denied: false, unauthorized: false };
+  }
+  let tenants = [];
+  try {
+    tenants = await workspace.identity.myTenants(gate.session.accessToken);
+  } catch {
+    return { tenantId: "", denied: Boolean(asked), unauthorized: false };
+  }
+  const ids = new Set((Array.isArray(tenants) ? tenants : []).map((row) => row?.id).filter(Boolean));
+  if (asked) {
+    if (!ids.has(asked)) return { tenantId: "", denied: true, unauthorized: false };
+    return { tenantId: asked, denied: false, unauthorized: false };
+  }
+  try {
+    const spaces = await loadSpaceView(workspace.identity, gate.session);
+    if (spaces?.activeId && ids.has(spaces.activeId)) {
+      return { tenantId: spaces.activeId, denied: false, unauthorized: false };
+    }
+  } catch {
+    // empty
+  }
+  return { tenantId: "", denied: false, unauthorized: false };
+}
+
+/**
  * Company workspace id for console memory. Client-supplied ids are never
  * authorization: under OAuth identity they must match myTenants membership.
  * Provider callbacks use resolveBoundTenant instead (botId / Slack team+channel).
@@ -2162,8 +2243,9 @@ async function resolveCompanyId(workspace, req, explicit = "") {
     return { companyId: "", denied: Boolean(asked), unauthorized: true };
   }
   if (gate.session.kind !== "oauth") {
-    // Passphrase console under identity flags: treat asked as a local label.
-    return { companyId: asked, denied: false, unauthorized: false };
+    // Passphrase under identity cannot satisfy myTenants — never honor client company ids.
+    if (asked) return { companyId: "", denied: true, unauthorized: false };
+    return { companyId: "", denied: false, unauthorized: false };
   }
   let tenants = [];
   try {
@@ -2174,30 +2256,17 @@ async function resolveCompanyId(workspace, req, explicit = "") {
   const ids = new Set((Array.isArray(tenants) ? tenants : []).map((row) => row?.id).filter(Boolean));
   if (asked) {
     if (!ids.has(asked)) return { companyId: "", denied: true, unauthorized: false };
-    await rememberSlackTeamBind(workspace, asked).catch(() => {});
     return { companyId: asked, denied: false, unauthorized: false };
   }
   try {
     const spaces = await loadSpaceView(workspace.identity, gate.session);
     if (spaces?.activeId && spaces?.activeKind !== "personal" && ids.has(spaces.activeId)) {
-      await rememberSlackTeamBind(workspace, spaces.activeId).catch(() => {});
       return { companyId: spaces.activeId, denied: false, unauthorized: false };
     }
   } catch {
     // Fall through to empty — memory fails closed.
   }
   return { companyId: "", denied: false, unauthorized: false };
-}
-
-/**
- * Bind the deployment Slack team (when known) to the authenticated tenant so
- * later signed Slack callbacks resolve without last-active process state.
- */
-async function rememberSlackTeamBind(workspace, tenantId) {
-  const team = String(workspace.env?.SLACK_TEAM_ID || "").trim();
-  const tenant = String(tenantId || "").trim();
-  if (!team || !tenant || !workspace.tenantBind) return;
-  await workspace.tenantBind.bind("slack", team, tenant);
 }
 
 /**

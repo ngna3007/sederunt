@@ -28,6 +28,8 @@ import {
   visibleSpaces,
   workDomain,
 } from "./identity/onboarding.js";
+import { claimWorkspaceSlack } from "./slack/claim.js";
+import { requiresDurableBind } from "./tenant-bind.js";
 
 const TENANT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -472,6 +474,25 @@ async function chooseTool(ctx, session, active, tool, body) {
         const user = await identity.getUser(session.accessToken);
         const fake = { ...(user?.user_metadata?.sederunt_fake_tools || {}), [tool]: true };
         await identity.updateUser(session.accessToken, { sederunt_fake_tools: fake });
+        redirect(res, `/console/welcome?step=${here}`);
+        return;
+      }
+      // Explicit Slack claim: verified auth.test team (+ default channel) → active tenant.
+      // First-writer-wins; never bind from console browsing or a deploy SLACK_TEAM_ID.
+      if (tool === "slack" && active?.id && ctx.tenantBind) {
+        const claimed = await claimWorkspaceSlack({
+          tenantBind: ctx.tenantBind,
+          slack: ctx.slack,
+          channelId: ctx.slackChannel || "",
+          requireRemote: requiresDurableBind(env),
+        }, active.id);
+        if (!claimed.ok) {
+          const error = claimed.conflict
+            ? "Slack is already linked to another workspace."
+            : "Slack could not be linked for this workspace. Check the bot token and try again.";
+          await renderStep(ctx, session, active, here, { error });
+          return;
+        }
         redirect(res, `/console/welcome?step=${here}`);
         return;
       }

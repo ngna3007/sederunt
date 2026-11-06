@@ -1,3 +1,5 @@
+import { CALENDAR_SCOPES } from "../calendar/mcp.js";
+import { FORMS_SCOPES } from "../connectors/google-person.js";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { codeChallengeFor } from "./pkce.js";
 import { IdentityError, displayNameFromUser } from "./shared.js";
@@ -155,7 +157,10 @@ export function createFakeIdentity(env = {}) {
         tokens.providerAccessToken = `fa.google.${user.id}`;
         tokens.providerRefreshToken = `fr.google.${user.id}`;
         const override = String(env.SEDERUNT_AUTH_FAKE_SCOPE || "").trim();
-        tokens.scope = override || String(pending.scope || "");
+        const fallback = pending.intent === "calendar"
+          ? CALENDAR_SCOPES.join(" ")
+          : FORMS_SCOPES.join(" ");
+        tokens.scope = override || String(pending.scope || "") || fallback;
       }
       return tokens;
     },

@@ -37,7 +37,10 @@ export async function handleCalendarEvent(ctx) {
     return;
   }
   const calendar = ctx.calendar;
-  if (!calendarPresentedConnected(ctx.env) || typeof calendar?.readEventDetails !== "function") {
+  const connected = ctx.connected === true || (
+    ctx.connected == null && calendarPresentedConnected(ctx.env)
+  );
+  if (!connected || typeof calendar?.readEventDetails !== "function") {
     sendJson(send, res, 409, { ok: false, error: "not-connected", message: "Calendar is not connected." });
     return;
   }

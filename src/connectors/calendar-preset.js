@@ -51,7 +51,12 @@ export async function googleCalendarPresetState(input) {
         };
       }
     } catch {
-      // Fall through when grants cannot be read.
+      if (identityConfigured(input.env)) {
+        return {
+          state: "needs_access",
+          connectUrl: CALENDAR_CONNECT_PATH,
+        };
+      }
     }
   } else if (input.personId && input.grants && typeof input.grants.granted === "function") {
     try {
@@ -66,10 +71,18 @@ export async function googleCalendarPresetState(input) {
         };
       }
     } catch {
-      // Fall through when grants cannot be read.
+      if (identityConfigured(input.env)) {
+        return {
+          state: "needs_access",
+          connectUrl: CALENDAR_CONNECT_PATH,
+        };
+      }
     }
   }
-  if (calendarPresentedConnected(input.env)) return { state: "ready", connectUrl: "" };
+  // Local demos only — identity consoles already returned above.
+  if (!identityConfigured(input.env) && calendarPresentedConnected(input.env)) {
+    return { state: "ready", connectUrl: "" };
+  }
   return {
     state: "needs_access",
     connectUrl: CALENDAR_CONNECT_PATH,

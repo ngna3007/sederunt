@@ -18,7 +18,7 @@ import {
 } from "./pending.js";
 import { codeChallengeFor, createCodeVerifier } from "./pkce.js";
 import { displayNameFromUser, identityConfigured, providerFromUser, resolveSignInProviders } from "./shared.js";
-import { CALENDAR_SCOPES, applyCalendarConnection } from "../calendar/mcp.js";
+import { CALENDAR_SCOPES, applyCalendarConnection, calendarFakeEnabled, calendarScopesGranted } from "../calendar/mcp.js";
 import { FORMS_SCOPES } from "../connectors/google-person.js";
 
 const PROVIDERS = new Set(["google", "github"]);
@@ -189,16 +189,25 @@ async function finishCallback(ctx) {
     }
     if (pending.intent === "calendar" && pending.provider === "google") {
       try {
-        // Local/non-oauth demos may still mirror into process env. OAuth console
-        // Connected/read uses person_google_grants and ignores these when identity is on.
-        applyCalendarConnection(env, {
-          accessToken: tokens.providerAccessToken || "",
-          refreshToken: tokens.providerRefreshToken || "",
-          expiresAt: tokens.expiresAt,
-          scopes: grantedScopeList(tokens.scope),
-        }, ctx.calendarSave);
+        const scopes = grantedScopeList(tokens.scope);
+        if (identityConfigured(env)) {
+          // OAuth: never store deployment calendar tokens. Fake demos may flip
+          // presentation flags only; Connected/read uses person_google_grants.
+          if (!calendarScopesGranted(scopes)) env.CALENDAR_OAUTH_DECLINED = "1";
+          else {
+            delete env.CALENDAR_OAUTH_DECLINED;
+            if (calendarFakeEnabled(env)) env.SEDERUNT_CALENDAR_FAKE_CONNECTED = "1";
+          }
+        } else {
+          applyCalendarConnection(env, {
+            accessToken: tokens.providerAccessToken || "",
+            refreshToken: tokens.providerRefreshToken || "",
+            expiresAt: tokens.expiresAt,
+            scopes,
+          }, ctx.calendarSave);
+        }
       } catch {
-        // Person grant above is the source of truth for OAuth tenants.
+        // Presentation / local mirror is best-effort.
       }
     }
     const formsTenant = grantTenant;

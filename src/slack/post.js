@@ -61,6 +61,33 @@ export function createSlackClient(env = {}, fetchImpl = globalThis.fetch) {
         return "";
       }
     },
+    /**
+     * Verified Slack team identity for the bot token (auth.test).
+     * Used when a workspace explicitly claims Slack — never from a deploy env var.
+     */
+    async authTest() {
+      if (!token) return { ok: false, teamId: "", teamName: "" };
+      try {
+        const response = await fetchImpl("https://slack.com/api/auth.test", {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/x-www-form-urlencoded",
+          },
+          body: "",
+        });
+        if (!response.ok) return { ok: false, teamId: "", teamName: "" };
+        const body = await response.json();
+        if (body?.ok !== true) return { ok: false, teamId: "", teamName: "" };
+        return {
+          ok: true,
+          teamId: typeof body.team_id === "string" ? body.team_id.trim() : "",
+          teamName: typeof body.team === "string" ? body.team.trim() : "",
+        };
+      } catch {
+        return { ok: false, teamId: "", teamName: "" };
+      }
+    },
   };
 }
 

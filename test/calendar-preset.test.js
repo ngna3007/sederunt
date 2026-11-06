@@ -391,8 +391,9 @@ test("calendar preset needs access, then one connect serves calendar-edit and th
   assert.equal(grantedPayload.includes("fa.google"), false);
   assert.equal(grantedPayload.includes("fr.google"), false);
   assert.equal(env.SEDERUNT_CALENDAR_FAKE_CONNECTED, "1");
-  assert.equal(typeof env.CALENDAR_OAUTH_REFRESH_TOKEN, "string");
-  assert.equal(env.CALENDAR_OAUTH_REFRESH_TOKEN.length > 0, true);
+  // OAuth identity stores consent on person_google_grants — never deployment env tokens.
+  assert.equal(env.CALENDAR_OAUTH_REFRESH_TOKEN, undefined);
+  assert.equal(env.CALENDAR_MCP_TOKEN, undefined);
   assert.equal(env.CALENDAR_OAUTH_DECLINED, undefined);
 
   const shared = await call(port, "GET", "/console/calendar/events/launch-review", null, { cookie: cookieHeader(granted.jar) });
