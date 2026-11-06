@@ -67,7 +67,40 @@ test("unaddressed meeting line without hold stays silence", async () => {
   assert.equal((session.decisions || []).length, 0);
 });
 
-test("addressesHearing still requires Maple or trigger", () => {
+test("addressesHearing still requires Maple, Adam, or a trigger", () => {
   assert.equal(addressesHearing("Remember this: cedar92", null), false);
   assert.equal(addressesHearing("Maple remember cedar92", null), true);
+  assert.equal(addressesHearing("Adam remember this: District 7", null), true);
+});
+
+test("stripHearing drops address-only Adam and keeps the District 7 sentence", () => {
+  assert.equal(stripHearing("Adam.", null), "");
+  assert.equal(
+    stripHearing("Adam, remember this: the new HCMC office is District 7, Building B, floors 8 and 9, move-in December 2nd.", null),
+    "remember this: the new HCMC office is District 7, Building B, floors 8 and 9, move-in December 2nd.",
+  );
+});
+
+test("meeting line addressed to Adam keeps when hearing still defaults to Maple", async () => {
+  const session = createSession();
+  const room = { id: "bot-northline-adam", botPresent: true, source: "recall", kind: "meeting", memberIds: ["anh"] };
+  const text = "Adam, remember this: the new HCMC office is District 7, Building B, floors 8 and 9, move-in December 2nd.";
+  const kept = await handleUtterance({
+    text,
+    memberId: "anh",
+    door: "meeting",
+    addressed: addressesHearing(text, null),
+    deliveryId: "t-northline-d7",
+    participants: ["anh"],
+    room,
+    session,
+  }, {
+    async remember() { return { ok: true }; },
+  });
+  assert.notEqual(kept.kind, "silence");
+  const texts = (session.decisions || []).map((d) => d.text);
+  assert.ok(
+    texts.some((row) => /district 7/i.test(row)),
+    `expected District 7 in decisions, got ${JSON.stringify(texts)}`,
+  );
 });

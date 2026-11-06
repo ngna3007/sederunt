@@ -1,5 +1,11 @@
 /** The meeting guest when the operator has not chosen one. */
 export const DEFAULT_HEARING_NAME = "Maple";
+/**
+ * Names that always count as an address. The visible Recall bot defaults to
+ * Adam (`DEFAULT_BOT_NAME`), while hearing still defaults to Maple. A line
+ * that says "Adam, remember this…" must keep even when hearing was never saved.
+ */
+export const DEFAULT_HEARING_ALIASES = ["Adam", "Maple"];
 
 const NAME = /^[\p{L}\p{N}][\p{L}\p{N} '\-]{0,39}$/u;
 
@@ -31,7 +37,7 @@ export function addressesHearing(text, hearing) {
   const raw = String(text ?? "");
   const heard = normalizeHearing(hearing);
   const tokens = raw.split(/\s+/).map(letters).filter(Boolean);
-  if (tokens.includes(letters(heard.name))) return true;
+  if (tokens.some((token) => addressNames(heard).has(token))) return true;
   return heard.triggers.some((trigger) => triggerMatches(raw, tokens, trigger));
 }
 
@@ -46,7 +52,7 @@ export function stripHearing(text, hearing) {
     const at = lower.lastIndexOf(trigger.toLowerCase());
     if (at >= 0) cut = Math.max(cut, at + trigger.length);
   }
-  const words = new Set([letters(heard.name), ...heard.triggers.filter((trigger) => !trigger.includes(" ")).map(letters)]);
+  const words = addressNames(heard);
   let offset = 0;
   for (const part of raw.split(/(\s+)/)) {
     if (words.has(letters(part))) cut = Math.max(cut, offset + part.length);
@@ -57,6 +63,14 @@ export function stripHearing(text, hearing) {
   // Address-only ("Maple.") is not a decision. Empty after lets the
   // meeting door arm a short continuation window for the next chunk.
   return after;
+}
+
+function addressNames(heard) {
+  return new Set([
+    letters(heard.name),
+    ...DEFAULT_HEARING_ALIASES.map(letters),
+    ...heard.triggers.filter((trigger) => !trigger.includes(" ")).map(letters),
+  ]);
 }
 
 function triggerMatches(raw, tokens, trigger) {
