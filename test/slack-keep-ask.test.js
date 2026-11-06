@@ -999,3 +999,51 @@ test("semantic hit outside index still asks when invited", async () => {
   const blocked = mergeSemanticVisible(visible, hits, "When is the Northline launch?", 5, "UOUTSIDER");
   assert.equal(blocked.some((row) => /November 18/i.test(row.text)), false);
 });
+
+test("launch-gate questions prefer the November keep over maple/cedar unlock codes", async () => {
+  const { mergeSemanticVisible, recallVisibleForAsk } = await import("../src/slack/reply.js");
+  const maple = {
+    id: "decision-maple",
+    text: "remember the launch code is maple47",
+    roomId: "C-ops",
+    spokenAt: "2026-11-05T18:05:30.211Z",
+    speaker: "U0CE7CM2N8Z",
+  };
+  const cedar = {
+    id: "decision-cedar",
+    text: "the launch code is cedar 92",
+    roomId: "C-ops",
+    spokenAt: "2026-11-05T18:06:01.000Z",
+    speaker: "U0CE7CM2N8Z",
+  };
+  const gate = {
+    id: "decision-1793966203_477209",
+    text: "Northline decision — please keep: launch is November 18 if billing is green by November 12; otherwise slip to November 25.",
+    roomId: "C0CEZT4KYP2",
+    spokenAt: "2026-11-06T11:56:43.000Z",
+    speaker: "U0CE7CM2N8Z",
+    inviteMemberIds: ["U0CE7CM2N8Z", "U0CEZV62A00", "U0CF9UVT17T"],
+    fileNames: [],
+  };
+  const visible = [maple, cedar, gate];
+  const question = "What's the launch gate for November?";
+  const picked = recallVisibleForAsk(visible, question, 5);
+  assert.equal(picked[0].id, gate.id);
+  assert.match(picked[0].text, /November 18/);
+
+  const hits = [
+    { distance: 0.04, decision: maple },
+    { distance: 0.06, decision: cedar },
+    { distance: 0.4, decision: gate },
+  ];
+  const merged = mergeSemanticVisible(visible, hits, question, 5, "U0CE7CM2N8Z");
+  assert.equal(merged[0].id, gate.id);
+  assert.match(merged[0].text, /November 18/);
+  const mapleAt = merged.findIndex((row) => /maple47/i.test(row.text));
+  const cedarAt = merged.findIndex((row) => /cedar 92/i.test(row.text));
+  if (mapleAt >= 0) assert.ok(mapleAt > 0);
+  if (cedarAt >= 0) assert.ok(cedarAt > 0);
+
+  const blocked = mergeSemanticVisible([maple, cedar], [{ distance: 0.1, decision: gate }], question, 5, "UOUTSIDER");
+  assert.equal(blocked.some((row) => /November 18/i.test(row.text)), false);
+});

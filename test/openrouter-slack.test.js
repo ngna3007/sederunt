@@ -192,6 +192,35 @@ test("mergeSemanticVisible prefers MemWal recall hits inside the invite set", ()
   assert.equal(merged[1].id, "c");
 });
 
+test("launch-gate questions rank the November schedule keep ahead of maple/cedar unlock codes", () => {
+  const maple = { id: "maple", text: "remember the launch code is maple47", fileName: null };
+  const cedar = { id: "cedar", text: "the launch code is cedar 92", fileName: null };
+  const gate = {
+    id: "gate",
+    text: "Northline decision — please keep: launch is November 18 if billing is green by November 12; otherwise slip to November 25.",
+    fileName: null,
+  };
+  const visible = [maple, cedar, gate];
+  const question = "What's the launch gate for November?";
+  const picked = recallVisibleForAsk(visible, question, 5);
+  assert.equal(picked[0].id, "gate");
+  assert.match(picked[0].text, /November 18/);
+  assert.ok(picked.findIndex((row) => row.id === "gate") < Math.min(
+    ...[picked.findIndex((row) => row.id === "maple"), picked.findIndex((row) => row.id === "cedar")].map((i) => (i < 0 ? Number.POSITIVE_INFINITY : i)),
+  ));
+
+  const hits = [
+    { distance: 0.05, decision: maple },
+    { distance: 0.08, decision: cedar },
+    { distance: 0.42, decision: gate },
+  ];
+  const merged = mergeSemanticVisible(visible, hits, question, 5);
+  assert.equal(merged[0].id, "gate");
+  assert.match(merged[0].text, /November 18/);
+  const top = mergeSemanticVisible(visible, hits, question, 1);
+  assert.equal(top[0].id, "gate");
+});
+
 test("answerSlackQuestion uses options.recall before OpenRouter", async () => {
   const seen = [];
   let recalledQuery = "";

@@ -2177,6 +2177,33 @@ if (sessionWhen && sessionWhen.dataset.at) {
     document.getElementById("record-list").append(card);
   }
 
+  function decisionMatchesFilter(decision) {
+    if (!decision) return false;
+    if (recordFilter === "current") return decision.status === "current";
+    if (recordFilter === "clashing") return decision.status === "clashing";
+    return true;
+  }
+
+  function paintRecord() {
+    clear("record-list");
+    text("record-detail", "");
+    var all = (state && state.decisions) || [];
+    var rows = all.filter(decisionMatchesFilter);
+    rows.forEach(function (decision) { addDecisionRow(decision); });
+    var recordCount = document.getElementById("record-count");
+    if (recordCount && all.length) {
+      recordCount.textContent = rows.length ? ("1\u2013" + rows.length + " of " + all.length) : ("0 of " + all.length);
+    }
+  }
+
+  function applyRecordFilter(filter) {
+    recordFilter = filter === "current" || filter === "clashing" ? filter : "all";
+    document.querySelectorAll("[data-decision-filter]").forEach(function (node) {
+      node.setAttribute("aria-pressed", node.getAttribute("data-decision-filter") === recordFilter ? "true" : "false");
+    });
+    paintRecord();
+  }
+
   function paintPeople() {
     var list = document.getElementById("people-list");
     clear("people-list");
@@ -2762,12 +2789,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
     syncCalendarAsk();
     paintAttention();
     paintHistory();
-    clear("record-list");
     clear("people-list");
-    text("record-detail", "");
-    (next.decisions || []).forEach(function (decision) {
-      addDecisionRow(decision);
-    });
+    paintRecord();
     syncNotices();
     paintPeople(next);
     fitChips();
@@ -2798,10 +2821,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     }
     if (recordBoard) recordBoard.hidden = noKept;
     var recordFoot = document.getElementById("record-foot");
-    var recordCount = document.getElementById("record-count");
-    var keptCount = (next.decisions || []).length;
     if (recordFoot) recordFoot.hidden = noKept;
-    if (recordCount && keptCount) recordCount.textContent = "1\u2013" + keptCount + " of " + keptCount;
     var chatNext = document.getElementById("chat-next");
     if (chatNext) chatNext.hidden = true;
     var chatForm = document.getElementById("chat-form");
@@ -7263,6 +7283,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
   document.querySelectorAll("[data-room-filter]").forEach(function (button) {
     button.addEventListener("click", function () {
       applyRoomFilters(button.getAttribute("data-room-filter") || "all", document.getElementById("room-search").value);
+    });
+  });
+  document.querySelectorAll("[data-decision-filter]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      applyRecordFilter(button.getAttribute("data-decision-filter") || "all");
     });
   });
   var clearFilters = document.getElementById("clear-filters");

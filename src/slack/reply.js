@@ -457,12 +457,7 @@ export function recallVisibleForAsk(visible, question, maxMemories = 5) {
     const row = rows.find((item) => rowHasFile(item, file)) ?? rows[0];
     return row ? [row] : [];
   }
-  const words = questionWords(question);
-  const scored = rows.map((row) => {
-    const hay = String(row?.text ?? "").toLowerCase();
-    const hits = words.reduce((n, word) => n + (hay.includes(word) ? 1 : 0), 0);
-    return { row, hits };
-  });
+  const scored = rows.map((row) => ({ row, hits: askHits(row, question) }));
   scored.sort((a, b) => b.hits - a.hits);
   const matched = scored.filter((item) => item.hits > 0).map((item) => item.row);
   const picked = matched.length ? matched : scored.map((item) => item.row);
@@ -528,18 +523,17 @@ export function mergeSemanticVisible(visible, hits, question, maxMemories = 5, m
     if (seen.has(key)) continue;
     seen.add(key);
     ordered.push(row);
-    if (ordered.length >= limit) return ordered;
   }
-  if (!invite.length) return ordered;
-  const fallback = recallVisibleForAsk(invite, question, limit);
-  for (const row of fallback) {
-    const key = row.id || row.text;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    ordered.push(row);
-    if (ordered.length >= limit) break;
+  if (invite.length) {
+    const fallback = recallVisibleForAsk(invite, question, limit);
+    for (const row of fallback) {
+      const key = row.id || row.text;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      ordered.push(row);
+    }
   }
-  return ordered;
+  return finalizeAskRecall(ordered, question, limit);
 }
 
 
@@ -551,6 +545,44 @@ function plainFact(text, connectorId) {
 
 function questionWords(question) {
   return String(question ?? "").toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length >= 4 && !STOP.has(word));
+}
+
+const SCHEDULE_QUESTION = /\b(gate|schedule|dates?|billing|slip(?:ped)?|november|december|january|february|march|april|june|july|august|september|october)\b/i;
+const SCHEDULE_KEEP = /\b(?:(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}|billing|slip(?:ped)?|launch\s+gate|schedule)\b/i;
+const UNLOCK_CODE = /\b(?:maple\d+|cedar[\s-]?\d+|unlock(?:\s+code)?|launch\s+code)\b/i;
+
+/** Gate / schedule / date questions should prefer calendar keeps, not unlock phrases. */
+function isScheduleQuestion(question) {
+  return SCHEDULE_QUESTION.test(String(question ?? ""));
+}
+
+function isScheduleKeep(text) {
+  return SCHEDULE_KEEP.test(String(text ?? ""));
+}
+
+function isUnlockCodeMemory(text) {
+  const value = String(text ?? "");
+  if (isScheduleKeep(value)) return false;
+  return UNLOCK_CODE.test(value);
+}
+
+function askHits(row, question) {
+  const hay = String(row?.text ?? "").toLowerCase();
+  const words = questionWords(question);
+  let hits = words.reduce((n, word) => n + (hay.includes(word) ? 1 : 0), 0);
+  if (isScheduleQuestion(question)) {
+    if (isScheduleKeep(row?.text)) hits += 10;
+    if (isUnlockCodeMemory(row?.text)) hits -= 10;
+  }
+  return hits;
+}
+
+function finalizeAskRecall(rows, question, limit) {
+  const list = Array.isArray(rows) ? rows.slice() : [];
+  if (isScheduleQuestion(question)) {
+    list.sort((a, b) => askHits(b, question) - askHits(a, question));
+  }
+  return list.slice(0, limit);
 }
 
 
