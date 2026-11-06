@@ -355,6 +355,40 @@ test("the shipped adapter keeps the decision document and a second process shows
   }
 });
 
+test("failed account read still reports Connected doors", async () => {
+  const memory = {
+    async index() {
+      throw new Error("Calendar request failed secret-value");
+    },
+  };
+  const app = createApp({
+    deps: { memory, tatum: quietTatum() },
+    env: cleanEnv({
+      SLACK_BOT_TOKEN: "xoxb-test",
+      SLACK_SIGNING_SECRET: "signing",
+      SEDERUNT_MEMBER: "mina",
+    }),
+    companyLoaded: true,
+    linearReady: true,
+  });
+  const port = await listen(app);
+  try {
+    const failed = JSON.parse((await get(port, "/api/console?member=mina")).raw);
+    assert.equal(failed.read, "failed");
+    assert.equal(failed.doors.calendar, true);
+    assert.equal(failed.doors.linear, true);
+    assert.equal(failed.doors.slack, true);
+    assert.equal(failed.slack, "ready");
+    const html = (await get(port, "/console/setup")).raw;
+    assert.match(html, /id="cal-conn" class="conn-state">Connected/);
+    assert.match(html, /id="lin-conn" class="conn-state">Connected/);
+    assert.match(html, /id="slack-conn" class="conn-state">Connected/);
+    assert.equal(html.includes(">Unknown<"), false);
+  } finally {
+    await close(app);
+  }
+});
+
 test("a failed memory read is not an empty workspace", async () => {
   let reads = 0;
   const memory = {
@@ -377,9 +411,12 @@ test("a failed memory read is not an empty workspace", async () => {
     assert.equal(failed.message.includes("No decision is stored yet"), false);
     assert.equal(failed.message.includes("secret-value"), false);
     assert.equal((await get(port, "/console")).raw.includes("Read the account again"), true);
+    const second = JSON.parse((await get(port, "/api/console?member=mina")).raw);
+    assert.equal(second.read, "failed");
+    assert.equal(reads >= 2, true, "failed index must not stick — next GET retries");
     const again = JSON.parse((await post(port, "/api/console/read", {})).raw);
     assert.equal(again.read, "failed");
-    assert.equal(reads >= 2, true);
+    assert.equal(reads >= 3, true);
   } finally {
     await close(app);
   }

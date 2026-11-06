@@ -2324,17 +2324,21 @@ export async function rebuildCompanyIndex(session, deps = {}) {
     return { ok: false, empty: false };
   }
   if (!Array.isArray(docs)) return { ok: false, empty: false };
-  applyIndexedDocuments(current, docs, false);
-  if (deps.memory.index && deps.memory.recall) {
-    try {
-      const full = await deps.memory.recall();
-      if (Array.isArray(full)) applyIndexedDocuments(current, full, false);
-    } catch {
-      // The index still names who was invited. The sentence waits until recall can be read.
+  try {
+    applyIndexedDocuments(current, docs, false);
+    if (deps.memory.index && deps.memory.recall) {
+      try {
+        const full = await deps.memory.recall();
+        if (Array.isArray(full)) applyIndexedDocuments(current, full, false);
+      } catch {
+        // The index still names who was invited. The sentence waits until recall can be read.
+      }
     }
+    restoreMeetingConfirms(current);
+    return { ok: true, empty: current.decisions.length === 0 };
+  } catch {
+    return { ok: false, empty: false };
   }
-  restoreMeetingConfirms(current);
-  return { ok: true, empty: current.decisions.length === 0 };
 }
 
 function restoreMeetingConfirms() {

@@ -1172,15 +1172,15 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function paintConn(id, connected) {
     var node = document.getElementById(id);
     if (!node) return;
-    var failed = state && state.read === "failed";
-    node.textContent = failed ? "Unknown" : (connected ? "Connected" : "Not connected");
-    node.className = failed || !connected ? "conn-state off" : "conn-state";
+    // A MemWal account-read failure must not paint tools as Unknown - doors are independent.
+    node.textContent = connected ? "Connected" : "Not connected";
+    node.className = connected ? "conn-state" : "conn-state off";
     var connectId = id === "cal-conn" ? "cal-connect" : id === "lin-conn" ? "lin-connect" : id === "slack-conn" ? "slack-connect" : "";
     var connect = connectId ? document.getElementById(connectId) : null;
-    if (connect) connect.hidden = failed || !!connected;
+    if (connect) connect.hidden = !!connected;
     var manageId = id === "cal-conn" ? "cal-manage" : id === "lin-conn" ? "lin-manage" : id === "slack-conn" ? "slack-manage" : "";
     var manage = manageId ? document.getElementById(manageId) : null;
-    if (manage) manage.hidden = failed || !connected;
+    if (manage) manage.hidden = !connected;
     var askId = id === "cal-conn" ? "cal-ask-row" : id === "lin-conn" ? "lin-ask-row" : id === "slack-conn" ? "slack-ask-row" : "";
     var askRow = askId ? document.getElementById(askId) : null;
     if (askRow) askRow.classList.toggle("ask-quiet", !connected);
@@ -2687,6 +2687,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var errorBox = document.getElementById("read-error");
     if (errorBox && next.read === "failed") errorBox.classList.remove("state-info");
     showRetry(next.read === "failed", homeErrorCopy(next.message));
+    // Soft-retry a failed account read a few times - the server drops a failed cache.
+    if (next.read === "failed" && readingTries < 3) {
+      readingTries += 1;
+      if (!readingTimer) readingTimer = setTimeout(function () { readingTimer = null; load(); }, 2000);
+    }
     fillHearing(next.hearing);
     var loaded = next.companyLoaded === true;
     document.getElementById("onboard-missing").hidden = loaded;

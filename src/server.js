@@ -1054,7 +1054,7 @@ export function createApp(options = {}) {
       // defaultDeps always builds a Slack client, so do not key off deps.slack.
       // Tests pass options.deps and read the response body; production acks first.
       // Only early-ack asks (DMs / @mentions). Channel keeps must finish the Kept
-      // post before the response ends — waitUntil alone was freezing mid-keep.
+      // post before the response ends - waitUntil alone was freezing mid-keep.
       const canLiveAck = parsed.type === "event_callback" && Boolean(env.SLACK_BOT_TOKEN) && options.deps == null;
       const peek = slackDelivery(event, { botUserIds: slackBotUserIds(parsed, env) });
       const liveAck = canLiveAck && peek.ask === true;
@@ -1859,9 +1859,18 @@ async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0)
   }
   const id = companyKey(workspace, companyId);
   if (retry) workspace.loads.delete(id);
+  // A failed or rejected index must not stick for the life of the instance.
+  if (current.readReport && current.readReport.ok === false) workspace.loads.delete(id);
   if (!workspace.loads.has(id)) {
+    current.readReport = undefined;
     const pending = rebuildCompanyIndex(current, depsFor(workspace, companyId)).then((report) => {
       current.readReport = report;
+      if (!report?.ok) workspace.loads.delete(id);
+      return report;
+    }).catch(() => {
+      const report = { ok: false, empty: false };
+      current.readReport = report;
+      workspace.loads.delete(id);
       return report;
     });
     workspace.loads.set(id, pending);
