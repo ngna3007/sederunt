@@ -940,6 +940,9 @@ export function createApp(options = {}) {
               const people = [...new Set([...(delivery.participants ?? []), configured].filter(Boolean))];
               delivery.participants = people;
               delivery.room.memberIds = people;
+              // Tab-share and some streams arrive with words but no speaker.
+              // Typed fills this in; without it, storeDecision refuses as missing-member.
+              if (!delivery.memberId) delivery.memberId = configured;
             }
             const current = await prepareWorkspace(workspace, "");
             await handleUtterance({ ...delivery, session: current }, depsFor(workspace, ""));

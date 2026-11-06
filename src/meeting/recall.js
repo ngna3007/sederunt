@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { DEFAULT_BOT_NAME, normalizeBotName } from "../bot/identity.js";
 import { addressesHearing, normalizeHearing } from "../hearing.js";
 
@@ -157,9 +157,7 @@ export function recallTranscriptDelivery(payload) {
   const botId = typeof data.bot?.id === "string" && data.bot.id
     ? data.bot.id
     : (typeof data.bot_id === "string" && data.bot_id ? data.bot_id : "meeting");
-  const deliveryId = typeof data.transcript?.id === "string" && data.transcript.id
-    ? data.transcript.id
-    : (typeof inner.id === "string" ? inner.id : "");
+  const deliveryId = transcriptChunkId(data, inner, words, text);
   return {
     text,
     memberId,
@@ -175,6 +173,35 @@ export function recallTranscriptDelivery(payload) {
       memberIds: memberId ? [memberId] : [],
     },
   };
+}
+
+/**
+ * Recall reuses one transcript.id for every streaming chunk in a recording.
+ * A keep must key the chunk (utterance id, first-word stamp, or text), or the
+ * second spoken sentence is dropped as a duplicate of the first.
+ */
+function transcriptChunkId(data, inner, words, text) {
+  const innerId = typeof inner?.id === "string" && inner.id.trim() ? inner.id.trim() : "";
+  if (innerId) return innerId;
+  const transcriptId = typeof data?.transcript?.id === "string" && data.transcript.id.trim()
+    ? data.transcript.id.trim()
+    : "";
+  const stamp = wordStamp(words[0]);
+  const digest = createHash("sha256").update(text).digest("hex").slice(0, 16);
+  return [transcriptId, stamp, digest].filter(Boolean).join(":");
+}
+
+function wordStamp(word) {
+  if (!word || typeof word === "string") return "";
+  const start = word.start_timestamp ?? word.start_time ?? word.start ?? "";
+  if (typeof start === "number") return String(start);
+  if (typeof start === "string") return start.trim();
+  if (start && typeof start === "object") {
+    if (typeof start.relative === "number") return String(start.relative);
+    if (typeof start.relative === "string" && start.relative.trim()) return start.relative.trim();
+    if (typeof start.absolute === "string" && start.absolute.trim()) return start.absolute.trim();
+  }
+  return "";
 }
 
 /**
