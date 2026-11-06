@@ -2685,7 +2685,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     clearTimeout(slowTimer);
     slowTimer = null;
     var errorBox = document.getElementById("read-error");
-    if (errorBox && next.read === "failed") errorBox.classList.remove("state-info");
+    if (errorBox) errorBox.classList.remove("still-loading", "state-info");
     showRetry(next.read === "failed", homeErrorCopy(next.message));
     // Soft-retry a failed account read a few times - the server drops a failed cache.
     if (next.read === "failed" && readingTries < 3) {
@@ -2898,12 +2898,16 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var box = document.getElementById("read-error");
     var button = document.getElementById("read-again");
     var line = document.getElementById("read-error-copy");
-    if (box) box.hidden = !on;
+    if (box) {
+      box.hidden = !on;
+      if (!on) box.classList.remove("still-loading", "state-info");
+    }
     if (button) button.hidden = !on;
     if (on && copy && line) line.textContent = copy;
     if (button && on) {
       button.disabled = false;
       if (copy && String(copy).indexOf("Home could not be loaded") === 0) button.textContent = "Try again";
+      else if (copy === "Still loading…") button.textContent = "Retry";
     }
   }
 
@@ -3073,6 +3077,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var readError = document.getElementById("read-error");
     if (readError) {
       var showHomeError = (name === "home" || name === "rooms") && state && state.read === "failed";
+      if (!showHomeError) readError.classList.remove("still-loading", "state-info");
       readError.hidden = !showHomeError;
       var readAgain = document.getElementById("read-again");
       if (readAgain) readAgain.hidden = !showHomeError;

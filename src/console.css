@@ -3400,6 +3400,11 @@ body.is-reading #chip-hint:empty {
   min-height: 10px;
   width: 40%;
 }
+#read-error[hidden],
+#read-error[hidden].still-loading,
+#read-error[hidden].state-info {
+  display: none !important;
+}
 #read-error.still-loading {
   position: absolute !important;
   top: 8px;
