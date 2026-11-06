@@ -198,6 +198,16 @@ function commandStore(env, kind, run, clock = Date.now) {
         ["HSET", key("meta", id), "updatedAt", String(Date.now())],
       ]);
     },
+    async replace(id, text) {
+      const commands = [
+        ["DEL", key("chunks", id)],
+        ["HSET", key("meta", id), "updatedAt", String(Date.now())],
+      ];
+      if (text) {
+        commands.splice(1, 0, ["RPUSH", key("chunks", id), String(text)], ["EXPIRE", key("chunks", id), ttl]);
+      }
+      await run(commands);
+    },
     async finish(id, fields = {}) {
       const update = ["status", fields.status || "done", "updatedAt", String(Date.now())];
       if (fields.source) update.push("source", fields.source);
@@ -305,6 +315,11 @@ function memoryStore(env, clock = Date.now) {
       const list = chunkMap.get(id) || [];
       list.push(text);
       chunkMap.set(id, list);
+      const meta = metas.get(id);
+      if (meta) meta.updatedAt = String(Date.now());
+    },
+    async replace(id, text) {
+      chunkMap.set(id, text ? [String(text)] : []);
       const meta = metas.get(id);
       if (meta) meta.updatedAt = String(Date.now());
     },

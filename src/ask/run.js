@@ -68,7 +68,8 @@ export function askSystemPrompt(memories, botName = "") {
     "Memory recall ran before this reply. The memories below are the only kept decisions you may cite.",
     "If the question is what Sederunt is or how Sederunt works, answer in one or two short sentences from the built-in product knowledge, even when no memory applies. Do not answer a product question with the empty-memory sentence.",
     "If the question asks for a meeting, a decision, a date, an owner, or a number, answer only from the memories below and the earlier turns. Do not invent decisions, dates, owners, or numbers.",
-    `If that question needs a kept decision and none of the memories apply, say exactly: ${NOTHING}`,
+    "When a memory below clearly answers the question (same topic, date, place, or name), use that memory. Prefer the memory that matches the question over unlock codes or unrelated keeps.",
+    `Only if none of the memories below apply, say exactly: ${NOTHING}`,
     "Do not store anything from this question.",
     "Lead with the answer in one or two short sentences. Add at most three short bullet points when they help.",
     "When two memories disagree, say so plainly and name both.",
@@ -99,6 +100,33 @@ export function scrubAskIds(raw) {
     .replace(/\bU[A-Z0-9_]{2,}\b/gi, "someone")
     .replace(/\b[CGD][A-Z0-9]{8,}\b/g, "a channel")
     .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "a room");
+}
+
+/**
+ * When the model abstains with NOTHING but recall already found keeps, answer
+ * from the top ranked row so a schedule/gate question is not empty on camera.
+ * @param {string} question
+ * @param {Array<{ text?: string }>} rows
+ */
+export function groundedAskAnswer(question, rows) {
+  const list = (Array.isArray(rows) ? rows : [])
+    .map((row) => humanAskText(row?.text))
+    .filter((line) => line && line !== NOTHING && !SYSTEM_LINE.test(line));
+  if (!list.length) return "";
+  const stripKeep = (line) => {
+    const cleaned = String(line)
+      .replace(/^.*?please keep:\s*/i, "")
+      .replace(/^Northline decision\s*[—\-]\s*/i, "")
+      .trim();
+    return cleaned || line;
+  };
+  let text = stripKeep(list[0]);
+  const words = contentWords(question);
+  if (words.length) {
+    const matched = list.filter((line) => words.some((word) => line.toLowerCase().includes(word)));
+    if (matched.length) text = stripKeep(matched[0]);
+  }
+  return text;
 }
 
 function memoryLine(row) {
@@ -192,6 +220,15 @@ export async function runAsk(input) {
       await flush();
       await chain;
       const streamed = scrubAskIds(humanAskText(result.text));
+      if (streamed === NOTHING) {
+        const grounded = groundedAskAnswer(question, rows);
+        if (grounded) {
+          if (typeof store.replace === "function") await store.replace(id, grounded);
+          else await store.append(id, grounded);
+          await store.finish(id, { status: "done", source: "retrieval", sources, result: { body: grounded } });
+          return { source: "retrieval", sources };
+        }
+      }
       // A real answer includes the empty-memory sentence for a decision question.
       // The friendly failure sentence is not an answer, so the daily charge is returned.
       if ((result.used || wrote) && streamed && streamed !== ASK_UNAVAILABLE) {

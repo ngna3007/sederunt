@@ -3,7 +3,7 @@ import { once } from "node:events";
 import net from "node:net";
 import test from "node:test";
 import { askBackend, createAskStore, quotaDay, settledStatus } from "../src/ask/store.js";
-import { ASK_UNAVAILABLE, NOTHING, askFallbackText, askSpendsQuota, askSystemPrompt, runAsk } from "../src/ask/run.js";
+import { ASK_UNAVAILABLE, NOTHING, askFallbackText, askSpendsQuota, askSystemPrompt, groundedAskAnswer, runAsk } from "../src/ask/run.js";
 import { sealSession, sessionCookie } from "../src/console-auth.js";
 import { createApp } from "../src/server.js";
 import { createSession } from "../src/session.js";
@@ -195,7 +195,7 @@ test("ask system prompt answers what Sederunt is from product knowledge when mem
   assert.match(prompt, /even when no memory applies/);
   assert.match(prompt, /Do not answer a product question with the empty-memory sentence/);
   assert.match(prompt, /Do not invent decisions, dates, owners, or numbers/);
-  assert.match(prompt, /needs a kept decision and none of the memories apply/);
+  assert.match(prompt, /Only if none of the memories below apply/);
   assert.match(prompt, new RegExp(NOTHING.replace(/[.]/g, "\\.")));
   assert.match(prompt, /Memories:\n\(none\)/);
   assert.doesNotMatch(prompt, /Answer only from the memories below/);
@@ -211,7 +211,7 @@ test("ask system prompt still cites a kept decision and forbids inventing one", 
   }], "");
   assert.match(prompt, /1\. The booth opens at nine\./);
   assert.match(prompt, /Do not invent decisions, dates, owners, or numbers/);
-  assert.match(prompt, /needs a kept decision and none of the memories apply/);
+  assert.match(prompt, /Only if none of the memories below apply/);
   assert.doesNotMatch(prompt, /\(none\)/);
 });
 
@@ -384,7 +384,7 @@ test("ask quota is spent only for a real answer", () => {
   assert.equal(askSpendsQuota(undefined, "stopped"), false);
 });
 
-test("the empty-memory sentence still spends a question when it is the model answer", async () => {
+test("model NOTHING with a recalled keep falls back to that keep and still spends a question", async () => {
   const app = appFor({ env: { OPENROUTER_API_KEY: "test-key" }, deltas: [NOTHING] });
   const port = await listen(app);
   try {
@@ -393,15 +393,55 @@ test("the empty-memory sentence still spends a question when it is the model ans
     assert.equal(first.body.remaining, 4);
     const streamed = await readStream(port, first.body.id, 0);
     const text = streamed.events.filter((row) => row.event === "chunk").map((row) => row.data.t).join("");
-    assert.equal(text, NOTHING);
+    assert.match(text, /booth opens at nine/i);
+    assert.notEqual(text, NOTHING);
     const done = streamed.events.at(-1);
     assert.equal(done.event, "done");
-    assert.equal(done.data.source, "openrouter");
+    assert.equal(done.data.source, "retrieval");
     assert.equal(done.data.quota.used, 1);
     assert.equal(done.data.quota.remaining, 4);
   } finally {
     app.close();
   }
+});
+
+test("groundedAskAnswer prefers the November launch keep over unlock codes", () => {
+  const maple = { text: "remember the launch code is maple47" };
+  const cedar = { text: "the booth staging unlock is cedar 92" };
+  const gate = { text: "Northline decision — please keep: launch is November 18 if billing is green by November 12; otherwise slip to November 25." };
+  const answer = groundedAskAnswer("What's the launch gate for November?", [gate, maple, cedar]);
+  assert.match(answer, /November 18/);
+  assert.match(answer, /billing/i);
+  assert.equal(answer.includes("maple47"), false);
+});
+
+test("model NOTHING with no recalled keeps still returns NOTHING and spends a question", async () => {
+  const store = createAskStore({});
+  await runAsk({
+    store,
+    id: await store.create("rowan", "What's the launch gate for November?"),
+    question: "What's the launch gate for November?",
+    visible: [],
+    env: { OPENROUTER_API_KEY: "test-key" },
+    fetchImpl: async (_url, init) => {
+      const encoder = new TextEncoder();
+      const body = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: NOTHING } }] })}\n\n`));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    },
+  });
+  // find latest id
+  const overview = await store.overview("rowan", 5);
+  const id = overview.ids[0];
+  const chunks = await store.chunks(id);
+  assert.equal(chunks.join(""), NOTHING);
+  const meta = await store.meta(id);
+  assert.equal(meta.source, "openrouter");
 });
 
 test("a model reply that is exactly the unavailable sentence refunds the quota", async () => {
