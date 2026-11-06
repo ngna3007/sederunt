@@ -6291,8 +6291,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
         parts.clash.forEach(function (item) {
           var chip = document.createElement("span");
           chip.className = "cite-chip";
-          var who = String(item.speaker || "someone").trim().toLowerCase() || "someone";
-          chip.textContent = item.clock ? (who + " · " + item.clock) : who;
+          var who = personLabel(item.speaker) || "";
+          var label = who || item.clock || "";
+          if (who && item.clock) label = who + " · " + item.clock;
+          if (!label) return;
+          chip.textContent = label;
           chips.append(chip);
         });
         var clashKeys = {};
@@ -6303,10 +6306,15 @@ if (sessionWhen && sessionWhen.dataset.at) {
           return cite && !clashKeys[(cite.roomId || "") + "|" + (cite.spokenAt || "")];
         });
         function extraLabel(cite) {
-          var who = String(cite.speaker || "").trim().toLowerCase();
+          var who = personLabel(cite.speaker) || "";
           var clock = cite.clock || "";
           if (who && clock) return who + " · " + clock;
-          return cite.label || "";
+          if (who) return who;
+          if (clock) return clock;
+          // Drop raw Slack/member ids that leaked into cite.label.
+          var raw = String(cite.label || "").trim();
+          if (/^u[a-z0-9_]{2,}$/i.test(raw.split(" · ")[0] || "")) return clock || "";
+          return raw;
         }
         function addExtra(cite) {
           var chip = document.createElement("button");
@@ -6687,8 +6695,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
       label.textContent = sources.length === 1 ? "From 1 kept decision" : "From " + sources.length + " kept decisions";
       span.parentNode.append(label);
       appendCites(span.parentNode, sources.map(function (item) {
-        return { label: String(item.speaker || "someone").trim().toLowerCase() || "someone", roomId: item.roomId || "", spokenAt: item.spokenAt || "" };
-      }));
+        var when = relativeWhen(item.spokenAt) || whenLabel(item.spokenAt);
+        var who = personLabel(item.speaker) || "";
+        var label = who || when || "";
+        if (who && when) label = who + " · " + when;
+        return { label: label, roomId: item.roomId || "", spokenAt: item.spokenAt || "" };
+      }).filter(function (cite) { return cite.label; }));
     }
     var actions = document.createElement("div");
     actions.className = "ask-actions";
@@ -6876,7 +6888,22 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function appendCites(body, cites) {
-    var all = (cites || []).filter(function (cite) { return cite && cite.label; });
+    function citeReadable(cite) {
+      if (!cite || !cite.label) return "";
+      var parts = String(cite.label).split(" · ");
+      var head = String(parts[0] || "").trim();
+      var when = relativeWhen(cite.spokenAt) || whenLabel(cite.spokenAt) || (parts[1] || "").trim();
+      // Never show raw Slack user/channel ids or UUIDs on Ask chips.
+      if (/^u[a-z0-9_]{2,}$/i.test(head)) head = "";
+      if (/^[cgd][a-z0-9]{8,}$/i.test(head)) head = "";
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(head)) head = "";
+      if (head && when) return head + " · " + when;
+      return head || when || "";
+    }
+    var all = (cites || []).map(function (cite) {
+      var label = citeReadable(cite);
+      return label ? { label: label, roomId: cite.roomId || "", spokenAt: cite.spokenAt || "" } : null;
+    }).filter(Boolean);
     if (!all.length) return;
     var row = document.createElement("span");
     row.className = "cite-row";
@@ -6885,9 +6912,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var chip = document.createElement("button");
       chip.type = "button";
       chip.className = "cite-chip";
-      var citeWhen = relativeWhen(cite.spokenAt) || whenLabel(cite.spokenAt);
-      var citeRoom = String(cite.label || "").split(" · ")[0];
-      chip.textContent = citeWhen ? (citeRoom + " · " + citeWhen) : cite.label;
+      chip.textContent = cite.label;
       chip.title = cite.label;
       chip.addEventListener("click", function () {
         if (!cite.roomId) return;
@@ -8472,7 +8497,7 @@ export function speakerLabel(speaker, displayName, memberId) {
   if (shown && (value === shown || (mine && value === mine))) return shown;
   if (/^\d+$/.test(value)) return "";
   if (/^ROW-\d+$/i.test(value)) return "";
-  if (/^U[A-Z0-9_]{2,}$/.test(value)) return "";
+  if (/^U[A-Z0-9_]{2,}$/i.test(value)) return "";
   if (/^0x[0-9a-fA-F]+$/.test(value)) return "";
   if (/^[a-z][a-z0-9]*([._-][a-z0-9]+)*$/.test(value)) return value.split(/[._-]+/).map(function (part) { return part.charAt(0).toUpperCase() + part.slice(1); }).join(" ");
   return value;

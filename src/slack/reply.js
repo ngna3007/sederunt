@@ -328,6 +328,44 @@ function questionWords(question) {
   return String(question ?? "").toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length >= 4 && !STOP.has(word));
 }
 
+
+const askClaims = new Set();
+
+/**
+ * Win the right to post one Slack ask reply for this delivery.
+ * Process memory covers same-isolate retries; Upstash/KV SET NX covers
+ * another Vercel isolate that receives Slack's 3s retry.
+ *
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {string} deliveryId
+ * @param {typeof fetch} [fetchImpl]
+ * @returns {Promise<boolean>} true when this caller should post
+ */
+export async function claimSlackAsk(env = process.env, deliveryId = "", fetchImpl = fetch) {
+  const id = String(deliveryId || "").trim();
+  if (!id) return true;
+  const key = `sederunt:slack:ask:${id}`;
+  if (askClaims.has(key)) return false;
+  askClaims.add(key);
+  const url = String(env.UPSTASH_REDIS_REST_URL || env.KV_REST_API_URL || "").trim().replace(/\/$/, "");
+  const token = String(env.UPSTASH_REDIS_REST_TOKEN || env.KV_REST_API_TOKEN || "").trim();
+  if (!url || !token) return true;
+  try {
+    const response = await (fetchImpl || fetch)(`${url}/set/${encodeURIComponent(key)}/1?NX=true&EX=600`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) return true;
+    const body = await response.json().catch(() => null);
+    // Upstash REST SET NX returns result null when the key already exists.
+    if (body && Object.prototype.hasOwnProperty.call(body, "result") && body.result == null) {
+      return false;
+    }
+    return true;
+  } catch {
+    return true;
+  }
+}
+
 /**
  * Post one answer into the channel or direct message that asked.
  * A file is uploaded to that conversation. The token stays with the caller.

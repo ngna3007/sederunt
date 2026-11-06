@@ -58,7 +58,7 @@ import { createSession } from "./session.js";
 import { createAskStore, askLimit, settledStatus } from "./ask/store.js";
 import { ASK_UNAVAILABLE, askSpendsQuota, humanAskText, runAsk } from "./ask/run.js";
 import { openRouterConfig } from "./openrouter.js";
-import { answerSlackQuestion, postSlackReply, replyFile, slackChannelMembers, slackFileBytes } from "./slack/reply.js";
+import { answerSlackQuestion, claimSlackAsk, postSlackReply, replyFile, slackChannelMembers, slackFileBytes } from "./slack/reply.js";
 import { slackBotUserIds, slackDelivery, verifySlackRequest } from "./slack/sign.js";
 import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded, warmProofs } from "./typed-path.js";
 import { wireCalls } from "./tatum/client.js";
@@ -1195,6 +1195,18 @@ export function createApp(options = {}) {
           };
           // One post only. createSlackClient always has postMessage, so posting
           // through both that client and postSlackReply duplicated every DM answer.
+          // claimSlackAsk stops a Slack retry on another isolate from posting again.
+          const claimId = delivery.deliveryId || (typeof event.ts === "string" ? event.ts : "");
+          const won = await claimSlackAsk(env, claimId, deps.slack?.fetch || deps.fetch);
+          if (!won) {
+            replyHttp(200, "application/json; charset=utf-8", JSON.stringify({
+              body: chatAnswer(result.body),
+              decisions: current.decisions.filter((item) => item.account !== "personal" && item.kind !== "note" && !item.deleted).length,
+              posted: false,
+              duplicate: true,
+            }));
+            return;
+          }
           if (env.SLACK_BOT_TOKEN) {
             await postSlackReply({
               token: env.SLACK_BOT_TOKEN,
@@ -1231,13 +1243,20 @@ export function createApp(options = {}) {
       }
       })();
       if (liveAck) {
+        let deferred = false;
         try {
           const { waitUntil } = await import("@vercel/functions");
-          if (typeof waitUntil === "function") waitUntil(slackWork);
+          if (typeof waitUntil === "function") {
+            waitUntil(slackWork);
+            deferred = true;
+          }
         } catch {
           // Local Node has no request context. Awaiting slackWork still finishes the reply.
         }
         replyHttp(200, "application/json; charset=utf-8", JSON.stringify({ slack: "accepted" }));
+        // Do not await after a real waitUntil handoff — keeping the invocation open
+        // past the 3s Slack retry window re-delivers the same DM and double-posts.
+        if (deferred) return;
       }
       await slackWork;
       return;

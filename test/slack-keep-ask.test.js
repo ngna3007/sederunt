@@ -347,3 +347,58 @@ test("message_changed with files is kept", async () => {
     await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
   }
 });
+
+
+test("two deliveries of the same DM post only one Slack answer", async () => {
+  const { createSlackClient } = await import("../src/slack/post.js");
+  const { claimSlackAsk } = await import("../src/slack/reply.js");
+  const api = slackApi();
+  const fetch = async (url, init = {}) => {
+    const href = String(url);
+    if (href.includes("openrouter.ai")) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { choices: [{ message: { content: JSON.stringify({ text: "Nothing is stored that you can read about that.", attach: null }) } }] };
+        },
+      };
+    }
+    return api.fetch(url, init);
+  };
+  const memory = mockAccount({ accountId: "company-dup-ask", delegates: ["delegate-dup-ask"] });
+  const makeApp = () => createApp({
+    session: createSession(),
+    deps: {
+      memory,
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+      slack: createSlackClient({ SLACK_BOT_TOKEN: "xoxb-test" }, fetch),
+      fetch,
+    },
+    env: {
+      COMPANY_MEMWAL_KEY: "key-sentinel-value",
+      COMPANY_MEMWAL_ACCOUNT_ID: "account-id-sentinel",
+      SLACK_SIGNING_SECRET: secret,
+      SLACK_BOT_TOKEN: "xoxb-test",
+      SEDERUNT_MEMBER: "U1",
+      OPENROUTER_API_KEY: "sk-or-test",
+    },
+    companyLoaded: true,
+  });
+  const first = makeApp();
+  first.listen(0, "127.0.0.1");
+  await once(first, "listening");
+  const port = first.address().port;
+  try {
+    const message = signed({ type: "message", user: "U1", channel: "D1", channel_type: "im", text: "launch code?", client_msg_id: "dm-dup-1", ts: "1700000000.000100" });
+    const a = await post(port, message.payload, message.headers);
+    assert.equal(a.status, 200, a.raw);
+    // Same delivery id again (Slack retry / second isolate uses same claim key via memory Set in this process).
+    const b = await post(port, message.payload, message.headers);
+    assert.equal(b.status, 200, b.raw);
+    assert.equal(api.texts.length, 1, `expected one chat.postMessage, got ${api.texts.length}: ${JSON.stringify(api.texts)}`);
+    assert.equal(await claimSlackAsk({}, "1700000000.000100"), false);
+  } finally {
+    await new Promise((resolve, reject) => first.close((error) => (error ? reject(error) : resolve())));
+  }
+});
