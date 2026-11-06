@@ -1502,10 +1502,10 @@ async function storeDecision(input, session, deps, parsed) {
     });
   }
   const room = liveRoom(input);
-  if (!room) return refusal(session, "No decision is stored.");
+  if (!room) return refusal(session, "no-room");
   const inviteMemberIds = snapshot(input, room);
   const invite = checkInvite(input.memberId, inviteMemberIds);
-  if (!invite.ok) return refusal(session, invite.reason === "missing-member" ? "No decision is stored." : "No decision is stored.");
+  if (!invite.ok) return refusal(session, invite.reason === "missing-member" ? "missing-member" : "not-invited");
   if (input.intent !== "keep" && looksLikeOpenQuestion(sentence)) {
     return finish(session, {
       status: "recorded",
@@ -1540,7 +1540,7 @@ async function storeDecision(input, session, deps, parsed) {
         idempotencyKey: `${existing.id}:files:${fileSetFingerprint(merged.files)}`,
         decision: decisionDocument(existing),
       });
-      if (!saved) return refusal(session, "No decision is stored.");
+      if (!saved) return refusal(session, "memory-remember-failed");
     }
     return renderVisible(session, input.memberId, existing.roomId, null);
   }
@@ -1614,7 +1614,7 @@ async function keepDecision(input, session, deps, draft) {
       idempotencyKey: decision.id,
       decision: decisionDocument(decision),
     });
-    if (!saved) return refusal(session, "No decision is stored.");
+    if (!saved) return refusal(session, "memory-remember-failed");
     decision.blobId = saved.blobId;
     decision.expiryEpoch = epochOf(saved.expiryEpoch);
     if (typeof saved.objectId === "string" && saved.objectId) decision.objectId = saved.objectId;

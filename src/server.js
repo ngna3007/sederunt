@@ -1179,6 +1179,10 @@ export function createApp(options = {}) {
             explicitKeep,
             storedNew,
             downloadFailed,
+            hasMember: Boolean(delivery.memberId),
+            participantCount: Array.isArray(delivery.participants) ? delivery.participants.length : 0,
+            speakerInvited: Boolean(delivery.memberId) && Array.isArray(delivery.participants) && delivery.participants.includes(delivery.memberId),
+            roomId: delivery.room?.id || "",
           });
         }
         if (!question && !repeat && allowed && env.SLACK_BOT_TOKEN) {

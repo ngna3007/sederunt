@@ -306,7 +306,7 @@ test("speaker omitted from channel members still keeps", async () => {
     async remember() { return { ok: true }; },
   });
   assert.notEqual(kept.kind, "silence");
-  assert.notEqual(kept.outcome, "No decision is stored.");
+  assert.ok(!["no-room","missing-member","not-invited","memory-remember-failed"].includes(kept.outcome), kept.outcome);
   const texts = (session.decisions || []).map((d) => d.text);
   assert.ok(
     texts.some((row) => /district 7/i.test(row)),
