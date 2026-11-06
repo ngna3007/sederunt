@@ -39,14 +39,15 @@ export function createCalendarAdapter(env = process.env, options = {}) {
   if (calendarFakeEnabled(env)) return createFakeCalendarAdapter(env, { timeZone: calendarTimeZone(env), now: options.now });
   const fetchImpl = options.fetch || fetch;
   const save = options.save;
+  const tokenOpts = { accessToken: options.accessToken };
   return {
     endpoint: CALENDAR_URL,
     async readDay(day) {
-      const names = await listDay(fetchImpl, env, save, day);
+      const names = await listDay(fetchImpl, env, save, day, tokenOpts);
       return names;
     },
     async listTools() {
-      const token = await currentToken(env, fetchImpl, save);
+      const token = await currentToken(env, fetchImpl, save, tokenOpts);
       if (!token) return [];
       const response = await fetchImpl(CALENDAR_URL, {
         method: "POST",
@@ -60,7 +61,7 @@ export function createCalendarAdapter(env = process.env, options = {}) {
       return tools.map((tool) => ({ ...tool, write: tool.name === "update_event" }));
     },
     async readEvent({ id, title } = {}) {
-      const token = await currentToken(env, fetchImpl, save);
+      const token = await currentToken(env, fetchImpl, save, tokenOpts);
       const zone = zoneOf(env);
       if (!token || !id) return null;
       try {
@@ -100,7 +101,7 @@ export function createCalendarAdapter(env = process.env, options = {}) {
           end: toUtcIso(event.end),
           readOnly: event.readOnly === true,
         }));
-      });
+      }, tokenOpts);
     },
     async readEventDetails(id) {
       const clean = String(id || "").trim();
@@ -175,8 +176,8 @@ function zoneOf(env) {
   return calendarTimeZone(env);
 }
 
-async function withCalendarToken(env, fetchImpl, save, run) {
-  let token = await currentToken(env, fetchImpl, save);
+async function withCalendarToken(env, fetchImpl, save, run, tokenOpts = {}) {
+  let token = await currentToken(env, fetchImpl, save, tokenOpts);
   if (!token) throw new CalendarError("not-connected", "Calendar is not connected.");
   try {
     return await run(token);
@@ -184,7 +185,9 @@ async function withCalendarToken(env, fetchImpl, save, run) {
     if (error instanceof CalendarError) throw error;
     const status = Number(error?.status) || 0;
     if (status !== 401) throw asCalendarError(error);
-    const refreshed = await refreshAccessToken(env, fetchImpl, save);
+    const refreshed = typeof tokenOpts.accessToken === "function"
+      ? await tokenOpts.accessToken({ force: true })
+      : await refreshAccessToken(env, fetchImpl, save);
     if (!refreshed) throw new CalendarError("not-connected", "Calendar is not connected.");
     try {
       return await run(refreshed);
@@ -255,7 +258,7 @@ async function updateEvent(fetchImpl, token, params, fallbackZone) {
   return { id: eventIdFrom(result) || id };
 }
 
-async function listDay(fetchImpl, env, save, day) {
+async function listDay(fetchImpl, env, save, day, tokenOpts = {}) {
   const window = dayBounds(day);
   const args = {
     startTime: window.start,
@@ -264,14 +267,16 @@ async function listDay(fetchImpl, env, save, day) {
     pageSize: 20,
   };
   try {
-    const token = await currentToken(env, fetchImpl, save);
+    const token = await currentToken(env, fetchImpl, save, tokenOpts);
     if (!token) return { day, events: [], unavailable: true };
     const result = await toolsCall(fetchImpl, token, "list_events", args);
     return { day, events: titlesFrom(result), unavailable: false };
   } catch (error) {
     const status = error instanceof Error ? Number(error.status) : 0;
     if (status !== 401 && status !== 403) return { day, events: [], unavailable: true };
-    const refreshed = await refreshAccessToken(env, fetchImpl, save);
+    const refreshed = typeof tokenOpts.accessToken === "function"
+      ? await tokenOpts.accessToken({ force: true })
+      : await refreshAccessToken(env, fetchImpl, save);
     if (!refreshed) return { day, events: [], unavailable: true };
     try {
       const result = await toolsCall(fetchImpl, refreshed, "list_events", args);
@@ -292,7 +297,10 @@ function accessExpired(env, now = Date.now()) {
   return expiresAt <= now + 60_000;
 }
 
-async function currentToken(env, fetchImpl, save) {
+async function currentToken(env, fetchImpl, save, tokenOpts = {}) {
+  if (typeof tokenOpts.accessToken === "function") {
+    return (await tokenOpts.accessToken({ force: false })) || "";
+  }
   if (env.CALENDAR_MCP_TOKEN && !accessExpired(env)) return env.CALENDAR_MCP_TOKEN;
   if (!env.CALENDAR_OAUTH_REFRESH_TOKEN) return env.CALENDAR_MCP_TOKEN || "";
   return refreshAccessToken(env, fetchImpl, save);

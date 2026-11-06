@@ -26,6 +26,15 @@ export async function googleCalendarPresetState(input) {
   if (connectors.some((item) => item.preset === GOOGLE_CALENDAR_PRESET)) {
     return { state: "connected", connectUrl: "" };
   }
+  if (input.personId && input.grants && typeof input.grants.granted === "function") {
+    try {
+      if (await input.grants.granted(input.personId, { tenantId: input.tenantId })) {
+        return { state: "ready", connectUrl: "" };
+      }
+    } catch {
+      // Fall through to env / needs_access.
+    }
+  }
   if (calendarPresentedConnected(input.env)) return { state: "ready", connectUrl: "" };
   return {
     state: "needs_access",

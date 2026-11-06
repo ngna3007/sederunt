@@ -14,14 +14,14 @@ const DECISION_MARK = "sederunt-decision";
  * An epoch on the job is recorded. This process does not extend the blob.
  * Pass `client` to use a fake relayer. Without one, the live client is used.
  */
-export async function rememberCompany({ text, kind, knowableAtCheckpoint, decision, preference, roomSetting, expiry, room, access, hearing, learned, minutes, actionItem, account, client, env = process.env, idempotencyKey, tatum }) {
+export async function rememberCompany({ text, kind, knowableAtCheckpoint, decision, preference, roomSetting, expiry, room, access, hearing, learned, minutes, actionItem, account, tenantId, client, env = process.env, idempotencyKey, tatum }) {
   const key = env.COMPANY_MEMWAL_KEY;
   const accountId = env.COMPANY_MEMWAL_ACCOUNT_ID;
   if (!key || !accountId) {
     throw new Error("Company MemWal credentials are not set");
   }
   const memwal = client ?? liveClient(env);
-  const saved = await memwal.rememberAndWait(decisionPayload({ text, kind, decision, preference, roomSetting, expiry, room, access, hearing, learned, minutes, actionItem, account }), NAMESPACE, {
+  const saved = await memwal.rememberAndWait(decisionPayload({ text, kind, decision, preference, roomSetting, expiry, room, access, hearing, learned, minutes, actionItem, account, tenantId }), NAMESPACE, {
     timeoutMs: 45000,
     idempotencyKey: typeof idempotencyKey === "string" ? idempotencyKey : undefined,
   });
@@ -51,7 +51,7 @@ export async function recallHitCount({ client, env = process.env } = {}) {
  * Semantic recall for a natural-language question (Walrus Memory chatbot ask path).
  * Returns parsed decision documents, newest-among-matches left to the caller to filter.
  */
-export async function recallCompany({ query, topK = 10, client, env = process.env } = {}) {
+export async function recallCompany({ query, topK = 10, tenantId, client, env = process.env } = {}) {
   const key = env.COMPANY_MEMWAL_KEY;
   const accountId = env.COMPANY_MEMWAL_ACCOUNT_ID;
   if (!key || !accountId) return [];
@@ -67,28 +67,13 @@ export async function recallCompany({ query, topK = 10, client, env = process.en
   for (const hit of hits) {
     const parsed = readDecisionPayload(hit?.text);
     if (!parsed) continue;
-    rows.push({
-      account: parsed.account ?? "company",
-      kind: parsed.kind ?? "decision",
-      blobId: typeof hit?.blob_id === "string" ? hit.blob_id : null,
-      distance: typeof hit?.distance === "number" ? hit.distance : null,
-      decision: parsed.decision ?? null,
-      preference: parsed.preference ?? null,
-      roomSetting: parsed.roomSetting ?? null,
-      expiry: parsed.expiry ?? null,
-      room: parsed.room ?? null,
-      access: parsed.access ?? null,
-      hearing: parsed.hearing ?? null,
-      activity: parsed.activity ?? null,
-      learned: parsed.learned ?? null,
-      minutes: parsed.minutes ?? null,
-      actionItem: parsed.actionItem ?? null,
-    });
+    if (!tenantOwns(parsed, tenantId)) continue;
+    rows.push(rowFromParsed(parsed, hit));
   }
   return rows;
 }
 
-export async function indexCompany({ client, env = process.env } = {}) {
+export async function indexCompany({ client, env = process.env, tenantId } = {}) {
   const key = env.COMPANY_MEMWAL_KEY;
   const accountId = env.COMPANY_MEMWAL_ACCOUNT_ID;
   if (!key || !accountId) return [];
@@ -116,37 +101,25 @@ export async function indexCompany({ client, env = process.env } = {}) {
     for (const hit of hits) {
       const parsed = readDecisionPayload(hit?.text);
       if (!parsed) continue;
+      if (!tenantOwns(parsed, tenantId)) continue;
       const blobId = typeof hit?.blob_id === "string" ? hit.blob_id : "";
       const decisionId = typeof parsed.decision?.id === "string" ? parsed.decision.id : "";
       const mapKey = blobId || decisionId || `${parsed.kind}:${String(parsed.decision?.text || parsed.text || "").slice(0, 80)}`;
       if (!mapKey || byKey.has(mapKey)) continue;
-      byKey.set(mapKey, {
-        account: parsed.account ?? "company",
-        kind: parsed.kind ?? "decision",
-        blobId: blobId || null,
-        decision: parsed.decision ?? null,
-        preference: parsed.preference ?? null,
-        roomSetting: parsed.roomSetting ?? null,
-        expiry: parsed.expiry ?? null,
-        room: parsed.room ?? null,
-        access: parsed.access ?? null,
-        hearing: parsed.hearing ?? null,
-        activity: parsed.activity ?? null,
-        learned: parsed.learned ?? null,
-        minutes: parsed.minutes ?? null,
-        actionItem: parsed.actionItem ?? null,
-      });
+      byKey.set(mapKey, rowFromParsed(parsed, hit));
     }
   }
   return [...byKey.values()];
 }
 
 function decisionPayload(input) {
+  const tenantId = normalizeTenantId(input?.tenantId);
   return JSON.stringify({
     mark: DECISION_MARK,
     text: typeof input?.text === "string" ? input.text : "",
     kind: input?.kind ?? "decision",
     account: input?.account ?? "company",
+    tenantId,
     decision: input?.decision ?? null,
     preference: input?.preference ?? null,
     roomSetting: input?.roomSetting ?? null,
@@ -159,6 +132,43 @@ function decisionPayload(input) {
     minutes: input?.minutes ?? null,
     actionItem: input?.actionItem ?? null,
   });
+}
+
+/**
+ * Workspace ownership for company memory. A missing tenantId on a stored
+ * document is legacy/unscoped and is never visible to a real workspace id.
+ * An empty requested tenant (local single-space) only sees unscoped rows.
+ */
+export function tenantOwns(parsed, tenantId) {
+  const want = normalizeTenantId(tenantId);
+  const have = normalizeTenantId(parsed?.tenantId);
+  return want === have;
+}
+
+export function normalizeTenantId(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function rowFromParsed(parsed, hit) {
+  const blobId = typeof hit?.blob_id === "string" ? hit.blob_id : null;
+  return {
+    account: parsed.account ?? "company",
+    kind: parsed.kind ?? "decision",
+    tenantId: normalizeTenantId(parsed.tenantId),
+    blobId,
+    distance: typeof hit?.distance === "number" ? hit.distance : null,
+    decision: parsed.decision ?? null,
+    preference: parsed.preference ?? null,
+    roomSetting: parsed.roomSetting ?? null,
+    expiry: parsed.expiry ?? null,
+    room: parsed.room ?? null,
+    access: parsed.access ?? null,
+    hearing: parsed.hearing ?? null,
+    activity: parsed.activity ?? null,
+    learned: parsed.learned ?? null,
+    minutes: parsed.minutes ?? null,
+    actionItem: parsed.actionItem ?? null,
+  };
 }
 
 function readDecisionPayload(text) {

@@ -65,11 +65,16 @@ import { wireCalls } from "./tatum/client.js";
 
 const port = Number(process.env.PORT || 8787);
 
-function memoryAdapter(env = process.env, client, tatum) {
+function memoryAdapter(env = process.env, client, tatum, tenantId = "") {
   const company = env.COMPANY_MEMWAL_KEY;
   const personal = env.PERSONAL_MEMWAL_KEY;
   if (!company && !personal) return null;
-  return {
+  const boundTenant = typeof tenantId === "string" ? tenantId.trim() : "";
+  const adapter = {
+    tenantId: boundTenant,
+    __bind(nextTenant) {
+      return memoryAdapter(env, client, tatum, nextTenant);
+    },
     async remember(input) {
       if (input.account === "personal") {
         if (!personal) throw new Error("This process holds no personal delegate");
@@ -80,16 +85,60 @@ function memoryAdapter(env = process.env, client, tatum) {
         throw new Error("This process holds only the company delegate");
       }
       const { rememberCompany } = await import("./memory/company.js");
-      return publicMemory(await rememberCompany({ ...input, client, env, tatum }));
+      const stamp = typeof input.tenantId === "string" && input.tenantId.trim()
+        ? input.tenantId.trim()
+        : boundTenant;
+      return publicMemory(await rememberCompany({ ...input, tenantId: stamp, client, env, tatum }));
     },
     async index() {
       const { indexCompany } = await import("./memory/company.js");
-      return indexCompany({ client, env });
+      return indexCompany({ client, env, tenantId: boundTenant });
     },
     /** Semantic ask path: query Walrus Memory before an LLM answer (withMemWal shape). */
     async recall(query) {
       const { recallCompany } = await import("./memory/company.js");
-      return recallCompany({ query, topK: 20, client, env });
+      return recallCompany({ query, topK: 20, client, env, tenantId: boundTenant });
+    },
+  };
+  return adapter;
+}
+
+/**
+ * Re-bind an existing company memory adapter to a workspace tenant id.
+ * Shares the same MemWal client/env; only the ownership stamp/filter changes.
+ */
+/**
+ * Re-bind company memory to a workspace tenant id. Shares the MemWal client;
+ * only the ownership stamp and filter change. Injected test fakes are wrapped.
+ */
+/**
+ * Re-bind company memory to a workspace tenant id.
+ * MemWal adapters recreate with the same client; injected test fakes are wrapped.
+ */
+export function bindMemoryTenant(memory, tenantId, env = process.env, client, tatum) {
+  const bound = typeof tenantId === "string" ? tenantId.trim() : "";
+  if (!memory) return memoryAdapter(env, client, tatum, bound);
+  if ((memory.tenantId || "") === bound) return memory;
+  if (typeof memory.__bind === "function") return memory.__bind(bound);
+  return {
+    tenantId: bound,
+    async remember(input) {
+      const stamp = typeof input?.tenantId === "string" && input.tenantId.trim()
+        ? input.tenantId.trim()
+        : bound;
+      return memory.remember({ ...input, tenantId: stamp });
+    },
+    async index() {
+      const docs = await memory.index();
+      if (!Array.isArray(docs)) return docs;
+      const { tenantOwns } = await import("./memory/company.js");
+      return docs.filter((doc) => tenantOwns(doc, bound));
+    },
+    async recall(query) {
+      const docs = await memory.recall(query);
+      if (!Array.isArray(docs)) return docs;
+      const { tenantOwns } = await import("./memory/company.js");
+      return docs.filter((doc) => tenantOwns(doc, bound));
     },
   };
 }
@@ -219,6 +268,49 @@ function liveLinear(stub, loadToken = loadLinearToken, config = {}) {
   }
 }
 
+/**
+ * Calendar adapter for the signed-in person on a tenant. OAuth console uses
+ * person_google_grants; local/env demos keep the process calendar adapter.
+ */
+async function calendarForRequest(workspace, { companyId = "", personId = "", req } = {}) {
+  const env = workspace.env;
+  const grants = workspace.googleGrants;
+  const tenantId = typeof companyId === "string" ? companyId.trim() : "";
+  const person = typeof personId === "string" ? personId.trim() : "";
+  if (tenantId && person && grants && typeof grants.openAccess === "function") {
+    const { createCalendarAdapter } = await import("./calendar/mcp.js");
+    const { calendarFakeEnabled } = await import("./calendar/fake.js");
+    if (!calendarFakeEnabled(env)) {
+      const adapter = createCalendarAdapter(env, {
+        save: workspace.calendarSave,
+        fetch: workspace.fetchImpl,
+        accessToken: async ({ force } = {}) => {
+          const opened = await grants.openAccess(person, { tenantId, force: force === true });
+          return opened?.accessToken || "";
+        },
+      });
+      return { adapter, personGrant: true, tenantId, personId: person };
+    }
+  }
+  return { adapter: workspace.deps.calendar, personGrant: false, tenantId, personId: person };
+}
+
+async function doorsForRequest(workspace, { companyId = "", personId = "", req } = {}) {
+  const doors = doorReport(workspace.env, workspace.linearReady === true);
+  const tenantId = typeof companyId === "string" ? companyId.trim() : "";
+  const person = typeof personId === "string" ? personId.trim() : "";
+  const grants = workspace.googleGrants;
+  if (tenantId && person && grants && typeof grants.granted === "function") {
+    try {
+      const ok = await grants.granted(person, { tenantId });
+      doors.calendar = ok === true;
+    } catch {
+      doors.calendar = false;
+    }
+  }
+  return doors;
+}
+
 /** Door flags for the room. The values are booleans, and the secrets stay out. */
 export function doorReport(env = process.env, linearReady = false) {
   const meeting = meetingDoorReady(env);
@@ -329,6 +421,8 @@ export function createApp(options = {}) {
     loads,
     session,
     deps,
+    memwalClient: options.memwal || null,
+    recordingTenantId: "",
     companyLoaded: loadedCompany(options, deps, env, companies),
     linearReady: options.linearReady === true || (options.env ? false : linearReady()),
     recall: options.recall || null,
@@ -354,6 +448,7 @@ export function createApp(options = {}) {
   workspace.googleGrants = options.googleGrants || createPersonGoogleStore({ env, fetchImpl: options.fetch });
   workspace.calendarMcp = createFakeCalendarMcp();
   workspace.calendarSave = typeof options.calendarSave === "function" ? options.calendarSave : null;
+  workspace.fetchImpl = options.fetch || globalThis.fetch;
   async function mcpCallContext(req) {
     const gate = guardConsole(req, env);
     const tenantId = await resolveMcpSpace(gate, identity, workspace.deps.connectors);
@@ -605,7 +700,8 @@ export function createApp(options = {}) {
         send(res, 401, "application/json; charset=utf-8", JSON.stringify({ ok: false, reason: "sign-in" }));
         return;
       }
-      const current = await prepareWorkspace(workspace, "", false, 2000);
+      const companyId = await resolveCompanyId(workspace, req, "");
+      const current = await prepareWorkspace(workspace, companyId, false, 2000);
       const groups = searchPublishedActivity(current, current.rooms || [], {
         query: url.searchParams.get("q") || "",
         roomId: url.searchParams.get("room") || "",
@@ -629,10 +725,11 @@ export function createApp(options = {}) {
         send(res, 400, "application/json; charset=utf-8", JSON.stringify({ ok: false, reason: "op" }));
         return;
       }
-      const current = await prepareWorkspace(workspace, "", false, 2000);
+      const companyId = await resolveCompanyId(workspace, req, "");
+      const current = await prepareWorkspace(workspace, companyId, false, 2000);
       const id = typeof body.id === "string" ? body.id : "";
       const actor = gate.session.name?.trim() || "Someone";
-      const deps = depsFor(workspace, "");
+      const deps = depsFor(workspace, companyId);
       const result = body.op === "undo"
         ? await undoRecorded(current, deps, id, actor)
         : await replayFailure(current, deps, id);
@@ -641,14 +738,21 @@ export function createApp(options = {}) {
       return;
     }
     if ((req.method === "GET" || req.method === "POST") && url.pathname === "/console/welcome") {
+      const companyId = await resolveCompanyId(workspace, req, "");
+      const personId = String(guardConsole(req, env).session?.userId || "").trim();
+      const calendar = await calendarForRequest(workspace, { companyId, personId, req });
+      const doors = await doorsForRequest(workspace, { companyId, personId, req });
       await handleWelcome({
         req, res, url, env, identity, send, redirect,
         readPosted: readPostedAll,
         botPreferences: workspace.botPreferences,
-        calendar: workspace.deps.calendar,
-        doors: doorReport(env, workspace.linearReady === true),
+        calendar: calendar.adapter,
+        doors,
         slack: workspace.deps.slack,
         slackChannel: workspace.deps.app?.slackChannel || "",
+        googleGrants: workspace.googleGrants,
+        tenantId: companyId,
+        personId,
       });
       return;
     }
@@ -820,7 +924,7 @@ export function createApp(options = {}) {
         send(res, 401, "application/json; charset=utf-8", JSON.stringify({ error: "Sign in again.", reason: gate.reason || "missing" }));
         return;
       }
-      const companyId = url.searchParams.get("company") || "";
+      const companyId = await resolveCompanyId(workspace, req, url.searchParams.get("company") || "");
       const current = await prepareWorkspace(workspace, companyId, false, 2000);
       const workspaceKind = url.searchParams.get("workspace") || "";
       const memberId = consoleBoardMember(gate.session, env, workspaceKind, url.searchParams.get("member") || "");
@@ -829,6 +933,7 @@ export function createApp(options = {}) {
         current,
         memberId,
         workspaceKind,
+        { req, companyId },
       )));
       return;
     }
@@ -838,7 +943,7 @@ export function createApp(options = {}) {
         send(res, 401, "application/json; charset=utf-8", JSON.stringify({ error: "Sign in again.", reason: gate.reason || "missing" }));
         return;
       }
-      const companyId = url.searchParams.get("company") || "";
+      const companyId = await resolveCompanyId(workspace, req, url.searchParams.get("company") || "");
       const current = await prepareWorkspace(workspace, companyId, true);
       const workspaceKind = url.searchParams.get("workspace") || "";
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(await consolePayload(
@@ -846,6 +951,7 @@ export function createApp(options = {}) {
         current,
         consoleBoardMember(gate.session, env, workspaceKind, ""),
         workspaceKind,
+        { req, companyId },
       )));
       return;
     }
@@ -881,15 +987,18 @@ export function createApp(options = {}) {
         let botId = "";
         let startedAt = "";
         let status = "not-configured";
+        let joinCompanyId = "";
         if (deps.meeting?.join) {
           try {
-            const ready = await prepareWorkspace(workspace, "");
+            const companyId = await resolveCompanyId(workspace, req, "");
+            const ready = await prepareWorkspace(workspace, companyId);
             const guest = normalizeHearing(ready?.hearing).name;
             const bot = await currentBot(workspace, req);
             const sent = await deps.meeting.join({ url: meetingUrl, name: guest, botName: bot.name });
             status = "sent";
             botId = typeof sent?.id === "string" ? sent.id : "";
             startedAt = typeof sent?.startedAt === "string" ? sent.startedAt : (typeof sent?.started_at === "string" ? sent.started_at : "");
+            joinCompanyId = companyId;
           } catch (error) {
             const message = error instanceof Error ? error.message : "";
             status = message === "Meeting join is not configured" ? "not-configured" : "failed";
@@ -899,11 +1008,11 @@ export function createApp(options = {}) {
           const platform = meetingPlatform(meetingUrl);
           if (platform) {
             try {
-              const current = await prepareWorkspace(workspace, "");
+              const current = await prepareWorkspace(workspace, joinCompanyId || "");
               await handleUtterance({
                 session: current,
                 openedRoom: { platform, id: botId, ...(startedAt ? { startedAt } : {}) },
-              }, depsFor(workspace, ""));
+              }, depsFor(workspace, joinCompanyId || ""));
             } catch {
               // The door already sent the bot. A missed record does not change that word.
             }
@@ -944,13 +1053,15 @@ export function createApp(options = {}) {
               // Typed fills this in; without it, storeDecision refuses as missing-member.
               if (!delivery.memberId) delivery.memberId = configured;
             }
-            const current = await prepareWorkspace(workspace, "");
-            await handleUtterance({ ...delivery, session: current }, depsFor(workspace, ""));
+            const companyId = workspace.recordingTenantId || "";
+            const current = await prepareWorkspace(workspace, companyId);
+            await handleUtterance({ ...delivery, session: current }, depsFor(workspace, companyId));
           }
           const ended = meetingEnded(payload);
           if (ended?.roomId) {
-            const current = await prepareWorkspace(workspace, "");
-            await endMeeting(current, depsFor(workspace, ""), ended.roomId);
+            const companyId = workspace.recordingTenantId || "";
+            const current = await prepareWorkspace(workspace, companyId);
+            await endMeeting(current, depsFor(workspace, companyId), ended.roomId);
           }
         } catch {
           // A signed callback is still accepted when the transcript has no words.
@@ -963,8 +1074,12 @@ export function createApp(options = {}) {
       const delivery = await readRequest(req);
       const configured = typeof env.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
       if (!delivery.memberId && configured) delivery.memberId = configured;
-      const current = await prepareWorkspace(workspace, delivery.company || "");
-      const result = await handleUtterance({ ...delivery, session: current }, depsFor(workspace, delivery.company || ""));
+      const companyId = (typeof delivery.company === "string" && delivery.company.trim())
+        || workspace.recordingTenantId
+        || "";
+      if (companyId) workspace.recordingTenantId = companyId;
+      const current = await prepareWorkspace(workspace, companyId);
+      const result = await handleUtterance({ ...delivery, session: current }, depsFor(workspace, companyId));
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(result));
       return;
     }
@@ -1030,7 +1145,9 @@ export function createApp(options = {}) {
         send(res, 200, "application/json; charset=utf-8", JSON.stringify({ challenge: parsed.challenge }));
         return;
       }
-      const companyId = typeof parsed.company === "string" ? parsed.company : "";
+      const companyId = (typeof parsed.company === "string" && parsed.company.trim())
+        || workspace.recordingTenantId
+        || "";
       const event = parsed.event && typeof parsed.event === "object" ? parsed.event : parsed;
       const subtype = typeof event.subtype === "string" ? event.subtype : "";
       const changedFiles = subtype === "message_changed" && slackEventHasFiles(event);
@@ -1656,7 +1773,7 @@ async function handleAsk(workspace, req, res, url) {
           return store.finish(askId, next);
         },
       };
-      const companyId = typeof body.company === "string" ? body.company : "";
+      const companyId = await resolveCompanyId(workspace, req, typeof body.company === "string" ? body.company : "");
       const scope = body.workspace === "personal" ? "personal" : "company";
       const work = (async () => {
         const previous = [];
@@ -1882,21 +1999,65 @@ function activitySameOrigin(req) {
 }
 
 function companyKey(workspace, companyId) {
-  if (!workspace.companies) return "company";
-  if (companyId && workspace.companies[companyId]) return companyId;
-  return Object.keys(workspace.companies)[0];
+  const id = typeof companyId === "string" ? companyId.trim() : "";
+  if (workspace.companies) {
+    if (id && workspace.companies[id]) return id;
+    return Object.keys(workspace.companies)[0] || "company";
+  }
+  return id || "company";
 }
 
 function sessionFor(workspace, companyId) {
-  if (!workspace.companies) return workspace.session;
   const id = companyKey(workspace, companyId);
-  if (!workspace.sessions.has(id)) workspace.sessions.set(id, createSession());
+  if (!workspace.sessions) return workspace.session;
+  if (!workspace.sessions.has(id)) {
+    // Default key reuses the process session so handlers that still close over
+    // createApp's `session` stay on the same board as prepareWorkspace.
+    const seed = id === "company" && workspace.session ? workspace.session : createSession();
+    workspace.sessions.set(id, seed);
+  }
   return workspace.sessions.get(id);
 }
 
 function depsFor(workspace, companyId) {
-  if (!workspace.companies) return workspace.deps;
-  return { ...workspace.deps, memory: workspace.companies[companyKey(workspace, companyId)] };
+  const id = companyKey(workspace, companyId);
+  const tenantId = id === "company" ? "" : id;
+  if (workspace.companies) {
+    return { ...workspace.deps, memory: workspace.companies[id], tenantId };
+  }
+  const memory = bindMemoryTenant(
+    workspace.deps.memory,
+    tenantId,
+    workspace.env,
+    workspace.memwalClient,
+    workspace.deps.tatum,
+  );
+  return { ...workspace.deps, memory, tenantId };
+}
+
+/**
+ * Active company workspace id for OAuth console, or an explicit query/body id.
+ * Remembers the last company used so Slack/Recall keeps stamp the same tenant.
+ */
+async function resolveCompanyId(workspace, req, explicit = "") {
+  const asked = typeof explicit === "string" ? explicit.trim() : "";
+  if (asked) {
+    workspace.recordingTenantId = asked;
+    return asked;
+  }
+  const gate = guardConsole(req, workspace.env);
+  if (workspace.identity && gate.session?.kind === "oauth") {
+    try {
+      const spaces = await loadSpaceView(workspace.identity, gate.session);
+      if (spaces?.activeId && spaces?.activeKind !== "personal") {
+        workspace.recordingTenantId = spaces.activeId;
+        return spaces.activeId;
+      }
+    } catch {
+      // Fall through to the last recording tenant.
+    }
+  }
+  return typeof workspace.recordingTenantId === "string" ? workspace.recordingTenantId : "";
 }
 
 async function currentBot(workspace, req) {
@@ -1974,9 +2135,15 @@ export function consoleBoardMember(session, env, workspace, requested = "") {
   return signed;
 }
 
-async function consolePayload(workspace, current, memberId, kind = "company") {
+async function consolePayload(workspace, current, memberId, kind = "company", options = {}) {
   const open = kind === "personal" ? "personal" : "company";
-  const doors = doorReport(workspace.env, workspace.linearReady === true);
+  const req = options.req;
+  const companyId = typeof options.companyId === "string" ? options.companyId : "";
+  const gate = req ? guardConsole(req, workspace.env) : { session: null };
+  const personId = String(gate.session?.userId || "").trim();
+  const doors = req
+    ? await doorsForRequest(workspace, { companyId, personId, req })
+    : doorReport(workspace.env, workspace.linearReady === true);
   const slack = doors.slack ? "ready" : "not-set-up";
   if (!workspace.companyLoaded) {
     return {
@@ -2058,7 +2225,7 @@ async function consolePayload(workspace, current, memberId, kind = "company") {
     access: board.access,
     counts: board.counts,
     hearing: normalizeHearing(current.hearing),
-    meetings: await calendarMeetings(workspace),
+    meetings: await calendarMeetings(workspace, { companyId, personId, req }),
     chain: chainReport(workspace.deps?.tatum),
   };
   return payload;
@@ -2077,11 +2244,14 @@ function chainReport(tatum) {
   };
 }
 
-async function calendarMeetings(workspace) {
-  const list = workspace.deps?.calendar?.listUpcoming;
+async function calendarMeetings(workspace, ctx = {}) {
+  const cal = ctx.req
+    ? (await calendarForRequest(workspace, ctx)).adapter
+    : workspace.deps?.calendar;
+  const list = cal?.listUpcoming;
   if (typeof list !== "function") return [];
   try {
-    const rows = await list.call(workspace.deps.calendar);
+    const rows = await list.call(cal);
     if (!Array.isArray(rows)) return [];
     return rows.slice(0, 20).map((event) => ({
       id: String(event?.id || "").slice(0, 256),

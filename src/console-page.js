@@ -2054,7 +2054,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function roomIdentity(room) {
     var when = (room && (room.startedAt || room.recordingStart)) || "";
     var platform = (room && room.platform) || "";
-    var title = roomName(room) || (room && room.id) || "Room";
+    var named = roomName(room);
+    var title = named && !looksLikeRawRoomId(named) ? named : "";
+    if (!title && platform) title = platform;
+    if (!title) title = "Room";
     var stamp = relativeWhen(when) || whenLabel(when);
     return {
       title: title,
@@ -2140,7 +2143,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var roomCell = document.createElement("span");
     roomCell.className = "ex-plat";
     roomCell.dataset.col = "room";
-    var roomLabelText = roomName(decisionRoom) || decisionRoom.id || "";
+    var roomLabelText = roomName(decisionRoom) || "";
+    if (roomLabelText && looksLikeRawRoomId(roomLabelText)) roomLabelText = "";
+    if (!roomLabelText && decisionRoom.platform) roomLabelText = String(decisionRoom.platform);
+    if (!roomLabelText) roomLabelText = "Room";
     if (roomLabelText) {
       var roomText = document.createElement("span");
       roomText.className = "room-name";
@@ -5196,7 +5202,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function consoleQuery() {
-    return "?workspace=" + encodeURIComponent(workspaceKind);
+    var q = "?workspace=" + encodeURIComponent(workspaceKind);
+    var company = consoleSpaces && consoleSpaces.activeId && consoleSpaces.activeKind !== "personal"
+      ? String(consoleSpaces.activeId)
+      : "";
+    if (company) q += "&company=" + encodeURIComponent(company);
+    return q;
   }
 
   function closeMenu() {
