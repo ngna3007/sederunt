@@ -2686,11 +2686,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
     slowTimer = null;
     var errorBox = document.getElementById("read-error");
     if (errorBox) errorBox.classList.remove("still-loading", "state-info");
-    showRetry(next.read === "failed", homeErrorCopy(next.message));
-    // Soft-retry a failed account read a few times - the server drops a failed cache.
+    // Soft-retry a failed account read quietly - only show the error after retries exhaust.
     if (next.read === "failed" && readingTries < 3) {
       readingTries += 1;
+      showRetry(false);
+      showHomeSkeleton(true);
       if (!readingTimer) readingTimer = setTimeout(function () { readingTimer = null; load(); }, 2000);
+    } else {
+      showRetry(next.read === "failed", homeErrorCopy(next.message));
     }
     fillHearing(next.hearing);
     var loaded = next.companyLoaded === true;
