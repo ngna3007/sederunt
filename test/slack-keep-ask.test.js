@@ -759,3 +759,114 @@ test("a floor-brief ask attaches northline-d7-floor-brief even if the model pick
     await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
   }
 });
+
+test("a floor-brief DM attaches northline from recall when the session only kept floor-plan", async () => {
+  const api = slackApi();
+  const uploadNames = [];
+  const fetch = async (url, init = {}) => {
+    const href = String(url);
+    if (href.includes("openrouter.ai")) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            choices: [{ message: { content: '{"text":"Here is the District 7 floor brief.","attach":"floor-plan.txt"}' } }],
+          };
+        },
+      };
+    }
+    if (href.endsWith("/files.getUploadURLExternal") && init.body) {
+      uploadNames.push(new URLSearchParams(String(init.body)).get("filename") || "");
+    }
+    if (href.endsWith("/files.info") || href.includes("/files.info?")) {
+      const id = new URLSearchParams(String(init.body || "")).get("file") || "";
+      const files = {
+        F0: { id: "F0", name: "floor-plan.txt" },
+        F2: { id: "F2", name: "northline-d7-floor-brief.txt" },
+      };
+      const found = files[id] || files.F0;
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            ok: true,
+            file: {
+              ...found,
+              url_private_download: `https://files.slack.com/files-pri/T/${found.id}/download/${found.name}`,
+            },
+          };
+        },
+      };
+    }
+    if (href.includes("/download/northline-d7-floor-brief.txt")) {
+      return { ok: true, status: 200, async text() { return "D7 FLOOR"; } };
+    }
+    return api.fetch(url, init);
+  };
+  const base = mockAccount({ accountId: "company-keep-stale", delegates: ["delegate-keep-stale"] });
+  const memory = {
+    ...base,
+    async recall(query) {
+      if (/floor brief|northline-d7-floor-brief/i.test(String(query || ""))) {
+        return [{
+          decision: {
+            id: "decision-nl",
+            text: "Northline ops note — please keep the announcement and both attachments.",
+            inviteMemberIds: ["U1"],
+            fileNames: [{ name: "northline-d7-floor-brief.txt", slackFileId: "F2" }],
+          },
+          distance: 0.05,
+        }];
+      }
+      return base.recall(query);
+    },
+  };
+  const app = createApp({
+    deps: {
+      memory,
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+      slack: { fetch, async members() { return ["U1"]; } },
+    },
+    env: {
+      COMPANY_MEMWAL_KEY: "key-sentinel-value",
+      COMPANY_MEMWAL_ACCOUNT_ID: "account-id-sentinel",
+      SLACK_SIGNING_SECRET: secret,
+      SLACK_BOT_TOKEN: "xoxb-test",
+      SEDERUNT_MEMBER: "U1",
+      OPENROUTER_API_KEY: "sk-or-test",
+    },
+    companyLoaded: true,
+  });
+  app.listen(0, "127.0.0.1");
+  await once(app, "listening");
+  const port = app.address().port;
+  const send = async (event) => {
+    const message = signed({ type: "message", user: "U1", ...event });
+    const reply = await post(port, message.payload, message.headers);
+    return { ...reply, body: JSON.parse(reply.raw) };
+  };
+  try {
+    const junk = await send({
+      subtype: "file_share",
+      channel: "C1",
+      text: "The floor plan is floor-plan.txt — please keep.",
+      client_msg_id: "keep-stale-plan",
+      files: [{ id: "F0", name: "floor-plan.txt", url_private_download: "https://files.slack.com/files-pri/T/F0/download/floor-plan.txt" }],
+    });
+    assert.equal(junk.status, 200, junk.raw);
+    const dm = await send({
+      channel: "D1",
+      channel_type: "im",
+      text: "Send me the District 7 floor brief we kept.",
+      client_msg_id: "dm-stale-floor",
+    });
+    assert.equal(dm.status, 200, dm.raw);
+    assert.equal(dm.body.posted, true);
+    assert.ok(uploadNames.includes("northline-d7-floor-brief.txt"), `expected floor brief upload, got ${JSON.stringify(uploadNames)}`);
+    assert.equal(uploadNames.includes("floor-plan.txt"), false, `old floor-plan.txt must not be attached, got ${JSON.stringify(uploadNames)}`);
+  } finally {
+    await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
+  }
+});

@@ -9,8 +9,61 @@ const STOP = new Set(["what", "about", "that", "this", "with", "from", "your", "
  * names, not question patterns.
  */
 export function replyFile(visible, question) {
+  return findReplyFile(visible, question)?.name || "";
+}
+
+/**
+ * Invite-visible stored files. Used so attach selection can read session
+ * fileNames (and Slack file ids) even when a visible row hid them.
+ */
+export function invitedFileRows(decisions, memberId) {
+  const member = typeof memberId === "string" ? memberId.trim() : "";
+  const rows = [];
+  for (const row of decisions ?? []) {
+    if (!row || row.deleted === true) continue;
+    if (member) {
+      const invite = Array.isArray(row.inviteMemberIds) ? row.inviteMemberIds : [];
+      if (invite.length && !invite.includes(member)) continue;
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+/**
+ * Visible rows plus recall hits the asker is invited to. A stale isolate
+ * may omit a freshly kept file from session.visible; the hit still has
+ * fileNames and slackFileId.
+ */
+export function fileCatalog(visible, hits, memberId) {
+  const rows = [];
+  const seen = new Set();
+  const add = (row) => {
+    if (!row || typeof row !== "object") return;
+    const names = rowFileNames(row);
+    const key = `${String(row.id || "")}:${names.map((name) => name.toLowerCase()).join("|")}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    rows.push(row);
+  };
+  for (const row of visible ?? []) add(row);
+  const member = typeof memberId === "string" ? memberId.trim() : "";
+  for (const hit of hits ?? []) {
+    const decision = hit?.decision && typeof hit.decision === "object" ? hit.decision : hit;
+    if (!decision || typeof decision !== "object") continue;
+    if (member) {
+      const invite = Array.isArray(decision.inviteMemberIds) ? decision.inviteMemberIds : [];
+      if (!invite.length || !invite.includes(member)) continue;
+    }
+    add(decision);
+  }
+  return rows;
+}
+
+/** The stored file the question names, with any Slack/Console ids on that row. */
+export function findReplyFile(visible, question) {
   const asked = String(question ?? "").toLowerCase();
-  if (!asked) return "";
+  if (!asked) return null;
   const spaced = ` ${spacedWords(asked)} `;
   let best = "";
   for (const row of visible ?? []) {
@@ -18,7 +71,45 @@ export function replyFile(visible, question) {
       if (fileNameSaid(name, asked, spaced) && name.length > best.length) best = name;
     }
   }
-  return best;
+  return best ? fileMeta(visible, best) : null;
+}
+
+export function fileMeta(catalog, name) {
+  const wanted = String(name || "").trim();
+  if (!wanted) return null;
+  const key = wanted.toLowerCase();
+  for (const row of catalog ?? []) {
+    if (Array.isArray(row?.fileNames)) {
+      for (const item of row.fileNames) {
+        if (typeof item === "string") {
+          if (item.trim().toLowerCase() === key) {
+            return {
+              name: item.trim(),
+              slackFileId: typeof row.slackFileId === "string" ? row.slackFileId : "",
+              consoleFileId: row.consoleFileId ?? null,
+              folderId: row.folderId ?? null,
+            };
+          }
+        } else if (item && typeof item.name === "string" && item.name.trim().toLowerCase() === key) {
+          return {
+            name: item.name.trim(),
+            slackFileId: typeof item.slackFileId === "string" ? item.slackFileId : "",
+            consoleFileId: item.consoleFileId ?? null,
+            folderId: item.folderId ?? null,
+          };
+        }
+      }
+    }
+    if (typeof row?.fileName === "string" && row.fileName.trim().toLowerCase() === key) {
+      return {
+        name: row.fileName.trim(),
+        slackFileId: typeof row.slackFileId === "string" ? row.slackFileId : "",
+        consoleFileId: row.consoleFileId ?? null,
+        folderId: row.folderId ?? null,
+      };
+    }
+  }
+  return { name: wanted, slackFileId: "", consoleFileId: null, folderId: null };
 }
 
 /** Stored file names on a visible row: fileNames[], then fileName. */
@@ -196,10 +287,16 @@ export async function answerSlackQuestion(visible, question, options = {}) {
   if (!reply.text) return fallback();
   // Question-named files win over the model's attach so "District 7 floor
   // brief" picks northline-d7-floor-brief.txt, not a leftover floor-plan.txt.
-  const attached = replyFile(rows, asked) || listedFile(memories, reply.attach) || mentionedFile(memories, reply.text);
+  // Session-visible rows plus invite-checked recall hits. A warm isolate
+  // that indexed before the keep may omit northline-d7-floor-brief.txt
+  // from visible while recall(question) still returns it with slackFileId.
+  const catalog = fileCatalog(rows, hits, options.memberId);
+  const picked = findReplyFile(catalog, asked);
+  const attached = picked?.name || listedFile(memories, reply.attach) || mentionedFile(memories, reply.text);
   return {
     text: reply.text,
     file: attached,
+    fileMeta: picked && picked.name === attached ? picked : fileMeta(catalog, attached),
     source: "openrouter",
     recalled: memories.length,
   };

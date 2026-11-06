@@ -58,7 +58,7 @@ import { createSession } from "./session.js";
 import { createAskStore, askLimit, settledStatus } from "./ask/store.js";
 import { ASK_UNAVAILABLE, askSpendsQuota, humanAskText, runAsk } from "./ask/run.js";
 import { openRouterConfig } from "./openrouter.js";
-import { answerSlackQuestion, claimSlackAsk, postSlackReply, replyFile, slackChannelMembers, slackFileBytes } from "./slack/reply.js";
+import { answerSlackQuestion, claimSlackAsk, findReplyFile, invitedFileRows, postSlackReply, slackChannelMembers, slackFileBytes } from "./slack/reply.js";
 import { slackBotUserIds, slackDelivery, slackEventHasFiles, verifySlackRequest } from "./slack/sign.js";
 import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded, warmProofs } from "./typed-path.js";
 import { wireCalls } from "./tatum/client.js";
@@ -1199,6 +1199,7 @@ export function createApp(options = {}) {
             token: env.SLACK_BOT_TOKEN,
             channel,
             excludeTs: typeof event.ts === "string" ? event.ts : "",
+            memberId: delivery.memberId,
             // MemWal.recall(query) ranks memories before the model reads them.
             recall: doorDeps.memory?.recall
               ? async (query) => doorDeps.memory.recall(query)
@@ -1206,11 +1207,21 @@ export function createApp(options = {}) {
           });
           // Keep the model's Slack reply. result.learned is Ask AI / chat shaping
           // (shapeAnswer sentence dump) and must not overwrite Adam's text here.
-          // Question-named files win over the model's attach (floor-plan.txt
-          // must not beat northline-d7-floor-brief.txt on "floor brief").
-          const named = replyFile(result.visible, delivery.text);
-          if (named) answer.file = named;
-          const bytes = answer.file ? await storedFileBytes(current, answer.file, deps, env) : null;
+          // Question-named files win over the model's attach. Search the session
+          // file records (not only visible rows, which hide names when a proof
+          // fails) so "District 7 floor brief" pins northline-d7-floor-brief.txt
+          // instead of a leftover floor-plan.txt.
+          const catalog = [
+            ...invitedFileRows(current.decisions, delivery.memberId),
+            ...(Array.isArray(result.visible) ? result.visible : []),
+          ];
+          const named = findReplyFile(catalog, delivery.text);
+          if (named?.name) {
+            answer.file = named.name;
+            answer.fileMeta = named;
+          }
+          const hint = named?.name ? named : answer.fileMeta;
+          const bytes = answer.file ? await storedFileBytes(current, answer.file, deps, env, hint) : null;
           const reply = {
             channel,
             text: answer.text,
@@ -2273,26 +2284,34 @@ function withinMs(promise, ms) {
 
 // Console copy first; when it is missing (upload failed or timed out), the
 // bytes are fetched again from Slack by the stored Slack file id.
-export async function storedFileBytes(session, name, deps, env = {}) {
-  const decision = (session?.decisions ?? []).find((item) =>
-    !item.deleted && item.fileNames?.some((file) => file?.name === name));
-  const file = decision?.fileNames?.find((item) => item?.name === name);
+export async function storedFileBytes(session, name, deps, env = {}, hint = null) {
+  const wanted = String(name || "").trim().toLowerCase();
+  const decision = wanted
+    ? (session?.decisions ?? []).find((item) =>
+      !item.deleted && item.fileNames?.some((file) => String(file?.name || "").trim().toLowerCase() === wanted))
+    : null;
+  const recorded = decision?.fileNames?.find((item) => String(item?.name || "").trim().toLowerCase() === wanted);
+  const file = recorded || (hint && String(hint.name || "").trim().toLowerCase() === wanted ? hint : null);
   if (!file) return null;
-  if (file.consoleFileId && typeof deps.console?.download === "function") {
+  const consoleFileId = file.consoleFileId || hint?.consoleFileId;
+  const slackFileId = file.slackFileId || hint?.slackFileId;
+  const folderId = file.folderId || hint?.folderId;
+  const fileName = file.name || hint?.name || name;
+  if (consoleFileId && typeof deps.console?.download === "function") {
     try {
       const bytes = await deps.console.download({
-        id: file.consoleFileId,
-        name: file.name,
-        folderId: typeof file.folderId === "string" ? file.folderId : "",
+        id: consoleFileId,
+        name: fileName,
+        folderId: typeof folderId === "string" ? folderId : "",
       });
       if (bytes != null && bytes !== "") return String(bytes);
     } catch {
       // Fall through to Slack.
     }
   }
-  if (!file.slackFileId) return null;
+  if (!slackFileId) return null;
   try {
-    const loaded = await slackBytes(env, deps, { id: file.slackFileId, name: file.name });
+    const loaded = await slackBytes(env, deps, { id: slackFileId, name: fileName });
     return loaded?.bytes != null && loaded.bytes !== "" ? String(loaded.bytes) : null;
   } catch {
     return null;

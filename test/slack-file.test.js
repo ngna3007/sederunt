@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { looksLikeOpenQuestion, parseUtterance } from "../src/parse.js";
-import { answerSlackQuestion, slackAnswer, slackFileBytes } from "../src/slack/reply.js";
+import { answerSlackQuestion, findReplyFile, replyFile, slackAnswer, slackFileBytes } from "../src/slack/reply.js";
 import { createSession } from "../src/session.js";
 import { handleUtterance } from "../src/typed-path.js";
 import { storedFileBytes } from "../src/server.js";
-import { replyFile } from "../src/slack/reply.js";
 
 test("calendar and trip reads stay parse reads, not open questions", () => {
   assert.equal(looksLikeOpenQuestion("What is on Monday?"), false);
@@ -461,6 +460,140 @@ test("replyFile prefers northline-d7-floor-brief over floor-plan", () => {
   const named = replyFile(visible, "Send me the District 7 floor brief we kept.");
   if (named) answer.file = named;
   assert.equal(answer.file, "northline-d7-floor-brief.txt");
+});
+
+
+test("findReplyFile reads session fileNames when visible rows omit them", () => {
+  const sessionRows = [
+    { text: "The floor plan is floor-plan.txt", fileNames: [{ name: "floor-plan.txt", slackFileId: "F0" }], inviteMemberIds: ["U1"] },
+    {
+      text: "Northline ops note — please keep the announcement and both attachments.",
+      fileNames: [
+        { name: "northline-ops-announcement.txt", slackFileId: "F1" },
+        { name: "northline-d7-floor-brief.txt", slackFileId: "F2" },
+        { name: "northline-launch-gate.txt", slackFileId: "F3" },
+      ],
+      inviteMemberIds: ["U1"],
+    },
+  ];
+  const strippedVisible = [
+    { text: "The floor plan is floor-plan.txt", fileName: "floor-plan.txt" },
+    { text: "Northline ops note — please keep the announcement and both attachments.", fileName: null, fileNames: [] },
+  ];
+  assert.equal(replyFile(strippedVisible, "Send me the District 7 floor brief we kept."), "");
+  const picked = findReplyFile(sessionRows, "Send me the District 7 floor brief we kept.");
+  assert.equal(picked.name, "northline-d7-floor-brief.txt");
+  assert.equal(picked.slackFileId, "F2");
+  assert.equal(findReplyFile(sessionRows, "northline-d7-floor-brief").name, "northline-d7-floor-brief.txt");
+});
+
+test("answerSlackQuestion pins northline from an invited recall hit when visible only lists floor-plan", async () => {
+  const visible = [
+    { text: "The floor plan is floor-plan.txt", fileName: "floor-plan.txt", inviteMemberIds: ["U1"] },
+  ];
+  const hits = [{
+    decision: {
+      id: "decision-nl",
+      text: "Northline ops note — please keep the announcement and both attachments.",
+      inviteMemberIds: ["U1"],
+      fileNames: [
+        { name: "northline-ops-announcement.txt", slackFileId: "F1" },
+        { name: "northline-d7-floor-brief.txt", slackFileId: "F2" },
+        { name: "northline-launch-gate.txt", slackFileId: "F3" },
+      ],
+    },
+    distance: 0.1,
+  }];
+  const fetchImpl = async (url) => {
+    if (String(url).includes("openrouter.ai")) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { choices: [{ message: { content: '{"text":"Here is the floor brief.","attach":"floor-plan.txt"}' } }] };
+        },
+      };
+    }
+    return { ok: true, status: 200, async json() { return {}; } };
+  };
+  const answer = await answerSlackQuestion(visible, "Send me the District 7 floor brief we kept.", {
+    env: { OPENROUTER_API_KEY: "sk-or-test" },
+    memberId: "U1",
+    fetchImpl,
+    recall: async () => hits,
+  });
+  assert.equal(answer.file, "northline-d7-floor-brief.txt");
+  assert.equal(answer.fileMeta.slackFileId, "F2");
+  const outsider = await answerSlackQuestion(visible, "Send me the District 7 floor brief we kept.", {
+    env: { OPENROUTER_API_KEY: "sk-or-test" },
+    memberId: "UKHOA",
+    fetchImpl,
+    recall: async () => hits,
+  });
+  assert.equal(outsider.file, "floor-plan.txt");
+});
+
+test("storedFileBytes uses a hint slackFileId when the session row omitted it", async () => {
+  const session = createSession();
+  session.decisions.push({
+    id: "d-nl",
+    deleted: false,
+    fileNames: [{ name: "northline-d7-floor-brief.txt", consoleFileId: null, folderId: null }],
+  });
+  const asked = [];
+  const deps = {
+    slack: {
+      async downloadFile(file) {
+        asked.push(file);
+        return { name: file.name, bytes: "D7 FLOOR", id: file.id };
+      },
+    },
+  };
+  const bytes = await storedFileBytes(
+    session,
+    "northline-d7-floor-brief.txt",
+    deps,
+    {},
+    { name: "northline-d7-floor-brief.txt", slackFileId: "F2" },
+  );
+  assert.equal(bytes, "D7 FLOOR");
+  assert.deepEqual(asked, [{ id: "F2", name: "northline-d7-floor-brief.txt" }]);
+});
+
+test("a recall reloads slackFileId onto a session row that lost it", async () => {
+  const session = createSession();
+  session.decisions.push({
+    id: "decision-1",
+    roomId: "CNEW",
+    text: "Northline ops note — please keep the announcement and both attachments.",
+    speakerMemberId: "anh",
+    inviteMemberIds: ["anh"],
+    kind: "decision",
+    contradicts: [],
+    deleted: false,
+    account: "company",
+    fileNames: [{ name: "northline-d7-floor-brief.txt", consoleFileId: null, folderId: null }],
+    facts: [],
+  });
+  await handleUtterance({
+    ...channelUtterance(session, "Send me the District 7 floor brief we kept."),
+    intent: "recall",
+  }, {
+    memory: {
+      async recall() {
+        return [{
+          decision: {
+            id: "decision-1",
+            roomId: "CNEW",
+            text: "Northline ops note — please keep the announcement and both attachments.",
+            inviteMemberIds: ["anh"],
+            fileNames: [{ name: "northline-d7-floor-brief.txt", slackFileId: "F2" }],
+          },
+        }];
+      },
+    },
+  });
+  assert.equal(session.decisions[0].fileNames[0].slackFileId, "F2");
 });
 
 test("a same-text keep merges newly attached files instead of skipping them", async () => {

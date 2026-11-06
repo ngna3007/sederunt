@@ -1811,6 +1811,9 @@ async function loadSentences(session, deps) {
     decision.checkpoint = loaded.checkpoint ?? decision.checkpoint;
     if (decision.expiryEpoch == null && loaded.expiryEpoch != null) decision.expiryEpoch = loaded.expiryEpoch;
     if (loaded.spokenAt) decision.spokenAt = loaded.spokenAt;
+    if (Array.isArray(loaded.fileNames) && loaded.fileNames.length) {
+      decision.fileNames = mergeNamedFiles(decision.fileNames, loaded.fileNames).files;
+    }
   }
 }
 
