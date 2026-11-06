@@ -73,6 +73,7 @@ export function askSystemPrompt(memories, botName = "") {
     "Lead with the answer in one or two short sentences. Add at most three short bullet points when they help.",
     "When two memories disagree, say so plainly and name both.",
     "Plain language only. Never mention chains, blobs, checkpoints, wallets, or other storage details.",
+    "Never quote Slack user ids, channel ids, UUIDs, or other technical member ids. Prefer a person's name or say someone.",
     "Reply in the language of the latest question.",
     "",
     "Memories:",
@@ -80,12 +81,32 @@ export function askSystemPrompt(memories, botName = "") {
   ].join("\n");
 }
 
+/** Drop Slack/member/room technical ids from Ask memory lines. */
+export function askDisplayName(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  if (/^U[A-Z0-9_]{2,}$/i.test(text)) return "";
+  if (/^[CGD][A-Z0-9]{8,}$/i.test(text)) return "";
+  if (/^ROW-\d+$/i.test(text)) return "";
+  if (/^\d+$/.test(text)) return "";
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text)) return "";
+  return text;
+}
+
+/** Strip leftover Slack user/channel ids from model text before it reaches the page. */
+export function scrubAskIds(raw) {
+  return String(raw ?? "")
+    .replace(/\bU[A-Z0-9_]{2,}\b/gi, "someone")
+    .replace(/\b[CGD][A-Z0-9]{8,}\b/g, "a channel")
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "a room");
+}
+
 function memoryLine(row) {
   const bits = [String(row?.text ?? "").trim()];
-  const who = String(row?.speaker ?? "").trim();
+  const who = askDisplayName(row?.speaker);
   const when = String(row?.spokenAt ?? "").trim();
-  const room = String(row?.roomId ?? "").trim();
-  const extra = [who && `said by ${who}`, when && `on ${when.slice(0, 16).replace("T", " ")} UTC`, room && `room ${room}`].filter(Boolean);
+  const room = askDisplayName(row?.roomId);
+  const extra = [who && `said by ${who}`, when && `on ${when.slice(0, 16).replace("T", " ")} UTC`, room && `in ${room}`].filter(Boolean);
   return extra.length ? `${bits[0]} (${extra.join(", ")})` : bits[0];
 }
 
@@ -154,7 +175,7 @@ export async function runAsk(input) {
       const messages = [];
       for (const turn of (input.history ?? []).slice(-3)) {
         if (turn?.question && turn?.answer) {
-          messages.push({ role: "user", content: turn.question }, { role: "assistant", content: turn.answer });
+          messages.push({ role: "user", content: turn.question }, { role: "assistant", content: scrubAskIds(turn.answer) });
         }
       }
       messages.push({ role: "user", content: question });
@@ -164,13 +185,13 @@ export async function runAsk(input) {
         messages,
         fetchImpl: input.fetchImpl,
         onDelta: async (delta) => {
-          pending += delta;
+          pending += scrubAskIds(delta);
           if (pending.length >= FLUSH_CHARS || Date.now() - last >= FLUSH_MS) await flush();
         },
       });
       await flush();
       await chain;
-      const streamed = humanAskText(result.text);
+      const streamed = scrubAskIds(humanAskText(result.text));
       // A real answer includes the empty-memory sentence for a decision question.
       // The friendly failure sentence is not an answer, so the daily charge is returned.
       if ((result.used || wrote) && streamed && streamed !== ASK_UNAVAILABLE) {
@@ -184,7 +205,7 @@ export async function runAsk(input) {
       return { source: "unavailable", sources };
     }
     const answer = typeof input.retrieval === "function" ? await input.retrieval() : null;
-    const text = askFallbackText(question, answer);
+    const text = scrubAskIds(askFallbackText(question, answer));
     await store.append(id, text);
     const source = text === ASK_UNAVAILABLE ? "unavailable" : "retrieval";
     await store.finish(id, { status: "done", source, sources, result: { body: text } });
