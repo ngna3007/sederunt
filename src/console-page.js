@@ -5233,24 +5233,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function armSlow() {
     if (slowTimer) return;
     slowTimer = setTimeout(function () {
-      var slowBox = document.getElementById("read-error");
-      var loading = document.getElementById("loading");
-      var homeBox = document.getElementById("home");
-      var onboardBox = document.getElementById("onboard");
-      if (slowBox) {
-        slowBox.classList.add("state-info", "still-loading");
-        if (homeBox && homeBox.hidden && onboardBox) onboardBox.append(slowBox);
-        else if (loading) loading.insertBefore(slowBox, loading.firstChild);
-      }
-      showRetry(true, "Still loading…");
+      // Keep the skeleton path only — never surface the error/Retry chrome for a slow read.
+      var label = document.getElementById("loading-label");
+      if (label) label.textContent = "Still working…";
       var quiet = document.querySelector("#loading .sr");
-      if (quiet) quiet.textContent = "Still loading…";
-      var again = document.getElementById("read-again");
-      if (again) {
-        again.disabled = false;
-        again.hidden = false;
-        again.textContent = "Retry";
-      }
+      if (quiet) quiet.textContent = "Still working…";
+      var onboardReading = document.getElementById("onboard-reading");
+      if (onboardReading && !onboardReading.hidden) onboardReading.textContent = "Still working…";
     }, 10000);
   }
 

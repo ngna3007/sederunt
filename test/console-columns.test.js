@@ -250,7 +250,7 @@ test("pass 02 keeps room, status, and list layout inside the viewport", () => {
   assert.match(block, /#record-list \.decision-row \.plat-badge \{[\s\S]*height: 20px;/);
   assert.match(block, /#history-list \.room-suffix,[\s\S]*max-width: none;/);
   assert.match(block, /#history-list \.activity-feed,[\s\S]*gap: 16px;/);
-  assert.match(page, /loading\.insertBefore\(slowBox, loading\.firstChild\)/);
+  assert.match(page, /label\.textContent = "Still working…"/);
   const zone = page.slice(page.indexOf("function zoneParts"), page.indexOf("function relativeWhen"));
   assert.doesNotMatch(zone, /calendar-zone/);
   assert.match(page, /relativeWhen\(item\.spokenAt\) \|\| whenLabel\(item\.spokenAt\)/);
