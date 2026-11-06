@@ -302,6 +302,11 @@ function withoutAddress(text, hearing) {
   return stripHearing(text, hearing);
 }
 
+function releaseDelivery(session, deliveryId) {
+  const id = byteTrim(String(deliveryId ?? "").trim(), 255);
+  if (id && session?.deliveries?.delete) session.deliveries.delete(id);
+}
+
 function silence() {
   return {
     status: "recorded",
@@ -1614,7 +1619,10 @@ async function keepDecision(input, session, deps, draft) {
       idempotencyKey: decision.id,
       decision: decisionDocument(decision),
     });
-    if (!saved) return refusal(session, "memory-remember-failed");
+    if (!saved) {
+      releaseDelivery(session, input.deliveryId);
+      return refusal(session, "memory-remember-failed");
+    }
     decision.blobId = saved.blobId;
     decision.expiryEpoch = epochOf(saved.expiryEpoch);
     if (typeof saved.objectId === "string" && saved.objectId) decision.objectId = saved.objectId;
@@ -2432,7 +2440,11 @@ async function remember(deps, document) {
       checkpoint: Number.isInteger(saved?.checkpoint) ? saved.checkpoint : null,
       owner: typeof saved?.owner === "string" ? saved.owner : null,
     };
-  } catch {
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error || "remember failed");
+    if (typeof deps.log === "function") {
+      deps.log({ kind: "memory-remember-error", message: message.slice(0, 240), account: document.account || "", kindName: document.kind || "" });
+    }
     return null;
   }
 }

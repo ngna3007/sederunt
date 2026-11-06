@@ -22,7 +22,7 @@ export async function rememberCompany({ text, kind, knowableAtCheckpoint, decisi
   }
   const memwal = client ?? liveClient(env);
   const saved = await memwal.rememberAndWait(decisionPayload({ text, kind, decision, preference, roomSetting, expiry, room, access, hearing, learned, minutes, actionItem, account }), NAMESPACE, {
-    timeoutMs: 90000,
+    timeoutMs: 45000,
     idempotencyKey: typeof idempotencyKey === "string" ? idempotencyKey : undefined,
   });
   return finishRecord({
@@ -189,7 +189,7 @@ export async function rememberPersonal({ text, kind, knowableAtCheckpoint }) {
     throw new Error("Personal MemWal credentials are not set");
   }
   const memwal = MemWal.create({ key, accountId, serverUrl, namespace: NAMESPACE });
-  const saved = await memwal.rememberAndWait(text, NAMESPACE, { timeoutMs: 90000 });
+  const saved = await memwal.rememberAndWait(text, NAMESPACE, { timeoutMs: 45000 });
   return finishRecord({
     account: "personal",
     accountId,

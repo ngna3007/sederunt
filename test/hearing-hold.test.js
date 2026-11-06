@@ -313,3 +313,44 @@ test("speaker omitted from channel members still keeps", async () => {
     `expected channel keep with omitted speaker, got ${JSON.stringify(texts)}`,
   );
 });
+
+test("memory failure releases deliveryId for retry", async () => {
+  const session = createSession();
+  const text = "Northline decision (pack-retry) — please keep: launch is November 18.";
+  const deliveryId = "slack-memwal-retry-1";
+  let calls = 0;
+  const deps = {
+    memory: {
+      async remember() {
+        calls += 1;
+        if (calls === 1) throw new Error("relayer timeout");
+        return { ok: true, blobId: "blob_ok" };
+      },
+    },
+    log() {},
+  };
+  const first = await handleUtterance({
+    text,
+    memberId: "rowan",
+    door: "channel",
+    intent: "keep",
+    deliveryId,
+    participants: ["rowan"],
+    room: { id: "C-ops", kind: "channel", source: "slack", botPresent: true, memberIds: ["rowan"] },
+    session,
+  }, deps);
+  assert.equal(first.outcome, "memory-remember-failed");
+  assert.equal((session.decisions || []).length, 0);
+  const second = await handleUtterance({
+    text,
+    memberId: "rowan",
+    door: "channel",
+    intent: "keep",
+    deliveryId,
+    participants: ["rowan"],
+    room: { id: "C-ops", kind: "channel", source: "slack", botPresent: true, memberIds: ["rowan"] },
+    session,
+  }, deps);
+  assert.notEqual(second.outcome, "duplicate-delivery");
+  assert.ok((session.decisions || []).some((row) => /november 18/i.test(row.text)));
+});
