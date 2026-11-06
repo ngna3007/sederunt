@@ -11,7 +11,7 @@ import { redact } from "./domain/redact.js";
 import { acceptCheckpoint } from "./domain/stamp.js";
 import { itemStatus } from "./domain/status.js";
 import { splitPassage } from "./memory/analyze.js";
-import { addressesHearing, normalizeHearing, stripHearing } from "./hearing.js";
+import { addressesHearing, normalizeHearing, splitAddressedKeepSentences, stripHearing } from "./hearing.js";
 import { learnedKey, memoriesFor, parseLearnedUtterance, shapeAnswer } from "./memory/learn.js";
 import { draftMinutes, rememberMeetingOutcome } from "./memory/outcome.js";
 import { looksLikeOpenQuestion, parseUtterance } from "./parse.js";
@@ -129,6 +129,24 @@ export async function handleUtterance(input, deps = {}) {
   if (input.intent === "recall") {
     session.trace.tool = "recall";
     return answerRecall(input, session, deps);
+  }
+
+  // One transcript delivery can contain several "Maple/Adam remember this …"
+  // sentences. Store each as its own decision instead of stripping to the last.
+  const keepClauses = splitAddressedKeepSentences(input.text, input.session?.hearing);
+  if (keepClauses.length > 1) {
+    let last = null;
+    for (const clause of keepClauses) {
+      const stripped = withoutAddress(clause, input.session?.hearing);
+      if (!stripped) continue;
+      last = await storeDecision(
+        { ...input, text: clause, addressed: true },
+        session,
+        deps,
+        { type: "note", private: false, text: stripped },
+      );
+    }
+    return last || silence();
   }
 
   const parsed = parseUtterance(withoutAddress(input.text, input.session?.hearing));
@@ -1381,6 +1399,21 @@ function roomSettingMemory(setting) {
 }
 
 async function storeDecision(input, session, deps, parsed) {
+  const keepClauses = splitAddressedKeepSentences(input.text, input.session?.hearing);
+  if (keepClauses.length > 1) {
+    let last = null;
+    for (const clause of keepClauses) {
+      const stripped = withoutAddress(clause, input.session?.hearing);
+      if (!stripped) continue;
+      last = await storeDecision(
+        { ...input, text: clause, addressed: true },
+        session,
+        deps,
+        { type: "note", private: parsed?.private === true, text: stripped },
+      );
+    }
+    return last || silence();
+  }
   if (isHuddle(input.room)) {
     return finish(session, {
       status: "recorded",

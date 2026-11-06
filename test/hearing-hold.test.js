@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { addressesHearing, stripHearing } from "../src/hearing.js";
+import { addressesHearing, splitAddressedKeepSentences, stripHearing } from "../src/hearing.js";
 import { handleUtterance } from "../src/typed-path.js";
 import { createSession } from "../src/session.js";
 
@@ -104,3 +104,40 @@ test("meeting line addressed to Adam keeps when hearing still defaults to Maple"
     `expected District 7 in decisions, got ${JSON.stringify(texts)}`,
   );
 });
+
+const NORTHLINE_TRIPLE = "maple remember this the new hcmc office is district 7 building b floors 8 and 9 move in december 2 maple remember this launch stays november 18 only if billing is green by november 12 otherwise we slipped to november 25 maple remember this ops only the booth staging unlock is cedar 92";
+
+test("splitAddressedKeepSentences splits three maple remember-this clauses", () => {
+  const parts = splitAddressedKeepSentences(NORTHLINE_TRIPLE, null);
+  assert.equal(parts.length, 3, `expected 3 parts, got ${JSON.stringify(parts)}`);
+  assert.match(parts[0], /district 7/i);
+  assert.match(parts[1], /november 18/i);
+  assert.match(parts[2], /cedar 92/i);
+});
+
+test("one transcript with three maple remember-this sentences stores three keeps", async () => {
+  const session = createSession();
+  const room = { id: "bot-northline-triple", botPresent: true, source: "recall", kind: "meeting", memberIds: ["anh"] };
+  const kept = await handleUtterance({
+    text: NORTHLINE_TRIPLE,
+    memberId: "anh",
+    door: "meeting",
+    addressed: addressesHearing(NORTHLINE_TRIPLE, null),
+    deliveryId: "t-northline-triple",
+    participants: ["anh"],
+    room,
+    session,
+  }, {
+    async remember() { return { ok: true }; },
+  });
+  assert.notEqual(kept.kind, "silence");
+  const texts = (session.decisions || []).filter((row) => !row.deleted).map((row) => row.text);
+  assert.equal(texts.length, 3, `expected 3 keeps, got ${JSON.stringify(texts)}`);
+  assert.match(texts[0], /district 7/i);
+  assert.match(texts[1], /november 18/i);
+  assert.match(texts[2], /cedar 92/i);
+  assert.ok(texts.some((row) => /district 7/i.test(row) && /floors 8 and 9/i.test(row)));
+  assert.ok(texts.some((row) => /november 18/i.test(row) && /november 12/i.test(row)));
+  assert.ok(texts.some((row) => /cedar 92/i.test(row) && /ops only/i.test(row)));
+});
+

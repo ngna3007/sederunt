@@ -65,6 +65,59 @@ export function stripHearing(text, hearing) {
   return after;
 }
 
+/**
+ * One Recall chunk can concatenate several "Maple/Adam remember this …"
+ * lines into a single utterance. Split so each addressed keep can be stored
+ * on its own. A line with one address, or none, is returned unchanged.
+ * stripHearing still cuts at the last name inside each part.
+ *
+ * @param {string} text
+ * @param {{ name?: string, triggers?: string[] } | null | undefined} hearing
+ * @returns {string[]}
+ */
+export function splitAddressedKeepSentences(text, hearing) {
+  const raw = String(text ?? "").trim();
+  if (!raw) return [];
+  const names = addressLabels(hearing);
+  if (!names.length) return [raw];
+  const namePattern = names.map(escapeRegExp).join("|");
+  const pattern = new RegExp(`(?:^|\\s)(?:${namePattern})[,:\\s-]*remember\\s+this\\b`, "gi");
+  const starts = [];
+  for (const hit of raw.matchAll(pattern)) {
+    let start = hit.index ?? 0;
+    if (start < raw.length && /\s/.test(raw.charAt(start))) start += 1;
+    starts.push(start);
+  }
+  if (starts.length <= 1) return [raw];
+  const parts = [];
+  for (let i = 0; i < starts.length; i += 1) {
+    const slice = raw.slice(starts[i], i + 1 < starts.length ? starts[i + 1] : raw.length).trim();
+    if (slice) parts.push(slice);
+  }
+  return parts.length ? parts : [raw];
+}
+
+function addressLabels(hearing) {
+  const heard = normalizeHearing(hearing);
+  const labels = [heard.name, ...DEFAULT_HEARING_ALIASES];
+  for (const trigger of heard.triggers) {
+    if (!trigger.includes(" ")) labels.push(trigger);
+  }
+  const seen = new Set();
+  const unique = [];
+  for (const label of labels) {
+    const key = letters(label);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(label);
+  }
+  return unique;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function addressNames(heard) {
   return new Set([
     letters(heard.name),
