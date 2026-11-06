@@ -1154,6 +1154,7 @@ export function createApp(options = {}) {
         }
         const doorDeps = depsFor(workspace, companyId);
         const keptBefore = current.decisions.length;
+        const filesBefore = snapshotDecisionFiles(current.decisions);
         // Where the message arrived decides ask or keep: a DM or @mention asks,
         // any other channel line is kept. Its words are never pattern-matched for this.
         const intent = delivery.intent === "delete" ? "delete" : (question ? "recall" : (huddle ? undefined : "keep"));
@@ -1162,20 +1163,9 @@ export function createApp(options = {}) {
           intent,
           session: current,
         }, doorDeps);
-        // "Kept <file>" only when this utterance actually recorded a decision with those files.
-        const keptNames = [];
-        const seenKept = new Set();
-        for (const item of current.decisions.slice(keptBefore)) {
-          if (item?.deleted || !Array.isArray(item.fileNames)) continue;
-          for (const file of item.fileNames) {
-            const name = typeof file?.name === "string" ? file.name.trim() : "";
-            if (!name) continue;
-            const key = name.toLowerCase();
-            if (seenKept.has(key)) continue;
-            seenKept.add(key);
-            keptNames.push(name);
-          }
-        }
+        // "Kept <file>" when this utterance recorded a new decision with files,
+        // or attached more files to a same-text decision that was already kept.
+        const keptNames = keptFileNames(current.decisions, keptBefore, filesBefore);
         const keptFile = keptNames.length > 0;
         const repeat = result?.allow === "duplicate-delivery" || result?.outcome === "duplicate-delivery" || result?.outcome === "duplicate";
         if (!question && keptFile && !repeat && result?.allow !== "not-invited" && result?.allow !== "missing-member" && env.SLACK_BOT_TOKEN) {
@@ -2182,6 +2172,64 @@ async function slackPeople(env, deps, channel) {
     return Array.isArray(people) ? people.map(String).filter(Boolean) : [];
   }
   return [];
+}
+
+function fileMarks(fileNames) {
+  const marks = [];
+  if (!Array.isArray(fileNames)) return marks;
+  for (const file of fileNames) {
+    const name = typeof file?.name === "string" ? file.name.trim() : "";
+    if (!name) continue;
+    const slackFileId = typeof file?.slackFileId === "string" ? file.slackFileId : "";
+    marks.push(`${name.toLowerCase()}::${slackFileId}`);
+  }
+  return marks;
+}
+
+function snapshotDecisionFiles(decisions) {
+  const snap = new Map();
+  for (const item of decisions ?? []) {
+    if (!item?.id || item.deleted) continue;
+    snap.set(item.id, new Set(fileMarks(item.fileNames)));
+  }
+  return snap;
+}
+
+function collectDecisionFileNames(item) {
+  const names = [];
+  const seen = new Set();
+  if (item?.deleted || !Array.isArray(item.fileNames)) return names;
+  for (const file of item.fileNames) {
+    const name = typeof file?.name === "string" ? file.name.trim() : "";
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(name);
+  }
+  return names;
+}
+
+function keptFileNames(decisions, beforeCount, beforeSnap) {
+  const names = [];
+  const seen = new Set();
+  const push = (item) => {
+    for (const name of collectDecisionFileNames(item)) {
+      const key = name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      names.push(name);
+    }
+  };
+  const list = decisions ?? [];
+  for (const item of list.slice(beforeCount)) push(item);
+  for (const item of list) {
+    if (!item?.id || item.deleted) continue;
+    const prev = beforeSnap.get(item.id);
+    if (!prev) continue;
+    if (fileMarks(item.fileNames).some((mark) => !prev.has(mark))) push(item);
+  }
+  return names;
 }
 
 function keptNotice(names) {

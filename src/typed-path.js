@@ -1438,17 +1438,33 @@ async function storeDecision(input, session, deps, parsed) {
       outcome: "question",
     });
   }
-  const duplicate = session.decisions.some((item) =>
+  const existing = session.decisions.find((item) =>
     !item.deleted && item.roomId === room.id && item.account !== "personal" && item.text === sentence && !item.replacedBy);
-  if (duplicate) {
-    return finish(session, {
-      status: "recorded",
-      kind: "note",
-      body: "That sentence is already kept.\nrecorded\npreference ask",
-      allow: "read",
-      preference: "ask",
-      outcome: "duplicate",
-    });
+  if (existing) {
+    const named = await namedFiles(input, deps, { text: sentence });
+    const merged = mergeNamedFiles(existing.fileNames, named);
+    if (!merged.changed.length) {
+      return finish(session, {
+        status: "recorded",
+        kind: "note",
+        body: "That sentence is already kept.\nrecorded\npreference ask",
+        allow: "read",
+        preference: "ask",
+        outcome: "duplicate",
+      });
+    }
+    existing.fileNames = merged.files;
+    if (deps.memory?.remember) {
+      const saved = await remember(deps, {
+        account: existing.account,
+        kind: existing.kind,
+        text: existing.text,
+        idempotencyKey: `${existing.id}:files:${fileSetFingerprint(merged.files)}`,
+        decision: decisionDocument(existing),
+      });
+      if (!saved) return refusal(session, "No decision is stored.");
+    }
+    return renderVisible(session, input.memberId, existing.roomId, null);
   }
   const learned = parseLearnedUtterance(sentence);
   if (learned) await keepLearned(session, deps, learned, room.id);
@@ -1628,6 +1644,53 @@ function attachedUploads(input) {
   }
   if (!list.length) push(input?.file);
   return list;
+}
+
+function fileNameKey(file) {
+  return typeof file?.name === "string" ? file.name.trim().toLowerCase() : "";
+}
+
+function mergeNamedFiles(existing, incoming) {
+  const files = (Array.isArray(existing) ? existing : []).map((file) => ({ ...file }));
+  const byName = new Map();
+  for (const file of files) {
+    const key = fileNameKey(file);
+    if (key) byName.set(key, file);
+  }
+  const changed = [];
+  for (const item of Array.isArray(incoming) ? incoming : []) {
+    const name = typeof item?.name === "string" ? item.name.trim() : "";
+    if (!name) continue;
+    const key = name.toLowerCase();
+    const prior = byName.get(key);
+    if (!prior) {
+      const next = { ...item, name };
+      files.push(next);
+      byName.set(key, next);
+      changed.push(next);
+      continue;
+    }
+    let dirty = false;
+    if (item.slackFileId && item.slackFileId !== prior.slackFileId) {
+      prior.slackFileId = item.slackFileId;
+      dirty = true;
+    }
+    if (item.consoleFileId && !prior.consoleFileId) {
+      prior.consoleFileId = item.consoleFileId;
+      if (item.folderId) prior.folderId = item.folderId;
+      dirty = true;
+    }
+    if (dirty) changed.push(prior);
+  }
+  return { files, changed };
+}
+
+function fileSetFingerprint(files) {
+  return (Array.isArray(files) ? files : [])
+    .map((file) => `${fileNameKey(file)}:${typeof file?.slackFileId === "string" ? file.slackFileId : ""}`)
+    .filter((part) => part && part !== ":")
+    .sort()
+    .join(",");
 }
 
 async function namedFiles(input, deps, draft) {
@@ -1852,7 +1915,7 @@ function foldDecision(existing, decision, blankText) {
   if (typeof decision.connectorId === "string" && decision.connectorId) existing.connectorId = decision.connectorId;
   if (decision.sourceDeliveryId) existing.sourceDeliveryId = decision.sourceDeliveryId;
   if (Array.isArray(decision.fileNames) && decision.fileNames.length) {
-    existing.fileNames = decision.fileNames.map((file) => ({ ...file }));
+    existing.fileNames = mergeNamedFiles(existing.fileNames, decision.fileNames).files;
   }
   if (Array.isArray(decision.inviteMemberIds) && decision.inviteMemberIds.length) {
     existing.inviteMemberIds = decision.inviteMemberIds.map(String);

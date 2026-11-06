@@ -473,6 +473,102 @@ test("a multi-file keep still stores the files that downloaded when one download
 });
 
 
+
+test("message_changed files on a same-text keep are merged and Kept lists them", async () => {
+  const api = slackApi();
+  const uploadNames = [];
+  const fetch = async (url, init = {}) => {
+    const href = String(url);
+    if (href.endsWith("/files.getUploadURLExternal") && init.body) {
+      uploadNames.push(new URLSearchParams(String(init.body)).get("filename") || "");
+    }
+    return api.fetch(url, init);
+  };
+  const memory = mockAccount({ accountId: "company-keep-merge", delegates: ["delegate-keep-merge"] });
+  const app = createApp({
+    deps: {
+      memory,
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+      slack: { fetch, async members() { return ["U1"]; } },
+    },
+    env: {
+      COMPANY_MEMWAL_KEY: "key-sentinel-value",
+      COMPANY_MEMWAL_ACCOUNT_ID: "account-id-sentinel",
+      SLACK_SIGNING_SECRET: secret,
+      SLACK_BOT_TOKEN: "xoxb-test",
+      SEDERUNT_MEMBER: "U1",
+    },
+    companyLoaded: true,
+  });
+  app.listen(0, "127.0.0.1");
+  await once(app, "listening");
+  const port = app.address().port;
+  const send = async (event) => {
+    const message = signed({ type: "message", user: "U1", ...event });
+    const reply = await post(port, message.payload, message.headers);
+    return { ...reply, body: JSON.parse(reply.raw) };
+  };
+  const text = "Northline ops note — please keep northline-ops-announcement.txt, northline-d7-floor-brief.txt, and northline-launch-gate.txt.";
+  const files = [
+    { id: "F1", name: "northline-ops-announcement.txt", url_private_download: "https://files.slack.com/files-pri/T/F1/download/northline-ops-announcement.txt" },
+    { id: "F2", name: "northline-d7-floor-brief.txt", url_private_download: "https://files.slack.com/files-pri/T/F2/download/northline-d7-floor-brief.txt" },
+    { id: "F3", name: "northline-launch-gate.txt", url_private_download: "https://files.slack.com/files-pri/T/F3/download/northline-launch-gate.txt" },
+  ];
+  try {
+    const first = await send({
+      channel: "C1",
+      text,
+      client_msg_id: "keep-merge-text",
+      ts: "1793953569.921829",
+    });
+    assert.equal(first.status, 200, first.raw);
+    assert.equal(first.body.decisions, 1);
+    assert.deepEqual(api.texts.filter((item) => /^Kept /.test(item.text)).map((item) => item.text), []);
+
+    const changed = await send({
+      subtype: "message_changed",
+      channel: "C1",
+      ts: "1793953573.000000",
+      message: {
+        user: "U1",
+        text,
+        ts: "1793953569.921829",
+        files,
+      },
+      previous_message: { user: "U1", text, ts: "1793953569.921829" },
+    });
+    assert.equal(changed.status, 200, changed.raw);
+    assert.equal(changed.body.decisions, 1);
+    assert.deepEqual(api.texts.map((item) => item.text), [
+      "Kept northline-ops-announcement.txt, northline-d7-floor-brief.txt, and northline-launch-gate.txt.",
+    ]);
+
+    const again = await send({
+      subtype: "file_share",
+      channel: "C1",
+      text,
+      client_msg_id: "keep-merge-again",
+      ts: "1793953600.000000",
+      files,
+    });
+    assert.equal(again.status, 200, again.raw);
+    assert.equal(again.body.decisions, 1);
+    assert.equal(api.texts.filter((item) => /^Kept /.test(item.text)).length, 1);
+
+    const dm = await send({
+      channel: "D1",
+      channel_type: "im",
+      text: "Send me the District 7 floor brief we kept.",
+      client_msg_id: "dm-merge-floor",
+    });
+    assert.equal(dm.status, 200, dm.raw);
+    assert.equal(dm.body.posted, true);
+    assert.ok(uploadNames.includes("northline-d7-floor-brief.txt"), `expected floor brief upload, got ${JSON.stringify(uploadNames)}`);
+  } finally {
+    await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
 test("two deliveries of the same DM post only one Slack answer", async () => {
   const { createSlackClient } = await import("../src/slack/post.js");
   const { claimSlackAsk } = await import("../src/slack/reply.js");

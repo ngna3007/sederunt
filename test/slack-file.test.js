@@ -442,3 +442,68 @@ test("replyFile matches a stored file from a distinctive stem suffix", () => {
   assert.equal(replyFile(visible, "resend the launch gate"), "northline-launch-gate.txt");
   assert.equal(replyFile(visible, "can you resend the planning doc"), "");
 });
+
+test("a same-text keep merges newly attached files instead of skipping them", async () => {
+  const session = createSession();
+  const text = "Northline ops note — please keep northline-ops-announcement.txt, northline-d7-floor-brief.txt, and northline-launch-gate.txt.";
+  const first = await handleUtterance(channelUtterance(session, text, { deliveryId: "keep-text" }), {});
+  assert.notEqual(first.outcome, "duplicate");
+  assert.equal(session.decisions.length, 1);
+  assert.deepEqual(session.decisions[0].fileNames, []);
+
+  const second = await handleUtterance(channelUtterance(session, text, {
+    deliveryId: "keep-files",
+    files: [
+      { name: "northline-ops-announcement.txt", bytes: "OPS", id: "F1" },
+      { name: "northline-d7-floor-brief.txt", bytes: "FLOOR", id: "F2" },
+      { name: "northline-launch-gate.txt", bytes: "GATE", id: "F3" },
+    ],
+  }), {});
+  assert.notEqual(second.outcome, "duplicate");
+  assert.equal(session.decisions.length, 1);
+  assert.deepEqual(session.decisions[0].fileNames.map((file) => file.name), [
+    "northline-ops-announcement.txt",
+    "northline-d7-floor-brief.txt",
+    "northline-launch-gate.txt",
+  ]);
+  assert.equal(session.decisions[0].fileNames[1].slackFileId, "F2");
+
+  const third = await handleUtterance(channelUtterance(session, text, {
+    deliveryId: "keep-files-again",
+    files: [
+      { name: "northline-ops-announcement.txt", bytes: "OPS", id: "F1" },
+      { name: "northline-d7-floor-brief.txt", bytes: "FLOOR", id: "F2" },
+      { name: "northline-launch-gate.txt", bytes: "GATE", id: "F3" },
+    ],
+  }), {});
+  assert.equal(third.outcome, "duplicate");
+  assert.equal(session.decisions.length, 1);
+});
+
+test("a same-text keep with extra files merges them onto the earlier decision", async () => {
+  const session = createSession();
+  const text = "Northline ops note — please keep northline-ops-announcement.txt, northline-d7-floor-brief.txt, and northline-launch-gate.txt.";
+  await handleUtterance(channelUtterance(session, text, {
+    deliveryId: "keep-one",
+    file: { name: "northline-ops-announcement.txt", bytes: "OPS", id: "F1" },
+  }), {});
+  assert.deepEqual(session.decisions[0].fileNames.map((file) => file.name), [
+    "northline-ops-announcement.txt",
+  ]);
+
+  const extra = await handleUtterance(channelUtterance(session, text, {
+    deliveryId: "keep-three",
+    files: [
+      { name: "northline-ops-announcement.txt", bytes: "OPS", id: "F1" },
+      { name: "northline-d7-floor-brief.txt", bytes: "FLOOR", id: "F2" },
+      { name: "northline-launch-gate.txt", bytes: "GATE", id: "F3" },
+    ],
+  }), {});
+  assert.notEqual(extra.outcome, "duplicate");
+  assert.equal(session.decisions.length, 1);
+  assert.deepEqual(session.decisions[0].fileNames.map((file) => file.name), [
+    "northline-ops-announcement.txt",
+    "northline-d7-floor-brief.txt",
+    "northline-launch-gate.txt",
+  ]);
+});
