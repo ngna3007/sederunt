@@ -2394,10 +2394,12 @@ function outsideRoomIds(input, candidates) {
 }
 
 function snapshot(input, room) {
-  if (Array.isArray(input.participants) && input.participants.length > 0) {
-    return input.participants.map(String);
-  }
-  return [...(room.memberIds ?? [])];
+  const ids = Array.isArray(input.participants) && input.participants.length > 0
+    ? input.participants.map(String)
+    : [...(room.memberIds ?? [])];
+  const speaker = typeof input.memberId === "string" ? input.memberId.trim() : "";
+  if (speaker && !ids.includes(speaker)) ids.push(speaker);
+  return ids;
 }
 
 async function remember(deps, document) {

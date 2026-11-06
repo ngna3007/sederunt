@@ -288,3 +288,28 @@ test("channel please-keep still stores without a meeting address", async () => {
     `expected channel keep, got ${JSON.stringify(texts)}`,
   );
 });
+
+test("speaker omitted from channel members still keeps", async () => {
+  const session = createSession();
+  const text = "Northline decision (pack-catchup) — please keep: the new HCMC office is District 7, Building B, floors 8 and 9, move-in December 2.";
+  const kept = await handleUtterance({
+    text,
+    memberId: "rowan",
+    door: "channel",
+    intent: "keep",
+    deliveryId: "slack-catchup-d7-omit-speaker",
+    // Members list is non-empty but missing the poster — previously refused.
+    participants: ["other", "bot"],
+    room: { id: "C-ops", kind: "channel", source: "slack", botPresent: true, memberIds: ["other", "bot"] },
+    session,
+  }, {
+    async remember() { return { ok: true }; },
+  });
+  assert.notEqual(kept.kind, "silence");
+  assert.notEqual(kept.outcome, "No decision is stored.");
+  const texts = (session.decisions || []).map((d) => d.text);
+  assert.ok(
+    texts.some((row) => /district 7/i.test(row)),
+    `expected channel keep with omitted speaker, got ${JSON.stringify(texts)}`,
+  );
+});

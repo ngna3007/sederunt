@@ -1079,9 +1079,14 @@ export function createApp(options = {}) {
           const people = await slackPeople(env, deps, channel);
           // conversations.members sometimes returns empty (rate limit / scope blip).
           // Falling back to the speaker keeps the channel file instead of going silent.
+          // A non-empty list can still omit the poster (partial page / Connect id);
+          // always union the speaker so invite does not refuse a real keep.
           const memberIds = people.length
-            ? people
+            ? [...people]
             : (delivery.memberId ? [delivery.memberId] : []);
+          if (delivery.memberId && !memberIds.includes(delivery.memberId)) {
+            memberIds.push(delivery.memberId);
+          }
           if (!memberIds.length) {
             if (env.SLACK_BOT_TOKEN && channel) {
               await postSlackReply({
