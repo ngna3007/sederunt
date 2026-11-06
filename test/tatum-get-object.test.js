@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { request } from "node:http";
 import test from "node:test";
+import { GrpcTypes } from "@mysten/sui/grpc";
 import { createApp } from "../src/server.js";
 import { createTatumReader } from "../src/tatum/get-object.js";
+import { frameMessage } from "../src/tatum/transport.js";
 
 const OBJECT_ID = "0x4c6ea9e8c622c9777966063fb8b04266f7963795017461625916d4c3b8fb058d";
 const BLOB_ID = "YhkR9vHVSXI1vjAINsKqd_vpouxWyorW5MqacAW3d3k";
@@ -20,7 +22,7 @@ test("no key records the id and does not open the gateway", async () => {
       return { objectId: OBJECT_ID, checkpoint: 1 };
     },
   });
-  await assert.rejects(() => reader.getObject(BLOB_ID), /Tatum read failed/);
+  await assert.rejects(() => reader.getObject(BLOB_ID), /Tatum key not set/);
   assert.equal(opened, false);
   assert.deepEqual(reader.calls, [BLOB_ID]);
 });
@@ -65,6 +67,7 @@ test("GetObject is one native gRPC frame and the object page shows its version",
   });
 
   const limited = createTatumReader({ TATUM_API_KEY: "tatum-key-wiresecret" }, {
+    retries: 0,
     async exchange() {
       return { grpcStatus: "8", httpStatus: "200", rateLimited: true, body: Buffer.alloc(0) };
     },
@@ -131,36 +134,15 @@ test("a blob id with no certified object does not call the gateway", async () =>
 });
 
 function objectFrame() {
-  const object = Buffer.concat([
-    fieldString(2, OBJECT_ID),
-    fieldVarint(3, 1062018188),
-    fieldString(4, "GfKGew"),
-    fieldString(6, "pkg::blob::Blob"),
-  ]);
-  const message = fieldBytes(1, object);
-  const frame = Buffer.alloc(5 + message.length);
-  frame.writeUInt32BE(message.length, 1);
-  message.copy(frame, 5);
-  return frame;
-}
-
-function fieldString(field, value) {
-  return fieldBytes(field, Buffer.from(value));
-}
-
-function fieldBytes(field, bytes) {
-  return Buffer.concat([Buffer.from([(field << 3) | 2, bytes.length]), bytes]);
-}
-
-function fieldVarint(field, value) {
-  const bytes = [];
-  let rest = value;
-  do {
-    const next = rest & 0x7f;
-    rest = Math.floor(rest / 128);
-    bytes.push(rest === 0 ? next : next | 0x80);
-  } while (rest > 0);
-  return Buffer.concat([Buffer.from([(field << 3) | 0]), Buffer.from(bytes)]);
+  const bytes = GrpcTypes.GetObjectResponse.toBinary({
+    object: {
+      objectId: OBJECT_ID,
+      version: 1062018188n,
+      digest: "GfKGew",
+      objectType: "pkg::blob::Blob",
+    },
+  });
+  return frameMessage(bytes);
 }
 
 function get(port, path) {
@@ -174,3 +156,40 @@ function get(port, path) {
     req.end();
   });
 }
+
+test("a blob with no stored owner uses the company account owner once and keeps the location", async () => {
+  const { encodeBlobContent } = await import("../src/memory/blob.js");
+  const ACCOUNT = "0x" + "12".repeat(32);
+  const OWNER = "0x" + "34".repeat(32);
+  const counts = { owner: 0, list: 0, get: 0, tx: 0 };
+  const content = encodeBlobContent({ blobId: BLOB_ID, certified: true });
+  const client = {
+    log: [],
+    async getAccountOwner(id) {
+      counts.owner += 1;
+      assert.equal(id, ACCOUNT);
+      return OWNER;
+    },
+    async listOwnedObjects({ owner }) {
+      counts.list += 1;
+      assert.equal(owner, OWNER);
+      return { objects: [{ objectId: OBJECT_ID, content, previousTransaction: "HMNM1usyR6SbipnmP2d7Ds7NpcmqQE4cEA83QiAMYKfs" }], hasNextPage: false };
+    },
+    async getObject(id) {
+      counts.get += 1;
+      return { objectId: id, ownerAddress: OWNER, content, checkpoint: 338404221, checkpointTime: "2026-10-26T17:40:03.000Z", certifyingDigest: "HMNM1usyR6SbipnmP2d7Ds7NpcmqQE4cEA83QiAMYKfs" };
+    },
+    async getTransaction() {
+      counts.tx += 1;
+      return { checkpoint: 338404221, timestampMs: 0 };
+    },
+  };
+  const reader = createTatumReader({ TATUM_API_KEY: "k", COMPANY_MEMWAL_ACCOUNT_ID: ACCOUNT }, { client });
+  const first = await reader.getObject(BLOB_ID, { blobId: BLOB_ID });
+  const second = await reader.getObject(BLOB_ID, { blobId: BLOB_ID });
+  assert.equal(first.proof.status, "verified");
+  assert.equal(second.proof.status, "verified");
+  assert.equal(second.checkpoint, 338404221);
+  assert.equal(counts.owner, 1);
+  assert.equal(counts.list, 1);
+});

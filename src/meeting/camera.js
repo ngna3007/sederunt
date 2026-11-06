@@ -34,10 +34,20 @@ const CAMERA_TEMPLATE = `<!doctype html>
     font-weight: 400;
     letter-spacing: 0;
   }
+  .quiet-why {
+    margin-top: 0.6rem;
+    max-width: 28rem;
+    color: #172b76;
+    font-family: "Source Sans 3", "Avenir Next", "Segoe UI", sans-serif;
+    font-size: 1.05rem;
+    font-weight: 400;
+    line-height: 1.35;
+  }
 </style>
 </head>
 <body>
   <p><span></span>{{name}}<small>Quiet until addressed.</small></p>
+  <p class="quiet-why">Say this name, or a trigger, and the line is kept.</p>
 </body>
 </html>
 `;

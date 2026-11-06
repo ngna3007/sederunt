@@ -2,7 +2,7 @@
 
 **Status:** active
 **Owner:** @ngna3007
-**Last updated:** 2026-10-21
+**Last updated:** 2026-11-04
 **Scope:** System-wide
 
 ## Mission
@@ -23,11 +23,13 @@ The public relayer's server wallet pays the WAL storage fee and the SUI gas. Thi
 
 A blob lives for the epochs that write paid. Mainnet epochs are about two weeks. The owner-token API grants `memories.read` only, so this process cannot renew a blob. The decision stores `expiryEpoch` when the relayer provides it. Console does not renew memory blobs. When the epoch passes, the content is gone.
 
-Locate uses public GraphQL to find the certification event and its checkpoint. That checkpoint is a candidate stamp. It is not the proof.
+Locate uses Tatum gRPC. A stored object id is one `GetObject`. Otherwise `ListOwnedObjects` on the owner address from `remember` matches the blob id, then `GetTransaction` reads the certifying checkpoint. There is no public GraphQL query and no whole-chain scan. A miss leaves the proof `unknown`. That locate result is a candidate stamp. The proof is the later `GetObject` check: the blob exists, the blob id matches, it is certified, and the checkpoint and time are known.
 
 ## Files
 
 A file goes to a private Console folder through the Console API. The service private key stays on the machine and off the landing. Reserve returns sponsored transaction bytes. The adapter signs those bytes with the service key and posts the signature. Console attaches the gas sponsor and broadcasts. The service key needs no SUI balance for that call.
+
+Channel files use the same account. By default every workspace shares one private folder. A workspace can be mapped to its own folder and child key; that key is sealed with `MCP_SECRETS_KEY_V1` and the runtime does not mint it. `CONSOLE_API_KEY` and `CONSOLE_SERVICE_PRIVATE_KEY` are required for a live write. `CONSOLE_SPACE_ID` selects the space (unset uses the key's personal space). `CONSOLE_FOLDER_ID`, when set, is an existing folder and is never created. `CONSOLE_FILES_FOLDER_NAME` (default `sederunt-files`) is used only when that id is unset. `FILES_DEMO=1` serves an in-memory page. The layout, tags, tenancy, and delete rules are in [walrus-files.md](./walrus-files.md). The mint sequence is [console-mint-plan.md](./console-mint-plan.md).
 
 The decision's `fileNames` entry is the name people hear. `recall` does not return bytes. Disconnecting Console does not delete memories. Console's Memory tab is metadata. It does not hold the sentence.
 

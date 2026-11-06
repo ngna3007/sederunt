@@ -1,4 +1,5 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { DEFAULT_BOT_NAME, normalizeBotName } from "../bot/identity.js";
 import { addressesHearing, normalizeHearing } from "../hearing.js";
 
 /**
@@ -35,6 +36,11 @@ function header(headers, name) {
 
 const BOT_URL = "https://ap-northeast-1.recall.ai/api/v1/bot/";
 
+/** Retrieve Bot for one id. The key stays on this request. */
+export function recallBotUrl(id) {
+  return `${BOT_URL}${encodeURIComponent(id)}/`;
+}
+
 /**
  * Recall.ai Output Media in ap-northeast-1. Join posts one bot only when the
  * key, an https meeting url, and a public https origin are all present.
@@ -59,6 +65,7 @@ export function createMeetingAdapter(env = process.env, options = {}) {
       const key = typeof env.RECALL_API_KEY === "string" ? env.RECALL_API_KEY : "";
       const meetingUrl = httpsUrl(input?.url);
       const guest = normalizeHearing({ name: input?.name }).name;
+      const botName = normalizeBotName(input?.botName) || DEFAULT_BOT_NAME;
       const cameraUrl = cameraPage(env.SEDERUNT_PUBLIC_ORIGIN, guest);
       if (!key || !env.RECALL_WEBHOOK_SECRET || !meetingUrl || !cameraUrl) throw new Error("Meeting join is not configured");
       let response;
@@ -72,11 +79,12 @@ export function createMeetingAdapter(env = process.env, options = {}) {
           },
           body: JSON.stringify({
             meeting_url: meetingUrl,
-            bot_name: guest,
+            bot_name: botName,
             output_media: {
               camera: { kind: "webpage", config: { url: cameraUrl } },
             },
             recording_config: {
+              video_mixed_mp4: {},
               transcript: {
                 provider: { recallai_streaming: { mode: "prioritize_low_latency", language_code: "en" } },
                 diarization: { use_separate_streams_when_available: true },
@@ -104,6 +112,33 @@ export function createMeetingAdapter(env = process.env, options = {}) {
       if (!id || text.includes(key)) throw new Error("Meeting join failed");
       return { id };
     },
+    /**
+     * Documented Recall remove-from-call:
+     * POST /api/v1/bot/{id}/leave_call/ (ap-northeast-1 same host as create).
+     * Used when durable tenant bind fails after join so the bot does not keep listening.
+     */
+    async leave(botId) {
+      calls.push("leave");
+      const key = typeof env.RECALL_API_KEY === "string" ? env.RECALL_API_KEY : "";
+      const id = typeof botId === "string" ? botId.trim() : "";
+      if (!key || !id) return { ok: false, reason: "missing" };
+      let response;
+      try {
+        response = await fetchImpl(`${BOT_URL}${encodeURIComponent(id)}/leave_call/`, {
+          method: "POST",
+          headers: {
+            authorization: `Token ${key}`,
+            accept: "application/json",
+          },
+        });
+      } catch {
+        return { ok: false, reason: "network" };
+      }
+      if (response.ok || response.status === 200) return { ok: true };
+      // Already left / unknown — treat as cleaned enough for fail-closed bind.
+      if (response.status === 404 || response.status === 400) return { ok: true, reason: "absent" };
+      return { ok: false, reason: `http-${response.status}` };
+    },
   };
 }
 
@@ -114,6 +149,24 @@ export function createMeetingAdapter(env = process.env, options = {}) {
  *
  * @param {unknown} payload
  */
+/**
+ * A meeting is over when Recall says the bot is done and names that bot.
+ * A bare `{ event: "bot.done" }` has no room, so it is not an ending.
+ *
+ * @param {unknown} payload
+ */
+export function meetingEnded(payload) {
+  const root = payload && typeof payload === "object" ? payload : {};
+  const event = typeof root.event === "string" ? root.event : "";
+  if (event !== "bot.done" && event !== "bot.status_change") return null;
+  const data = root.data && typeof root.data === "object" ? root.data : {};
+  const status = typeof data.status === "string" ? data.status : (data.status?.code || "");
+  if (event === "bot.status_change" && status !== "done" && status !== "call_ended") return null;
+  const botId = data.bot?.id || data.bot_id || root.bot?.id || "";
+  if (typeof botId !== "string" || !botId.trim()) return null;
+  return { roomId: botId.trim() };
+}
+
 export function recallTranscriptDelivery(payload) {
   const root = payload && typeof payload === "object" ? payload : {};
   const data = root.data && typeof root.data === "object" ? root.data : root;
@@ -131,9 +184,7 @@ export function recallTranscriptDelivery(payload) {
   const botId = typeof data.bot?.id === "string" && data.bot.id
     ? data.bot.id
     : (typeof data.bot_id === "string" && data.bot_id ? data.bot_id : "meeting");
-  const deliveryId = typeof data.transcript?.id === "string" && data.transcript.id
-    ? data.transcript.id
-    : (typeof inner.id === "string" ? inner.id : "");
+  const deliveryId = transcriptChunkId(data, inner, words, text);
   return {
     text,
     memberId,
@@ -149,6 +200,138 @@ export function recallTranscriptDelivery(payload) {
       memberIds: memberId ? [memberId] : [],
     },
   };
+}
+
+/**
+ * Recall reuses one transcript.id for every streaming chunk in a recording.
+ * A keep must key the chunk (utterance id, first-word stamp, or text), or the
+ * second spoken sentence is dropped as a duplicate of the first.
+ */
+function transcriptChunkId(data, inner, words, text) {
+  const innerId = typeof inner?.id === "string" && inner.id.trim() ? inner.id.trim() : "";
+  if (innerId) return innerId;
+  const transcriptId = typeof data?.transcript?.id === "string" && data.transcript.id.trim()
+    ? data.transcript.id.trim()
+    : "";
+  const stamp = wordStamp(words[0]);
+  const digest = createHash("sha256").update(text).digest("hex").slice(0, 16);
+  return [transcriptId, stamp, digest].filter(Boolean).join(":");
+}
+
+function wordStamp(word) {
+  if (!word || typeof word === "string") return "";
+  const start = word.start_timestamp ?? word.start_time ?? word.start ?? "";
+  if (typeof start === "number") return String(start);
+  if (typeof start === "string") return start.trim();
+  if (start && typeof start === "object") {
+    if (typeof start.relative === "number") return String(start.relative);
+    if (typeof start.relative === "string" && start.relative.trim()) return start.relative.trim();
+    if (typeof start.absolute === "string" && start.absolute.trim()) return start.absolute.trim();
+  }
+  return "";
+}
+
+/**
+ * The console media card for one Retrieve Bot payload.
+ * Download URLs are copied through. Nothing here reads an API key.
+ *
+ * @param {unknown} bot
+ * @param {number} [now]
+ */
+export function mediaFromBot(bot, now = Date.now()) {
+  const blank = {
+    state: "none",
+    title: "",
+    videoUrl: "",
+    transcriptUrl: "",
+    participantsUrl: "",
+    eventsUrl: "",
+    timelineUrl: "",
+    metadataUrl: "",
+    startedAt: "",
+    duration: 0,
+    lines: [],
+    segments: [],
+    events: [],
+  };
+  if (!bot || typeof bot !== "object") return blank;
+  const root = /** @type {Record<string, unknown>} */ (bot);
+  const recordings = Array.isArray(root.recordings) ? root.recordings : [];
+  const recording = recordings[0] && typeof recordings[0] === "object" ? recordings[0] : null;
+  const shortcuts = recording && recording.media_shortcuts && typeof recording.media_shortcuts === "object"
+    ? recording.media_shortcuts
+    : {};
+  const video = shortcutData(shortcuts.video_mixed);
+  const transcript = shortcutData(shortcuts.transcript);
+  const people = shortcutData(shortcuts.participant_events);
+  const meta = shortcutData(shortcuts.meeting_metadata);
+  const title = stringField(meta, "title") || stringField(root, "meeting_title");
+  const started = stringField(recording, "started_at") || stringField(root, "join_at");
+  const completed = stringField(recording, "completed_at");
+  const duration = secondsBetween(started, completed);
+  const urls = {
+    title,
+    videoUrl: stringField(video, "download_url"),
+    transcriptUrl: stringField(transcript, "download_url"),
+    participantsUrl: stringField(people, "participants_download_url"),
+    eventsUrl: stringField(people, "participant_events_download_url"),
+    timelineUrl: stringField(people, "speaker_timeline_download_url"),
+    metadataUrl: stringField(meta, "download_url"),
+    startedAt: started,
+    duration,
+    lines: Array.isArray(root.lines) ? root.lines : [],
+    segments: Array.isArray(root.segments) ? root.segments : [],
+    events: Array.isArray(root.events) ? root.events : [],
+  };
+  if (mediaExpired(recording, shortcuts, root, now)) return { ...blank, ...urls, state: "expired", videoUrl: "" };
+  const code = statusCode(recording) || statusCode(shortcuts.video_mixed);
+  if (!recordings.length) {
+    const botCode = lastStatus(root);
+    return { ...blank, ...urls, state: botCode && botCode !== "done" && botCode !== "fatal" ? "processing" : "none" };
+  }
+  if (!urls.videoUrl && code && code !== "done") return { ...blank, ...urls, state: "processing" };
+  if (!urls.videoUrl && !urls.transcriptUrl && !urls.timelineUrl && !urls.participantsUrl) return { ...blank, ...urls, state: "none" };
+  return { ...blank, ...urls, state: urls.videoUrl ? "ready" : "novideo" };
+}
+
+function shortcutData(node) {
+  if (!node || typeof node !== "object") return {};
+  const data = node.data;
+  return data && typeof data === "object" ? data : {};
+}
+
+function stringField(node, key) {
+  if (!node || typeof node !== "object") return "";
+  const value = node[key];
+  return typeof value === "string" ? value : "";
+}
+
+function statusCode(node) {
+  if (!node || typeof node !== "object" || !node.status || typeof node.status !== "object") return "";
+  return typeof node.status.code === "string" ? node.status.code : "";
+}
+
+function lastStatus(bot) {
+  const changes = Array.isArray(bot.status_changes) ? bot.status_changes : [];
+  const last = changes[changes.length - 1];
+  return last && typeof last.code === "string" ? last.code : "";
+}
+
+function mediaExpired(recording, shortcuts, bot, now) {
+  const blob = JSON.stringify({ recording, shortcuts, message: bot.message || bot.detail || "" });
+  if (/media has already expired/i.test(blob)) return true;
+  const stamps = [recording?.expires_at, shortcuts.video_mixed?.expires_at].filter((value) => typeof value === "string");
+  return stamps.some((value) => {
+    const time = Date.parse(value);
+    return !Number.isNaN(time) && time <= now;
+  });
+}
+
+function secondsBetween(start, end) {
+  const a = Date.parse(start || "");
+  const b = Date.parse(end || "");
+  if (Number.isNaN(a) || Number.isNaN(b) || b < a) return 0;
+  return Math.round((b - a) / 1000);
 }
 
 function httpsUrl(value) {

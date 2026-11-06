@@ -45,7 +45,7 @@ test("a read ignores preference, and a write runs for do or for the confirmed ac
   );
   assert.deepEqual(
     authorize({ action: "write", tool: "linear" }),
-    { allowed: false, reason: "ask" },
+    { allowed: true, reason: "do" },
   );
   assert.equal(
     authorize({ action: "write", tool: "linear", preference: "ask" }).allowed,
@@ -84,8 +84,8 @@ test("a read ignores preference, and a write runs for do or for the confirmed ac
   assert.equal(authorize({ action: "noop", tool: "linear", preference: "do" }).allowed, false);
 });
 
-test("a room preference wins, and a missing preference is ask", () => {
-  assert.equal(resolvePreference([], "linear", "room-1"), "ask");
+test("a room preference wins, and a missing preference runs", () => {
+  assert.equal(resolvePreference([], "linear", "room-1"), "do");
   assert.equal(
     resolvePreference(
       [{ tool: "linear", value: "do", roomId: "", replacedBy: null }],
@@ -111,7 +111,7 @@ test("a room preference wins, and a missing preference is ask", () => {
       "linear",
       "",
     ),
-    "ask",
+    "do",
   );
 });
 

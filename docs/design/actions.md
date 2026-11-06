@@ -11,7 +11,7 @@ Turn one explicit request into one connector call, or into a waiting action, acc
 
 ## Preference
 
-The live `ToolPreference` for the tool is the account value, unless the room has an override. A missing document means `ask`.
+The live `ToolPreference` for the tool is the account value, unless the room has an override. A missing document means `do`. `ask` records the request and does not call the connector. There is no confirm step. The activity log is the record of both. See [activity-log.md](./activity-log.md). [0004](../decisions/0004-write-preference.md) still describes the earlier ask default.
 
 | Value | What the gate does |
 |---|---|

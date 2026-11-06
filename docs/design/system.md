@@ -2,7 +2,7 @@
 
 **Status:** active
 **Owner:** @ngna3007
-**Last updated:** 2026-10-21
+**Last updated:** 2026-11-04
 **Scope:** System-wide
 
 ## Mission
@@ -27,8 +27,7 @@ The public landing explains the product. It is not a door into the record. There
 | Language | JavaScript | Domain is plain functions. Remotion clips are TypeScript and are not a dependency of the server |
 | Record | Walrus Memory | `@mysten-incubation/memwal` against `https://relayer.memory.walrus.xyz` |
 | Files | Walrus Console | Private Seal folder. API at `api.console.walrus.xyz` |
-| Proof | Tatum | gRPC `LedgerService/GetObject` at `https://sui-mainnet-grpc.gateway.tatum.io` |
-| Locate | Sui GraphQL | `https://graphql.mainnet.sui.io/graphql` finds a certification. It is not the proof |
+| Proof and locate | Tatum | Native gRPC at `https://sui-mainnet-grpc.gateway.tatum.io:443` with `x-api-key`. `GetObject`, `ListOwnedObjects`, `GetTransaction`, `GetCheckpoint`, and `GetServiceInfo`. No public GraphQL and no public fullnode |
 | Meetings | Recall.ai | Output Media bot. Zoom, Google Meet, Teams, Webex |
 | Connectors | Remote MCP | Linear at `https://mcp.linear.app/mcp`. Calendar is read from its live tool list before a write tool is named |
 | Agent door | Sederunt MCP | Local stdio. Tools are `recall` and `act` |
@@ -43,9 +42,9 @@ graph TD
   mcp[MCP door]
   gate[Gate]
   domain[Domain]
-  memory[Memory adapter]
+  memory[Walrus Memory]
   console[Console adapter]
-  tatum[Tatum adapter]
+  tatum[Tatum gRPC]
   connectors[Connector adapters]
   meeting --> gate
   channel --> gate
@@ -55,6 +54,7 @@ graph TD
   gate --> console
   gate --> tatum
   gate --> connectors
+  memory --> tatum
 ```
 
 Imports point downward. `src/domain/` imports nothing else under `src/`. The gate imports the domain and receives adapters. An adapter imports its SDK. The landing renders a string. It does not call the gate.
@@ -73,7 +73,7 @@ Pure rules: invite check, write preference, status, clash, and checkpoint. Given
 |---|---|---|
 | Memory | `remember`, `recall`, `analyze` on one account per call | The decision is not stored. The gate does not invent a blob id |
 | Console | Upload and name a file in a private folder | The decision can still be stored. It does not claim the file exists |
-| Tatum | Read the object and its checkpoint | Status `unknown`. No fallback fullnode |
+| Tatum | Read and locate the Blob object, its certifying transaction, and the chain tip | Status `unknown`. No GraphQL and no public-fullnode fallback |
 | Connector | One tool operation | No id comes back. The action stays available |
 | Recall | Join, transcript, participant ids | The typed MCP door still accepts a delivery |
 

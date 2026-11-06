@@ -1,0 +1,203 @@
+import assert from "node:assert/strict";
+import { once } from "node:events";
+import { request } from "node:http";
+import test from "node:test";
+import {
+  consoleSecret,
+  openSession,
+  passphraseMatches,
+  safeConsoleNext,
+  sealSession,
+} from "../src/console-auth.js";
+import { renderConsolePage, speakerLabel } from "../src/console-page.js";
+import { createApp } from "../src/server.js";
+
+const SECRET = "fixture-passphrase";
+
+function listen(app) {
+  app.listen(0, "127.0.0.1");
+  return once(app, "listening").then(() => app.address().port);
+}
+
+function call(port, method, path, { body, headers, cookie } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = request({
+      hostname: "127.0.0.1",
+      port,
+      method,
+      path,
+      headers: {
+        ...(body ? { "content-type": "application/x-www-form-urlencoded", "content-length": Buffer.byteLength(body) } : {}),
+        ...(cookie ? { cookie } : {}),
+        ...(headers || {}),
+      },
+    }, (res) => {
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("end", () => resolve({
+        status: res.statusCode,
+        location: res.headers.location || "",
+        cookie: res.headers["set-cookie"],
+        raw: Buffer.concat(chunks).toString("utf8"),
+      }));
+    });
+    req.on("error", reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+test("a console passphrase seals a session and a bad signature does not open", () => {
+  assert.equal(consoleSecret({}), "");
+  assert.equal(consoleSecret({ SEDERUNT_CONSOLE_SECRET: "  desk  " }), "desk");
+  assert.equal(passphraseMatches("desk", "desk"), true);
+  assert.equal(passphraseMatches("other", "desk"), false);
+  const token = sealSession({ memberId: "Mina", name: "Mina Chen", exp: Date.now() + 1000 }, "desk");
+  const opened = openSession(token, "desk");
+  assert.equal(opened.ok, true);
+  assert.equal(opened.memberId, "Mina");
+  assert.equal(opened.name, "Mina Chen");
+  assert.equal(openSession(token, "other").reason, "invalid");
+  assert.equal(openSession(sealSession({ memberId: "Mina", exp: Date.now() - 10 }, "desk"), "desk").reason, "expired");
+  assert.equal(safeConsoleNext("https://evil.example"), "/console");
+  assert.equal(safeConsoleNext("/console/rooms"), "/console/rooms");
+  assert.equal(safeConsoleNext("/console/sign-in"), "/console");
+});
+
+test("the session name is who kept a sentence, and a raw id stays blank", () => {
+  assert.equal(speakerLabel("Mina", "Mina Chen", "Mina"), "Mina Chen");
+  assert.equal(speakerLabel("U_MINA", "Mina Chen", "U_MINA"), "Mina Chen");
+  assert.equal(speakerLabel("Rowan", "Mina Chen", "Mina"), "Rowan");
+  assert.equal(speakerLabel("100", "Mina Chen", "Mina"), "");
+  assert.equal(speakerLabel("ROW-4", "Mina Chen", "Mina"), "");
+  assert.equal(speakerLabel("U_OTHER", "Mina Chen", "Mina"), "");
+  const signed = renderConsolePage({
+    signedIn: true,
+    accountName: "Mina Chen",
+    accountMember: "Mina",
+    accountLine: "Owner",
+  });
+  assert.match(signed, /id="account-name">Mina Chen</);
+  assert.match(signed, /id="account-avatar"[^>]*>MC</);
+  assert.match(signed, /data-known="true"/);
+  assert.match(signed, /data-member="Mina"/);
+  assert.match(signed, /Edit profile/);
+  assert.match(signed, /Sign out/);
+  assert.doesNotMatch(signed, /id="member"/);
+  assert.doesNotMatch(signed, /Your name/);
+  const open = renderConsolePage({
+    signedIn: false,
+    accountName: "Mina",
+    accountMember: "Mina",
+    accountLine: "Sign-in is not set up",
+  });
+  assert.match(open, /id="account-name">Mina</);
+  assert.match(open, /Sign-in is not set up/);
+  assert.doesNotMatch(open, /Edit profile/);
+  assert.doesNotMatch(open, /<input[^>]*id="member"/);
+  const blank = renderConsolePage({});
+  assert.match(blank, /data-known="false"/);
+  assert.match(blank, /id="account-name">Account</);
+});
+
+test("sign-in is off until a passphrase is set, and a set passphrase gates only the console", async () => {
+  const open = createApp({
+    companyLoaded: true,
+    env: { SEDERUNT_MEMBER: "Mina" },
+  });
+  const port = await listen(open);
+  try {
+    const home = await call(port, "GET", "/console");
+    assert.equal(home.status, 200);
+    assert.match(home.raw, /Sign-in is not set up/);
+    assert.match(home.raw, /id="account"/);
+    assert.match(home.raw, /id="account-name">Mina</);
+    assert.match(home.raw, /data-known="true"/);
+    assert.doesNotMatch(home.raw, /id="member"/);
+    assert.doesNotMatch(home.raw, /Enter your name/);
+    assert.doesNotMatch(home.raw, /Your name/);
+    const refused = await call(port, "POST", "/console/profile", {
+      body: JSON.stringify({ name: "Mina Chen" }),
+      headers: { "content-type": "application/json" },
+    });
+    assert.equal(refused.status, 409);
+    const page = await call(port, "GET", "/console/sign-in");
+    assert.equal(page.status, 302);
+    assert.equal(page.location, "/console");
+    const slack = await call(port, "POST", "/api/slack", { body: "{}" });
+    assert.equal(slack.status, 200);
+  } finally {
+    open.close();
+  }
+
+  const gated = createApp({
+    companyLoaded: true,
+    env: { SEDERUNT_MEMBER: "Mina", SEDERUNT_CONSOLE_SECRET: SECRET },
+  });
+  const gatedPort = await listen(gated);
+  try {
+    const blocked = await call(gatedPort, "GET", "/console/rooms");
+    assert.equal(blocked.status, 302);
+    assert.match(blocked.location, /^\/console\/sign-in\?next=/);
+    const wrong = await call(gatedPort, "POST", "/console/sign-in", {
+      body: "name=Mina&passphrase=nope&next=/console/history",
+    });
+    assert.equal(wrong.status, 401);
+    assert.match(wrong.raw, /That passphrase does not match/);
+    const signed = await call(gatedPort, "POST", "/console/sign-in", {
+      body: "name=Mina&passphrase=fixture-passphrase&next=/console/history",
+    });
+    assert.equal(signed.status, 302);
+    assert.equal(signed.location, "/console/history");
+    const cookie = String(signed.cookie || "");
+    assert.match(cookie, /sederunt_session=/);
+    assert.match(cookie, /HttpOnly/);
+    const home = await call(gatedPort, "GET", "/console/history", { cookie: cookie.split(";")[0] });
+    assert.equal(home.status, 200);
+    assert.match(home.raw, /Sign out/);
+    assert.match(home.raw, /Edit profile/);
+    assert.match(home.raw, />Mina</);
+    assert.doesNotMatch(home.raw, /id="member"/);
+    const renamed = await call(gatedPort, "POST", "/console/profile", {
+      body: JSON.stringify({ name: "Mina Chen" }),
+      headers: { "content-type": "application/json" },
+      cookie: cookie.split(";")[0],
+    });
+    assert.equal(renamed.status, 200);
+    assert.match(renamed.raw, /Mina Chen/);
+    const renamedCookie = String(renamed.cookie || "");
+    assert.match(renamedCookie, /sederunt_session=/);
+    const token = decodeURIComponent(renamedCookie.match(/sederunt_session=([^;]+)/)[1]);
+    const renamedSession = openSession(token, SECRET);
+    assert.equal(renamedSession.ok, true);
+    assert.equal(renamedSession.memberId, "Mina");
+    assert.equal(renamedSession.name, "Mina Chen");
+    const shown = await call(gatedPort, "GET", "/console", { cookie: `sederunt_session=${encodeURIComponent(token)}` });
+    assert.equal(shown.status, 200);
+    assert.match(shown.raw, /id="account-name">Mina Chen</);
+    assert.match(shown.raw, /id="account-avatar"[^>]*>MC</);
+    assert.match(shown.raw, /data-member="Mina"/);
+    const blankName = await call(gatedPort, "POST", "/console/profile", {
+      body: JSON.stringify({ name: "   " }),
+      headers: { "content-type": "application/json" },
+      cookie: `sederunt_session=${encodeURIComponent(token)}`,
+    });
+    assert.equal(blankName.status, 400);
+    const unsigned = await call(gatedPort, "POST", "/console/profile", {
+      body: JSON.stringify({ name: "Other" }),
+      headers: { "content-type": "application/json" },
+    });
+    assert.equal(unsigned.status, 409);
+    const board = await call(gatedPort, "GET", "/api/console?member=henry", { cookie: `sederunt_session=${encodeURIComponent(token)}` });
+    assert.equal(board.status, 200);
+    const expired = sealSession({ memberId: "Mina", name: "Mina", exp: Date.now() - 1000 }, SECRET);
+    const bounced = await call(gatedPort, "GET", "/console", { cookie: `sederunt_session=${encodeURIComponent(expired)}` });
+    assert.equal(bounced.status, 302);
+    assert.match(bounced.location, /reason=expired/);
+    const slack = await call(gatedPort, "POST", "/api/slack", { body: "{}" });
+    assert.equal(slack.status, 200);
+    assert.equal(slack.location, "");
+  } finally {
+    gated.close();
+  }
+});

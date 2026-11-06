@@ -3,8 +3,14 @@ const MCP_URL = "https://mcp.linear.app/mcp";
 /**
  * Linear boundary. Talks to the remote MCP the product spec names.
  * The token stays in memory for the process. It is never written to a response.
+ *
+ * @param {string} token
+ * @param {typeof fetch} [fetchImpl]
+ * @param {{ team?: string, workspace?: string }} [options]
  */
-export function createLinearClient(token, fetchImpl = globalThis.fetch) {
+export function createLinearClient(token, fetchImpl = globalThis.fetch, options = {}) {
+  const team = String(options.team || "ROW").trim() || "ROW";
+  const workspace = String(options.workspace || "").trim();
   let sessionId = "";
   let nextId = 1;
   let started = null;
@@ -62,36 +68,68 @@ export function createLinearClient(token, fetchImpl = globalThis.fetch) {
     return result;
   }
 
+  async function saveIdentified(name, args, id) {
+    const result = await callTool(name, args);
+    const parsed = parseToolJson(result);
+    const identifier = findIdentifier(parsed) || findIdentifier(result) || rowId(id);
+    if (!identifier) throw new Error("Linear save returned no issue id.");
+    return { id: identifier, identifier };
+  }
+
+  async function issueLabels(id) {
+    const result = await callTool("get_issue", { id });
+    const parsed = parseToolJson(result);
+    const raw = parsed?.labels || parsed?.issue?.labels || [];
+    if (!Array.isArray(raw)) return [];
+    return raw.map((label) => (typeof label === "string" ? label : label?.name || "")).filter(Boolean);
+  }
+
   return {
     async readOpenTripTickets() {
-      const trip = issuesFrom(await callTool("list_issues", { team: "ROW", query: "trip", limit: 25 }));
-      const open = issuesFrom(await callTool("list_issues", { team: "ROW", limit: 25 }));
-      return { team: "ROW", trip, open };
+      const trip = issuesFrom(await callTool("list_issues", { team, query: "trip", limit: 25 }));
+      const open = issuesFrom(await callTool("list_issues", { team, limit: 25 }));
+      return { team, trip, open };
     },
-    async createIssue({ title }) {
-      const result = await callTool("save_issue", {
+    async createIssue({ title, idempotencyKey, description }) {
+      const args = {
         title,
-        team: "ROW",
+        team,
         project: "Sederunt",
-        description: "Filed from Sederunt after that tool preference allowed this one action.",
-      });
+        description: typeof description === "string" && description.trim() ? description.trim() : "Filed from a room.",
+      };
+      if (idempotencyKey) args.idempotencyKey = idempotencyKey;
+      const result = await callTool("save_issue", args);
       const parsed = parseToolJson(result);
       const identifier = findIdentifier(parsed) || findIdentifier(result);
       if (!identifier) {
         const snippet = toolText(result).replace(/\s+/g, " ").slice(0, 500);
         throw new Error(`Linear create returned no issue id. ${snippet}`);
       }
-      return { id: identifier, identifier };
+      const url = findUrl(parsed) || findUrl(result) || issueUrl(workspace, identifier);
+      return { id: identifier, identifier, url };
     },
     async assignIssue({ id, assignee }) {
-      const result = await callTool("save_issue", { id, assignee });
-      const parsed = parseToolJson(result);
-      const identifier = findIdentifier(parsed) || findIdentifier(result) || rowId(id);
-      if (!identifier) throw new Error("Linear assign returned no issue id.");
-      return { id: identifier, identifier };
+      const saved = await saveIdentified("save_issue", { id, assignee }, id);
+      return saved;
+    },
+    async updateIssue({ id, state }) {
+      return saveIdentified("save_issue", { id, state }, id);
+    },
+    async addLabel({ id, label }) {
+      const current = await issueLabels(id);
+      const labels = current.includes(label) ? current : [...current, label];
+      return saveIdentified("save_issue", { id, labels }, id);
+    },
+    async removeLabel({ id, label }) {
+      const current = await issueLabels(id);
+      const labels = current.filter((name) => name.toLowerCase() !== String(label || "").toLowerCase());
+      return saveIdentified("save_issue", { id, labels }, id);
+    },
+    async unassignIssue({ id }) {
+      return saveIdentified("save_issue", { id, assignee: null }, id);
     },
     async findIssuesByTitle(title) {
-      const found = issuesFrom(await callTool("list_issues", { team: "ROW", query: title, limit: 20 }));
+      const found = issuesFrom(await callTool("list_issues", { team, query: title, limit: 20 }));
       return found.filter((issue) => (issue.title || "") === title);
     },
     async getIssue(id) {
@@ -153,8 +191,23 @@ function issuesFrom(result) {
   }));
 }
 
+function issueUrl(workspace, identifier) {
+  if (!workspace || !identifier) return "";
+  return `https://linear.app/${encodeURIComponent(workspace)}/issue/${identifier}`;
+}
+
 function rowId(value) {
-  return typeof value === "string" && /^ROW-\d+$/.test(value) ? value : "";
+  if (typeof value !== "string") return "";
+  const text = value.trim().toUpperCase();
+  return /^[A-Z][A-Z0-9]+-\d+$/.test(text) ? text : "";
+}
+
+function findUrl(value) {
+  if (!value || typeof value !== "object") return "";
+  if (typeof value.url === "string" && value.url.startsWith("https://")) return value.url.split("?")[0];
+  const nested = value.issue || value.data;
+  if (nested && nested !== value) return findUrl(nested);
+  return "";
 }
 
 function findIdentifier(value) {

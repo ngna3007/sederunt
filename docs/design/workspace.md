@@ -2,7 +2,7 @@
 
 **Status:** draft
 **Owner:** @ngna3007
-**Last updated:** 2026-10-23
+**Last updated:** 2026-11-03
 **Scope:** Feature-level. The signed-in workspace the operator opens. This is not Walrus Console.
 
 ## Mission
@@ -11,38 +11,43 @@ Give the operator one workspace at a time, and make the next action obvious. Hom
 
 ## Direction
 
-Reading this as: an operator workspace for the person who sets the accounts up, in the cmdoss component system with the Sederunt palette, dial ENERGY 1 / RHYTHM 2 / MOTION 1.
+Reading this as: an operator workspace. The shell stays put and the page inside it changes. Motion is hover and focus only.
 
-The operator asked for that component system and for these colors. The dials follow from the job. The screen is a tool, so it does not shout (ENERGY 1). The shell stays put and the page inside it changes (RHYTHM 2). Motion is hover and focus only (MOTION 1).
+The visual system is the light console in `src/console.css`. Geist is the UI face and Geist Mono is the label face. Both come from the `geist` package (SIL Open Font License).
 
-| Token | Value | Why |
+| Token | Value | Use |
 |---|---|---|
-| Canvas | `#f4f3ef` | The Sederunt ground. Light, because a dark rail was refused |
-| Paper | `#fffcf8` | Cards and the sidebar sit on the canvas as paper, not as glass |
-| Ink | `#172b76` | Body text. Passes 4.5:1 on paper |
-| Strong | `#081428` | Titles and the wordmark |
-| Quiet | `#5c6790` | Secondary sentences. Passes 4.5:1 on paper and on the canvas |
-| Label | `#4c5678` | Small labels. The previous dim blue failed 4.5:1 |
-| Accent | `#2458f6` | One accent: the current section, the primary button, and focus |
-| Waiting | `#7c4704` on the tint, `#a16207` on paper | The waiting count, paired with the words "Waiting on you". The darker brown is the number and the status word on the tint, because `#a16207` misses 4.5:1 there |
-| Kept | `#1c7c54` | A stored or delivered state, paired with the state word |
-| Failed | `#c24141` | A failed state, paired with the state word |
+| Background | `#f7f8fb` | Page ground |
+| Card | `#ffffff` | Cards, menus, dialogs |
+| Foreground | `#171a24` | Body text |
+| Muted text | `#5e636f` | Secondary sentences and table heads. Passes 4.5:1 on the background |
+| Border | `#dce0e6` | 1px rules |
+| Input | `#d2d6de` | Field borders |
+| Primary | `#2458f6` | The landing action blue: current section, primary button, focus. White on it is about 5.5:1 |
+| Primary hover | `#1a46d4` | Pressed and hover fill. White on it stays above 4.5:1 |
+| Primary subtle | `#eef1fb` | Selected nav, chips, and avatar ground. The landing wash |
+| Primary border | `#8ebcff` | Chip and focus edge. The landing light blue |
+| Primary text | `#ffffff` | Text on the accent |
+| Sidebar | `#f1f3f9` | Rail, 240px |
+| Success text | `#146c34` | A kept or sent state. Darker than the fill so small text passes 4.5:1 |
+| Warning text | `#8a5a00` | Waiting. Darker than the fill so small text passes 4.5:1 |
+| Failed | `#d42f34` | A failed state |
 
-Type is Inter Tight for the UI and JetBrains Mono for proofs and file names, because that is the type of the component system the operator asked to keep. Radius is 8px on buttons and inputs, 12px on cards and dialogs. Buttons are 32px tall on a wide screen and at least 44px tall when the width collapses. The close control is 44px in both.
+Radius is 6px on buttons and inputs, 10px on cards and dialogs, and full pills on chips and badges. The sidebar is 240px. The top bar is 52px. Labels are 11.5px mono, uppercase, tracking 0.07em.
 
-Section labels stay short and uppercase with 0.04em tracking. That is the component system's label voice, kept on purpose. It is not a poster heading.
+Section labels stay short and uppercase. That is the label voice. It is not a poster heading.
 
-The company tile is a blue gradient. Both ends keep white initials above 4.5:1. The personal tile is solid `#081428`, because a lighter second stop failed that test. The two tiles stay different so the menu can tell the workspaces apart. The operator mark in the top bar is a solid disc. Cards do not float. The menu and the dialog are the only elevated surfaces. The waiting cell is the one tinted surface, because that count is the action. No blur on the bar, the sidebar, and the dialog at once. No glow, no radial orbs, no chart.
+The company tile is the brand blue. The personal tile is solid `#171a24`. The two tiles stay different so the menu can tell the workspaces apart. Cards do not float. The menu and the dialog are the only elevated surfaces. The waiting cell is the one tinted surface, because that count is the action. The top bar may blur. No glow, no radial orbs.
 
 ## Design Principles
 
 - Home is the waiting count and the rooms. History is a different page.
 - A count is a count of records in the open workspace. It does not name a week, a trend, or a customer base the record does not have.
 - The workspace list lives in the top chip. The sidebar is the sections of the workspace that is open.
-- A room block, and a history row, opens one dialog. The dialog is the file. There is no second column of detail.
+- A room row opens the room page. The page is two panes: the transcript on the left, and overview, decisions, waiting, and settings on the right.
 - Close is the X at the top right, the shade, or Escape.
 - A control that cannot do its action is not drawn.
-- A private note is not a room, and it never appears in the company workspace.
+- A private note is never shared as a room, and it never appears in the company workspace.
 
 ## Architecture
 
@@ -86,7 +91,7 @@ Four counts share one bordered row, because they are one record split four ways,
 
 When Waiting on you is above zero, that cell is tinted and it is a button. It opens History on You, with every kind shown, so the waiting changes are in the list. The line on the cell says "Confirm one change". The other three counts stay quiet. When the count is zero, the cell is not a button, and it says nothing is waiting.
 
-Under the counts, the rooms use the same blocks as the Rooms page in [rooms.md](./rooms.md): the platform mark beside the title, where the room is, who was present, and the bot name. The last decision opens with the dialog. A block opens the room dialog. When the company workspace has no rooms, the list says so and offers New room. A personal workspace says a private note is not a room, and offers no such button.
+Under the counts, the rooms use the same blocks as the Rooms page in [rooms.md](./rooms.md): the platform mark beside the title, where the room is, who was present, and the bot name. The last decision opens with the dialog. A block opens the room dialog. When the company workspace has no rooms, the list says so and offers New room. A personal workspace says private notes stay there and are never shared as rooms, and offers no such button.
 
 ### History
 
@@ -111,7 +116,7 @@ Chat can repeat a question about what is already kept in the open workspace. The
 | State | What the operator sees |
 |---|---|
 | Ready | The counts and the room blocks of the open workspace |
-| Empty | Why it is empty, and the one action that fills it. A personal workspace says a private note is not a room |
+| Empty | Why it is empty, and the one action that fills it. A personal workspace says private notes stay there and are never shared as rooms |
 | Loading | "Loading this workspace." No skeleton of a layout the record will not have |
 | Error | What failed, and a way to try the read again |
 | Sample | The sentence "Sample record. This preview does not write." Counts then belong to that sample, and they are labeled as such |

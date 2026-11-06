@@ -1,0 +1,24 @@
+NORTHLINE — NOVEMBER LAUNCH GATE
+Owner: Quang Lê (Eng) · Signed off: Rowan Nguyễn (Product)
+Date locked: 6 Nov 2026
+
+PUBLIC LAUNCH
+  Target: Wednesday 18 Nov 2026, 10:00 ICT
+  Slip option (once): Tuesday 25 Nov 2026 — only if the gate below fails
+
+HARD GATE — due Wednesday 12 Nov 2026, 17:00 ICT
+  [ ] Billing migration complete on production
+  [ ] Invoice PDF + receipt email verified on 3 live accounts
+  [ ] Refund path smoke-tested
+  [ ] No Sev-1 open on payments for 48h before the gate
+
+SOFT CHECKS (do not block launch alone)
+  [ ] Status page copy reviewed
+  [ ] Support macros updated
+  [ ] Booth demo environment healthy (ops-only unlock — not in this file)
+
+COMMS
+  • Green gate → Mina sends customer email 13 Nov
+  • Red gate → Rowan posts slip to #ops-hq same day; Mina holds the email
+
+This document supersedes the 28 Oct draft.

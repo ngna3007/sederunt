@@ -233,14 +233,14 @@ test("a read-only console key is rejected before any upload", async () => {
 
 test("the six adapters own their calls and do not open the network when unconfigured", async () => {
   const env = {};
-  await assert.rejects(() => createTatumReader(env).getObject("blob-1"), /Tatum read failed/);
+  await assert.rejects(() => createTatumReader(env).getObject("blob-1"), /Tatum key not set/);
   assert.deepEqual(await createCalendarAdapter(env).listTools(), []);
   await assert.rejects(() => createConsoleAdapter({ apiKey: "", scope: "" }).upload({ name: "a.txt" }), /not configured/);
   await assert.rejects(() => createMeetingAdapter(env).join(), /not configured/);
   const session = createSession();
   const linear = { calls: [], async createIssue() { this.calls.push("create"); return { id: "ROW-1" }; } };
   await handleUtterance(utterance(session, "File the venue ticket hall-wait", { deliveryId: "wait-1" }), { linear });
-  assert.deepEqual(linear.calls, []);
+  assert.deepEqual(linear.calls, ["create"]);
 });
 
 test("a long transcript stores one sentence and facts, and one idempotency key yields one blob id", async () => {

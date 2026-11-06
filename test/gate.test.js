@@ -106,7 +106,7 @@ test("a Linear read ignores a do preference and does not create", async () => {
   assertWord(result);
 });
 
-test("a write with no stored preference waits and does not call the connector", async () => {
+test("a write with no stored preference runs and records the request and the action", async () => {
   const linear = countingLinear();
   const memory = countingMemory();
   const session = createSession();
@@ -114,28 +114,29 @@ test("a write with no stored preference waits and does not call the connector", 
     utterance(session, "File the venue ticket seaside-hall", { deliveryId: "ask-1" }),
     { linear, memory },
   );
-  assert.deepEqual(linear.calls, []);
-  assert.equal(result.status, "recorded");
-  assert.equal(result.issueId, null);
-  assert.equal(result.link, null);
-  assert.equal(result.preference, "ask");
+  assert.deepEqual(linear.calls, ["create"]);
+  assert.equal(result.status, "filed");
+  assert.equal(result.issueId, "ROW-44");
+  assert.equal(result.preference, "do");
   assert.match(result.body, /seaside-hall/);
-  assert.match(result.body, /recorded/);
-  assert.match(result.body, /preference ask/);
-  assert.match(result.body, /Waiting for confirmation of action-/);
-  assert.doesNotMatch(result.body, /filed/);
-  assert.doesNotMatch(result.body, /ROW-/);
+  assert.match(result.body, /filed/);
   assert.equal(session.actions.length, 1);
-  assert.equal(session.actions[0].state, "waiting");
-  assert.equal(session.actions[0].connectorId, null);
+  assert.equal(session.actions[0].state, "closed");
+  const pair = session.activity.filter((row) => row.requestId === session.actions[0].id);
+  assert.equal(pair.length, 2);
+  assert.equal(pair[0].kind, "request");
+  assert.equal(pair[1].kind, "action");
+  assert.equal(pair[0].requestId, pair[1].requestId);
   assert.ok(memory.calls.every((call) => !call.connectorId && call.account !== undefined));
   assert.ok(memory.calls.every((call) => !String(call.text).includes("0x")));
+  assert.equal(JSON.stringify(session.activity).includes("lin_api_"), false);
   assertWord(result);
 });
 
 test("ask confirms one action, and yes does not file a second write", async () => {
   const linear = countingLinear();
   const session = createSession();
+  await handleUtterance(utterance(session, "set linear to ask"), {});
   const proposed = await handleUtterance(
     utterance(session, "File the venue ticket hall-one", { deliveryId: "ask-hall" }),
     { linear },
@@ -349,6 +350,7 @@ test("an empty connector id stays recorded and a new confirmation can send it on
 test("dismissing a waiting action does not call the connector", async () => {
   const linear = countingLinear();
   const session = createSession();
+  await handleUtterance(utterance(session, "set linear to ask"), {});
   const proposed = await handleUtterance(
     utterance(session, "File the venue ticket hall-dismiss", { deliveryId: "dismiss-ask" }),
     { linear },
@@ -712,6 +714,7 @@ test("a calendar read ignores do, and a calendar edit follows the preference", a
 
   const asking = createSession();
   const quiet = countingCalendar();
+  await handleUtterance(utterance(asking, "set calendar to ask"), {});
   const waiting = await handleUtterance(
     utterance(asking, "Move the review to Friday", { deliveryId: "cal-ask" }),
     { calendar: quiet },
@@ -744,6 +747,7 @@ test("MCP recall applies no write preference, and act under ask does not call", 
   assert.deepEqual(linear.calls, []);
 
   const asked = createSession();
+  await handleUtterance(utterance(asked, "set linear to ask"), {});
   const acted = await act(
     {
       text: "File the venue ticket hall-mcp",
@@ -778,7 +782,7 @@ test("MCP recall applies no write preference, and act under ask does not call", 
   assert.doesNotMatch(JSON.stringify(throughDoor), /0x[0-9a-fA-F]{6,}/);
 });
 
-test("a restarted meeting still waits for one confirm", async () => {
+test("a restarted meeting keeps the sentence and does not queue a confirm", async () => {
   const docs = [
     { room: { id: "bot-live", kind: "meeting", platform: "Google Meet" } },
     {
@@ -812,9 +816,8 @@ test("a restarted meeting still waits for one confirm", async () => {
   const session = createSession();
   await rebuildCompanyIndex(session, { memory });
   const waiting = session.actions.filter((action) => action.state === "waiting");
-  assert.equal(waiting.length, 1);
-  assert.equal(waiting[0].statement, "the booth opens at nine");
-  assert.equal(waiting[0].decisionId, "decision-1");
+  assert.equal(waiting.length, 0);
+  assert.equal(session.decisions.some((decision) => decision.text === "the booth opens at nine"), true);
 });
 
 test("Maple keeps the words that follow the name, and a misheard Sederunt does not", async () => {

@@ -4,7 +4,7 @@ import { once } from "node:events";
 import { request } from "node:http";
 import test from "node:test";
 import { createApp } from "../src/server.js";
-import { createMeetingAdapter, verifyRecallRequest } from "../src/meeting/recall.js";
+import { createMeetingAdapter, recallTranscriptDelivery, verifyRecallRequest } from "../src/meeting/recall.js";
 
 const secret = `whsec_${Buffer.from("recall-test-secret").toString("base64")}`;
 
@@ -204,9 +204,20 @@ test("join sends one bot to the public camera page and a failed join omits the k
   assert.equal(sent[0].init.headers.authorization, `Token ${key}`);
   const body = JSON.parse(sent[0].init.body);
   assert.equal(body.meeting_url, "https://meet.google.com/abc-defg-hij");
-  assert.equal(body.bot_name, "Maple");
+  assert.equal(body.bot_name, "Adam");
   assert.equal(body.output_media.camera.config.url, "https://sederunt.example/meeting?name=Maple");
+  sent.length = 0;
+  await createMeetingAdapter(env, {
+    async fetch(url, init) {
+      sent.push({ url, init });
+      return { ok: true, async text() { return JSON.stringify({ id: "bot-2" }); } };
+    },
+  }).join({ ...meeting, name: "Maple", botName: "Mai" });
+  const renamed = JSON.parse(sent[0].init.body);
+  assert.equal(renamed.bot_name, "Mai");
+  assert.equal(renamed.output_media.camera.config.url, "https://sederunt.example/meeting?name=Maple");
   assert.deepEqual(body.recording_config, {
+    video_mixed_mp4: {},
     transcript: {
       provider: { recallai_streaming: { mode: "prioritize_low_latency", language_code: "en" } },
       diarization: { use_separate_streams_when_available: true },
@@ -232,6 +243,126 @@ test("join sends one bot to the public camera page and a failed join omits the k
     },
   );
   assert.equal(calls, 1);
+});
+
+test("streaming chunks that share a transcript.id still keep separately", () => {
+  const same = "tr-shared";
+  const first = recallTranscriptDelivery({
+    event: "transcript.data",
+    data: {
+      bot: { id: "bot-live" },
+      transcript: { id: same },
+      data: {
+        participant: { id: 100, name: "Anh" },
+        words: [{ text: "Adam" }, { text: "remember" }, { text: "this:" }, { text: "District" }, { text: "7" }],
+      },
+    },
+  });
+  const second = recallTranscriptDelivery({
+    event: "transcript.data",
+    data: {
+      bot: { id: "bot-live" },
+      transcript: { id: same },
+      data: {
+        participant: { id: 100, name: "Anh" },
+        words: [{ text: "Adam" }, { text: "remember" }, { text: "this:" }, { text: "cedar-92" }],
+      },
+    },
+  });
+  assert.ok(first?.deliveryId);
+  assert.ok(second?.deliveryId);
+  assert.notEqual(first.deliveryId, second.deliveryId);
+  assert.equal(first.addressed, true);
+  assert.equal(second.addressed, true);
+  const replay = recallTranscriptDelivery({
+    event: "transcript.data",
+    data: {
+      bot: { id: "bot-live" },
+      transcript: { id: same },
+      data: {
+        participant: { id: 100, name: "Anh" },
+        words: [{ text: "Adam" }, { text: "remember" }, { text: "this:" }, { text: "District" }, { text: "7" }],
+      },
+    },
+  });
+  assert.equal(replay.deliveryId, first.deliveryId);
+});
+
+test("two spoken keeps that share a transcript.id both land", async () => {
+  const app = createApp({
+    companyLoaded: true,
+    env: { RECALL_WEBHOOK_SECRET: secret, SEDERUNT_MEMBER: "U_MINA" },
+    deps: {
+      memory: { async remember() { return { blobId: null }; }, async index() { return []; }, async recall() { return []; } },
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+    },
+  });
+  app.listen(0, "127.0.0.1");
+  await once(app, "listening");
+  const port = app.address().port;
+  const deliver = (words) => {
+    const payload = JSON.stringify({
+      event: "transcript.data",
+      data: {
+        bot: { id: "bot-chunks" },
+        transcript: { id: "tr-shared" },
+        data: { participant: { id: 100, name: "Anh" }, words: words.map((text) => ({ text })) },
+      },
+    });
+    return post(port, "/api/recall", payload, {
+      "webhook-id": `msg-${words.join("-")}`,
+      "webhook-timestamp": "1731705121",
+      "webhook-signature": `v1,${sign(secret, `msg-${words.join("-")}`, "1731705121", payload)}`,
+    });
+  };
+  try {
+    assert.equal((await deliver(["Hey", "Maple", "the", "office", "is", "District", "7."])).status, 204);
+    assert.equal((await deliver(["Hey", "Maple", "the", "unlock", "is", "cedar-92."])).status, 204);
+    const board = JSON.parse((await get(port, "/api/console?member=U_MINA")).raw);
+    const texts = (board.decisions ?? []).map((row) => row.text).join("\n");
+    assert.match(texts, /District 7/);
+    assert.match(texts, /cedar-92/);
+  } finally {
+    await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
+test("a transcript with no speaker still keeps for the configured member", async () => {
+  const app = createApp({
+    companyLoaded: true,
+    env: { RECALL_WEBHOOK_SECRET: secret, SEDERUNT_MEMBER: "U_MINA" },
+    deps: {
+      memory: { async remember() { return { blobId: null }; }, async index() { return []; }, async recall() { return []; } },
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+    },
+  });
+  app.listen(0, "127.0.0.1");
+  await once(app, "listening");
+  const port = app.address().port;
+  try {
+    const payload = JSON.stringify({
+      event: "transcript.data",
+      data: {
+        bot: { id: "bot-tab" },
+        transcript: { id: "tr-tab" },
+        data: {
+          words: [{ text: "Hey" }, { text: "Maple" }, { text: "move-in" }, { text: "is" }, { text: "December" }, { text: "2nd." }],
+        },
+      },
+    });
+    const accepted = await post(port, "/api/recall", payload, {
+      "webhook-id": "msg-tab",
+      "webhook-timestamp": "1731705121",
+      "webhook-signature": `v1,${sign(secret, "msg-tab", "1731705121", payload)}`,
+    });
+    assert.equal(accepted.status, 204);
+    const mine = await get(port, "/api/console?member=U_MINA");
+    const other = await get(port, "/api/console?member=U_OTHER");
+    assert.match(mine.raw, /move-in is December 2nd/);
+    assert.equal(other.raw.includes("December 2nd"), false);
+  } finally {
+    await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
+  }
 });
 
 test("verification rejects a secret that does not sign the raw body", () => {

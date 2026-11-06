@@ -1,0 +1,188 @@
+[
+  {
+    "id": "live-answer-first-good",
+    "rule": "answer_first",
+    "mode": "live_voice",
+    "expect": "pass",
+    "messages": [
+      { "role": "user", "text": "Adam, when is the retro?" },
+      { "role": "assistant", "text": "Sure, the retro is half past two and I'll be there." }
+    ]
+  },
+  {
+    "id": "live-answer-first-bad",
+    "rule": "answer_first",
+    "mode": "live_voice",
+    "expect": "fail",
+    "messages": [
+      { "role": "user", "text": "Adam, when is the retro?" },
+      { "role": "assistant", "text": "Great question. You asked about the retro. Hope this helps, and I'll send notes." }
+    ]
+  },
+  {
+    "id": "live-natural-speech-good",
+    "rule": "natural_speech",
+    "mode": "live_voice",
+    "expect": "pass",
+    "messages": [
+      { "role": "user", "text": "Adam, what did Lan decide?" },
+      { "role": "assistant", "text": "Sure, I'll walk through the decision the way Lan described it." }
+    ]
+  },
+  {
+    "id": "live-natural-speech-bad",
+    "rule": "natural_speech",
+    "mode": "live_voice",
+    "expect": "fail",
+    "messages": [
+      { "role": "user", "text": "Adam, what did Lan decide?" },
+      { "role": "assistant", "text": "• See https://example.com and <@U012345678> for the notes." }
+    ]
+  },
+  {
+    "id": "live-contractions-good",
+    "rule": "contractions",
+    "mode": "live_voice",
+    "expect": "pass",
+    "messages": [
+      { "role": "user", "text": "Adam, can you tell Lan?" },
+      { "role": "assistant", "text": "Sure, I'll walk Lan through the notes after the meeting." }
+    ]
+  },
+  {
+    "id": "live-contractions-bad",
+    "rule": "contractions",
+    "mode": "live_voice",
+    "expect": "fail",
+    "messages": [
+      { "role": "user", "text": "Adam, can you tell Lan?" },
+      { "role": "assistant", "text": "I will walk Lan through the notes after the meeting today." }
+    ]
+  },
+  {
+    "id": "live-not-robotic-good",
+    "rule": "not_robotic",
+    "mode": "live_voice",
+    "expect": "pass",
+    "messages": [
+      { "role": "user", "text": "Adam, hold the notes." },
+      { "role": "assistant", "text": "Sure, I'll hold the notes until Lan asks for them." }
+    ]
+  },
+  {
+    "id": "live-not-robotic-bad",
+    "rule": "not_robotic",
+    "mode": "live_voice",
+    "expect": "fail",
+    "messages": [
+      { "role": "user", "text": "Adam, hold the notes." },
+      { "role": "assistant", "text": "Task queued." }
+    ]
+  },
+  {
+    "id": "live-spoken-time-good",
+    "rule": "spoken_time",
+    "mode": "live_voice",
+    "expect": "pass",
+    "messages": [
+      { "role": "user", "text": "Adam, when do we start?" },
+      { "role": "assistant", "text": "Let's start at half past two, and I'll wait for Lan." }
+    ]
+  },
+  {
+    "id": "live-spoken-time-bad",
+    "rule": "spoken_time",
+    "mode": "live_voice",
+    "expect": "fail",
+    "messages": [
+      { "role": "user", "text": "Adam, when do we start?" },
+      { "role": "assistant", "text": "Let's start at 14:30, and I'll wait for Lan." }
+    ]
+  },
+  {
+    "id": "live-confirm-writes-good",
+    "rule": "confirm_writes",
+    "mode": "live_voice",
+    "expect": "pass",
+    "context": { "writeRequested": true },
+    "messages": [
+      { "role": "user", "text": "Adam, send that to Lan." },
+      { "role": "assistant", "text": "Sure, I'll send that to Lan for approval after the call." }
+    ]
+  },
+  {
+    "id": "live-confirm-writes-bad",
+    "rule": "confirm_writes",
+    "mode": "live_voice",
+    "expect": "fail",
+    "context": { "writeRequested": true },
+    "messages": [
+      { "role": "user", "text": "Adam, send that to Lan." },
+      { "role": "assistant", "text": "Done, I sent it." }
+    ]
+  },
+  {
+    "id": "live-addressed-only-good",
+    "rule": "addressed_only",
+    "mode": "live_voice",
+    "expect": "pass",
+    "context": { "addressed": false },
+    "messages": [
+      { "role": "user", "text": "Lan, can you take the notes?" },
+      { "role": "assistant", "text": "" }
+    ]
+  },
+  {
+    "id": "live-addressed-only-bad",
+    "rule": "addressed_only",
+    "mode": "live_voice",
+    "expect": "fail",
+    "context": { "addressed": false },
+    "messages": [
+      { "role": "user", "text": "Lan, can you take the notes?" },
+      { "role": "assistant", "text": "I'll answer that now." }
+    ]
+  },
+  {
+    "id": "live-yield-floor-good",
+    "rule": "yield_floor",
+    "mode": "live_voice",
+    "expect": "pass",
+    "context": { "interrupted": true },
+    "messages": [
+      { "role": "user", "text": "Adam, wait." },
+      { "role": "assistant", "text": "Sure." }
+    ]
+  },
+  {
+    "id": "live-yield-floor-bad",
+    "rule": "yield_floor",
+    "mode": "live_voice",
+    "expect": "fail",
+    "context": { "interrupted": true },
+    "messages": [
+      { "role": "user", "text": "Adam, wait." },
+      { "role": "assistant", "text": "I'll keep going through the whole agenda, the budget, the hiring plan, and the launch date before anyone else speaks." }
+    ]
+  },
+  {
+    "id": "live-no-broadcast-bad",
+    "rule": "no_broadcast",
+    "mode": "live_voice",
+    "expect": "fail",
+    "messages": [
+      { "role": "user", "text": "Adam, tell the room." },
+      { "role": "assistant", "text": "I'll ping @channel after the call." }
+    ]
+  },
+  {
+    "id": "live-robotic-ack-bad",
+    "rule": "not_robotic",
+    "mode": "live_voice",
+    "expect": "fail",
+    "messages": [
+      { "role": "user", "text": "Adam, file that." },
+      { "role": "assistant", "text": "Request acknowledged." }
+    ]
+  }
+]

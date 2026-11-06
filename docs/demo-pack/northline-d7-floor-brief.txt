@@ -1,0 +1,36 @@
+NORTHLINE — DISTRICT 7 FLOOR BRIEF
+Prepared by: Sofia Phạm, Workplace Ops
+For: Rowan Nguyễn / Quang Lê
+Version: 1.2 · 5 Nov 2026
+Status: Approved for circulation in #ops-hq
+
+ADDRESS
+  Building B, Street 15, Tân Phú, District 7, HCMC
+  Landlord contact: HCMC Estates desk (Sofia holds the lease packet)
+
+STACK
+  Floor 8 — 420 m²
+    • Lobby + reception (north core)
+    • 2 meeting rooms: “Saigon” (8p), “Mekong” (4p)
+    • CS overflow benches (12 seats)
+    • Mother room + first-aid closet (south wall)
+  Floor 9 — 410 m²
+    • Open eng / product (36 desks, hot-desk capable)
+    • Focus rooms ×4 (1p)
+    • War room “Launch” (10p) — reserved for Nov launch week
+    • Server closet: landlord UPS only; no on-prem prod
+
+MOVE-IN TARGET
+  Tuesday 2 Dec 2026, 08:00–18:00
+  Furniture delivery window: 28–29 Nov
+  Network cutover: 1 Dec evening (Quang + MSP)
+
+BADGES & ACCESS
+  Name list due to Sofia by 20 Nov
+  Contractors get day passes only — no after-hours without Rowan or Quang
+
+DO NOT
+  • Announce the staging unlock phrase in this channel
+  • Share landlord unit numbers outside Northline staff
+
+Questions → Sofia.

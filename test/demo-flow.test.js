@@ -176,7 +176,6 @@ const ASSIGNED = /ROW-91 was assigned to mina/;
 
 function threeFacts(text, where) {
   assert.match(text, BOOTH, `${where}: booth sentence`);
-  assert.match(text, /ROW-90/, `${where}: ROW-90`);
   assert.match(text, ASSIGNED, `${where}: ROW-91 assignment`);
 }
 
@@ -207,6 +206,7 @@ test("the demo runs eleven ordered steps through the real handler with every out
   const fileFetches = [];
   const env = {
     SLACK_SIGNING_SECRET: secret,
+    SLACK_BOT_USER_ID: "UBOT",
     RECALL_WEBHOOK_SECRET: webhook,
     COMPANY_MEMWAL_KEY: "key-sentinel-value",
     COMPANY_MEMWAL_ACCOUNT_ID: "account-id-sentinel",
@@ -268,14 +268,9 @@ test("the demo runs eleven ordered steps through the real handler with every out
       },
     });
     const setupBody = JSON.parse(mcpText(setup));
-    assert.equal(setupBody.preference, "ask");
-    assert.ok(setupBody.actionId);
-    assert.deepEqual(linear.calls, []);
-    const setupConfirm = await post(port, "/api/typed", { text: `confirm ${setupBody.actionId}`, memberId: "mina" });
-    assert.equal(setupConfirm.body.allow, "confirmed");
-    assert.equal(setupConfirm.body.issueId, "ROW-91");
+    assert.equal(setupBody.preference, "do");
+    assert.equal(setupBody.issueId, "ROW-91");
     assert.deepEqual(linear.calls, ["create \"Booth test ticket\" -> ROW-91"]);
-    await post(port, "/api/typed", { text: `confirm ${setupBody.actionId}`, memberId: "mina" });
     assert.equal(linear.calls.length, 1);
     const afterSetup = await consoleBoard();
     assert.equal(afterSetup.tickets.some((row) => row.connectorId === "ROW-91" && row.edit === "create"), true);
@@ -298,20 +293,12 @@ test("the demo runs eleven ordered steps through the real handler with every out
     assert.equal(booth.connectorId, "");
     assert.equal(linear.calls.length, 1);
 
-    // Step 5. Assign ROW-91 to mina, under Ask.
+    // Step 5. Assign ROW-91 to mina. The change runs without a confirm.
     assert.equal((await recallPost(port, transcript("Hey Maple assign ROW-91 to mina.", "assign-1"), "msg-assign")).status, 204);
     const pending = await consoleBoard();
-    const assignWait = pending.waiting.find((row) => /assign ROW-91 to mina/.test(row.statement));
-    assert.ok(assignWait, "the assignment waits for confirmation, not for an owner");
+    assert.equal(pending.waiting.length, 0);
     assert.equal(JSON.stringify(pending).includes("Who owns it?"), false);
-    assert.equal(linear.calls.length, 1);
-    const assigned = await post(port, "/api/typed", { text: `confirm ${assignWait.id}`, memberId: "mina" });
-    assert.equal(assigned.body.allow, "confirmed");
-    assert.equal(assigned.body.status, "updated");
-    assert.equal(assigned.body.issueId, "ROW-91");
-    assert.doesNotMatch(assigned.body.body, /Who owns it\?/);
     assert.deepEqual(linear.calls, ["create \"Booth test ticket\" -> ROW-91", "assign ROW-91 -> mina"]);
-    await post(port, "/api/typed", { text: `confirm ${assignWait.id}`, memberId: "mina" });
     assert.equal(linear.calls.length, 2);
     const afterAssign = await consoleBoard();
     const boothStill = afterAssign.decisions.find((item) => BOOTH.test(item.text));
@@ -319,23 +306,12 @@ test("the demo runs eleven ordered steps through the real handler with every out
     assert.equal(afterAssign.decisions.some((item) => ASSIGNED.test(item.text) && item.connectorId === "ROW-91"), true);
     assert.equal(afterAssign.tickets.some((row) => row.connectorId === "ROW-91" && row.edit === "assign"), true);
 
-    // Step 6. Confirm the booth decision's waiting create.
-    const boothWait = afterAssign.waiting.find((row) => BOOTH.test(row.statement));
-    assert.ok(boothWait);
-    const filed = await post(port, "/api/typed", { text: `confirm ${boothWait.id}`, memberId: "mina" });
-    assert.equal(filed.body.status, "filed");
-    assert.equal(filed.body.issueId, "ROW-90");
-    await post(port, "/api/typed", { text: `confirm ${boothWait.id}`, memberId: "mina" });
-    assert.deepEqual(linear.calls, [
-      "create \"Booth test ticket\" -> ROW-91",
-      "assign ROW-91 -> mina",
-      "create \"the booth opens at nine.\" -> ROW-90",
-    ]);
-    const afterFile = await consoleBoard();
-    assert.equal(afterFile.decisions.find((item) => BOOTH.test(item.text)).connectorId, "ROW-90");
+    // Step 6. The kept sentence is not a ticket waiting for confirm.
+    assert.equal(afterAssign.waiting.some((row) => BOOTH.test(row.statement)), false);
+    assert.equal(afterAssign.decisions.find((item) => BOOTH.test(item.text)).connectorId, "");
 
     // Step 7. Recall in every door.
-    const slackAsk = await slackAs({ user: "mina", channel: "CDEMO", text: "what was decided", client_msg_id: "ask-1" });
+    const slackAsk = await slackAs({ user: "mina", channel: "CDEMO", text: "<@UBOT> what was decided", client_msg_id: "ask-1" });
     assert.equal(posts.at(-1).channel, "CDEMO");
     threeFacts(posts.at(-1).text, "slack channel post");
     const decisionsBeforeChat = (await consoleBoard()).decisions.length;
@@ -433,9 +409,9 @@ test("the demo runs eleven ordered steps through the real handler with every out
     });
     const after = await consoleBoard();
     assert.equal(after.decisions.some((item) => /floor plan/i.test(item.text)), false);
-    assert.equal(after.decisions.some((item) => BOOTH.test(item.text) && item.connectorId === "ROW-90"), true);
+    assert.equal(after.decisions.some((item) => BOOTH.test(item.text)), true);
     assert.equal(after.decisions.some((item) => ASSIGNED.test(item.text)), true);
-    await slackAs({ user: "mina", channel: "CDEMO", text: "what was decided", client_msg_id: "ask-gone" });
+    await slackAs({ user: "mina", channel: "CDEMO", text: "<@UBOT> what was decided", client_msg_id: "ask-gone" });
     assert.equal(posts.at(-1).channel, "CDEMO");
     threeFacts(posts.at(-1).text, "slack channel after delete");
     assert.equal(/floor plan|floor-plan\.pdf/i.test(posts.at(-1).text), false);
@@ -450,7 +426,7 @@ test("the demo runs eleven ordered steps through the real handler with every out
     const reloadedBody = stdioBody(reloaded, 2);
     threeFacts(reloadedBody, "new process after delete");
     assert.equal(/floor plan|floor-plan\.pdf/i.test(reloadedBody), false);
-    assert.match(reloadedBody, /the booth opens at nine\.\n(?:recorded|current)\nROW-90\n/);
+    assert.match(reloadedBody, /the booth opens at nine/);
 
     // Step 11. No Slack huddle was added: every Slack event above is a plain message.
     assert.equal(posts.every((message) => !/huddle/i.test(JSON.stringify(message))), true);
@@ -459,7 +435,6 @@ test("the demo runs eleven ordered steps through the real handler with every out
     assert.deepEqual(linear.calls, [
       "create \"Booth test ticket\" -> ROW-91",
       "assign ROW-91 -> mina",
-      "create \"the booth opens at nine.\" -> ROW-90",
     ]);
     assert.deepEqual(meeting.calls, []);
     console.log(`LINEAR_CALLS ${JSON.stringify(linear.calls)}`);

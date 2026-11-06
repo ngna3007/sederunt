@@ -121,6 +121,14 @@ function noSecret(raw) {
   assert.equal(/\b0x[a-f0-9]{8,}\b/i.test(raw), false);
 }
 
+function accountKeyField(raw) {
+  const inputs = raw.match(/<input\b[^>]*>/gi) || [];
+  return inputs.some((tag) => {
+    if (/\bid="mcp-token(?:-next)?"/.test(tag)) return false;
+    return /type="password"|name="key"|name="token"/i.test(tag);
+  });
+}
+
 test("the console is the workspace and the room page redirects", async () => {
   const memory = mockAccount({ accountId: "company-console", delegates: ["delegate-console"] });
   const meeting = { calls: [], async join() { this.calls.push("join"); } };
@@ -146,17 +154,16 @@ test("the console is the workspace and the room page redirects", async () => {
     assert.match(visible, /Set SEDERUNT_PUBLIC_ORIGIN to a public https address, then restart/);
     assert.match(visible, /id="slack-block"/);
     assert.match(visible, /The channel door is not set up/);
-    assert.match(home.raw, /Calendar is on Ask/);
-    assert.match(home.raw, /Linear is on Ask/);
+    assert.match(home.raw, /Run automatically/);
     assert.match(home.raw, /The meeting has not sent who is there/);
-    assert.match(home.raw, /A display name is not an id/);
-    assert.match(home.raw, /Nothing has been asked here yet/);
+    assert.match(home.raw, /Names heard in a room/);
+    assert.match(home.raw, /Ask Sederunt/);
     assert.match(home.raw, /data-scope="group"/);
     assert.match(home.raw, /data-scope="you"/);
     assert.match(home.raw, /id="workspace-chip"/);
     assert.match(home.raw, /id="workspace-menu"/);
     assert.match(home.raw, /Create a workspace/);
-    assert.match(home.raw, /A private note is not a room/);
+    assert.match(home.raw, /Private notes stay in this workspace. They are never shared as rooms./);
     assert.match(home.raw, /A second company is a delegate added outside this page/);
     assert.match(home.raw, /This page does not take a key/);
     assert.match(home.raw, /id="cal-connect"/);
@@ -167,7 +174,7 @@ test("the console is the workspace and the room page redirects", async () => {
     assert.match(home.raw, /#3c90ff/);
     assert.equal(home.raw.includes("Acme"), false);
     assert.equal(home.raw.includes("Auto"), false);
-    assert.equal(/type="password"|name="key"|name="token"/i.test(home.raw), false);
+    assert.equal(accountKeyField(home.raw), false);
     assert.equal(home.raw.includes("—"), false);
     noSecret(home.raw);
 
@@ -194,8 +201,8 @@ test("the console is the workspace and the room page redirects", async () => {
     assert.equal(state.status, 200);
     const board = JSON.parse(state.raw);
     assert.equal(board.companyLoaded, true);
-    assert.equal(board.preferences.linear, "ask");
-    assert.equal(board.preferences.calendar, "ask");
+    assert.equal(board.preferences.linear, "do");
+    assert.equal(board.preferences.calendar, "do");
     assert.equal(board.slack, "not-set-up");
     assert.equal(board.doors.meeting, false);
     assert.equal(board.decisions.some((item) => item.text === "The booth opens at nine."), true);
@@ -206,7 +213,8 @@ test("the console is the workspace and the room page redirects", async () => {
     assert.equal(board.counts.waiting, 0);
     assert.equal(board.counts.sent, 0);
     assert.equal(board.counts.failed, 0);
-    assert.equal(state.raw.includes("blobId"), false);
+    assert.equal(typeof board.decisions[0].blobId, "string");
+    assert.equal(board.decisions[0].proofStatus, "unknown");
     assert.equal(state.raw.includes("consoleFileId"), false);
     noSecret(state.raw);
   } finally {
@@ -225,7 +233,7 @@ test("a missing company delegate names the restart and has no key field", async 
     const home = await get(port, "/console");
     const state = JSON.parse((await get(port, "/api/console")).raw);
     assert.match(home.raw, /Add the delegate outside this page, then restart/);
-    assert.equal(/type="password"|name="key"|name="token"/i.test(home.raw), false);
+    assert.equal(accountKeyField(home.raw), false);
     assert.equal(state.companyLoaded, false);
     assert.match(state.message, /not loaded/);
     assert.match(state.message, /restart/);
@@ -347,6 +355,40 @@ test("the shipped adapter keeps the decision document and a second process shows
   }
 });
 
+test("failed account read still reports Connected doors", async () => {
+  const memory = {
+    async index() {
+      throw new Error("Calendar request failed secret-value");
+    },
+  };
+  const app = createApp({
+    deps: { memory, tatum: quietTatum() },
+    env: cleanEnv({
+      SLACK_BOT_TOKEN: "xoxb-test",
+      SLACK_SIGNING_SECRET: "signing",
+      SEDERUNT_MEMBER: "mina",
+    }),
+    companyLoaded: true,
+    linearReady: true,
+  });
+  const port = await listen(app);
+  try {
+    const failed = JSON.parse((await get(port, "/api/console?member=mina")).raw);
+    assert.equal(failed.read, "failed");
+    assert.equal(failed.doors.calendar, true);
+    assert.equal(failed.doors.linear, true);
+    assert.equal(failed.doors.slack, true);
+    assert.equal(failed.slack, "ready");
+    const html = (await get(port, "/console/setup")).raw;
+    assert.match(html, /id="cal-conn" class="conn-state">Connected/);
+    assert.match(html, /id="lin-conn" class="conn-state">Connected/);
+    assert.match(html, /id="slack-conn" class="conn-state">Connected/);
+    assert.equal(html.includes(">Unknown<"), false);
+  } finally {
+    await close(app);
+  }
+});
+
 test("a failed memory read is not an empty workspace", async () => {
   let reads = 0;
   const memory = {
@@ -369,9 +411,12 @@ test("a failed memory read is not an empty workspace", async () => {
     assert.equal(failed.message.includes("No decision is stored yet"), false);
     assert.equal(failed.message.includes("secret-value"), false);
     assert.equal((await get(port, "/console")).raw.includes("Read the account again"), true);
+    const second = JSON.parse((await get(port, "/api/console?member=mina")).raw);
+    assert.equal(second.read, "failed");
+    assert.equal(reads >= 2, true, "failed index must not stick — next GET retries");
     const again = JSON.parse((await post(port, "/api/console/read", {})).raw);
     assert.equal(again.read, "failed");
-    assert.equal(reads >= 2, true);
+    assert.equal(reads >= 3, true);
   } finally {
     await close(app);
   }
@@ -439,6 +484,7 @@ test("ask and a repeated delivery do not call the connector", async () => {
     },
   };
   const session = createSession();
+  await handleUtterance({ text: "set linear to ask", session, memberId: "mina", room: room() }, { linear });
   const asked = await handleUtterance({
     text: "File the venue ticket hall",
     session,
@@ -520,7 +566,7 @@ test("the alpha walk keeps one sentence and stdio recall matches the console", a
     const onboard = await get(missingPort, "/console");
     assert.match(onboard.raw, /id="onboard"/);
     assert.match(onboard.raw, /Add the delegate outside this page, then restart/);
-    assert.equal(/type="password"|name="key"|name="token"/i.test(onboard.raw), false);
+    assert.equal(accountKeyField(onboard.raw), false);
     noSecret(onboard.raw);
   } finally {
     await close(missing);
@@ -535,15 +581,14 @@ test("the alpha walk keeps one sentence and stdio recall matches the console", a
     const home = await get(firstPort, "/console");
     assert.match(home.raw, /id="people"/);
     assert.match(home.raw, /SEDERUNT_PUBLIC_ORIGIN/);
-    assert.match(home.raw, /Calendar is on Ask/);
-    assert.match(home.raw, /Linear is on Ask/);
+    assert.match(home.raw, /Run automatically/);
     const joined = await post(firstPort, "/api/join", { url: "https://meet.google.com/abc-defg-hij" });
     assert.deepEqual(joined.body, { join: "not-configured" });
     assert.deepEqual(meeting.calls, []);
     const state = JSON.parse((await get(firstPort, "/api/console?member=mina")).raw);
     assert.equal(state.companyLoaded, true);
-    assert.equal(state.preferences.calendar, "ask");
-    assert.equal(state.preferences.linear, "ask");
+    assert.equal(state.preferences.calendar, "do");
+    assert.equal(state.preferences.linear, "do");
     const kept = await stdioTools(createSession(), { memory, tatum: quietTatum() }, [{
       id: 2,
       name: "act",
@@ -563,8 +608,8 @@ test("the alpha walk keeps one sentence and stdio recall matches the console", a
   try {
     const board = JSON.parse((await get(port, "/api/console?member=mina")).raw);
     assert.equal(board.decisions.some((item) => item.text === "The booth opens at nine."), true);
-    assert.equal(board.preferences.calendar, "ask");
-    assert.equal(board.preferences.linear, "ask");
+    assert.equal(board.preferences.calendar, "do");
+    assert.equal(board.preferences.linear, "do");
     const recalled = await stdioTools(createSession(), { memory, tatum: quietTatum() }, [{
       id: 2,
       name: "recall",
@@ -643,7 +688,7 @@ test("a signed slack channel stores one decision and a huddle stores none", asyn
         async members() { return ["U1"]; },
       },
     },
-    env: cleanEnv({ SLACK_SIGNING_SECRET: secret, SEDERUNT_MEMBER: "U1" }),
+    env: cleanEnv({ SLACK_SIGNING_SECRET: secret, SEDERUNT_MEMBER: "U1", SLACK_BOT_USER_ID: "UBOT" }),
     companyLoaded: true,
   });
   const port = await listen(app);
@@ -681,7 +726,7 @@ test("a signed slack channel stores one decision and a huddle stores none", asyn
       type: "message",
       user: "U1",
       channel: "C1",
-      text: "what was decided",
+      text: "<@UBOT> what was decided",
       client_msg_id: "ask-1",
       members: ["U1"],
     }, secret);
@@ -790,7 +835,7 @@ test("a Slack channel join is not stored", async () => {
   }
 });
 
-test("a repeated Slack question is posted once", async () => {
+test("a repeated channel mention is posted once", async () => {
   const memory = mockAccount({ accountId: "company-slack-retry", delegates: ["delegate-slack-retry"] });
   const secret = "slack-secret-sentinel";
   const posts = [];
@@ -803,7 +848,7 @@ test("a repeated Slack question is posted once", async () => {
         async members() { return ["U1"]; },
       },
     },
-    env: cleanEnv({ SLACK_SIGNING_SECRET: secret, SEDERUNT_MEMBER: "U1" }),
+    env: cleanEnv({ SLACK_SIGNING_SECRET: secret, SEDERUNT_MEMBER: "U1", SLACK_BOT_USER_ID: "UBOT" }),
     companyLoaded: true,
   });
   const port = await listen(app);
@@ -820,7 +865,7 @@ test("a repeated Slack question is posted once", async () => {
       type: "message",
       user: "U1",
       channel: "C1",
-      text: "what was decided",
+      text: "<@UBOT> what was decided",
       ts: "1700000005.000",
     }, secret);
     const first = await post(port, "/api/slack", asked.payload, asked.headers);
@@ -887,14 +932,12 @@ test("the room file names a file and a waiting change, and hides a clash the mem
       deliveryId: "wait-1",
     });
     assert.equal(waiting.status, 200);
-    assert.match(waiting.body.body, /Waiting for confirmation/);
+    assert.doesNotMatch(waiting.body.body, /Waiting for confirmation/);
     const board = JSON.parse((await get(port, "/api/console?member=mina")).raw);
     const named = board.decisions.find((item) => item.text === "Keep brief.pdf for the booth.");
     assert.deepEqual(named.fileNames, [{ name: "brief.pdf" }]);
-    assert.equal(board.waiting.length, 1);
-    assert.equal(board.waiting[0].tool, "linear");
-    assert.match(board.waiting[0].statement, /venue ticket hall/);
-    assert.equal(board.counts.waiting, 1);
+    assert.equal(board.waiting.length, 0);
+    assert.equal(board.counts.waiting, 0);
     assert.equal(JSON.stringify(board).includes("consoleFileId"), false);
     assert.equal(JSON.stringify(board).includes("PDFBYTES"), false);
     assert.equal(JSON.stringify(board).includes("console-brief"), false);
@@ -1005,7 +1048,7 @@ test("a personal workspace keeps the private note and has no room", async () => 
     assert.equal(company.decisions.some((item) => item.text === "The booth opens at nine."), true);
     assert.equal(JSON.stringify(company).includes("side door code"), false);
     assert.equal(company.rooms.length, 1);
-    assert.equal(company.counts.waiting, 1);
+    assert.equal(company.counts.waiting, 0);
 
     const personal = JSON.parse((await get(port, "/api/console?member=mina&workspace=personal")).raw);
     assert.equal(personal.workspace, "personal");
@@ -1019,7 +1062,8 @@ test("a personal workspace keeps the private note and has no room", async () => 
     assert.equal(personal.decisions[0].roomId, "");
     assert.equal(JSON.stringify(personal).includes("booth opens"), false);
     assert.equal(JSON.stringify(personal).includes("venue ticket"), false);
-    assert.equal(JSON.stringify(personal).includes("blobId"), false);
+    assert.equal(typeof personal.decisions[0].blobId, "string");
+    assert.equal(personal.decisions[0].proofStatus, "unknown");
     noSecret(JSON.stringify(personal));
 
     const hidden = JSON.parse((await get(port, "/api/console?member=henry&workspace=personal")).raw);
@@ -1065,7 +1109,7 @@ test("ask first, voice, and clash survive a new process", async () => {
     });
     const before = JSON.parse((await get(firstPort, "/api/console?member=mina")).raw);
     assert.equal(before.decisions.length, 1);
-    assert.equal(before.rooms[0].ask, true);
+    assert.equal(before.rooms[0].ask, false);
     assert.equal(before.rooms[0].voice, "plain");
     assert.equal(before.rooms[0].raiseClash, false);
 
@@ -1115,8 +1159,8 @@ test("ask first, voice, and clash survive a new process", async () => {
     assert.equal(saved.decisions.length, 2);
     assert.equal(saved.decisions.some((item) => item.text === "set voice to short"), false);
     assert.equal(saved.decisions.some((item) => item.text === "set clash to on"), false);
-    assert.equal(saved.preferences.linear, "ask");
-    assert.equal(saved.preferences.calendar, "ask");
+    assert.equal(saved.preferences.linear, "do");
+    assert.equal(saved.preferences.calendar, "do");
     assert.equal(saved.rooms[0].ask, false);
     assert.equal(saved.rooms[0].voice, "short");
     assert.equal(saved.rooms[0].raiseClash, true);
@@ -1133,8 +1177,8 @@ test("ask first, voice, and clash survive a new process", async () => {
     assert.equal(board.decisions.length, 2);
     assert.equal(board.decisions.some((item) => item.text === "The booth opens at nine."), true);
     assert.equal(board.decisions.some((item) => item.text === "The booth raises a clash at noon."), true);
-    assert.equal(board.preferences.linear, "ask");
-    assert.equal(board.preferences.calendar, "ask");
+    assert.equal(board.preferences.linear, "do");
+    assert.equal(board.preferences.calendar, "do");
     const kept = board.rooms.find((item) => item.id === "room-1");
     assert.equal(kept.ask, false);
     assert.equal(kept.voice, "short");
@@ -1161,7 +1205,7 @@ test("ask first, voice, and clash survive a new process", async () => {
     assert.equal(firstRoom.ask, false);
     assert.equal(other.voice, "plain");
     assert.equal(other.raiseClash, false);
-    assert.equal(other.ask, true);
+    assert.equal(other.ask, false);
   } finally {
     await close(second);
   }
@@ -1177,13 +1221,13 @@ test("ask first, voice, and clash survive a new process", async () => {
     assert.equal(firstRoom.ask, false);
     assert.equal(other.voice, "plain");
     assert.equal(other.raiseClash, false);
-    assert.equal(board.preferences.linear, "ask");
+    assert.equal(board.preferences.linear, "do");
     const session = createSession();
     await rebuildCompanyIndex(session, { memory });
     assert.equal(resolvePreference(session.preferences, "linear", "room-1"), "do");
     assert.equal(resolvePreference(session.preferences, "calendar", "room-1"), "do");
-    assert.equal(resolvePreference(session.preferences, "linear", "room-2"), "ask");
-    assert.equal(resolvePreference(session.preferences, "linear", ""), "ask");
+    assert.equal(resolvePreference(session.preferences, "linear", "room-2"), "do");
+    assert.equal(resolvePreference(session.preferences, "linear", ""), "do");
   } finally {
     await close(third);
   }
@@ -1249,7 +1293,7 @@ test("the shipped adapter reloads a room voice without keeping the command", asy
       assert.equal(board.decisions[0].text, "The booth opens at nine.");
       assert.equal(board.rooms[0].voice, "short");
       assert.equal(board.rooms[0].raiseClash, true);
-      assert.equal(board.rooms[0].ask, true);
+      assert.equal(board.rooms[0].ask, false);
       assert.equal(JSON.stringify(board).includes("delegate-setting-sentinel"), false);
       noSecret(JSON.stringify(board));
     } finally {
@@ -1386,8 +1430,9 @@ test("a named file stays in Console, the proof is read, and the epoch is not ren
     assert.equal(raw.includes("file-secret"), false);
     assert.equal(raw.includes("folder-secret"), false);
     assert.equal(raw.includes("PDFBYTES"), false);
-    assert.equal(raw.includes("0xaaaaaaaa"), false);
-    noSecret(raw);
+    assert.equal(board.decisions[0].proof.objectId, "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    assert.match(raw, /https:\/\/suiscan\.xyz\/mainnet\/object\/0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/);
+    assert.equal(board.chain.transport, "tatum-grpc");
   } finally {
     await close(first);
   }
@@ -1499,7 +1544,9 @@ test("a later expiry copy does not clear the epoch already observed", async () =
   assert.equal(proved.decisions[0].expiryEpoch, 420);
   assert.deepEqual(proved.decisions[0].fileNames, [{ name: "brief.pdf" }]);
   assert.equal(JSON.stringify(proved).includes("file-secret"), false);
-  assert.equal(JSON.stringify(proved).includes("blob-sentence"), false);
+  assert.equal(proved.decisions[0].blobId, "blob-sentence");
+  assert.equal(proved.decisions[0].proof.blobId, "blob-sentence");
+  assert.equal(proved.decisions[0].proofStatus, "unknown");
   const unknown = await readProofs(session, companyBoard(session, "mina"), {
     async getObject() {
       throw new Error("Tatum read failed");
@@ -2158,7 +2205,7 @@ test("a Slack challenge is echoed and the console confirm uses the configured me
   };
   const app = createApp({
     deps: { memory, tatum: quietTatum(), linear },
-    env: cleanEnv({ SLACK_SIGNING_SECRET: secret, SEDERUNT_MEMBER: "U_MINA" }),
+    env: cleanEnv({ SLACK_SIGNING_SECRET: secret, SEDERUNT_MEMBER: "U_MINA", SLACK_BOT_USER_ID: "UBOT" }),
     companyLoaded: true,
   });
   const port = await listen(app);
@@ -2182,13 +2229,8 @@ test("a Slack challenge is echoed and the console confirm uses the configured me
     });
     assert.match(kept.body.body, /booth opens at nine/);
     const board = JSON.parse((await get(port, "/api/console?member=U_MINA")).raw);
-    const confirmId = board.waiting[0].id;
-    const filed = await post(port, "/api/typed", { text: `confirm ${confirmId}` });
-    assert.equal(filed.body.allow, "confirmed");
-    assert.deepEqual(linear.calls, ["create"]);
-    const again = await post(port, "/api/typed", { text: `confirm ${confirmId}` });
-    assert.deepEqual(linear.calls, ["create"]);
-    assert.notEqual(again.body.status, "filed");
+    assert.equal(board.waiting.length, 0);
+    assert.deepEqual(linear.calls, []);
 
     const ask = signed({
       type: "message",
@@ -2200,7 +2242,6 @@ test("a Slack challenge is echoed and the console confirm uses the configured me
     const before = JSON.parse((await get(port, "/api/console?member=U_MINA")).raw).decisions.length;
     const answer = await post(port, "/api/slack", ask.payload, ask.headers);
     assert.match(answer.body.body, /booth opens at nine/);
-    assert.match(answer.body.body, /ROW-91/);
     const after = JSON.parse((await get(port, "/api/console?member=U_MINA")).raw).decisions.length;
     assert.equal(after, before);
   } finally {

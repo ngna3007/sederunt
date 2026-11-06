@@ -2,6 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-10-21
+- **Updated**: 2026-11-03
 
 ## Context
 
@@ -9,9 +10,9 @@ Some people want the agent to wait before it changes a tool. Some people want an
 
 ## Decision
 
-Each write tool has a preference stored with the account: `ask` or `do`. A new tool starts at `ask`. A room may override that preference for itself. Reads ignore the preference. Under both values the agent does not invent an action, and a missing fact stops the action.
+Each write tool has a preference stored with the account: `ask` or `do`. A missing preference is `do`: the connector runs as part of the delivery. A room may override that preference for itself. Reads ignore the preference. Under both values the agent does not invent an action, and a missing fact stops the action.
 
-When the preference is `ask`, Sederunt states the one action and waits. Confirmation covers that action only. When the preference is `do`, an explicit request is enough, and there is no pending confirmation.
+When the preference is `ask`, Sederunt records the request and does not call the connector. There is no confirm step and no waiting action. When the preference is `do`, an explicit request is enough. The activity log records the request and the action, failure, or undo. See [activity-log.md](../design/activity-log.md).
 
 ## Alternatives Considered
 

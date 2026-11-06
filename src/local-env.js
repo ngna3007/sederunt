@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-const FILES = ["recall.env", "calendar-oauth.env", "public.env", "console.env", "slack.env", "tatum.env"];
+const FILES = ["recall.env", "calendar-oauth.env", "public.env", "console.env", "slack.env", "tatum.env", "openrouter.env"];
 
 /**
  * Fills missing process env names from the gitignored local files.
@@ -39,5 +39,9 @@ function fillEnv(env, read, files) {
 }
 
 function readLocalFile(name) {
-  return readFileSync(`.local/${name}`, "utf8");
+  try {
+    return readFileSync(`.local/${name}`, "utf8");
+  } catch {
+    return readFileSync(`/workspace/sederunt-secrets/${name}`, "utf8");
+  }
 }

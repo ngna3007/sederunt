@@ -1,7 +1,7 @@
 /**
- * A read ignores the write preference. A write or a delete runs only when
- * the live preference is do, or when ask is confirmed for this action id.
- * A missing preference is ask.
+ * A read ignores the write preference. A write or a delete runs unless the
+ * live preference is ask. A missing preference runs. An ask preference still
+ * runs when this action id was confirmed.
  *
  * @param {{
  *   action: "read" | "write" | "delete",
@@ -17,10 +17,10 @@ export function authorize(input) {
   if (input.action !== "write" && input.action !== "delete") {
     return { allowed: false, reason: "ask" };
   }
-  if (input.preference === "do") return { allowed: true, reason: "do" };
   const confirmed = input.confirmed === true
     && input.actionId
     && input.actionId === input.confirmActionId;
-  if (confirmed) return { allowed: true, reason: "confirmed" };
-  return { allowed: false, reason: "ask" };
+  if (input.preference === "ask" && !confirmed) return { allowed: false, reason: "ask" };
+  if (confirmed && input.preference === "ask") return { allowed: true, reason: "confirmed" };
+  return { allowed: true, reason: "do" };
 }

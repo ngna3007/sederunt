@@ -1,16 +1,19 @@
 const TRIP_READ = /what tickets are open for the trip\??/i;
 const FILE_TICKET = /file the venue ticket(?:\s+(\S+))?/i;
+const FILE_REQUEST = /^file (?:the |a |an )(.+?)[.!]?$/i;
 const YES = /^yes[.!]?$/i;
 const PRIVATE_NOTE = /^(?:private note|private)\s*:\s*/i;
 const CONFIRM = /^confirm\s+(\S+)$/i;
 const DISMISS = /^dismiss\s+(\S+)$/i;
-const PREFERENCE = /^set\s+(linear|calendar)\s+to\s+(ask|do)(?:\s+in\s+room\s+(\S+))?$/i;
+const PREFERENCE = /^set\s+(linear|calendar|slack)\s+to\s+(ask|do)(?:\s+in\s+room\s+(\S+))?$/i;
 const ROOM_VOICE = /^set voice to (short|plain|formal)(?: in room (\S+))?$/i;
 const ROOM_CLASH = /^set clash to (on|off)(?: in room (\S+))?$/i;
 const DAY = "monday|tuesday|wednesday|thursday|friday|saturday|sunday";
 const CALENDAR_READ = new RegExp(`what is on (${DAY})`, "i");
 const CALENDAR_EDIT = new RegExp(`move the review(?:\\s+to\\s+(${DAY}))?`, "i");
 const RECALL = /what was decided|what happened/i;
+const SUMMARIZE_OR_RESEND = /\b(?:summarize|resend)\b/i;
+const SHARE_FILE_OR_LINK = /\bshare\b[\s/]*(?:the\s+|a\s+)?(?:attached\s+|working\s+)?(?:file|link)s?\b/i;
 const ASSIGN = /^assign\s+(.+)$/i;
 const CREATE_TICKET = /^create\s+(?:(?:a|one)\s+)?(?:test\s+)?ticket\s+titled\s+["\u201c]?(.+?)["\u201d]?[.!]?$/i;
 const ISSUE_ID = /^[A-Z][A-Z0-9]*-\d+$/;
@@ -65,6 +68,18 @@ export function parseUtterance(text) {
       params: { name: "review", day: named || null },
     };
   }
+  if (FILE_REQUEST.test(trimmed) && !FILE_TICKET.test(trimmed)) {
+    const title = FILE_REQUEST.exec(trimmed)?.[1]?.trim() || trimmed;
+    return {
+      type: "write",
+      tool: "linear",
+      edit: "create",
+      statement: trimmed,
+      title,
+      missingFact: "",
+      params: { title },
+    };
+  }
   if (FILE_TICKET.test(trimmed)) {
     const venue = FILE_TICKET.exec(trimmed)?.[1] || "";
     return {
@@ -77,7 +92,7 @@ export function parseUtterance(text) {
       params: { title: trimmed },
     };
   }
-  if (RECALL.test(trimmed)) return { type: "recall" };
+  if (looksLikeRecallAsk(trimmed)) return { type: "recall" };
   const create = CREATE_TICKET.exec(trimmed);
   if (create) {
     return {
@@ -126,6 +141,22 @@ export function parseUtterance(text) {
 const OPEN_QUESTION = /^(what|who|when|where|why|how|can|did)\b/i;
 
 /**
+ * A recall or summarize ask on the typed and meeting doors. Slack does not
+ * use this: there, a DM or @mention is an ask and every other channel line
+ * is kept (see handleUtterance intent "keep"). Calendar and trip reads
+ * stay their own parse types: they match earlier in parseUtterance, and
+ * looksLikeOpenQuestion still excludes them.
+ *
+ * @param {string} text
+ */
+export function looksLikeRecallAsk(text) {
+  const trimmed = String(text ?? "").trim();
+  if (!trimmed) return false;
+  if (RECALL.test(trimmed)) return true;
+  return SUMMARIZE_OR_RESEND.test(trimmed) || SHARE_FILE_OR_LINK.test(trimmed);
+}
+
+/**
  * A meeting question. Recall and calendar or ticket reads are not this:
  * those already have their own parse type.
  *
@@ -134,7 +165,7 @@ const OPEN_QUESTION = /^(what|who|when|where|why|how|can|did)\b/i;
 export function looksLikeOpenQuestion(text) {
   const trimmed = String(text ?? "").trim();
   if (!trimmed) return false;
-  if (/what was decided|what happened/i.test(trimmed)) return false;
+  if (RECALL.test(trimmed)) return false;
   if (CALENDAR_READ.test(trimmed) || TRIP_READ.test(trimmed)) return false;
   return /\?$/.test(trimmed) || OPEN_QUESTION.test(trimmed);
 }

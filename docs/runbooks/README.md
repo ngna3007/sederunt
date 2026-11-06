@@ -14,3 +14,7 @@ system.
 
 While operating the system — deploying, rolling back, or responding to an
 incident.
+
+## Live demo / QA
+
+- [live-demo-plan.md](./live-demo-plan.md) — end-to-end browser kịch bản for QA and hackathon demos (console → meeting → Slack privacy/files → Ask AI / Files).

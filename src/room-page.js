@@ -1,3 +1,5 @@
+import { sederuntMark, FAVICON_LINK } from "./sederunt-mark.js";
+
 /**
  * The meeting room. The ledger is the whole company room in this process.
  * A call join and a question do not become decisions.
@@ -8,6 +10,7 @@ export function renderRoomPage() {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+${FAVICON_LINK}
 <title>Sederunt</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@500&family=Source+Sans+3:wght@400;600&display=swap">
 <style>
@@ -42,15 +45,7 @@ export function renderRoomPage() {
     font-size: 1.35rem;
     letter-spacing: -0.03em;
   }
-  .mark span {
-    display: inline-grid;
-    place-items: center;
-    width: 2.25rem;
-    height: 2.25rem;
-    background: #172b76;
-    color: #f4f3ef;
-    font-size: 1.35rem;
-  }
+  .mark .sederunt-mark { flex: none; display: block; }
   h1 {
     margin: 0 0 0.35rem;
     font-family: Outfit, "Avenir Next", "Segoe UI", sans-serif;
@@ -253,7 +248,7 @@ export function renderRoomPage() {
 </head>
 <body>
 <header>
-  <p class="mark"><span>S</span> Sederunt</p>
+  <p class="mark">${sederuntMark({ size: 36 })}<span class="brand-word">Sederunt</span></p>
   <ul id="pills" role="status" aria-label="Connections">
     <li>Checking Meet, Calendar, and Linear.</li>
   </ul>

@@ -1,71 +1,115 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { locateMemory } from "../src/memory/locate.js";
+import { encodeBlobContent } from "../src/memory/blob.js";
+import { locateMemory, WALRUS_BLOB_TYPE } from "../src/memory/locate.js";
 
 const blobId = "FqC_szXusTD8s7ADsC1KpZIwpy8ffj_tK8LtMhy7WIo";
-const blobDecimal = "62575947033000038682330634974899207203795032031128080931274229481064074551318";
 const objectId = "0x1a13b3bb2fed62845bd3269fc09c7157c645e9f1fa6a2ac4b399dc153ee6b7c2";
+const otherId = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const owner = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const digest = "C1J2cwJJQyaXZYBWqaDY5LRJHALA8JrtobJgD9BoWFjq";
 const checkpoint = 335852087;
 
-test("locateMemory returns the certifying checkpoint when it is outside the latest 50", async () => {
-  const eventCalls = [];
-  globalThis.fetch = async (_url, init) => {
-    const body = JSON.parse(init.body);
-    if (body.query.includes("object(address")) {
-      return json({
-        data: {
-          object: {
-            address: objectId,
-            asMoveObject: { contents: { type: { repr: "0xfdc88f7d7cf30afab2f82e8380d11ee8f70efb90e863d1de8616fae1bb09ea77::blob::Blob" } } },
-          },
-        },
-      });
-    }
-    eventCalls.push(body.variables?.before ?? null);
-    const before = body.variables?.before ?? null;
-    if (before == null) {
-      return json({
-        data: {
-          events: {
-            pageInfo: { hasPreviousPage: true, startCursor: "older-page" },
-            nodes: Array.from({ length: 50 }, (_unused, index) => ({
-              contents: { json: { blob_id: String(index + 1), object_id: "0x1" } },
-              transaction: { digest: `miss-${index}`, effects: { checkpoint: { sequenceNumber: 335861000 + index } } },
-            })),
-          },
-        },
-      });
-    }
-    assert.equal(before, "older-page");
-    return json({
-      data: {
-        events: {
-          pageInfo: { hasPreviousPage: true, startCursor: "older-still" },
-          nodes: [
-            {
-              contents: { json: { blob_id: blobDecimal, object_id: objectId } },
-              transaction: { digest, effects: { checkpoint: { sequenceNumber: checkpoint } } },
-            },
-          ],
-        },
-      },
-    });
+test("locateMemory matches an owned Blob over gRPC and reads the certifying checkpoint", async () => {
+  const pages = [];
+  const reads = [];
+  const txs = [];
+  const tatum = {
+    async listOwnedObjects(query) {
+      pages.push(query);
+      assert.equal(query.owner, owner);
+      assert.equal(query.type, WALRUS_BLOB_TYPE);
+      assert.equal(query.limit, 50);
+      if (!query.cursor) {
+        return {
+          objects: [{ objectId: otherId, content: encodeBlobContent({ blobId: otherBlob(), certified: true }) }],
+          hasNextPage: true,
+          cursor: "older-page",
+        };
+      }
+      assert.equal(query.cursor, "older-page");
+      return {
+        objects: [{
+          objectId,
+          previousTransaction: digest,
+          content: encodeBlobContent({ blobId, certified: true }),
+        }],
+        hasNextPage: false,
+        cursor: null,
+      };
+    },
+    async getObject(id) {
+      reads.push(id);
+      return {
+        objectId: id,
+        previousTransaction: digest,
+        content: encodeBlobContent({ blobId, certified: true }),
+      };
+    },
+    async getTransaction(id) {
+      txs.push(id);
+      return { digest: id, checkpoint, timestampMs: 1_762_160_000_000 };
+    },
   };
-
-  try {
-    const found = await locateMemory(blobId);
-    assert.equal(found.checkpoint, checkpoint);
-    assert.equal(found.digest, digest);
-    assert.equal(found.objectId, objectId);
-    assert.deepEqual(eventCalls, [null, "older-page"]);
-  } finally {
-    globalThis.fetch = async () => {
-      throw new Error("locate test must not call the network");
-    };
-  }
+  const found = await locateMemory(blobId, { tatum, owner });
+  assert.equal(found.objectId, objectId);
+  assert.equal(found.digest, digest);
+  assert.equal(found.checkpoint, checkpoint);
+  assert.equal(found.checkpointTime, new Date(1_762_160_000_000).toISOString());
+  assert.deepEqual(reads, [objectId]);
+  assert.deepEqual(txs, [digest]);
+  assert.equal(pages.length, 2);
 });
 
-function json(payload) {
-  return { json: async () => payload };
+test("a stored object id is one GetObject and does not list owned objects", async () => {
+  let listed = 0;
+  const tatum = {
+    async listOwnedObjects() {
+      listed += 1;
+      return { objects: [] };
+    },
+    async getObject(id) {
+      return {
+        objectId: id,
+        certifyingDigest: digest,
+        checkpoint,
+        checkpointTime: "2026-11-03T02:32:22.000Z",
+        content: encodeBlobContent({ blobId, certified: true }),
+      };
+    },
+  };
+  const found = await locateMemory(blobId, { tatum, owner, objectId });
+  assert.equal(listed, 0);
+  assert.equal(found.objectId, objectId);
+  assert.equal(found.checkpoint, checkpoint);
+  assert.equal(found.digest, digest);
+});
+
+test("locateMemory does not scan the chain when the owner is missing", async () => {
+  let listed = 0;
+  const found = await locateMemory(blobId, {
+    tatum: {
+      async listOwnedObjects() {
+        listed += 1;
+        return { objects: [] };
+      },
+      async getObject() {
+        throw new Error("should not read");
+      },
+    },
+    owner: "fixture",
+  });
+  assert.equal(listed, 0);
+  assert.equal(found.objectId, null);
+  assert.equal(found.locateError, "The blob owner is required to list owned objects.");
+});
+
+test("locateMemory reports a missing Tatum key and does not call", async () => {
+  const found = await locateMemory(blobId, { owner });
+  assert.equal(found.locateError, "Tatum key not set");
+  assert.equal(found.objectId, null);
+});
+
+function otherBlob() {
+  return Buffer.alloc(32, 7).toString("base64url");
 }
