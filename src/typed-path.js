@@ -100,15 +100,19 @@ export async function handleUtterance(input, deps = {}) {
   };
   if (typeof deps.log === "function") session.emit = deps.log;
   if (deliveryId && session.deliveries.has(deliveryId)) {
-    return finish(session, {
-      status: "recorded",
-      kind: "duplicate",
-      body: "duplicate-delivery",
-      allow: "duplicate-delivery",
-      outcome: "duplicate-delivery",
-    });
+    // Same ts as an earlier keep (Slack message_changed) can still bring files.
+    if (!attachedUploads(input).length) {
+      return finish(session, {
+        status: "recorded",
+        kind: "duplicate",
+        body: "duplicate-delivery",
+        allow: "duplicate-delivery",
+        outcome: "duplicate-delivery",
+      });
+    }
+  } else if (deliveryId) {
+    session.deliveries.add(deliveryId);
   }
-  if (deliveryId) session.deliveries.add(deliveryId);
 
   if (input.join && deps.meeting?.join) {
     session.trace.join = "failed";

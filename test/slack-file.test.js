@@ -443,6 +443,26 @@ test("replyFile matches a stored file from a distinctive stem suffix", () => {
   assert.equal(replyFile(visible, "can you resend the planning doc"), "");
 });
 
+test("replyFile prefers northline-d7-floor-brief over floor-plan", () => {
+  const visible = [
+    { text: "The floor plan is floor-plan.txt", fileName: "floor-plan.txt" },
+    {
+      text: "Northline ops note — please keep the announcement and both attachments.",
+      fileNames: [
+        "northline-ops-announcement.txt",
+        "northline-d7-floor-brief.txt",
+        "northline-launch-gate.txt",
+      ],
+    },
+  ];
+  assert.equal(replyFile(visible, "Send me the District 7 floor brief we kept."), "northline-d7-floor-brief.txt");
+  assert.equal(replyFile(visible, "northline-d7-floor-brief"), "northline-d7-floor-brief.txt");
+  const answer = { text: "Here is the floor brief.", file: "floor-plan.txt" };
+  const named = replyFile(visible, "Send me the District 7 floor brief we kept.");
+  if (named) answer.file = named;
+  assert.equal(answer.file, "northline-d7-floor-brief.txt");
+});
+
 test("a same-text keep merges newly attached files instead of skipping them", async () => {
   const session = createSession();
   const text = "Northline ops note — please keep northline-ops-announcement.txt, northline-d7-floor-brief.txt, and northline-launch-gate.txt.";

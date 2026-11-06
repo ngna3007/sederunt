@@ -5,7 +5,7 @@ import { request } from "node:http";
 import test from "node:test";
 import { mockAccount } from "../src/memory/mock-account.js";
 import { createApp } from "../src/server.js";
-import { slackBotUserIds, slackDelivery } from "../src/slack/sign.js";
+import { slackBotUserIds, slackDelivery, slackEventHasFiles } from "../src/slack/sign.js";
 
 const secret = "slack-gate-secret";
 const SUMMARIZE = "Please summarize the important announcement I just posted in #new-channel, and resend/share the attached file demo-note.txt (or a working link to it).";
@@ -288,6 +288,40 @@ test("a file_share with several attachments delivers every file", () => {
   });
   assert.equal(delivery.file.name, "northline-ops-announcement.txt");
   assert.deepEqual(delivery.files.map((file) => file.name), [
+    "northline-ops-announcement.txt",
+    "northline-d7-floor-brief.txt",
+    "northline-launch-gate.txt",
+  ]);
+});
+
+test("message_changed with the original ts still has a distinct delivery id", () => {
+  const ts = "1793954184.202039";
+  const files = [
+    { id: "F1", name: "northline-ops-announcement.txt" },
+    { id: "F2", name: "northline-d7-floor-brief.txt" },
+    { id: "F3", name: "northline-launch-gate.txt" },
+  ];
+  const first = slackDelivery({
+    type: "message",
+    user: "U1",
+    channel: "C1",
+    ts,
+    text: "Northline ops note (pack-77e165a) — please keep the files.",
+  });
+  const changed = slackDelivery({
+    type: "message",
+    subtype: "message_changed",
+    channel: "C1",
+    ts,
+    message: { user: "U1", text: first.text, ts, files },
+    previous_message: { user: "U1", text: first.text, ts },
+  });
+  assert.equal(first.deliveryId, ts);
+  assert.notEqual(changed.deliveryId, first.deliveryId);
+  assert.match(changed.deliveryId, /^changed:/);
+  assert.equal(slackEventHasFiles({ subtype: "message_changed", message: { files } }), true);
+  assert.equal(slackEventHasFiles({ subtype: "message_changed", files }), true);
+  assert.deepEqual(changed.files.map((file) => file.name), [
     "northline-ops-announcement.txt",
     "northline-d7-floor-brief.txt",
     "northline-launch-gate.txt",

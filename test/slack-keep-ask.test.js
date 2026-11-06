@@ -508,7 +508,8 @@ test("message_changed files on a same-text keep are merged and Kept lists them",
     const reply = await post(port, message.payload, message.headers);
     return { ...reply, body: JSON.parse(reply.raw) };
   };
-  const text = "Northline ops note — please keep northline-ops-announcement.txt, northline-d7-floor-brief.txt, and northline-launch-gate.txt.";
+  const text = "Northline ops note (pack-test) — please keep northline-ops-announcement.txt, northline-d7-floor-brief.txt, and northline-launch-gate.txt.";
+  const ts = "1793954184.202039";
   const files = [
     { id: "F1", name: "northline-ops-announcement.txt", url_private_download: "https://files.slack.com/files-pri/T/F1/download/northline-ops-announcement.txt" },
     { id: "F2", name: "northline-d7-floor-brief.txt", url_private_download: "https://files.slack.com/files-pri/T/F2/download/northline-d7-floor-brief.txt" },
@@ -519,27 +520,28 @@ test("message_changed files on a same-text keep are merged and Kept lists them",
       channel: "C1",
       text,
       client_msg_id: "keep-merge-text",
-      ts: "1793953569.921829",
+      ts,
     });
     assert.equal(first.status, 200, first.raw);
     assert.equal(first.body.decisions, 1);
-    assert.deepEqual(api.texts.filter((item) => /^Kept /.test(item.text)).map((item) => item.text), []);
+    assert.deepEqual(api.texts.map((item) => item.text), ["Kept."]);
 
     const changed = await send({
       subtype: "message_changed",
       channel: "C1",
-      ts: "1793953573.000000",
+      ts,
       message: {
         user: "U1",
         text,
-        ts: "1793953569.921829",
+        ts,
         files,
       },
-      previous_message: { user: "U1", text, ts: "1793953569.921829" },
+      previous_message: { user: "U1", text, ts },
     });
     assert.equal(changed.status, 200, changed.raw);
     assert.equal(changed.body.decisions, 1);
     assert.deepEqual(api.texts.map((item) => item.text), [
+      "Kept.",
       "Kept northline-ops-announcement.txt, northline-d7-floor-brief.txt, and northline-launch-gate.txt.",
     ]);
 
@@ -620,5 +622,140 @@ test("two deliveries of the same DM post only one Slack answer", async () => {
     assert.equal(await claimSlackAsk({}, "1700000000.000100"), false);
   } finally {
     await new Promise((resolve, reject) => first.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
+
+test("an explicit keep still acks when every file download fails", async () => {
+  const api = slackApi();
+  const fetch = async (url, init = {}) => {
+    const href = String(url);
+    if (href.includes("/download/")) {
+      return { ok: false, status: 403, async text() { return ""; } };
+    }
+    return api.fetch(url, init);
+  };
+  const memory = mockAccount({ accountId: "company-keep-empty", delegates: ["delegate-keep-empty"] });
+  const app = createApp({
+    deps: {
+      memory,
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+      slack: { fetch, async members() { return ["U1"]; } },
+    },
+    env: {
+      COMPANY_MEMWAL_KEY: "key-sentinel-value",
+      COMPANY_MEMWAL_ACCOUNT_ID: "account-id-sentinel",
+      SLACK_SIGNING_SECRET: secret,
+      SLACK_BOT_TOKEN: "xoxb-test",
+      SEDERUNT_MEMBER: "U1",
+    },
+    companyLoaded: true,
+  });
+  app.listen(0, "127.0.0.1");
+  await once(app, "listening");
+  const port = app.address().port;
+  try {
+    const message = signed({
+      type: "message",
+      subtype: "file_share",
+      user: "U1",
+      channel: "C1",
+      text: "Northline ops note (pack-empty) — please keep northline-ops-announcement.txt, northline-d7-floor-brief.txt, and northline-launch-gate.txt.",
+      client_msg_id: "keep-empty-1",
+      files: [
+        { name: "northline-ops-announcement.txt", url_private_download: "https://files.slack.com/files-pri/T/F1/download/northline-ops-announcement.txt" },
+        { name: "northline-d7-floor-brief.txt", url_private_download: "https://files.slack.com/files-pri/T/F2/download/northline-d7-floor-brief.txt" },
+        { name: "northline-launch-gate.txt", url_private_download: "https://files.slack.com/files-pri/T/F3/download/northline-launch-gate.txt" },
+      ],
+    });
+    const reply = await post(port, message.payload, message.headers);
+    const body = JSON.parse(reply.raw);
+    assert.equal(reply.status, 200, reply.raw);
+    assert.equal(body.decisions, 1);
+    assert.deepEqual(api.texts.map((item) => item.text), ["Kept. The files did not arrive."]);
+  } finally {
+    await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
+test("a floor-brief ask attaches northline-d7-floor-brief even if the model picks floor-plan", async () => {
+  const api = slackApi();
+  const uploadNames = [];
+  const fetch = async (url, init = {}) => {
+    const href = String(url);
+    if (href.includes("openrouter.ai")) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            choices: [{ message: { content: '{"text":"Here is the floor brief.","attach":"floor-plan.txt"}' } }],
+          };
+        },
+      };
+    }
+    if (href.endsWith("/files.getUploadURLExternal") && init.body) {
+      uploadNames.push(new URLSearchParams(String(init.body)).get("filename") || "");
+    }
+    return api.fetch(url, init);
+  };
+  const memory = mockAccount({ accountId: "company-keep-prefer", delegates: ["delegate-keep-prefer"] });
+  const app = createApp({
+    deps: {
+      memory,
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+      slack: { fetch, async members() { return ["U1"]; } },
+    },
+    env: {
+      COMPANY_MEMWAL_KEY: "key-sentinel-value",
+      COMPANY_MEMWAL_ACCOUNT_ID: "account-id-sentinel",
+      SLACK_SIGNING_SECRET: secret,
+      SLACK_BOT_TOKEN: "xoxb-test",
+      SEDERUNT_MEMBER: "U1",
+      OPENROUTER_API_KEY: "sk-or-test",
+    },
+    companyLoaded: true,
+  });
+  app.listen(0, "127.0.0.1");
+  await once(app, "listening");
+  const port = app.address().port;
+  const send = async (event) => {
+    const message = signed({ type: "message", user: "U1", ...event });
+    const reply = await post(port, message.payload, message.headers);
+    return { ...reply, body: JSON.parse(reply.raw) };
+  };
+  try {
+    const junk = await send({
+      subtype: "file_share",
+      channel: "C1",
+      text: "The floor plan is floor-plan.txt — please keep.",
+      client_msg_id: "keep-junk-plan",
+      files: [{ id: "F0", name: "floor-plan.txt", url_private_download: "https://files.slack.com/files-pri/T/F0/download/floor-plan.txt" }],
+    });
+    assert.equal(junk.status, 200, junk.raw);
+    const kept = await send({
+      subtype: "file_share",
+      channel: "C1",
+      text: "Northline ops note — please keep the announcement and both attachments.",
+      client_msg_id: "keep-prefer-northline",
+      files: [
+        { id: "F1", name: "northline-ops-announcement.txt", url_private_download: "https://files.slack.com/files-pri/T/F1/download/northline-ops-announcement.txt" },
+        { id: "F2", name: "northline-d7-floor-brief.txt", url_private_download: "https://files.slack.com/files-pri/T/F2/download/northline-d7-floor-brief.txt" },
+        { id: "F3", name: "northline-launch-gate.txt", url_private_download: "https://files.slack.com/files-pri/T/F3/download/northline-launch-gate.txt" },
+      ],
+    });
+    assert.equal(kept.status, 200, kept.raw);
+    const dm = await send({
+      channel: "D1",
+      channel_type: "im",
+      text: "Send me the District 7 floor brief we kept.",
+      client_msg_id: "dm-prefer-floor",
+    });
+    assert.equal(dm.status, 200, dm.raw);
+    assert.equal(dm.body.posted, true);
+    assert.ok(uploadNames.includes("northline-d7-floor-brief.txt"), `expected floor brief upload, got ${JSON.stringify(uploadNames)}`);
+    assert.equal(uploadNames.includes("floor-plan.txt"), false, `old floor-plan.txt must not be attached, got ${JSON.stringify(uploadNames)}`);
+  } finally {
+    await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
   }
 });

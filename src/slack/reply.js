@@ -41,7 +41,12 @@ export function rowFileNames(row) {
 }
 
 function fileNameSaid(name, asked, spaced) {
-  if (asked.includes(name.toLowerCase())) return true;
+  const lower = name.toLowerCase();
+  if (asked.includes(lower)) {
+    // "../demo-note.txt" must not count as naming demo-note.txt.
+    if (asked.includes(`/${lower}`) || asked.includes(`\\${lower}`)) return false;
+    return true;
+  }
   const dot = name.lastIndexOf(".");
   const stem = spacedWords((dot > 0 ? name.slice(0, dot) : name).toLowerCase());
   if (stem.length < 3) return false;
@@ -189,7 +194,9 @@ export async function answerSlackQuestion(visible, question, options = {}) {
   if (!completed.used || !completed.text) return fallback();
   const reply = readAskReply(completed.text);
   if (!reply.text) return fallback();
-  const attached = listedFile(memories, reply.attach) || mentionedFile(memories, reply.text);
+  // Question-named files win over the model's attach so "District 7 floor
+  // brief" picks northline-d7-floor-brief.txt, not a leftover floor-plan.txt.
+  const attached = replyFile(rows, asked) || listedFile(memories, reply.attach) || mentionedFile(memories, reply.text);
   return {
     text: reply.text,
     file: attached,

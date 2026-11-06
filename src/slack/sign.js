@@ -71,6 +71,16 @@ export function slackDelivery(event, options = {}) {
   const forgetIds = deleted
     ? uniqueIds([event?.deleted_ts, previous?.ts, previous?.client_msg_id])
     : [];
+  // Slack often reuses the original message ts on message_changed. The warm
+  // session remembers that id, so a distinct key is required or the file
+  // merge never runs.
+  const fileKey = files.map((item) => item.id || item.name).filter(Boolean).join(",");
+  const changed = Boolean(nested) && event?.subtype === "message_changed";
+  const deliveryId = deleted
+    ? `delete:${forgetIds[0] || storedId}`
+    : (changed
+      ? `changed:${firstId(body?.ts, storedId)}:${fileKey || firstId(event?.event_ts, storedId)}`
+      : storedId);
   return {
     text,
     memberId,
@@ -81,7 +91,7 @@ export function slackDelivery(event, options = {}) {
     forgetIds,
     // The delete event's own id must not equal the stored message ts, or the
     // gate treats the delete as a duplicate of the message it should forget.
-    deliveryId: deleted ? `delete:${forgetIds[0] || storedId}` : storedId,
+    deliveryId,
     participants: [],
     file,
     files,
@@ -154,6 +164,16 @@ function firstId(...values) {
 
 function uniqueIds(values) {
   return [...new Set(values.map((value) => (typeof value === "string" ? value.trim() : "")).filter(Boolean))];
+}
+
+/**
+ * True when a Slack event (or its nested message) carries named files.
+ * message_changed payloads may put files on .message or on the event itself.
+ */
+export function slackEventHasFiles(event) {
+  if (!event || typeof event !== "object") return false;
+  const nested = event.message && typeof event.message === "object" ? event.message : null;
+  return attachedFiles(nested, event).length > 0;
 }
 
 function attachedFiles(...events) {

@@ -59,7 +59,7 @@ import { createAskStore, askLimit, settledStatus } from "./ask/store.js";
 import { ASK_UNAVAILABLE, askSpendsQuota, humanAskText, runAsk } from "./ask/run.js";
 import { openRouterConfig } from "./openrouter.js";
 import { answerSlackQuestion, claimSlackAsk, postSlackReply, replyFile, slackChannelMembers, slackFileBytes } from "./slack/reply.js";
-import { slackBotUserIds, slackDelivery, verifySlackRequest } from "./slack/sign.js";
+import { slackBotUserIds, slackDelivery, slackEventHasFiles, verifySlackRequest } from "./slack/sign.js";
 import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded, warmProofs } from "./typed-path.js";
 import { wireCalls } from "./tatum/client.js";
 
@@ -314,7 +314,7 @@ export function createApp(options = {}) {
   });
   if (!deps.app) deps.app = appConfig(env);
   deps.connectors = options.connectors || deps.connectors || createConnectorStore(env);
-  if (!options.deps && isDirectRun()) {
+  if (!options.deps && (isDirectRun() || process.env.VERCEL)) {
     deps.log = (event) => {
       process.stdout.write(`${JSON.stringify(event)}\n`);
     };
@@ -1030,9 +1030,7 @@ export function createApp(options = {}) {
       const companyId = typeof parsed.company === "string" ? parsed.company : "";
       const event = parsed.event && typeof parsed.event === "object" ? parsed.event : parsed;
       const subtype = typeof event.subtype === "string" ? event.subtype : "";
-      const changedFiles = subtype === "message_changed"
-        && Array.isArray(event?.message?.files)
-        && event.message.files.some((item) => item && typeof item.name === "string" && item.name.trim());
+      const changedFiles = subtype === "message_changed" && slackEventHasFiles(event);
       const noise = subtype
         && subtype !== "file_share"
         && subtype !== "message_deleted"
@@ -1070,6 +1068,9 @@ export function createApp(options = {}) {
         const question = delivery.ask === true;
         const huddle = delivery.room?.kind === "huddle" || delivery.room?.source === "slack-huddle";
         let storedFile = null;
+        let incoming = [];
+        let storedFiles = [];
+        let downloadFailed = false;
         if (!question && delivery.intent !== "delete" && !huddle) {
           const channel = delivery.room?.askChannel || "";
           const people = await slackPeople(env, deps, channel);
@@ -1096,10 +1097,9 @@ export function createApp(options = {}) {
           }
           delivery.participants = memberIds;
           delivery.room.memberIds = memberIds;
-          const incoming = Array.isArray(delivery.files) && delivery.files.length
+          incoming = Array.isArray(delivery.files) && delivery.files.length
             ? delivery.files
             : (delivery.file ? [delivery.file] : []);
-          const storedFiles = [];
           const downloaded = await Promise.all(incoming.map(async (item) => {
             try {
               return await withinMs(slackBytes(env, deps, item), 12_000);
@@ -1130,22 +1130,7 @@ export function createApp(options = {}) {
               }
             }
           }
-          if (incoming.length && !storedFiles.length) {
-            if (env.SLACK_BOT_TOKEN && channel) {
-              await postSlackReply({
-                token: env.SLACK_BOT_TOKEN,
-                fetchImpl: deps.slack?.fetch,
-                channel,
-                text: "The file did not arrive.",
-                username: botName,
-              });
-            }
-            replyHttp(200, "application/json; charset=utf-8", JSON.stringify({
-              body: "The file did not arrive.",
-              decisions: current.decisions.filter((item) => !item.deleted).length,
-            }));
-            return;
-          }
+          if (incoming.length && !storedFiles.length) downloadFailed = true;
           if (storedFiles.length) {
             storedFile = storedFiles[0];
             delivery.file = storedFiles[0];
@@ -1165,17 +1150,41 @@ export function createApp(options = {}) {
         }, doorDeps);
         // "Kept <file>" when this utterance recorded a new decision with files,
         // or attached more files to a same-text decision that was already kept.
+        // An explicit keep that names or attaches files also acks when only
+        // the text landed (or when every download failed) so the channel is
+        // never left silent after a new decision.
         const keptNames = keptFileNames(current.decisions, keptBefore, filesBefore);
         const keptFile = keptNames.length > 0;
+        const storedNew = current.decisions.length > keptBefore || keptFile;
+        const explicitKeep = isExplicitKeep(delivery.text, incoming.length);
         const repeat = result?.allow === "duplicate-delivery" || result?.outcome === "duplicate-delivery" || result?.outcome === "duplicate";
-        if (!question && keptFile && !repeat && result?.allow !== "not-invited" && result?.allow !== "missing-member" && env.SLACK_BOT_TOKEN) {
+        const allowed = result?.allow !== "not-invited" && result?.allow !== "missing-member";
+        if (typeof deps.log === "function") {
+          deps.log({
+            kind: "slack-keep",
+            subtype,
+            deliveryId: delivery.deliveryId || "",
+            incoming: incoming.length,
+            stored: storedFiles.length,
+            outcome: result?.outcome || result?.allow || "",
+            keptNames,
+            explicitKeep,
+            storedNew,
+            downloadFailed,
+          });
+        }
+        if (!question && !repeat && allowed && env.SLACK_BOT_TOKEN) {
           const channel = delivery.room?.askChannel || (typeof event.channel === "string" ? event.channel : "");
-          if (channel) {
+          let notice = "";
+          if (keptFile) notice = keptNotice(keptNames);
+          else if (explicitKeep && storedNew) notice = downloadFailed ? "Kept. The files did not arrive." : "Kept.";
+          else if (downloadFailed) notice = "The file did not arrive.";
+          if (channel && notice) {
             await postSlackReply({
               token: env.SLACK_BOT_TOKEN,
               fetchImpl: deps.slack?.fetch,
               channel,
-              text: keptNotice(keptNames),
+              text: notice,
               username: botName,
             });
           }
@@ -1197,11 +1206,10 @@ export function createApp(options = {}) {
           });
           // Keep the model's Slack reply. result.learned is Ask AI / chat shaping
           // (shapeAnswer sentence dump) and must not overwrite Adam's text here.
-          // If the model forgot attach, pin a stored file the question already names.
-          if (!answer.file) {
-            const named = replyFile(result.visible, delivery.text);
-            if (named) answer.file = named;
-          }
+          // Question-named files win over the model's attach (floor-plan.txt
+          // must not beat northline-d7-floor-brief.txt on "floor brief").
+          const named = replyFile(result.visible, delivery.text);
+          if (named) answer.file = named;
           const bytes = answer.file ? await storedFileBytes(current, answer.file, deps, env) : null;
           const reply = {
             channel,
@@ -2236,6 +2244,15 @@ function keptNotice(names) {
   if (names.length === 1) return `Kept ${names[0]}.`;
   if (names.length === 2) return `Kept ${names[0]} and ${names[1]}.`;
   return `Kept ${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}.`;
+}
+
+const NAMED_FILE = /\b[\w.-]+\.(?:pdf|png|docx|txt|pptx)\b/i;
+
+function isExplicitKeep(text, fileCount) {
+  if (fileCount > 0) return true;
+  const line = String(text || "");
+  if (/\bplease keep\b/i.test(line)) return true;
+  return NAMED_FILE.test(line) && /\bkeep\b/i.test(line);
 }
 
 async function slackBytes(env, deps, file) {
