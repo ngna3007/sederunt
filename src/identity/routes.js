@@ -167,25 +167,13 @@ async function finishCallback(ctx) {
     }
     const user = await identity.getUser(tokens.accessToken);
     if (!user?.id) throw new Error("unverified");
-    if (pending.intent === "calendar" && pending.provider === "google") {
+    let grantTenant = "";
+    if ((pending.intent === "forms" || pending.intent === "calendar") && pending.provider === "google" && ctx.googleGrants) {
       try {
-        applyCalendarConnection(env, {
-          accessToken: tokens.providerAccessToken || "",
-          refreshToken: tokens.providerRefreshToken || "",
-          expiresAt: tokens.expiresAt,
-          scopes: grantedScopeList(tokens.scope),
-        }, ctx.calendarSave);
-      } catch {
-        // Sign-in still completes. Calendar stays disconnected until a full grant is stored.
-      }
-    }
-    let formsTenant = "";
-    if (pending.intent === "forms" && pending.provider === "google" && ctx.googleGrants) {
-      try {
-        formsTenant = await formsTenantId(ctx, tokens.accessToken);
+        grantTenant = await formsTenantId(ctx, tokens.accessToken);
         let refresh = tokens.providerRefreshToken || "";
         if (!refresh && typeof ctx.googleGrants.savedRefresh === "function") {
-          refresh = await ctx.googleGrants.savedRefresh(user.id, { tenantId: formsTenant });
+          refresh = await ctx.googleGrants.savedRefresh(user.id, { tenantId: grantTenant });
         }
         if (refresh) {
           await ctx.googleGrants.save(user.id, {
@@ -193,12 +181,27 @@ async function finishCallback(ctx) {
             accessToken: tokens.providerAccessToken || "",
             expiresAt: tokens.expiresAt,
             scopes: grantedScopeList(tokens.scope),
-          }, { tenantId: formsTenant });
+          }, { tenantId: grantTenant });
         }
       } catch {
-        // Sign-in still completes. The Forms card stays on Connect until a grant is stored.
+        // Sign-in still completes. The connector card stays on Connect until a grant is stored.
       }
     }
+    if (pending.intent === "calendar" && pending.provider === "google") {
+      try {
+        // Local/non-oauth demos may still mirror into process env. OAuth console
+        // Connected/read uses person_google_grants and ignores these when identity is on.
+        applyCalendarConnection(env, {
+          accessToken: tokens.providerAccessToken || "",
+          refreshToken: tokens.providerRefreshToken || "",
+          expiresAt: tokens.expiresAt,
+          scopes: grantedScopeList(tokens.scope),
+        }, ctx.calendarSave);
+      } catch {
+        // Person grant above is the source of truth for OAuth tenants.
+      }
+    }
+    const formsTenant = grantTenant;
     let name = displayNameFromUser(user).slice(0, 80);
     try {
       const profile = await identity.profile(tokens.accessToken);

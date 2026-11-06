@@ -58,7 +58,9 @@ test("tenantOwns keeps legacy unscoped records invisible to a real workspace", (
   assert.equal(tenantOwns({ tenantId: TENANT_A }, TENANT_B), false);
   assert.equal(tenantOwns({ tenantId: "" }, TENANT_A), false);
   assert.equal(tenantOwns({}, TENANT_A), false);
-  assert.equal(tenantOwns({ tenantId: "" }, ""), true);
+  assert.equal(tenantOwns({ tenantId: "" }, ""), false);
+  assert.equal(tenantOwns({ tenantId: "" }, "", { allowUnscoped: true }), true);
+  assert.equal(tenantOwns({ tenantId: TENANT_A }, "", { allowUnscoped: true }), false);
   assert.equal(normalizeTenantId("  x  "), "x");
 });
 
@@ -93,14 +95,16 @@ test("shared MemWal backing does not cross tenants on remember/index/recall", as
 
   const indexA = await indexCompany({ client, env, tenantId: TENANT_A });
   const indexB = await indexCompany({ client, env, tenantId: TENANT_B });
-  const indexEmpty = await indexCompany({ client, env, tenantId: "" });
+  const indexEmptyClosed = await indexCompany({ client, env, tenantId: "" });
+  const indexEmptyLocal = await indexCompany({ client, env, tenantId: "", allowUnscoped: true });
 
   assert.equal(indexA.length, 1);
   assert.match(indexA[0].decision.text, /Alpha only/);
   assert.equal(indexB.length, 1);
   assert.match(indexB[0].decision.text, /Bravo only/);
-  assert.equal(indexEmpty.length, 1);
-  assert.match(indexEmpty[0].decision.text, /Legacy unscoped/);
+  assert.equal(indexEmptyClosed.length, 0);
+  assert.equal(indexEmptyLocal.length, 1);
+  assert.match(indexEmptyLocal[0].decision.text, /Legacy unscoped/);
 
   const recallA = await recallCompany({ query: "secret", tenantId: TENANT_A, client, env });
   const recallB = await recallCompany({ query: "secret", tenantId: TENANT_B, client, env });

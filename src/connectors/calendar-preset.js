@@ -1,4 +1,5 @@
 import { calendarPresentedConnected } from "../calendar/fake.js";
+import { identityConfigured } from "../identity/shared.js";
 import { CALENDAR_SCOPES, calendarGrantPartial } from "../calendar/mcp.js";
 import { requestOrigin } from "../identity/routes.js";
 import { GOOGLE_CALENDAR_MCP_URL, GOOGLE_CALENDAR_PRESET } from "./builtin-calendar.js";
@@ -26,13 +27,46 @@ export async function googleCalendarPresetState(input) {
   if (connectors.some((item) => item.preset === GOOGLE_CALENDAR_PRESET)) {
     return { state: "connected", connectUrl: "" };
   }
-  if (input.personId && input.grants && typeof input.grants.granted === "function") {
+  if (input.personId && input.grants && typeof input.grants.describe === "function") {
     try {
-      if (await input.grants.granted(input.personId, { tenantId: input.tenantId })) {
-        return { state: "ready", connectUrl: "" };
+      const status = await input.grants.describe(input.personId, {
+        tenantId: input.tenantId,
+        scopes: CALENDAR_SCOPES,
+      });
+      if (status?.granted) return { state: "ready", connectUrl: "" };
+      // Forms-only (or any incomplete calendar consent) is not calendar-connected.
+      if (status?.partial) {
+        return {
+          state: "needs_access",
+          connectUrl: CALENDAR_CONNECT_PATH,
+          message: CALENDAR_PARTIAL_MESSAGE,
+        };
+      }
+      // OAuth consoles never fall back to deployment calendar credentials.
+      if (identityConfigured(input.env)) {
+        return {
+          state: "needs_access",
+          connectUrl: CALENDAR_CONNECT_PATH,
+          ...(calendarGrantPartial(input.env) ? { message: CALENDAR_PARTIAL_MESSAGE } : {}),
+        };
       }
     } catch {
-      // Fall through to env / needs_access.
+      // Fall through when grants cannot be read.
+    }
+  } else if (input.personId && input.grants && typeof input.grants.granted === "function") {
+    try {
+      if (await input.grants.granted(input.personId, { tenantId: input.tenantId, scopes: CALENDAR_SCOPES })) {
+        return { state: "ready", connectUrl: "" };
+      }
+      if (identityConfigured(input.env)) {
+        return {
+          state: "needs_access",
+          connectUrl: CALENDAR_CONNECT_PATH,
+          ...(calendarGrantPartial(input.env) ? { message: CALENDAR_PARTIAL_MESSAGE } : {}),
+        };
+      }
+    } catch {
+      // Fall through when grants cannot be read.
     }
   }
   if (calendarPresentedConnected(input.env)) return { state: "ready", connectUrl: "" };

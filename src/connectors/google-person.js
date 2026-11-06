@@ -1,10 +1,13 @@
 import { openSecret, sealSecret } from "./secrets.js";
+import { CALENDAR_SCOPES } from "../calendar/mcp.js";
 
 /** Forms scopes requested with incremental Google consent. */
 export const FORMS_SCOPES = Object.freeze([
   "https://www.googleapis.com/auth/forms.body",
   "https://www.googleapis.com/auth/forms.responses.readonly",
 ]);
+
+export { CALENDAR_SCOPES };
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const FRESH_MS = 60_000;
@@ -236,15 +239,27 @@ export function createPersonGoogleStore(options = {}) {
     });
   }
 
-  function described(record) {
+  function described(record, requiredScopes = FORMS_SCOPES) {
     const scopes = record?.scopes || [];
+    const required = Array.isArray(requiredScopes) && requiredScopes.length ? requiredScopes : FORMS_SCOPES;
     const hasRefresh = Boolean(record?.refreshToken);
-    const granted = hasRefresh && FORMS_SCOPES.every((scope) => scopes.includes(scope));
+    const granted = hasRefresh && required.every((scope) => scopes.includes(scope));
     return {
       granted,
       partial: hasRefresh && !granted,
       scopes: [...scopes],
     };
+  }
+
+  function mergeScopes(left, right) {
+    const out = [];
+    const seen = new Set();
+    for (const scope of [...normalizeScopes(left), ...normalizeScopes(right)]) {
+      if (seen.has(scope)) continue;
+      seen.add(scope);
+      out.push(scope);
+    }
+    return out;
   }
 
   /**
@@ -301,7 +316,8 @@ export function createPersonGoogleStore(options = {}) {
       const tenantId = String(saveOptions.tenantId || "").trim();
       const refreshToken = String(record?.refreshToken || "");
       if (!id || !refreshToken || !acceptsTenant(tenantId)) return false;
-      const scopes = normalizeScopes(record?.scopes);
+      const prior = await load(tenantId, id);
+      const scopes = mergeScopes(prior?.scopes, record?.scopes);
       await persist(tenantId, id, refreshToken, scopes);
       const accessToken = String(record?.accessToken || "");
       const expiresAt = Number(record?.expiresAt) || 0;
@@ -332,9 +348,10 @@ export function createPersonGoogleStore(options = {}) {
     async describe(personId, describeOptions = {}) {
       const id = String(personId || "").trim();
       const tenantId = String(describeOptions.tenantId || "").trim();
+      const required = describeOptions.scopes || FORMS_SCOPES;
       if (!id || !acceptsTenant(tenantId)) return { granted: false, partial: false, scopes: [] };
       const record = await load(tenantId, id);
-      return described(record);
+      return described(record, required);
     },
     /**
      * @param {string} personId
@@ -352,9 +369,10 @@ export function createPersonGoogleStore(options = {}) {
     async openAccess(personId, tokenOptions = {}) {
       const id = String(personId || "").trim();
       const tenantId = String(tokenOptions.tenantId || "").trim();
+      const required = tokenOptions.scopes || FORMS_SCOPES;
       if (!id || !acceptsTenant(tenantId)) return { accessToken: "", needsAccess: true };
       const record = await load(tenantId, id);
-      const status = described(record);
+      const status = described(record, required);
       if (!record?.refreshToken || !status.granted) return { accessToken: "", needsAccess: true };
       const cached = cache.get(cacheKey(tenantId, id));
       const fresh = tokenOptions.force !== true && cached?.accessToken && Number(cached.expiresAt) > Date.now() + FRESH_MS;

@@ -51,7 +51,7 @@ export async function recallHitCount({ client, env = process.env } = {}) {
  * Semantic recall for a natural-language question (Walrus Memory chatbot ask path).
  * Returns parsed decision documents, newest-among-matches left to the caller to filter.
  */
-export async function recallCompany({ query, topK = 10, tenantId, client, env = process.env } = {}) {
+export async function recallCompany({ query, topK = 10, tenantId, allowUnscoped = false, client, env = process.env } = {}) {
   const key = env.COMPANY_MEMWAL_KEY;
   const accountId = env.COMPANY_MEMWAL_ACCOUNT_ID;
   if (!key || !accountId) return [];
@@ -67,13 +67,13 @@ export async function recallCompany({ query, topK = 10, tenantId, client, env = 
   for (const hit of hits) {
     const parsed = readDecisionPayload(hit?.text);
     if (!parsed) continue;
-    if (!tenantOwns(parsed, tenantId)) continue;
+    if (!tenantOwns(parsed, tenantId, { allowUnscoped })) continue;
     rows.push(rowFromParsed(parsed, hit));
   }
   return rows;
 }
 
-export async function indexCompany({ client, env = process.env, tenantId } = {}) {
+export async function indexCompany({ client, env = process.env, tenantId, allowUnscoped = false } = {}) {
   const key = env.COMPANY_MEMWAL_KEY;
   const accountId = env.COMPANY_MEMWAL_ACCOUNT_ID;
   if (!key || !accountId) return [];
@@ -101,7 +101,7 @@ export async function indexCompany({ client, env = process.env, tenantId } = {})
     for (const hit of hits) {
       const parsed = readDecisionPayload(hit?.text);
       if (!parsed) continue;
-      if (!tenantOwns(parsed, tenantId)) continue;
+      if (!tenantOwns(parsed, tenantId, { allowUnscoped })) continue;
       const blobId = typeof hit?.blob_id === "string" ? hit.blob_id : "";
       const decisionId = typeof parsed.decision?.id === "string" ? parsed.decision.id : "";
       const mapKey = blobId || decisionId || `${parsed.kind}:${String(parsed.decision?.text || parsed.text || "").slice(0, 80)}`;
@@ -137,12 +137,15 @@ function decisionPayload(input) {
 /**
  * Workspace ownership for company memory. A missing tenantId on a stored
  * document is legacy/unscoped and is never visible to a real workspace id.
- * An empty requested tenant (local single-space) only sees unscoped rows.
+ * An empty requested tenant fails closed unless allowUnscoped is set (local
+ * demos without identity). Production must never set allowUnscoped.
  */
-export function tenantOwns(parsed, tenantId) {
+export function tenantOwns(parsed, tenantId, options = {}) {
   const want = normalizeTenantId(tenantId);
   const have = normalizeTenantId(parsed?.tenantId);
-  return want === have;
+  if (want) return want === have;
+  if (options.allowUnscoped === true) return !have;
+  return false;
 }
 
 export function normalizeTenantId(value) {

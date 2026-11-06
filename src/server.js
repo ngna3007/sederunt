@@ -10,7 +10,7 @@ import { createFormsApp, handleNodeForms } from "./mcp-forms/http.js";
 import { createFakeCalendarMcp } from "./connectors/calendar-fake.js";
 import { createConnectorStore } from "./connectors/store.js";
 import { createPersonGoogleStore } from "./connectors/google-person.js";
-import { calendarPresentedConnected, calendarTimeZone, createCalendarAdapter } from "./calendar/mcp.js";
+import { CALENDAR_SCOPES, calendarPresentedConnected, calendarTimeZone, createCalendarAdapter } from "./calendar/mcp.js";
 import { createConsoleAdapter } from "./console/upload.js";
 import { createLinearClient } from "./linear/mcp.js";
 import { loadLinearToken } from "./linear/token.js";
@@ -62,6 +62,7 @@ import { answerSlackQuestion, claimSlackAsk, findReplyFile, invitedFileRows, pos
 import { slackBotUserIds, slackDelivery, slackEventHasFiles, verifySlackRequest } from "./slack/sign.js";
 import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded, warmProofs } from "./typed-path.js";
 import { wireCalls } from "./tatum/client.js";
+import { createTenantBind } from "./tenant-bind.js";
 
 const port = Number(process.env.PORT || 8787);
 
@@ -88,57 +89,63 @@ function memoryAdapter(env = process.env, client, tatum, tenantId = "") {
       const stamp = typeof input.tenantId === "string" && input.tenantId.trim()
         ? input.tenantId.trim()
         : boundTenant;
+      // Unbound production writes fail closed — no legacy/unscoped company blob.
+      if (!stamp && this.allowUnscoped !== true) {
+        return publicMemory({ ok: false, blobId: null });
+      }
       return publicMemory(await rememberCompany({ ...input, tenantId: stamp, client, env, tatum }));
     },
+    allowUnscoped: false,
     async index() {
       const { indexCompany } = await import("./memory/company.js");
-      return indexCompany({ client, env, tenantId: boundTenant });
+      return indexCompany({ client, env, tenantId: boundTenant, allowUnscoped: this.allowUnscoped === true });
     },
     /** Semantic ask path: query Walrus Memory before an LLM answer (withMemWal shape). */
     async recall(query) {
       const { recallCompany } = await import("./memory/company.js");
-      return recallCompany({ query, topK: 20, client, env, tenantId: boundTenant });
+      return recallCompany({ query, topK: 20, client, env, tenantId: boundTenant, allowUnscoped: this.allowUnscoped === true });
     },
   };
   return adapter;
 }
 
 /**
- * Re-bind an existing company memory adapter to a workspace tenant id.
- * Shares the same MemWal client/env; only the ownership stamp/filter changes.
- */
-/**
- * Re-bind company memory to a workspace tenant id. Shares the MemWal client;
- * only the ownership stamp and filter change. Injected test fakes are wrapped.
- */
-/**
  * Re-bind company memory to a workspace tenant id.
- * MemWal adapters recreate with the same client; injected test fakes are wrapped.
+ * MemWal adapters recreate with the same client; injected test fakes are wrapped
+ * so empty-tenant writes fail closed when allowUnscoped is off.
  */
 export function bindMemoryTenant(memory, tenantId, env = process.env, client, tatum) {
   const bound = typeof tenantId === "string" ? tenantId.trim() : "";
   if (!memory) return memoryAdapter(env, client, tatum, bound);
-  if ((memory.tenantId || "") === bound) return memory;
   if (typeof memory.__bind === "function") return memory.__bind(bound);
+  // Always wrap injected fakes so empty-tenant fail-closed applies even when
+  // memory.tenantId is already "" (same as the requested bind).
+  if ((memory.tenantId || "") === bound && memory.__tenantBound === true) return memory;
+  const allowUnscoped = memory.allowUnscoped === true;
   return {
     tenantId: bound,
+    allowUnscoped,
+    __tenantBound: true,
     async remember(input) {
       const stamp = typeof input?.tenantId === "string" && input.tenantId.trim()
         ? input.tenantId.trim()
         : bound;
+      if (!stamp && !allowUnscoped) {
+        return { ok: false, blobId: null };
+      }
       return memory.remember({ ...input, tenantId: stamp });
     },
     async index() {
       const docs = await memory.index();
       if (!Array.isArray(docs)) return docs;
       const { tenantOwns } = await import("./memory/company.js");
-      return docs.filter((doc) => tenantOwns(doc, bound));
+      return docs.filter((doc) => tenantOwns(doc, bound, { allowUnscoped }));
     },
     async recall(query) {
       const docs = await memory.recall(query);
       if (!Array.isArray(docs)) return docs;
       const { tenantOwns } = await import("./memory/company.js");
-      return docs.filter((doc) => tenantOwns(doc, bound));
+      return docs.filter((doc) => tenantOwns(doc, bound, { allowUnscoped }));
     },
   };
 }
@@ -277,6 +284,7 @@ async function calendarForRequest(workspace, { companyId = "", personId = "", re
   const grants = workspace.googleGrants;
   const tenantId = typeof companyId === "string" ? companyId.trim() : "";
   const person = typeof personId === "string" ? personId.trim() : "";
+  const oauthConsole = identityConfigured(env) && Boolean(person && tenantId);
   if (tenantId && person && grants && typeof grants.openAccess === "function") {
     const { createCalendarAdapter } = await import("./calendar/mcp.js");
     const { calendarFakeEnabled } = await import("./calendar/fake.js");
@@ -285,28 +293,47 @@ async function calendarForRequest(workspace, { companyId = "", personId = "", re
         save: workspace.calendarSave,
         fetch: workspace.fetchImpl,
         accessToken: async ({ force } = {}) => {
-          const opened = await grants.openAccess(person, { tenantId, force: force === true });
+          const opened = await grants.openAccess(person, {
+            tenantId,
+            force: force === true,
+            scopes: CALENDAR_SCOPES,
+          });
           return opened?.accessToken || "";
         },
       });
       return { adapter, personGrant: true, tenantId, personId: person };
     }
   }
+  // OAuth production never falls back to deployment calendar credentials.
+  if (oauthConsole) {
+    return {
+      adapter: {
+        async listUpcoming() { return { unavailable: true }; },
+        async readDay(day) { return { day, events: [], unavailable: true }; },
+      },
+      personGrant: false,
+      tenantId,
+      personId: person,
+    };
+  }
   return { adapter: workspace.deps.calendar, personGrant: false, tenantId, personId: person };
 }
 
 async function doorsForRequest(workspace, { companyId = "", personId = "", req } = {}) {
-  const doors = doorReport(workspace.env, workspace.linearReady === true);
+  const env = workspace.env;
+  const doors = doorReport(env, workspace.linearReady === true);
   const tenantId = typeof companyId === "string" ? companyId.trim() : "";
   const person = typeof personId === "string" ? personId.trim() : "";
   const grants = workspace.googleGrants;
   if (tenantId && person && grants && typeof grants.granted === "function") {
     try {
-      const ok = await grants.granted(person, { tenantId });
+      const ok = await grants.granted(person, { tenantId, scopes: CALENDAR_SCOPES });
       doors.calendar = ok === true;
     } catch {
       doors.calendar = false;
     }
+  } else if (identityConfigured(env)) {
+    doors.calendar = false;
   }
   return doors;
 }
@@ -405,6 +432,9 @@ export function createApp(options = {}) {
     memwal: options.memwal,
   });
   if (!deps.app) deps.app = appConfig(env);
+  if (deps.memory && typeof deps.memory === "object") {
+    deps.memory.allowUnscoped = !identityConfigured(env);
+  }
   deps.connectors = options.connectors || deps.connectors || createConnectorStore(env);
   if (!options.deps && (isDirectRun() || process.env.VERCEL)) {
     deps.log = (event) => {
@@ -422,7 +452,7 @@ export function createApp(options = {}) {
     session,
     deps,
     memwalClient: options.memwal || null,
-    recordingTenantId: "",
+    tenantBind: options.tenantBind || createTenantBind(env, { fetchImpl: options.fetch || globalThis.fetch }),
     companyLoaded: loadedCompany(options, deps, env, companies),
     linearReady: options.linearReady === true || (options.env ? false : linearReady()),
     recall: options.recall || null,
@@ -700,7 +730,12 @@ export function createApp(options = {}) {
         send(res, 401, "application/json; charset=utf-8", JSON.stringify({ ok: false, reason: "sign-in" }));
         return;
       }
-      const companyId = await resolveCompanyId(workspace, req, "");
+      const resolved = await resolveCompanyId(workspace, req, "");
+      if (resolved.denied || resolved.unauthorized) {
+        sendCompanyDenied(res, send, resolved);
+        return;
+      }
+      const companyId = resolved.companyId;
       const current = await prepareWorkspace(workspace, companyId, false, 2000);
       const groups = searchPublishedActivity(current, current.rooms || [], {
         query: url.searchParams.get("q") || "",
@@ -725,7 +760,12 @@ export function createApp(options = {}) {
         send(res, 400, "application/json; charset=utf-8", JSON.stringify({ ok: false, reason: "op" }));
         return;
       }
-      const companyId = await resolveCompanyId(workspace, req, "");
+      const resolved = await resolveCompanyId(workspace, req, "");
+      if (resolved.denied || resolved.unauthorized) {
+        sendCompanyDenied(res, send, resolved);
+        return;
+      }
+      const companyId = resolved.companyId;
       const current = await prepareWorkspace(workspace, companyId, false, 2000);
       const id = typeof body.id === "string" ? body.id : "";
       const actor = gate.session.name?.trim() || "Someone";
@@ -738,7 +778,8 @@ export function createApp(options = {}) {
       return;
     }
     if ((req.method === "GET" || req.method === "POST") && url.pathname === "/console/welcome") {
-      const companyId = await resolveCompanyId(workspace, req, "");
+      const resolved = await resolveCompanyId(workspace, req, "");
+      const companyId = resolved.companyId;
       const personId = String(guardConsole(req, env).session?.userId || "").trim();
       const calendar = await calendarForRequest(workspace, { companyId, personId, req });
       const doors = await doorsForRequest(workspace, { companyId, personId, req });
@@ -901,7 +942,12 @@ export function createApp(options = {}) {
     }
     if (req.method === "POST" && url.pathname === "/api/hearing") {
       const body = await readJson(req);
-      const companyId = typeof body.company === "string" ? body.company : "";
+      const resolved = await resolveCompanyId(workspace, req, typeof body.company === "string" ? body.company : "");
+      if (resolved.denied || resolved.unauthorized) {
+        sendCompanyDenied(res, send, resolved);
+        return;
+      }
+      const companyId = resolved.companyId;
       const current = await prepareWorkspace(workspace, companyId);
       const triggers = typeof body.triggers === "string"
         ? body.triggers.split(/\n+/)
@@ -924,7 +970,12 @@ export function createApp(options = {}) {
         send(res, 401, "application/json; charset=utf-8", JSON.stringify({ error: "Sign in again.", reason: gate.reason || "missing" }));
         return;
       }
-      const companyId = await resolveCompanyId(workspace, req, url.searchParams.get("company") || "");
+      const resolved = await resolveCompanyId(workspace, req, url.searchParams.get("company") || "");
+      if (resolved.denied || resolved.unauthorized) {
+        sendCompanyDenied(res, send, resolved);
+        return;
+      }
+      const companyId = resolved.companyId;
       const current = await prepareWorkspace(workspace, companyId, false, 2000);
       const workspaceKind = url.searchParams.get("workspace") || "";
       const memberId = consoleBoardMember(gate.session, env, workspaceKind, url.searchParams.get("member") || "");
@@ -943,7 +994,12 @@ export function createApp(options = {}) {
         send(res, 401, "application/json; charset=utf-8", JSON.stringify({ error: "Sign in again.", reason: gate.reason || "missing" }));
         return;
       }
-      const companyId = await resolveCompanyId(workspace, req, url.searchParams.get("company") || "");
+      const resolved = await resolveCompanyId(workspace, req, url.searchParams.get("company") || "");
+      if (resolved.denied || resolved.unauthorized) {
+        sendCompanyDenied(res, send, resolved);
+        return;
+      }
+      const companyId = resolved.companyId;
       const current = await prepareWorkspace(workspace, companyId, true);
       const workspaceKind = url.searchParams.get("workspace") || "";
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(await consolePayload(
@@ -963,7 +1019,12 @@ export function createApp(options = {}) {
     if (req.method === "GET" && url.pathname === "/api/room") {
       const requested = url.searchParams.get("room") || "desk";
       const roomId = /^[A-Za-z0-9_-]{1,64}$/.test(requested) ? requested : "desk";
-      const current = await prepareWorkspace(workspace, url.searchParams.get("company") || "");
+      const resolved = await resolveCompanyId(workspace, req, url.searchParams.get("company") || "");
+      if (resolved.denied || resolved.unauthorized) {
+        sendCompanyDenied(res, send, resolved);
+        return;
+      }
+      const current = await prepareWorkspace(workspace, resolved.companyId);
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(roomLedger(current, roomId)));
       return;
     }
@@ -988,17 +1049,23 @@ export function createApp(options = {}) {
         let startedAt = "";
         let status = "not-configured";
         let joinCompanyId = "";
+        const resolved = await resolveCompanyId(workspace, req, typeof body.company === "string" ? body.company : "");
+        if (resolved.denied || resolved.unauthorized) {
+          return { join: "denied", denied: true, unauthorized: resolved.unauthorized === true };
+        }
+        joinCompanyId = resolved.companyId;
         if (deps.meeting?.join) {
           try {
-            const companyId = await resolveCompanyId(workspace, req, "");
-            const ready = await prepareWorkspace(workspace, companyId);
+            const ready = await prepareWorkspace(workspace, joinCompanyId);
             const guest = normalizeHearing(ready?.hearing).name;
             const bot = await currentBot(workspace, req);
             const sent = await deps.meeting.join({ url: meetingUrl, name: guest, botName: bot.name });
             status = "sent";
             botId = typeof sent?.id === "string" ? sent.id : "";
             startedAt = typeof sent?.startedAt === "string" ? sent.startedAt : (typeof sent?.started_at === "string" ? sent.started_at : "");
-            joinCompanyId = companyId;
+            if (botId && joinCompanyId && workspace.tenantBind) {
+              await workspace.tenantBind.bind("bot", botId, joinCompanyId);
+            }
           } catch (error) {
             const message = error instanceof Error ? error.message : "";
             status = message === "Meeting join is not configured" ? "not-configured" : "failed";
@@ -1023,7 +1090,11 @@ export function createApp(options = {}) {
       pending.set(meetingUrl, work);
       try {
         const result = await work;
-        send(res, 200, "application/json; charset=utf-8", JSON.stringify(result));
+        if (result?.denied) {
+          sendCompanyDenied(res, send, result);
+          return;
+        }
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify({ join: result.join }));
       } finally {
         // Keep the promise briefly so a double-click shares one bot, then clear.
         setTimeout(() => {
@@ -1053,13 +1124,15 @@ export function createApp(options = {}) {
               // Typed fills this in; without it, storeDecision refuses as missing-member.
               if (!delivery.memberId) delivery.memberId = configured;
             }
-            const companyId = workspace.recordingTenantId || "";
+            const botId = typeof delivery.room?.id === "string" ? delivery.room.id : "";
+            const companyId = await resolveBoundTenant(workspace, { botId });
+            // Unbound production memory fails closed (empty tenant + no allowUnscoped).
             const current = await prepareWorkspace(workspace, companyId);
             await handleUtterance({ ...delivery, session: current }, depsFor(workspace, companyId));
           }
           const ended = meetingEnded(payload);
           if (ended?.roomId) {
-            const companyId = workspace.recordingTenantId || "";
+            const companyId = await resolveBoundTenant(workspace, { botId: ended.roomId });
             const current = await prepareWorkspace(workspace, companyId);
             await endMeeting(current, depsFor(workspace, companyId), ended.roomId);
           }
@@ -1074,10 +1147,12 @@ export function createApp(options = {}) {
       const delivery = await readRequest(req);
       const configured = typeof env.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
       if (!delivery.memberId && configured) delivery.memberId = configured;
-      const companyId = (typeof delivery.company === "string" && delivery.company.trim())
-        || workspace.recordingTenantId
-        || "";
-      if (companyId) workspace.recordingTenantId = companyId;
+      const resolved = await resolveCompanyId(workspace, req, typeof delivery.company === "string" ? delivery.company : "");
+      if (resolved.denied || resolved.unauthorized) {
+        sendCompanyDenied(res, send, resolved);
+        return;
+      }
+      const companyId = resolved.companyId;
       const current = await prepareWorkspace(workspace, companyId);
       const result = await handleUtterance({ ...delivery, session: current }, depsFor(workspace, companyId));
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(result));
@@ -1086,7 +1161,12 @@ export function createApp(options = {}) {
     if (req.method === "POST" && url.pathname === "/api/proof") {
       const body = await readJson(req);
       const id = typeof body.id === "string" ? body.id : "";
-      const companyId = typeof body.company === "string" ? body.company : "";
+      const resolved = await resolveCompanyId(workspace, req, typeof body.company === "string" ? body.company : "");
+      if (resolved.denied || resolved.unauthorized) {
+        sendCompanyDenied(res, send, resolved);
+        return;
+      }
+      const companyId = resolved.companyId;
       const current = await prepareWorkspace(workspace, companyId);
       const memberId = consoleBoardMember(null, env, "company", typeof body.memberId === "string" ? body.memberId : "");
       const visible = companyBoard(current, memberId);
@@ -1121,7 +1201,12 @@ export function createApp(options = {}) {
     }
     if (req.method === "POST" && url.pathname === "/api/chat") {
       const body = await readJson(req);
-      send(res, 200, "application/json; charset=utf-8", JSON.stringify(await chatReply(workspace, body)));
+      const reply = await chatReply(workspace, body, "", req);
+      if (reply?.denied) {
+        sendCompanyDenied(res, send, reply);
+        return;
+      }
+      send(res, 200, "application/json; charset=utf-8", JSON.stringify(reply));
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/slack") {
@@ -1145,10 +1230,12 @@ export function createApp(options = {}) {
         send(res, 200, "application/json; charset=utf-8", JSON.stringify({ challenge: parsed.challenge }));
         return;
       }
-      const companyId = (typeof parsed.company === "string" && parsed.company.trim())
-        || workspace.recordingTenantId
-        || "";
       const event = parsed.event && typeof parsed.event === "object" ? parsed.event : parsed;
+      const slackTeam = typeof parsed.team_id === "string" && parsed.team_id.trim()
+        ? parsed.team_id.trim()
+        : (typeof event.team === "string" ? event.team.trim() : "");
+      const slackChannel = typeof event.channel === "string" ? event.channel.trim() : "";
+      const companyId = await resolveBoundTenant(workspace, { teamId: slackTeam, channelId: slackChannel });
       const subtype = typeof event.subtype === "string" ? event.subtype : "";
       const changedFiles = subtype === "message_changed" && slackEventHasFiles(event);
       const noise = subtype
@@ -1773,7 +1860,14 @@ async function handleAsk(workspace, req, res, url) {
           return store.finish(askId, next);
         },
       };
-      const companyId = await resolveCompanyId(workspace, req, typeof body.company === "string" ? body.company : "");
+      const resolved = await resolveCompanyId(workspace, req, typeof body.company === "string" ? body.company : "");
+      if (resolved.denied || resolved.unauthorized) {
+        json(resolved.unauthorized ? 401 : 403, resolved.unauthorized
+          ? { error: "Sign in again.", reason: "missing" }
+          : { error: "That workspace is not available.", reason: "forbidden" });
+        return;
+      }
+      const companyId = resolved.companyId;
       const scope = body.workspace === "personal" ? "personal" : "company";
       const work = (async () => {
         const previous = [];
@@ -1872,9 +1966,21 @@ async function handleAsk(workspace, req, res, url) {
  * trustedMember is the console board member. A body field cannot set it:
  * /api/chat forwards the JSON body, and a caller must not pick their own invite.
  */
-async function chatReply(workspace, body, trustedMember = "") {
+async function chatReply(workspace, body, trustedMember = "", req = null) {
   const env = workspace.env;
-  const companyId = typeof body.company === "string" ? body.company : "";
+  const resolved = req
+    ? await resolveCompanyId(workspace, req, typeof body.company === "string" ? body.company : "")
+    : { companyId: typeof body.company === "string" ? body.company : "", denied: false, unauthorized: false };
+  if (resolved.denied || resolved.unauthorized) {
+    return {
+      body: resolved.unauthorized ? "Sign in again." : "That workspace is not available.",
+      decisions: 0,
+      stored: false,
+      denied: true,
+      unauthorized: resolved.unauthorized === true,
+    };
+  }
+  const companyId = resolved.companyId;
   const current = await prepareWorkspace(workspace, companyId);
   const text = typeof body.text === "string" ? body.text.trim() : "";
   const requested = typeof body.workspace === "string" ? body.workspace : "";
@@ -2036,28 +2142,95 @@ function depsFor(workspace, companyId) {
 }
 
 /**
- * Active company workspace id for OAuth console, or an explicit query/body id.
- * Remembers the last company used so Slack/Recall keeps stamp the same tenant.
+ * Company workspace id for console memory. Client-supplied ids are never
+ * authorization: under OAuth identity they must match myTenants membership.
+ * Provider callbacks use resolveBoundTenant instead (botId / Slack team+channel).
+ * No process-global last-active workspace.
+ *
+ * @returns {Promise<{ companyId: string, denied: boolean, unauthorized: boolean }>}
  */
 async function resolveCompanyId(workspace, req, explicit = "") {
   const asked = typeof explicit === "string" ? explicit.trim() : "";
+  const env = workspace.env;
+  const gate = guardConsole(req, env);
+  const oauthOn = identityConfigured(env) && Boolean(workspace.identity);
+
+  if (!oauthOn) {
+    return { companyId: asked, denied: false, unauthorized: false };
+  }
+  if (!gate.session) {
+    return { companyId: "", denied: Boolean(asked), unauthorized: true };
+  }
+  if (gate.session.kind !== "oauth") {
+    // Passphrase console under identity flags: treat asked as a local label.
+    return { companyId: asked, denied: false, unauthorized: false };
+  }
+  let tenants = [];
+  try {
+    tenants = await workspace.identity.myTenants(gate.session.accessToken);
+  } catch {
+    return { companyId: "", denied: Boolean(asked), unauthorized: false };
+  }
+  const ids = new Set((Array.isArray(tenants) ? tenants : []).map((row) => row?.id).filter(Boolean));
   if (asked) {
-    workspace.recordingTenantId = asked;
-    return asked;
+    if (!ids.has(asked)) return { companyId: "", denied: true, unauthorized: false };
+    await rememberSlackTeamBind(workspace, asked).catch(() => {});
+    return { companyId: asked, denied: false, unauthorized: false };
   }
-  const gate = guardConsole(req, workspace.env);
-  if (workspace.identity && gate.session?.kind === "oauth") {
-    try {
-      const spaces = await loadSpaceView(workspace.identity, gate.session);
-      if (spaces?.activeId && spaces?.activeKind !== "personal") {
-        workspace.recordingTenantId = spaces.activeId;
-        return spaces.activeId;
-      }
-    } catch {
-      // Fall through to the last recording tenant.
+  try {
+    const spaces = await loadSpaceView(workspace.identity, gate.session);
+    if (spaces?.activeId && spaces?.activeKind !== "personal" && ids.has(spaces.activeId)) {
+      await rememberSlackTeamBind(workspace, spaces.activeId).catch(() => {});
+      return { companyId: spaces.activeId, denied: false, unauthorized: false };
     }
+  } catch {
+    // Fall through to empty — memory fails closed.
   }
-  return typeof workspace.recordingTenantId === "string" ? workspace.recordingTenantId : "";
+  return { companyId: "", denied: false, unauthorized: false };
+}
+
+/**
+ * Bind the deployment Slack team (when known) to the authenticated tenant so
+ * later signed Slack callbacks resolve without last-active process state.
+ */
+async function rememberSlackTeamBind(workspace, tenantId) {
+  const team = String(workspace.env?.SLACK_TEAM_ID || "").trim();
+  const tenant = String(tenantId || "").trim();
+  if (!team || !tenant || !workspace.tenantBind) return;
+  await workspace.tenantBind.bind("slack", team, tenant);
+}
+
+/**
+ * Resolve tenant for a signed Recall/Slack callback. Never trusts client body
+ * company ids or process-global last-active workspace.
+ */
+async function resolveBoundTenant(workspace, { botId = "", teamId = "", channelId = "" } = {}) {
+  const bind = workspace.tenantBind;
+  if (!bind) return "";
+  const bot = String(botId || "").trim();
+  if (bot) {
+    const fromBot = await bind.resolve("bot", bot);
+    if (fromBot) return fromBot;
+  }
+  const team = String(teamId || "").trim();
+  const channel = String(channelId || "").trim();
+  if (team && channel) {
+    const fromChannel = await bind.resolve("slack", `${team}:${channel}`);
+    if (fromChannel) return fromChannel;
+  }
+  if (team) {
+    const fromTeam = await bind.resolve("slack", team);
+    if (fromTeam) return fromTeam;
+  }
+  return "";
+}
+
+function sendCompanyDenied(res, send, { unauthorized = false } = {}) {
+  const status = unauthorized ? 401 : 403;
+  const body = unauthorized
+    ? { error: "Sign in again.", reason: "missing" }
+    : { error: "That workspace is not available.", reason: "forbidden" };
+  send(res, status, "application/json; charset=utf-8", JSON.stringify(body));
 }
 
 async function currentBot(workspace, req) {

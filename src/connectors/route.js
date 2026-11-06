@@ -70,6 +70,8 @@ export async function handleConnectorRoutes(ctx) {
           store,
           tenantId,
           env: ctx.env,
+          grants: ctx.workspace?.googleGrants,
+          personId,
         }),
       };
       sendJson(ctx, 200, { ok: true, connectors, demoUrl: demo?.url || "", presets });
@@ -105,6 +107,8 @@ export async function handleConnectorRoutes(ctx) {
         env: ctx.env,
         req,
         calendarMcp: ctx.workspace?.calendarMcp,
+        grants: ctx.workspace?.googleGrants,
+        personId: personIdFrom(gate, ctx.env),
       });
       if (!result.ok) {
         sendJson(ctx, result.code === "needs_access" ? 200 : 400, {

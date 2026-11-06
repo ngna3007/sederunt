@@ -3,7 +3,7 @@ import { loadSpaceView } from "../console-flow.js";
 import { authorize } from "../domain/allow.js";
 import { resolvePreference } from "../domain/preference.js";
 import { redact } from "../domain/redact.js";
-import { calendarAccessToken } from "../calendar/mcp.js";
+import { CALENDAR_SCOPES, calendarAccessToken } from "../calendar/mcp.js";
 import { calendarFakeEnabled } from "../calendar/fake.js";
 import { formsFakeEnabled } from "../mcp-forms/api.js";
 import { callTool } from "./client.js";
@@ -253,6 +253,24 @@ function takeConfirmation(session, toolName, confirmId) {
  * @param {boolean} [force]
  */
 async function takeCalendarAccess(input, force = false) {
+  const grants = input.googleGrants;
+  const personId = input.personId;
+  const tenantId = input.tenantId || "";
+  if (personId && tenantId && grants && typeof grants.openAccess === "function") {
+    const opened = await grants.openAccess(personId, {
+      tenantId,
+      force,
+      scopes: CALENDAR_SCOPES,
+    });
+    return {
+      accessToken: typeof opened?.accessToken === "string" ? opened.accessToken : "",
+      needsAccess: opened?.needsAccess === true,
+    };
+  }
+  // OAuth person consoles never fall back to deployment calendar credentials.
+  if (personId && tenantId) {
+    return { accessToken: "", needsAccess: true };
+  }
   const accessToken = await calendarAccessToken(input.env, {
     fetch: input.fetch,
     save: input.calendarSave,
