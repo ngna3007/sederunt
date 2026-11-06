@@ -111,12 +111,12 @@ function memoryLine(row) {
 }
 
 /** Rows the asker may see, ranked for the question (MemWal.recall first when present). */
-export async function recallForAsk(visible, question, recall, limit = 5) {
+export async function recallForAsk(visible, question, recall, limit = 5, memberId = "") {
   let rows = recallVisibleForAsk(visible, question, limit);
   if (typeof recall === "function") {
     try {
       const hits = await recall(String(question ?? "").trim());
-      const merged = mergeSemanticVisible(visible, hits, question, limit);
+      const merged = mergeSemanticVisible(visible, hits, question, limit, memberId);
       if (merged.length) rows = merged;
     } catch {
       // Keep the keyword rank when memory recall is down.
@@ -156,7 +156,7 @@ export async function runAsk(input) {
   const env = input.env ?? process.env;
   const question = String(input.question ?? "").trim();
   try {
-    const rows = await recallForAsk(input.visible ?? [], question, input.recall, 5);
+    const rows = await recallForAsk(input.visible ?? [], question, input.recall, 5, input.memberId || "");
     const sources = rows.map(sourceOf).filter((row) => row.text);
     if (openRouterConfig(env).enabled) {
       let pending = "";

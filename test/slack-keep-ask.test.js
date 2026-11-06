@@ -972,3 +972,30 @@ test("a file-pin DM caption strips leaked JSON and replaces the empty fallback",
     await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
   }
 });
+
+test("semantic hit outside index still asks when invited", async () => {
+  const { mergeSemanticVisible } = await import("../src/slack/reply.js");
+  const visible = [{
+    id: "decision-old",
+    text: "remember the launch code is maple47",
+    roomId: "C-ops",
+    spokenAt: "2026-11-05T18:05:30.211Z",
+    speaker: "U0CE7CM2N8Z",
+  }];
+  const hits = [{
+    distance: 0.2,
+    decision: {
+      id: "decision-1793966203_477209",
+      text: "Northline decision — please keep: launch is November 18 if billing is green by November 12; otherwise slip to November 25.",
+      roomId: "C0CEZT4KYP2",
+      spokenAt: "2026-11-06T11:56:43.000Z",
+      speakerMemberId: "U0CE7CM2N8Z",
+      inviteMemberIds: ["U0CE7CM2N8Z", "U0CEZV62A00", "U0CF9UVT17T"],
+      fileNames: [],
+    },
+  }];
+  const merged = mergeSemanticVisible(visible, hits, "When is the Northline launch?", 5, "U0CE7CM2N8Z");
+  assert.ok(merged.some((row) => /November 18/i.test(row.text)));
+  const blocked = mergeSemanticVisible(visible, hits, "When is the Northline launch?", 5, "UOUTSIDER");
+  assert.equal(blocked.some((row) => /November 18/i.test(row.text)), false);
+});

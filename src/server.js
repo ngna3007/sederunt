@@ -89,7 +89,7 @@ function memoryAdapter(env = process.env, client, tatum) {
     /** Semantic ask path: query Walrus Memory before an LLM answer (withMemWal shape). */
     async recall(query) {
       const { recallCompany } = await import("./memory/company.js");
-      return recallCompany({ query, topK: 10, client, env });
+      return recallCompany({ query, topK: 20, client, env });
     },
   };
 }
@@ -1676,6 +1676,7 @@ async function handleAsk(workspace, req, res, url) {
           id,
           question,
           visible,
+          memberId,
           history: previous,
           env,
           fetchImpl: workspace.openrouterFetch || undefined,

@@ -93,30 +93,52 @@ export async function indexCompany({ client, env = process.env } = {}) {
   const accountId = env.COMPANY_MEMWAL_ACCOUNT_ID;
   if (!key || !accountId) return [];
   const memwal = client ?? liveClient(env);
-  const result = await memwal.recall({ query: DECISION_MARK, topK: 50, namespace: NAMESPACE });
-  const hits = Array.isArray(result?.results) ? result.results : [];
-  const rows = [];
-  for (const hit of hits) {
-    const parsed = readDecisionPayload(hit?.text);
-    if (!parsed) continue;
-    rows.push({
-      account: parsed.account ?? "company",
-      kind: parsed.kind ?? "decision",
-      blobId: typeof hit?.blob_id === "string" ? hit.blob_id : null,
-      decision: parsed.decision ?? null,
-      preference: parsed.preference ?? null,
-      roomSetting: parsed.roomSetting ?? null,
-      expiry: parsed.expiry ?? null,
-      room: parsed.room ?? null,
-      access: parsed.access ?? null,
-      hearing: parsed.hearing ?? null,
-      activity: parsed.activity ?? null,
-      learned: parsed.learned ?? null,
-      minutes: parsed.minutes ?? null,
-      actionItem: parsed.actionItem ?? null,
-    });
+  // MemWal has no full list API — a single recall(mark) only returns the topK
+  // nearest to the mark string, so recent keeps fall off the console board.
+  // Union several query seeds so Decisions / Ask visible cover live demo content.
+  const queries = [
+    DECISION_MARK,
+    "please keep decision",
+    "remember this",
+    "Northline office launch billing",
+    "District 7 Building floors move-in",
+    "meeting room hearing",
+  ];
+  const byKey = new Map();
+  for (const query of queries) {
+    let hits = [];
+    try {
+      const result = await memwal.recall({ query, topK: 50, namespace: NAMESPACE });
+      hits = Array.isArray(result?.results) ? result.results : [];
+    } catch {
+      continue;
+    }
+    for (const hit of hits) {
+      const parsed = readDecisionPayload(hit?.text);
+      if (!parsed) continue;
+      const blobId = typeof hit?.blob_id === "string" ? hit.blob_id : "";
+      const decisionId = typeof parsed.decision?.id === "string" ? parsed.decision.id : "";
+      const mapKey = blobId || decisionId || `${parsed.kind}:${String(parsed.decision?.text || parsed.text || "").slice(0, 80)}`;
+      if (!mapKey || byKey.has(mapKey)) continue;
+      byKey.set(mapKey, {
+        account: parsed.account ?? "company",
+        kind: parsed.kind ?? "decision",
+        blobId: blobId || null,
+        decision: parsed.decision ?? null,
+        preference: parsed.preference ?? null,
+        roomSetting: parsed.roomSetting ?? null,
+        expiry: parsed.expiry ?? null,
+        room: parsed.room ?? null,
+        access: parsed.access ?? null,
+        hearing: parsed.hearing ?? null,
+        activity: parsed.activity ?? null,
+        learned: parsed.learned ?? null,
+        minutes: parsed.minutes ?? null,
+        actionItem: parsed.actionItem ?? null,
+      });
+    }
   }
-  return rows;
+  return [...byKey.values()];
 }
 
 function decisionPayload(input) {

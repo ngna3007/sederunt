@@ -1,5 +1,6 @@
 import { openRouterComplete, openRouterConfig } from "../openrouter.js";
 import { buildSlackAskPrompt } from "../bot/persona.js";
+import { checkInvite } from "../domain/invite.js";
 
 const STOP = new Set(["what", "about", "that", "this", "with", "from", "your", "have", "does", "file", "when", "where", "who", "why", "how", "was", "decided", "the", "and", "for"]);
 
@@ -472,7 +473,7 @@ export function recallVisibleForAsk(visible, question, maxMemories = 5) {
  * Prefer invite-visible rows that MemWal.recall ranked (low distance first).
  * Falls back to keyword rank so Slack never answers outside the invite set.
  */
-export function mergeSemanticVisible(visible, hits, question, maxMemories = 5) {
+export function mergeSemanticVisible(visible, hits, question, maxMemories = 5, memberId = "") {
   const limit = Math.max(1, Math.min(Number(maxMemories) || 5, 20));
   // Invite set first (file-scoped when needed); semantic order is applied next.
   const file = replyFile(visible, question);
@@ -482,7 +483,6 @@ export function mergeSemanticVisible(visible, hits, question, maxMemories = 5) {
     if (file) return rowHasFile(row, file) || text.toLowerCase().includes(file.toLowerCase());
     return rowFileNames(row).length === 0;
   });
-  if (!invite.length) return [];
   const byId = new Map();
   const byText = new Map();
   for (const row of invite) {
@@ -498,10 +498,31 @@ export function mergeSemanticVisible(visible, hits, question, maxMemories = 5) {
     const db = typeof b?.distance === "number" ? b.distance : 1;
     return da - db;
   });
+  const member = String(memberId || "").trim();
   for (const hit of ranked) {
     const id = hit?.decision?.id || hit?.id || "";
-    const text = String(hit?.decision?.text ?? hit?.text ?? "").trim().toLowerCase();
-    const row = (id && byId.get(String(id))) || (text && byText.get(text)) || null;
+    const text = String(hit?.decision?.text ?? hit?.text ?? "").trim();
+    let row = (id && byId.get(String(id))) || (text && byText.get(text.toLowerCase())) || null;
+    // Index is incomplete (mark-topK). Admit a semantic hit when the asker is on its invite.
+    if (!row && member && text && checkInvite(member, hit?.decision?.inviteMemberIds).ok) {
+      if (file) {
+        const names = Array.isArray(hit?.decision?.fileNames) ? hit.decision.fileNames : [];
+        const has = names.some((f) => String(f?.name || f || "").toLowerCase() === file.toLowerCase())
+          || text.toLowerCase().includes(file.toLowerCase());
+        if (!has && names.length) continue;
+      } else if (Array.isArray(hit?.decision?.fileNames) && hit.decision.fileNames.length) {
+        continue;
+      }
+      row = {
+        id: typeof hit?.decision?.id === "string" ? hit.decision.id : id || "",
+        text,
+        roomId: typeof hit?.decision?.roomId === "string" ? hit.decision.roomId : "",
+        spokenAt: typeof hit?.decision?.spokenAt === "string" ? hit.decision.spokenAt : "",
+        speaker: typeof hit?.decision?.speakerMemberId === "string" ? hit.decision.speakerMemberId : "",
+        inviteMemberIds: Array.isArray(hit?.decision?.inviteMemberIds) ? hit.decision.inviteMemberIds : [],
+        fileNames: Array.isArray(hit?.decision?.fileNames) ? hit.decision.fileNames : [],
+      };
+    }
     if (!row) continue;
     const key = row.id || row.text;
     if (seen.has(key)) continue;
@@ -509,6 +530,7 @@ export function mergeSemanticVisible(visible, hits, question, maxMemories = 5) {
     ordered.push(row);
     if (ordered.length >= limit) return ordered;
   }
+  if (!invite.length) return ordered;
   const fallback = recallVisibleForAsk(invite, question, limit);
   for (const row of fallback) {
     const key = row.id || row.text;
