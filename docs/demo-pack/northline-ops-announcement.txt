@@ -1,0 +1,30 @@
+NORTHLINE — OPS ANNOUNCEMENT
+From: Rowan Nguyễn, Head of Product
+To: #ops-hq
+Date: 6 Nov 2026
+Subject: D7 office lock + Nov launch gate (please keep)
+
+Team —
+
+Two decisions are now locked. Treat this thread as the source of truth until someone posts a correction.
+
+1) New HCMC site
+   • District 7, Building B, floors 8–9
+   • Move-in target: Tuesday 2 Dec 2026
+   • Floor 8: lobby, reception, CS overflow
+   • Floor 9: engineering + product
+   • Access badges: Sofia owns the vendor list; cutoff for names is 20 Nov
+
+2) November product launch
+   • Public launch remains Wednesday 18 Nov 2026
+   • Gate: billing migration must be green by Wednesday 12 Nov (Quang)
+   • If the gate misses, we slip once to Tuesday 25 Nov — no soft launch in between
+   • Booth (DevSummit): doors 09:00, badge pickup at the north entrance (Mina)
+
+Attachments in this post:
+  • northline-d7-floor-brief.txt  — layout + move-in checklist
+  • northline-launch-gate.txt     — go / no-go criteria
+
+Adam — please keep this announcement and both attachments for the Northline workspace.
+
+— Rowan

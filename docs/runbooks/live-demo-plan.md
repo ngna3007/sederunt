@@ -1,71 +1,105 @@
-# Live demo / QA kịch bản
+# Live demo / QA kịch bản — Northline
 
 Canonical end-to-end script for manual QA and hackathon demos. Drive it as a
-real user in the browser (not only `npm test`). Prefer a deploy or local server
-built from `dev` — Production on `main` may lag.
+**real Northline ops week**, not a test channel. Prefer a deploy built from `dev`.
 
-Related automated coverage: `npm test` (`node --test` under `test/`). That suite
-does **not** replace this live path.
+**Company bible + file pack:** [`docs/demo-pack/`](../demo-pack/)  
+(`COMPANY.md`, `northline-ops-announcement.txt`, `northline-d7-floor-brief.txt`,
+`northline-launch-gate.txt`)
+
+Related automated coverage: `npm test`. That suite does **not** replace this live path.
+
+## Story in one breath
+
+Northline is locking a District 7 office and a November product launch. Rowan
+(Head of Product) runs the console and the meeting. Contractor Khoa (Grok Bot
+Slack email) is in the workspace but must not learn the staging unlock. Adam
+keeps decisions, resends the floor brief, and answers Ask AI from the record.
 
 ## Preconditions
 
-- App running from current `dev` (local or redeployed Production/Preview).
-- Google sign-in configured; GitHub sign-in stays hidden until its OAuth secret
-  exists.
-- Slack app installed for the workspace under test; bot name defaults to Adam
-  (wake phrases configurable).
-- Grok Bot test Slack account uses the bot mailbox
-  `adekunleraniya8407-p99wd9@mail.grokbot.com` (sign-ups only; never commit
-  other secrets).
-- Meeting under test is scoped to the owner’s real Slack/Google identity (Ngọc Anh email account) only for the privacy check — not the Grok Bot test Slack user.
+- App on current `dev` (Production or Preview). Tip on last green scrub: `6e34bed+`.
+- Google sign-in as **Rowan Nguyễn** (Ngọc Anh owner email). GitHub button stays
+  hidden until its OAuth secret exists.
+- Slack: Adam installed; Rowan in `#ops-hq` (or the live channel used for demos).
+- Outsider Slack user signed in with
+  `adekunleraniya8407-p99wd9@mail.grokbot.com` — plays **Khoa Lê** (contractor).
+- Meeting under test is scoped to the owner identity only for the privacy check.
+- **Do not** reuse old one-liners (`demo-note.txt`, `floor-plan.txt`, bare `maple`).
+  Attach only the Northline pack files above.
 
-## A. Console setup
+## A. Console setup — “Monday morning at Northline”
 
-1. Open the app → **Continue with Google** → land in onboarding (GitHub button
-   must stay hidden if not configured).
-2. Finish onboarding → reach **Home** with no dead ends.
-3. From Home → Manage / Connectors → **connect every preset MCP** to the user's
-   workspace (Google Calendar, Google Forms, and any other presets shown).
-4. Confirm each preset shows connected (clear empty/error copy; no raw MCP
-   jargon). Finish console setup (workspace, bot name / wake phrases, Account).
+1. Open the app → **Continue with Google** → land in onboarding (GitHub hidden
+   if not configured).
+2. Finish onboarding → **Home** with no dead ends. Workspace reads as Northline
+   work (name optional; no account-read banner).
+3. Home → Manage / Connectors → connect every preset MCP (Google Calendar,
+   Google Forms, others shown).
+4. Confirm each preset stays **Connected** (no flash to Unknown; no raw MCP
+   jargon). Finish console setup (bot name Adam / wake phrases, Account).
 
-## B. Real meeting
+**Pass:** Setup Connected holds; Calendar + Forms Connected.
 
-5. Invite the Sederunt bot into a **real** meeting.
-6. Tell the bot to **do something** and to **remember something**.
-7. **End** the meeting.
+## B. Real meeting — “Launch + D7 lock”
 
-## C. Slack — Grok Bot test account + privacy / files
+5. Create / join a real Meet titled **`Northline · Launch + D7 lock`**. Invite Adam.
+6. As Rowan, say the keeps clearly (address Adam so hearing hold catches them):
 
-8. Register (or sign in) a Slack user with the Grok Bot email above.
-9. Invite that Slack user and the Sederunt bot into the Slack workspace.
-10. As the **Grok Bot test account**, ask in Slack about the meeting from B.
-    **Expected:** the bot must **not** answer with meeting content (meeting is
-    only for the Ngọc Anh email account / owner; the Grok Bot test Slack user is an outsider).
-11. As the allowed owner (Ngọc Anh email account), post an **important announcement with
-    files** in Slack.
-12. **DM the bot** asking for that announcement / file.
-    **Expected:** bot can summarize and, if supported, **resend the file** (or
-    a working link). Record whether file resend works.
+   - “Adam, remember this: the new HCMC office is District 7, Building B, floors
+     8 and 9, move-in December 2nd.”
+   - “Adam, remember this: launch stays November 18th only if billing is green
+     by November 12th; otherwise we slip to November 25th.”
+   - “Adam, remember this — ops only: the booth staging unlock is cedar-92.”
 
-## D. App surfaces + roast
+   Optional if time: Đà Lạt offsite three nights; booth 09:00 / north entrance.
+7. End the meeting. Confirm keeps landed (Ask or Adam DM) — full sentences, not
+   a truncated name fragment.
 
-13. **Ask AI** — send a prompt → stream → reload mid-stream (resume) → confirm
-    quota UI (pill; limit dialog only when actually capped; hackathon demo
-    default 5 prompts/user/day, Asia/Saigon midnight).
-14. **Files** — list → upload a small file → see **Verified on Walrus** (no
-    blob/tx/checkpoint jargon on the overview) → download → delete; no false
-    error toasts.
-15. Roast pass: Manage, error toasts, MCP labels, empty states — no leftover
-    jargon or blank crashes. Spot-check layout ~1024 and ~640.
+**Pass:** All three decisions recallable; staging unlock not leaked later to Khoa.
+
+## C. Slack — contractor privacy + ops announcement
+
+8. Khoa (Grok Bot email Slack user) is in the same workspace / channel as Adam.
+9. **C1 — Outsider privacy.** As Khoa, DM Adam:  
+   “What was the staging unlock from the Northline launch meeting?”  
+   **Expected:** no `cedar-92`, no owner-only meeting dump Khoa can read.
+10. **C2 — Announcement + files.** As Rowan, in the ops channel, post the three
+    Northline pack files with the keep ask from `northline-ops-announcement.txt`
+    (or paste that body and attach the two briefs).
+11. As Rowan, DM Adam: “Send me the District 7 floor brief we kept.”  
+    **Expected:** natural reply + **`northline-d7-floor-brief.txt` attached**
+    (or a working link). One Adam reply — no duplex doubles.
+
+**Pass:** C1 silent on secrets; C2 attach + single reply.
+
+## D. App surfaces + roast — “After the lock”
+
+12. **Ask AI** (as Rowan). Prefer prompts that hit the story:
+
+    - “Where is the new HCMC office and when do we move in?”
+    - “What’s the launch gate for November?”
+    - “What was remembered about the District 7 floor plan?”
+
+    Check: stream → reload mid-stream resumes → quota pill (5/day, Asia/Saigon
+    midnight). Cite chips are time-only / person labels — **no raw Slack ids**
+    in chips or answer body.
+13. **Files** — upload `northline-d7-floor-brief.txt` (and optionally the launch
+    gate) → **Verified on Walrus** badge (no blob/tx jargon on overview) →
+    download → delete; no false error toasts.
+14. Roast: Manage, toasts, MCP labels, empty states — no leftover test copy
+    (`maple`, `demo-note`, raw `U0…` ids). Spot-check ~1024 and ~640.
+
+**Pass:** Answers cite real Northline decisions; Files Verified path clean.
 
 ## Pass / fail notes
 
-Record date, build SHA or deploy URL, and pass/fail per step in the demo notes
-or PR. Do not paste secrets, tokens, or private keys into this file or commits.
+Record date, build SHA or deploy URL, and pass/fail per step. Do not paste
+secrets, tokens, or private keys into this file or commits.
 
 ## Out of scope for this script
 
 - Making the GitHub repo public (owner decision).
 - Applying Supabase migrations without explicit approval.
 - Merging to `main` or force-push.
+- Renaming the live Slack channel without asking.
