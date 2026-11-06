@@ -54,7 +54,9 @@ export function stripHearing(text, hearing) {
   }
   if (cut < 0) return raw;
   const after = raw.slice(cut).replace(/^[,:\s-]+/, "").trim();
-  return after || raw;
+  // Address-only ("Maple.") is not a decision. Empty after lets the
+  // meeting door arm a short continuation window for the next chunk.
+  return after;
 }
 
 function triggerMatches(raw, tokens, trigger) {

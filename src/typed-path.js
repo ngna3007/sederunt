@@ -60,10 +60,35 @@ const FILE_NAME = /\b([\w.-]+\.(?:pdf|png|docx|txt|pptx))\b/i;
  *   meeting?: { join(input: unknown): Promise<unknown> },
  * }} deps
  */
+/** Recall often streams the guest name alone, then the rest.
+ * An address-only meeting chunk arms a short hold so the next line still enters.
+ * @type {Map<string, number>}
+ */
+const hearingHolds = new Map();
+const HEARING_HOLD_MS = 15_000;
+
 export async function handleUtterance(input, deps = {}) {
   const session = ensureSession(input.session);
   if (input.openedRoom) return openMeetingRoom(session, deps, input.openedRoom);
   if (!enters(input)) return silence();
+
+  // Address-only ("Maple.") is not a decision. Arm a hold for the next chunk.
+  if (input.door === "meeting") {
+    const roomId = typeof input.room?.id === "string" ? input.room.id.trim() : "";
+    const stripped = withoutAddress(input.text, input.session?.hearing);
+    const addressedNow = input.addressed === true || addressesHearing(input.text, input.session?.hearing);
+    if (addressedNow && !String(stripped).trim()) {
+      if (roomId) {
+        hearingHolds.set(roomId, Date.now() + HEARING_HOLD_MS);
+        session.hearingHold = { roomId, until: Date.now() + HEARING_HOLD_MS };
+      }
+      return silence();
+    }
+    if (roomId) {
+      hearingHolds.delete(roomId);
+      if (session.hearingHold) delete session.hearingHold;
+    }
+  }
 
   const deliveryId = byteTrim(String(input.deliveryId ?? "").trim(), 255);
   session.trace = {
@@ -201,7 +226,12 @@ function ensureSession(session) {
 function enters(input) {
   if (input.door !== "meeting") return true;
   if (input.addressed === true) return true;
-  return addressesHearing(input.text, input.session?.hearing);
+  if (addressesHearing(input.text, input.session?.hearing)) return true;
+  const roomId = typeof input.room?.id === "string" ? input.room.id.trim() : "";
+  if (!roomId) return false;
+  const until = hearingHolds.get(roomId) || input.session?.hearingHold?.until || 0;
+  if (typeof until === "number" && until > Date.now()) return true;
+  return false;
 }
 
 function withoutAddress(text, hearing) {
