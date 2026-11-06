@@ -188,6 +188,7 @@ export async function runAsk(input) {
     const sources = rows.map(sourceOf).filter((row) => row.text);
     if (openRouterConfig(env).enabled) {
       let pending = "";
+      let drafted = "";
       let last = Date.now();
       let wrote = false;
       let chain = Promise.resolve();
@@ -213,13 +214,17 @@ export async function runAsk(input) {
         messages,
         fetchImpl: input.fetchImpl,
         onDelta: async (delta) => {
-          pending += scrubAskIds(delta);
+          const piece = scrubAskIds(delta);
+          pending += piece;
+          drafted += piece;
+          // Hold while the draft is still only the empty-memory sentence (or a
+          // prefix), so grounded fallback can swap in a keep without a flash.
+          const draft = scrubAskIds(humanAskText(drafted));
+          if (NOTHING.startsWith(draft) && draft.length <= NOTHING.length) return;
           if (pending.length >= FLUSH_CHARS || Date.now() - last >= FLUSH_MS) await flush();
         },
       });
-      await flush();
-      await chain;
-      const streamed = scrubAskIds(humanAskText(result.text));
+      const streamed = scrubAskIds(humanAskText(result.text || drafted));
       if (streamed === NOTHING) {
         const grounded = groundedAskAnswer(question, rows);
         if (grounded) {
@@ -229,6 +234,8 @@ export async function runAsk(input) {
           return { source: "retrieval", sources };
         }
       }
+      await flush();
+      await chain;
       // A real answer includes the empty-memory sentence for a decision question.
       // The friendly failure sentence is not an answer, so the daily charge is returned.
       if ((result.used || wrote) && streamed && streamed !== ASK_UNAVAILABLE) {

@@ -6691,7 +6691,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var body = typeof done.result.body === "string" ? done.result.body : "";
       fromResult = humanAskText(learned || body);
     }
-    var said = streamed || fromResult;
+    // Prefer the finished result when the model streamed the empty-memory sentence
+    // but recall already grounded a keep (source retrieval).
+    var emptyMemory = "Nothing kept in this workspace matches that yet.";
+    var said = streamed;
+    if (fromResult && (!said || said === emptyMemory || (done && done.source === "retrieval"))) said = fromResult;
+    else if (!said) said = fromResult;
     var status = done && done.status;
     if (!said) {
       span.textContent = status === "done" ? ASK_FRIENDLY : "The answer stopped. Ask again.";
