@@ -63,6 +63,7 @@ import { slackBotUserIds, slackDelivery, slackEventHasFiles, verifySlackRequest 
 import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded, warmProofs } from "./typed-path.js";
 import { wireCalls } from "./tatum/client.js";
 import { createTenantBind, requiresDurableBind } from "./tenant-bind.js";
+import { slackClaimState } from "./slack/claim.js";
 
 const port = Number(process.env.PORT || 8787);
 
@@ -918,6 +919,17 @@ export function createApp(options = {}) {
       const oauth = identity && gate.session?.kind === "oauth";
       const spaces = oauth ? await loadSpaceView(identity, gate.session) : null;
       const connectedDoors = oauth ? doorReport(env, workspace.linearReady === true) : null;
+      // Slack "connected" for Home/checklist: verified tenant ownership, not env token doors alone.
+      // Fake-tools demo keeps door+metadata behavior via toolsConnected inside loadToolAsk.
+      if (connectedDoors && spaces?.activeId && workspace.tenantBind && env.SEDERUNT_TOOLS_FAKE !== "1") {
+        const claim = await slackClaimState({
+          tenantBind: workspace.tenantBind,
+          slack: workspace.deps.slack,
+          channelId: workspace.deps.app?.slackChannel || "",
+          slackConfigured: connectedDoors.slack === true,
+        }, spaces.activeId);
+        connectedDoors.slack = claim.linked === true;
+      }
       const accountProfile = oauth ? await loadAccountProfile(identity, gate.session, spaces) : null;
       const toolAsk = oauth ? await loadToolAsk(identity, gate.session, connectedDoors || {}, env) : null;
       const checklist = oauth && url.pathname === "/console" ? await loadChecklist(identity, gate.session, spaces, toolAsk) : null;
@@ -943,7 +955,7 @@ export function createApp(options = {}) {
               : "Check that SEDERUNT_PUBLIC_ORIGIN is a public https address, then restart.",
         calendarConnected: doors.calendar === true,
         linearConnected: doors.linear === true,
-        slackConnected: doors.slack === true,
+        slackConnected: (connectedDoors || doors).slack === true,
         slackReady: Boolean(env.SLACK_SIGNING_SECRET && env.SLACK_BOT_TOKEN),
         signedIn: Boolean(gate.session),
         signInOff: !consoleSecret(env) && !identity,
@@ -1107,7 +1119,21 @@ export function createApp(options = {}) {
               });
               if (!bound?.ok || (requiresDurableBind(env) && !bound.durable)) {
                 status = "failed";
-                return { join: status, reason: bound?.conflict ? "bind-conflict" : "bind-failed", botId };
+                let left = false;
+                if (typeof deps.meeting?.leave === "function") {
+                  try {
+                    const cleaned = await deps.meeting.leave(botId);
+                    left = cleaned?.ok === true;
+                  } catch {
+                    left = false;
+                  }
+                }
+                return {
+                  join: status,
+                  reason: bound?.conflict ? "bind-conflict" : "bind-failed",
+                  botId,
+                  left,
+                };
               }
               status = "sent";
             } else {
@@ -1137,7 +1163,11 @@ export function createApp(options = {}) {
       pending.set(flightKey, work);
       try {
         const result = await work;
-        send(res, 200, "application/json; charset=utf-8", JSON.stringify({ join: result.join, reason: result.reason || undefined }));
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify({
+          join: result.join,
+          reason: result.reason || undefined,
+          left: result.left === true ? true : undefined,
+        }));
       } finally {
         setTimeout(() => {
           if (pending.get(flightKey) === work) pending.delete(flightKey);
@@ -1168,6 +1198,11 @@ export function createApp(options = {}) {
             }
             const botId = typeof delivery.room?.id === "string" ? delivery.room.id : "";
             const companyId = await resolveBoundTenant(workspace, { botId });
+            // Race: join bound after Recall fires — ask provider to retry; never ingest unbound.
+            if (!companyId && identityConfigured(env) && requiresDurableBind(env)) {
+              send(res, 503, "text/plain; charset=utf-8", "bind-pending");
+              return;
+            }
             // Unbound production memory fails closed (empty tenant + no allowUnscoped).
             const current = await prepareWorkspace(workspace, companyId);
             await handleUtterance({ ...delivery, session: current }, depsFor(workspace, companyId));
@@ -1175,6 +1210,10 @@ export function createApp(options = {}) {
           const ended = meetingEnded(payload);
           if (ended?.roomId) {
             const companyId = await resolveBoundTenant(workspace, { botId: ended.roomId });
+            if (!companyId && identityConfigured(env) && requiresDurableBind(env)) {
+              send(res, 503, "text/plain; charset=utf-8", "bind-pending");
+              return;
+            }
             const current = await prepareWorkspace(workspace, companyId);
             await endMeeting(current, depsFor(workspace, companyId), ended.roomId);
           }
@@ -2285,7 +2324,13 @@ async function resolveBoundTenant(workspace, { botId = "", teamId = "", channelI
   const channel = String(channelId || "").trim();
   if (team && channel) {
     const fromChannel = await bind.resolve("slack", `${team}:${channel}`);
-    if (fromChannel) return fromChannel;
+    const fromTeam = await bind.resolve("slack", team);
+    // Split-brain (channel owner ≠ team owner) or orphan channel under foreign team → fail closed.
+    if (fromChannel) {
+      if (fromTeam && fromTeam !== fromChannel) return "";
+      if (!fromTeam) return ""; // channel without authoritative team ownership
+      return fromChannel;
+    }
   }
   if (team) {
     const fromTeam = await bind.resolve("slack", team);

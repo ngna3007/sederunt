@@ -1,17 +1,18 @@
 /**
- * Durable botId / Slack team+channel → tenant bindings for company memory.
+ * Durable botId / Slack team(+channel) → tenant bindings for company memory.
  * Uses the same Redis/Upstash credentials as Ask when configured so another
- * isolate can resolve a join/Recall/Slack callback. Bindings are authorization
- * for provider callbacks only — never a substitute for membership checks.
+ * isolate can resolve a join/Recall/Slack callback.
  *
  * Ownership is first-writer-wins (SET NX). Same-tenant refresh renews TTL.
  * A different tenant conflict fails closed without overwriting.
+ * Slack connection keys are long-lived; meeting bot keys keep a short TTL.
  */
 
 import { askBackend, restConfig } from "./ask/store.js";
 
 const PREFIX = "sederunt:tenant-bind";
-const DEFAULT_TTL_SEC = 60 * 60 * 24 * 14; // 14 days
+const BOT_TTL_SEC = 60 * 60 * 24 * 14; // 14 days — ephemeral meeting bots
+const SLACK_TTL_SEC = 60 * 60 * 24 * 365; // 1 year — connection ownership; refreshed on claim
 
 /**
  * @param {"bot" | "slack"} kind
@@ -26,11 +27,20 @@ export function bindKey(kind, id) {
 }
 
 /**
- * True when callbacks may land on another isolate — local Map alone is not enough.
  * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
  */
 export function requiresDurableBind(env = process.env) {
   return askBackend(env) !== "memory";
+}
+
+/**
+ * @param {"bot" | "slack"} kind
+ * @param {number} defaultTtl
+ */
+function ttlFor(kind, defaultTtl) {
+  if (kind === "slack") return SLACK_TTL_SEC;
+  if (kind === "bot") return BOT_TTL_SEC;
+  return defaultTtl;
 }
 
 /**
@@ -39,17 +49,17 @@ export function requiresDurableBind(env = process.env) {
  *   fetchImpl?: typeof fetch,
  *   memory?: Map<string, string>,
  *   ttlSec?: number,
- *   /** test double for remote SET/GET *\/
  *   remote?: {
  *     get: (key: string) => Promise<string>,
  *     setNx: (key: string, value: string, ttlSec: number) => Promise<"ok" | "conflict" | "error">,
  *     expire: (key: string, ttlSec: number) => Promise<boolean>,
+ *     compareAndDelete?: (key: string, value: string) => Promise<boolean>,
  *   },
  * }} [options]
  */
 export function createTenantBind(env = process.env, options = {}) {
   const memory = options.memory || new Map();
-  const ttlSec = Number.isFinite(options.ttlSec) ? Math.max(60, Number(options.ttlSec)) : DEFAULT_TTL_SEC;
+  const defaultTtl = Number.isFinite(options.ttlSec) ? Math.max(60, Number(options.ttlSec)) : BOT_TTL_SEC;
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   const backend = askBackend(env);
   const injected = options.remote || null;
@@ -84,14 +94,15 @@ export function createTenantBind(env = process.env, options = {}) {
   }
 
   /**
+   * Strict protocol: only Redis "OK" counts as NX success. Null/empty = conflict.
+   * Any other non-null result is treated as error (never silently ok).
    * @returns {Promise<"ok" | "conflict" | "error">}
    */
-  async function setNxRemote(key, tenantId) {
+  async function setNxRemote(key, tenantId, ttlSec) {
     if (injected) return injected.setNx(key, tenantId, ttlSec);
     if (backend === "rest") {
       const config = restConfig(env);
       if (!config) return "error";
-      // Upstash REST: SET key value NX EX ttl — pipeline keeps protocol honest.
       const response = await fetchImpl(`${config.url}/pipeline`, {
         method: "POST",
         headers: {
@@ -103,11 +114,11 @@ export function createTenantBind(env = process.env, options = {}) {
       if (!response.ok) return "error";
       const rows = await response.json().catch(() => null);
       const row = Array.isArray(rows) ? rows[0] : null;
-      if (row?.error) return "error";
-      // NX miss returns null/empty result; hit returns "OK".
-      if (row?.result === "OK" || row?.result === true) return "ok";
-      if (row?.result == null || row?.result === "") return "conflict";
-      return "ok";
+      if (!row || row.error) return "error";
+      if (row.result === "OK") return "ok";
+      if (row.result == null || row.result === "") return "conflict";
+      // Unexpected payload (e.g. true/"1") — fail closed, do not accept as success.
+      return "error";
     }
     if (backend === "redis") {
       const url = String(env.REDIS_URL || env.KV_URL || "").trim();
@@ -127,10 +138,10 @@ export function createTenantBind(env = process.env, options = {}) {
         return "error";
       }
     }
-    return "ok"; // memory-only: caller applies Map NX
+    return "ok";
   }
 
-  async function expireRemote(key) {
+  async function expireRemote(key, ttlSec) {
     if (injected) return injected.expire(key, ttlSec);
     if (backend === "rest") {
       const config = restConfig(env);
@@ -169,23 +180,79 @@ export function createTenantBind(env = process.env, options = {}) {
     return true;
   }
 
+  /**
+   * Delete only when the stored value still equals tenantId (never clobber another owner).
+   */
+  async function compareAndDeleteRemote(key, tenantId) {
+    if (injected) {
+      if (typeof injected.compareAndDelete === "function") {
+        return injected.compareAndDelete(key, tenantId);
+      }
+      // Without an atomic compare-and-delete, refuse rather than risk deleting another owner.
+      return false;
+    }
+    if (backend === "rest") {
+      const config = restConfig(env);
+      if (!config) return false;
+      // Lua: delete iff value matches — atomic vs a concurrent NX claim.
+      const response = await fetchImpl(`${config.url}/pipeline`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${config.token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify([[
+          "EVAL",
+          "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end",
+          "1",
+          key,
+          tenantId,
+        ]]),
+      });
+      if (!response.ok) return false;
+      const rows = await response.json().catch(() => null);
+      const row = Array.isArray(rows) ? rows[0] : null;
+      if (row?.error) return false;
+      return Number(row?.result) > 0;
+    }
+    if (backend === "redis") {
+      const url = String(env.REDIS_URL || env.KV_URL || "").trim();
+      if (!url) return false;
+      try {
+        const { createClient } = await import("redis");
+        const client = createClient({ url, socket: { connectTimeout: 3000 } });
+        client.on("error", () => {});
+        await client.connect();
+        try {
+          const script = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end";
+          const result = await client.eval(script, { keys: [key], arguments: [tenantId] });
+          return Number(result) > 0;
+        } finally {
+          await client.quit().catch(() => {});
+        }
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+
   return {
     memory,
     backend,
     requiresDurable: backend !== "memory",
     /**
-     * Claim ownership. First writer wins. Same tenant refreshes TTL only.
      * @param {"bot" | "slack"} kind
-     * @param {string} id team, team:channel, or bot id
+     * @param {string} id
      * @param {string} tenantId
      * @param {{ requireRemote?: boolean }} [opts]
-     * @returns {Promise<{ ok: boolean, durable: boolean, conflict?: boolean, created?: boolean, owner?: string, reason?: string }>}
      */
     async bind(kind, id, tenantId, opts = {}) {
       const key = bindKey(kind, id);
       const tenant = String(tenantId || "").trim();
       if (!key || !tenant) return { ok: false, durable: false, reason: "missing" };
       const requireRemote = opts.requireRemote === true || backend !== "memory";
+      const ttlSec = ttlFor(kind, defaultTtl);
 
       let remoteOwner = "";
       if (backend !== "memory" || injected) {
@@ -203,16 +270,14 @@ export function createTenantBind(env = process.env, options = {}) {
       }
 
       if (owner === tenant) {
-        // Same-owner refresh — never overwrite with a different value.
         if (backend !== "memory" || injected) {
-          const renewed = await expireRemote(key);
+          const renewed = await expireRemote(key, ttlSec);
           if (requireRemote && !renewed) return { ok: false, durable: false, reason: "remote-expire", owner };
         }
         memory.set(key, tenant);
         return { ok: true, durable: requireRemote || backend !== "memory", created: false, owner: tenant };
       }
 
-      // First writer.
       if (backend === "memory" && !injected) {
         if (memory.has(key) && memory.get(key) !== tenant) {
           return { ok: false, durable: false, conflict: true, owner: memory.get(key) };
@@ -221,10 +286,8 @@ export function createTenantBind(env = process.env, options = {}) {
         return { ok: true, durable: false, created: true };
       }
 
-      const set = await setNxRemote(key, tenant);
-      if (set === "error") {
-        return { ok: false, durable: false, reason: "remote-write" };
-      }
+      const set = await setNxRemote(key, tenant, ttlSec);
+      if (set === "error") return { ok: false, durable: false, reason: "remote-write" };
       if (set === "conflict") {
         let won = "";
         try { won = await readRemote(key); } catch { /* ignore */ }
@@ -236,6 +299,35 @@ export function createTenantBind(env = process.env, options = {}) {
       }
       memory.set(key, tenant);
       return { ok: true, durable: true, created: true };
+    },
+
+    /**
+     * Release a key only if we still own it. Safe rollback after a partial claim.
+     * @param {"bot" | "slack"} kind
+     * @param {string} id
+     * @param {string} tenantId
+     */
+    async release(kind, id, tenantId) {
+      const key = bindKey(kind, id);
+      const tenant = String(tenantId || "").trim();
+      if (!key || !tenant) return { ok: false, reason: "missing" };
+      if (backend === "memory" && !injected) {
+        if (memory.get(key) !== tenant) return { ok: false, reason: "not-owner", owner: memory.get(key) || "" };
+        memory.delete(key);
+        return { ok: true };
+      }
+      const deleted = await compareAndDeleteRemote(key, tenant);
+      if (deleted) {
+        if (memory.get(key) === tenant) memory.delete(key);
+        return { ok: true };
+      }
+      const owner = memory.get(key) || "";
+      try {
+        const remote = await readRemote(key);
+        if (remote && remote !== tenant) return { ok: false, reason: "not-owner", owner: remote };
+      } catch { /* ignore */ }
+      if (owner === tenant) memory.delete(key);
+      return { ok: false, reason: "not-owner", owner };
     },
 
     /**
@@ -253,10 +345,8 @@ export function createTenantBind(env = process.env, options = {}) {
             return remote;
           }
         } catch {
-          // Fall through to local only when remote is optional.
           if (backend !== "memory" || injected) {
-            const local = memory.get(key);
-            return local || "";
+            return memory.get(key) || "";
           }
         }
       }

@@ -517,7 +517,10 @@ test("welcome shows the slack channel name, not a channel id", async () => {
     };
     const identity = createIdentity(env);
     const deps = defaultDeps({ env });
-    deps.slack = { async channelLabel() { return label; } };
+    deps.slack = {
+      async channelLabel() { return label; },
+      async authTest() { return { ok: true, teamId: "T0DEMO", teamName: "Demo" }; },
+    };
     const app = createApp({ companyLoaded: true, env, identity, deps });
     const port = await listen(app);
     try {
@@ -529,6 +532,10 @@ test("welcome shows the slack channel name, not a channel id", async () => {
       const created = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=create&name=Channel+Check" });
       assert.equal(created.status, 302);
       absorb(jar, created.cookie);
+      // Honest Connected status requires verified ownership claim (not env doors alone).
+      const connected = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=chat&choice=connect" });
+      assert.equal(connected.status, 302);
+      absorb(jar, connected.cookie);
       return await call(port, "GET", "/console/welcome?step=chat", { cookie: header(jar) });
     } finally {
       app.close();
@@ -536,10 +543,12 @@ test("welcome shows the slack channel name, not a channel id", async () => {
   }
   const named = await chatPage("sederunt-demo");
   assert.equal(named.status, 200);
+  assert.match(named.raw, /id="slack-status">[\s\S]*?Connected/);
   assert.match(named.raw, /Posts to #sederunt-demo/);
   assert.doesNotMatch(named.raw, /#C0DEMO/);
   const blank = await chatPage("");
   assert.equal(blank.status, 200);
+  assert.match(blank.raw, /id="slack-status">[\s\S]*?Connected/);
   assert.match(blank.raw, /Recaps, decisions and action items/);
   assert.doesNotMatch(blank.raw, /#C0DEMO|Posts to #/);
 });

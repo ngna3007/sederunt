@@ -28,7 +28,7 @@ import {
   visibleSpaces,
   workDomain,
 } from "./identity/onboarding.js";
-import { claimWorkspaceSlack } from "./slack/claim.js";
+import { claimWorkspaceSlack, slackClaimState } from "./slack/claim.js";
 import { requiresDurableBind } from "./tenant-bind.js";
 
 const TENANT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -205,16 +205,35 @@ async function renderStep(ctx, session, active, step, extra = {}) {
     return;
   }
   if (step === "chat") {
+    // Honest connection status: verified ownership for this tenant, not env door flags alone.
+    // Fake-tools demo still uses live.slack so the photographed journey stays green.
+    let slackLinked = live.slack;
+    let conflictOwner = "";
+    if (!fakeToolsOn(env) && active?.id && ctx.tenantBind) {
+      const claim = await slackClaimState({
+        tenantBind: ctx.tenantBind,
+        slack: ctx.slack,
+        channelId: ctx.slackChannel || "",
+        slackConfigured: doors.slack === true,
+      }, active.id);
+      slackLinked = claim.linked === true;
+      conflictOwner = claim.conflictOwner || "";
+    }
+    const noticeParts = [];
+    if (extra.asked || (!slackLinked && prefs.slack === "connect")) {
+      noticeParts.push("Slack connects for the whole workspace in Setup → Tools. Your choice is saved, so Home will remind you.");
+    }
+    if (conflictOwner) {
+      noticeParts.push("This Slack workspace is already linked to another Sederunt workspace.");
+    }
     sendWelcome(ctx, 200, {
       step,
       error: extra.error || "",
-      notice: extra.asked || (!live.slack && prefs.slack === "connect")
-        ? "Slack connects for the whole workspace in Setup → Tools. Your choice is saved, so Home will remind you."
-        : "",
+      notice: noticeParts.join(" "),
       chat: {
-        slack: live.slack,
-        channel: live.slack ? await slackChannelLabel(ctx, ctx.slackChannel || (doors.slack ? "" : "sederunt")) : "",
-        asked: !live.slack && prefs.slack === "connect",
+        slack: slackLinked,
+        channel: slackLinked ? await slackChannelLabel(ctx, ctx.slackChannel || (doors.slack ? "" : "sederunt")) : "",
+        asked: !slackLinked && prefs.slack === "connect",
       },
     });
     return;
@@ -469,6 +488,17 @@ async function chooseTool(ctx, session, active, tool, body) {
       return;
     }
     if (choice === "connect") {
+      // Shared Slack install (auth.test → deployment bot team): only owner/admin may claim.
+      // Fake-tools demo still goes through this handler so the HTTP path is gated too.
+      if (tool === "slack") {
+        const role = String(active?.role || "");
+        if (role !== "owner" && role !== "admin") {
+          await renderStep(ctx, session, active, here, {
+            error: "Only an owner or admin can connect Slack for this workspace.",
+          });
+          return;
+        }
+      }
       await saveToolChoice(identity, session, tool, "connect");
       if (fakeToolsOn(env)) {
         const user = await identity.getUser(session.accessToken);

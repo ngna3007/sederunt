@@ -112,6 +112,33 @@ export function createMeetingAdapter(env = process.env, options = {}) {
       if (!id || text.includes(key)) throw new Error("Meeting join failed");
       return { id };
     },
+    /**
+     * Documented Recall remove-from-call:
+     * POST /api/v1/bot/{id}/leave_call/ (ap-northeast-1 same host as create).
+     * Used when durable tenant bind fails after join so the bot does not keep listening.
+     */
+    async leave(botId) {
+      calls.push("leave");
+      const key = typeof env.RECALL_API_KEY === "string" ? env.RECALL_API_KEY : "";
+      const id = typeof botId === "string" ? botId.trim() : "";
+      if (!key || !id) return { ok: false, reason: "missing" };
+      let response;
+      try {
+        response = await fetchImpl(`${BOT_URL}${encodeURIComponent(id)}/leave_call/`, {
+          method: "POST",
+          headers: {
+            authorization: `Token ${key}`,
+            accept: "application/json",
+          },
+        });
+      } catch {
+        return { ok: false, reason: "network" };
+      }
+      if (response.ok || response.status === 200) return { ok: true };
+      // Already left / unknown — treat as cleaned enough for fail-closed bind.
+      if (response.status === 404 || response.status === 400) return { ok: true, reason: "absent" };
+      return { ok: false, reason: `http-${response.status}` };
+    },
   };
 }
 

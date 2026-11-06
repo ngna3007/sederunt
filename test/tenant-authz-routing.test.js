@@ -5,7 +5,7 @@ import { request } from "node:http";
 import test from "node:test";
 import { CONSOLE_COOKIE, sealSession } from "../src/console-auth.js";
 import { CALENDAR_SCOPES, FORMS_SCOPES, createPersonGoogleStore } from "../src/connectors/google-person.js";
-import { claimWorkspaceSlack } from "../src/slack/claim.js";
+import { claimWorkspaceSlack, slackClaimState } from "../src/slack/claim.js";
 import { createTenantBind } from "../src/tenant-bind.js";
 import { createApp } from "../src/server.js";
 
@@ -68,6 +68,10 @@ function identityFor(memberships) {
         role: row.role || "owner",
       }));
     },
+    async getUser() {
+      return { user_metadata: {} };
+    },
+    async updateUser() {},
   };
 }
 
@@ -109,7 +113,7 @@ function call(port, method, path, body, headers = {}) {
         const raw = Buffer.concat(chunks).toString("utf8");
         let json = null;
         try { json = JSON.parse(raw); } catch { /* plain */ }
-        resolve({ status: res.statusCode, raw, json, headers: res.headers });
+        resolve({ status: res.statusCode, raw, json, headers: res.headers, location: res.headers.location || "" });
       });
     });
     req.on("error", reject);
@@ -601,6 +605,11 @@ test("join reports failed when durable bot bind cannot be acknowledged", async (
     { UPSTASH_REDIS_REST_URL: "https://x", UPSTASH_REDIS_REST_TOKEN: "t" },
     { memory: new Map(), remote },
   );
+  const meeting = {
+    left: [],
+    async join() { return { id: "bot-no-bind" }; },
+    async leave(id) { this.left.push(id); return { ok: true }; },
+  };
   const app = createApp({
     companyLoaded: true,
     linearReady: true,
@@ -620,7 +629,7 @@ test("join reports failed when durable bot bind cannot be acknowledged", async (
     tenantBind: binds,
     deps: {
       memory: trackingMemory(),
-      meeting: { async join() { return { id: "bot-no-bind" }; } },
+      meeting,
       tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
     },
   });
@@ -632,4 +641,320 @@ test("join reports failed when durable bot bind cannot be acknowledged", async (
   assert.equal(join.status, 200);
   assert.equal(join.json?.join, "failed");
   assert.equal(join.json?.reason, "bind-failed");
+  assert.equal(join.json?.left, true);
+  assert.deepEqual(meeting.left, ["bot-no-bind"]);
+});
+
+test("team-first claim rolls back leftover channel; rejected tenant owns nothing", async () => {
+  const store = new Map();
+  const remote = {
+    async get(key) { return store.get(key) || ""; },
+    async setNx(key, value) {
+      if (store.has(key)) return "conflict";
+      store.set(key, value);
+      return "ok";
+    },
+    async expire(key) { return store.has(key); },
+    async compareAndDelete(key, value) {
+      if (store.get(key) !== value) return false;
+      store.delete(key);
+      return true;
+    },
+  };
+  const env = { UPSTASH_REDIS_REST_URL: "https://x", UPSTASH_REDIS_REST_TOKEN: "t" };
+  const binds = createTenantBind(env, { memory: new Map(), remote });
+  const slack = { async authTest() { return { ok: true, teamId: "T_ORPHAN", teamName: "Orphan" }; } };
+
+  // Case 1: A owns team-only; B claims team+C_DEFAULT → fail; no channel leftover for B
+  assert.equal((await binds.bind("slack", "T_ORPHAN", TENANT_A)).ok, true);
+  const bDefault = await claimWorkspaceSlack({
+    tenantBind: binds, slack, channelId: "C_DEFAULT", requireRemote: true,
+  }, TENANT_B);
+  assert.equal(bDefault.ok, false);
+  assert.equal(bDefault.conflict, true);
+  assert.equal(await binds.resolve("slack", "T_ORPHAN"), TENANT_A);
+  assert.equal(await binds.resolve("slack", "T_ORPHAN:C_DEFAULT"), "");
+
+  // Case 2: A owns team+C1; B claims C2 → fail; C2 not left owned by B
+  assert.equal((await binds.bind("slack", "T_ORPHAN:C1", TENANT_A)).ok, true);
+  const bC2 = await claimWorkspaceSlack({
+    tenantBind: binds,
+    slack: { async authTest() { return { ok: true, teamId: "T_ORPHAN", teamName: "Orphan" }; } },
+    channelId: "C2",
+    requireRemote: true,
+  }, TENANT_B);
+  assert.equal(bC2.ok, false);
+  assert.equal(await binds.resolve("slack", "T_ORPHAN:C2"), "");
+  assert.equal(await binds.resolve("slack", "T_ORPHAN:C1"), TENANT_A);
+});
+
+test("channel claim failure rolls back only our new team key; never another owner", async () => {
+  const store = new Map();
+  let failChannel = false;
+  const remote = {
+    async get(key) { return store.get(key) || ""; },
+    async setNx(key, value) {
+      // Channel keys look like ...:slack:TEAM:CHANNEL (two more segments after slack)
+      const parts = String(key).split(":");
+      const isChannel = parts.length >= 5;
+      if (failChannel && isChannel) return "error";
+      if (store.has(key)) return "conflict";
+      store.set(key, value);
+      return "ok";
+    },
+    async expire(key) { return store.has(key); },
+    async compareAndDelete(key, value) {
+      if (store.get(key) !== value) return false;
+      store.delete(key);
+      return true;
+    },
+  };
+  const env = { UPSTASH_REDIS_REST_URL: "https://x", UPSTASH_REDIS_REST_TOKEN: "t" };
+  const binds = createTenantBind(env, { memory: new Map(), remote });
+
+  // B creates team then channel write fails → team rolled back
+  failChannel = true;
+  const failed = await claimWorkspaceSlack({
+    tenantBind: binds,
+    teamId: "T_ROLL",
+    channelId: "C_NEW",
+    requireRemote: true,
+  }, TENANT_B);
+  assert.equal(failed.ok, false);
+  assert.equal(failed.rolledBackTeam, true);
+  assert.equal(await binds.resolve("slack", "T_ROLL"), "");
+  assert.equal(await binds.resolve("slack", "T_ROLL:C_NEW"), "");
+
+  // A successfully claims team; B channel-only attempt that somehow created team earlier must not delete A
+  failChannel = false;
+  assert.equal((await claimWorkspaceSlack({
+    tenantBind: binds, teamId: "T_ROLL", channelId: "C_A", requireRemote: true,
+  }, TENANT_A)).ok, true);
+
+  // Simulate B holding a stale "createdTeam" path: release with B must not wipe A
+  assert.equal((await binds.release("slack", "T_ROLL", TENANT_B)).ok, false);
+  assert.equal(await binds.resolve("slack", "T_ROLL"), TENANT_A);
+});
+
+test("split-brain / mismatched keysets fail closed for routing and claim state", async (t) => {
+  const store = new Map();
+  const remote = {
+    async get(key) { return store.get(key) || ""; },
+    async setNx(key, value) {
+      if (store.has(key)) return "conflict";
+      store.set(key, value);
+      return "ok";
+    },
+    async expire(key) { return store.has(key); },
+    async compareAndDelete(key, value) {
+      if (store.get(key) !== value) return false;
+      store.delete(key);
+      return true;
+    },
+  };
+  const envBind = { UPSTASH_REDIS_REST_URL: "https://x", UPSTASH_REDIS_REST_TOKEN: "t" };
+  const binds = createTenantBind(envBind, { memory: new Map(), remote });
+  // Legacy team-only A + orphan channel leftover as B
+  await binds.bind("slack", "T_SPLIT", TENANT_A);
+  store.set("sederunt:tenant-bind:slack:T_SPLIT:C_LEFT", TENANT_B);
+
+  const stateB = await slackClaimState({
+    tenantBind: binds, teamId: "T_SPLIT", channelId: "C_LEFT", slackConfigured: true,
+  }, TENANT_B);
+  assert.equal(stateB.linked, false);
+  assert.equal(stateB.splitBrain === true || Boolean(stateB.conflictOwner), true);
+
+  const memory = trackingMemory();
+  const app = createApp({
+    companyLoaded: true,
+    env: identityEnv({
+      SLACK_SIGNING_SECRET: SLACK_SECRET,
+      SLACK_BOT_TOKEN: "xoxb-test",
+      UPSTASH_REDIS_REST_URL: "https://x",
+      UPSTASH_REDIS_REST_TOKEN: "t",
+    }),
+    identity: identityFor([{ id: TENANT_B }]),
+    tenantBind: binds,
+    deps: {
+      memory,
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+      slack: {
+        async postMessage() {},
+        async members() { return ["U1"]; },
+        async authTest() { return { ok: true, teamId: "T_SPLIT", teamName: "Split" }; },
+      },
+    },
+  });
+  const port = await listen(app);
+  t.after(() => app.close());
+
+  const payload = JSON.stringify({
+    type: "event_callback",
+    team_id: "T_SPLIT",
+    event: { type: "message", user: "U1", channel: "C_LEFT", text: "Should not land for B", client_msg_id: "split-1" },
+  });
+  await call(port, "POST", "/api/slack", payload, signSlack(payload));
+  assert.equal(memory.remembered.length, 0);
+
+  // Legacy team-only routes to A when no channel key
+  const binds2 = createTenantBind(envBind, { memory: new Map(), remote });
+  await binds2.bind("slack", "T_LEGACY", TENANT_A);
+  const memory2 = trackingMemory();
+  const app2 = createApp({
+    companyLoaded: true,
+    env: identityEnv({ SLACK_SIGNING_SECRET: SLACK_SECRET, SLACK_BOT_TOKEN: "xoxb-test" }),
+    identity: identityFor([{ id: TENANT_A }]),
+    tenantBind: binds2,
+    deps: {
+      memory: memory2,
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+      slack: { async postMessage() {}, async members() { return ["U1"]; } },
+    },
+  });
+  const port2 = await listen(app2);
+  t.after(() => app2.close());
+  const legacy = JSON.stringify({
+    type: "event_callback",
+    team_id: "T_LEGACY",
+    event: { type: "message", user: "U1", channel: "C_ANY", text: "Legacy team only for A", client_msg_id: "leg-1" },
+  });
+  await call(port2, "POST", "/api/slack", legacy, signSlack(legacy));
+  assert.equal(memory2.remembered.length >= 1, true);
+  assert.equal(memory2.remembered.at(-1).tenantId, TENANT_A);
+});
+
+test("welcome Connect Slack HTTP path requires owner/admin; member rejected", async (t) => {
+  const store = new Map();
+  const remote = {
+    async get(key) { return store.get(key) || ""; },
+    async setNx(key, value) {
+      if (store.has(key)) return "conflict";
+      store.set(key, value);
+      return "ok";
+    },
+    async expire(key) { return store.has(key); },
+    async compareAndDelete(key, value) {
+      if (store.get(key) !== value) return false;
+      store.delete(key);
+      return true;
+    },
+  };
+  const binds = createTenantBind(
+    { UPSTASH_REDIS_REST_URL: "https://x", UPSTASH_REDIS_REST_TOKEN: "t" },
+    { memory: new Map(), remote },
+  );
+  const app = createApp({
+    companyLoaded: true,
+    env: identityEnv({
+      SLACK_SIGNING_SECRET: SLACK_SECRET,
+      SLACK_BOT_TOKEN: "xoxb-test",
+      SLACK_DEFAULT_CHANNEL: "C1",
+      UPSTASH_REDIS_REST_URL: "https://x",
+      UPSTASH_REDIS_REST_TOKEN: "t",
+    }),
+    identity: identityFor([{ id: TENANT_A, role: "member" }]),
+    tenantBind: binds,
+    deps: {
+      memory: trackingMemory(),
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+      slack: {
+        async postMessage() {},
+        async members() { return ["U1"]; },
+        async authTest() { return { ok: true, teamId: "T_WELCOME", teamName: "Welcome" }; },
+      },
+    },
+  });
+  const port = await listen(app);
+  t.after(() => app.close());
+  const denied = await call(port, "POST", "/console/welcome", "action=chat&choice=connect", {
+    cookie: oauthCookie({ tenantId: TENANT_A }),
+    "content-type": "application/x-www-form-urlencoded",
+  });
+  assert.equal(denied.status, 200);
+  assert.match(denied.raw, /Only an owner or admin can connect Slack/);
+  assert.equal(await binds.resolve("slack", "T_WELCOME"), "");
+  assert.equal(await binds.resolve("slack", "T_WELCOME:C1"), "");
+
+  // Owner path succeeds via same HTTP handler
+  const ownerApp = createApp({
+    companyLoaded: true,
+    env: identityEnv({
+      SLACK_SIGNING_SECRET: SLACK_SECRET,
+      SLACK_BOT_TOKEN: "xoxb-test",
+      SLACK_DEFAULT_CHANNEL: "C1",
+      UPSTASH_REDIS_REST_URL: "https://x",
+      UPSTASH_REDIS_REST_TOKEN: "t",
+    }),
+    identity: identityFor([{ id: TENANT_A, role: "owner" }]),
+    tenantBind: binds,
+    deps: {
+      memory: trackingMemory(),
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+      slack: {
+        async postMessage() {},
+        async members() { return ["U1"]; },
+        async authTest() { return { ok: true, teamId: "T_WELCOME", teamName: "Welcome" }; },
+      },
+    },
+  });
+  const portOwner = await listen(ownerApp);
+  t.after(() => ownerApp.close());
+  const ok = await call(portOwner, "POST", "/console/welcome", "action=chat&choice=connect", {
+    cookie: oauthCookie({ tenantId: TENANT_A }),
+    "content-type": "application/x-www-form-urlencoded",
+  });
+  assert.equal(ok.status, 302);
+  assert.equal(await binds.resolve("slack", "T_WELCOME"), TENANT_A);
+  assert.equal(await binds.resolve("slack", "T_WELCOME:C1"), TENANT_A);
+
+  const chat = await call(portOwner, "GET", "/console/welcome?step=chat", null, {
+    cookie: oauthCookie({ tenantId: TENANT_A }),
+  });
+  assert.match(chat.raw, /id="slack-status">[\s\S]*?Connected/);
+});
+
+test("unbound early Recall callback is retryable and does not ingest", async (t) => {
+  const memory = trackingMemory();
+  const binds = createTenantBind(
+    { UPSTASH_REDIS_REST_URL: "https://x", UPSTASH_REDIS_REST_TOKEN: "t" },
+    {
+      memory: new Map(),
+      remote: {
+        async get() { return ""; },
+        async setNx() { return "ok"; },
+        async expire() { return true; },
+        async compareAndDelete() { return true; },
+      },
+    },
+  );
+  const app = createApp({
+    companyLoaded: true,
+    env: identityEnv({
+      RECALL_WEBHOOK_SECRET: RECALL_SECRET,
+      UPSTASH_REDIS_REST_URL: "https://x",
+      UPSTASH_REDIS_REST_TOKEN: "t",
+    }),
+    identity: identityFor([{ id: TENANT_A }]),
+    tenantBind: binds,
+    deps: {
+      memory,
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+    },
+  });
+  const port = await listen(app);
+  t.after(() => app.close());
+  const payload = JSON.stringify({
+    event: "transcript.data",
+    data: {
+      bot: { id: "bot-early-1" },
+      transcript: { id: "tr-early" },
+      data: {
+        participant: { id: "mina", name: "Mina" },
+        words: [{ text: "Adam," }, { text: "early" }, { text: "callback" }, { text: "should" }, { text: "retry." }],
+      },
+    },
+  });
+  const early = await call(port, "POST", "/api/recall", payload, signRecall(payload));
+  assert.equal(early.status, 503);
+  assert.equal(memory.remembered.length, 0);
 });
