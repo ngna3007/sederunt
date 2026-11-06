@@ -55,14 +55,17 @@ export function slackDelivery(event, options = {}) {
   const previous = deleted && event?.previous_message && typeof event.previous_message === "object"
     ? event.previous_message
     : null;
+  // File uploads often land as message_changed with the real text/files on .message.
+  const nested = !deleted && event?.message && typeof event.message === "object" ? event.message : null;
+  const body = deleted ? (previous || event) : (nested || event);
   const huddle = event?.type === "huddle" || event?.subtype === "huddle" || event?.channel_type === "huddle";
-  const memberId = typeof (previous?.user || event?.user) === "string" ? (previous?.user || event.user) : "";
+  const memberId = typeof body?.user === "string" ? body.user : (typeof event?.user === "string" ? event.user : "");
   const channel = typeof event?.channel === "string" ? event.channel : "";
-  const raw = typeof (previous?.text ?? event?.text) === "string" ? (previous?.text ?? event.text) : "";
+  const raw = typeof body?.text === "string" ? body.text : "";
   const botUserIds = Array.isArray(options?.botUserIds) ? options.botUserIds : [];
-  const ask = !deleted && !huddle && slackAsks(event, botUserIds);
+  const ask = !deleted && !huddle && slackAsks(nested || event, botUserIds);
   const text = cleanText(raw, botUserIds);
-  const file = attachedFile(event) || attachedFile(previous);
+  const file = attachedFile(body) || attachedFile(event) || attachedFile(previous);
   const storedId = firstId(event?.ts, event?.client_msg_id);
   const forgetIds = deleted
     ? uniqueIds([event?.deleted_ts, previous?.ts, previous?.client_msg_id])

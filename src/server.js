@@ -1030,7 +1030,14 @@ export function createApp(options = {}) {
       const companyId = typeof parsed.company === "string" ? parsed.company : "";
       const event = parsed.event && typeof parsed.event === "object" ? parsed.event : parsed;
       const subtype = typeof event.subtype === "string" ? event.subtype : "";
-      const noise = subtype && subtype !== "file_share" && subtype !== "message_deleted" && subtype !== "huddle";
+      const changedFiles = subtype === "message_changed"
+        && Array.isArray(event?.message?.files)
+        && event.message.files.some((item) => item && typeof item.name === "string" && item.name.trim());
+      const noise = subtype
+        && subtype !== "file_share"
+        && subtype !== "message_deleted"
+        && subtype !== "huddle"
+        && !changedFiles;
       if (event.bot_id || subtype === "bot_message" || (noise && event.type !== "huddle")) {
         send(res, 200, "application/json; charset=utf-8", JSON.stringify({ slack: "ignored" }));
         return;
@@ -1046,7 +1053,11 @@ export function createApp(options = {}) {
       };
       // defaultDeps always builds a Slack client, so do not key off deps.slack.
       // Tests pass options.deps and read the response body; production acks first.
-      const liveAck = parsed.type === "event_callback" && Boolean(env.SLACK_BOT_TOKEN) && options.deps == null;
+      // Only early-ack asks (DMs / @mentions). Channel keeps must finish the Kept
+      // post before the response ends — waitUntil alone was freezing mid-keep.
+      const canLiveAck = parsed.type === "event_callback" && Boolean(env.SLACK_BOT_TOKEN) && options.deps == null;
+      const peek = slackDelivery(event, { botUserIds: slackBotUserIds(parsed, env) });
+      const liveAck = canLiveAck && peek.ask === true;
       const slackWork = (async () => {
       const current = await prepareWorkspace(workspace, companyId);
       const botName = (await currentBot(workspace, req)).name;
@@ -1204,6 +1215,18 @@ export function createApp(options = {}) {
           posted: question === true && !repeat,
         }));
       } catch {
+        const channel = typeof event?.channel === "string" ? event.channel : "";
+        if (env.SLACK_BOT_TOKEN && channel) {
+          try {
+            await postSlackReply({
+              token: env.SLACK_BOT_TOKEN,
+              fetchImpl: deps.slack?.fetch,
+              channel,
+              text: "I could not keep that message.",
+              username: "Adam",
+            });
+          } catch { /* already failing */ }
+        }
         replyHttp(500, "text/plain; charset=utf-8", "slack event failed");
       }
       })();

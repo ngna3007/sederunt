@@ -303,3 +303,47 @@ test("a channel file is kept when conversations.members returns empty", async ()
     await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
   }
 });
+
+test("message_changed with files is kept", async () => {
+  const api = slackApi();
+  const memory = mockAccount({ accountId: "company-keep-changed", delegates: ["delegate-keep-changed"] });
+  const app = createApp({
+    deps: {
+      memory,
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+      slack: { fetch: api.fetch, async members() { return ["U1"]; } },
+    },
+    env: {
+      COMPANY_MEMWAL_KEY: "key-sentinel-value",
+      COMPANY_MEMWAL_ACCOUNT_ID: "account-id-sentinel",
+      SLACK_SIGNING_SECRET: secret,
+      SLACK_BOT_TOKEN: "xoxb-test",
+      SEDERUNT_MEMBER: "U1",
+    },
+    companyLoaded: true,
+  });
+  app.listen(0, "127.0.0.1");
+  await once(app, "listening");
+  const port = app.address().port;
+  try {
+    const message = signed({
+      type: "message",
+      subtype: "message_changed",
+      channel: "C1",
+      message: {
+        user: "U1",
+        text: "Live demo announcement floor-plan.txt — please keep.",
+        ts: "1700000100.000200",
+        files: [{ id: "F1", name: "demo-note.txt", url_private_download: "https://files.slack.com/files-pri/T/F1/download/demo-note.txt" }],
+      },
+      previous_message: { user: "U1", text: "Live demo announcement floor-plan.txt — please keep.", ts: "1700000100.000200" },
+    });
+    const reply = await post(port, message.payload, message.headers);
+    assert.equal(reply.status, 200, reply.raw);
+    const body = JSON.parse(reply.raw);
+    assert.equal(body.decisions, 1);
+    assert.deepEqual(api.texts.map((item) => item.text), ["Kept demo-note.txt."]);
+  } finally {
+    await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
+  }
+});
