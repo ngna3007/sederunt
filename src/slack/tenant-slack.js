@@ -49,7 +49,7 @@ export async function slackConnection(workspace, tenantId) {
   if (slackOAuthConfigured(env)) {
     if (await workspace.tenantBind.resolve("slack", claim.teamId) !== tenant) return none;
     if (!workspace.slackInstallations?.legacyEligible) throw installationError("unavailable");
-    if (!await workspace.slackInstallations.legacyEligible({ tenantId: tenant, teamId: claim.teamId, enroll: true })) return none;
+    if (!await workspace.slackInstallations.legacyEligible({ tenantId: tenant, teamId: claim.teamId, enroll: false })) return none;
   }
   // A team that has its own OAuth installation belongs to that tenant only.
   if (slackOAuthConfigured(env) && workspace.slackInstallations && claim.teamId) {

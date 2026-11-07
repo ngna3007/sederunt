@@ -559,6 +559,7 @@ async function legacyFixture(installations, tenant = A, team = "TLEGACY") {
 test("durable supersession: OAuth -> revoke -> failed reconnect -> reinstall -> remove never revives an older different legacy team", async () => {
   const installations = createMemoryInstallationStore({});
   const workspace = await legacyFixture(installations);
+  assert.equal(await installations.enrollLegacy({ tenantId: A, teamId: "TLEGACY" }), true);
   assert.equal((await slackConnection(workspace, A)).source, "legacy");
   const oldClient = tenantSlackClient(workspace, A);
   const old = await slackConnection(workspace, A);
@@ -576,7 +577,7 @@ test("durable supersession: OAuth -> revoke -> failed reconnect -> reinstall -> 
   assert.equal((await slackConnection(workspace, A)).teamId, "TREINSTALL");
   await installations.remove(A);
   assert.equal((await slackConnection(workspace, A)).linked, false);
-  assert.equal(await installations.legacyEligible({ tenantId: A, teamId: "TLEGACY", enroll: true }), false);
+  assert.equal(await installations.enrollLegacy({ tenantId: A, teamId: "TLEGACY" }), false);
   assert.equal(workspace.log.length, 0);
 });
 
@@ -587,11 +588,13 @@ test("orphan/deleted tenant legacy claims cannot enroll or route; live legacy is
   assert.equal((await slackConnection(orphan, C)).linked, false);
   assert.equal((await slackEventTenant(orphan, { teamId: "TLEGACY", legacyTenantId: C })).tenantId, "");
   const live = await legacyFixture(installations);
+  assert.equal(await installations.enrollLegacy({ tenantId: A, teamId: "TLEGACY" }), true);
   assert.equal((await slackConnection(live, A)).source, "legacy");
   tenants.delete(A);
   assert.equal((await slackConnection(live, A)).linked, false);
   assert.equal((await slackEventTenant(live, { teamId: "TLEGACY", legacyTenantId: A })).tenantId, "");
   const other = await legacyFixture(installations, B, "TBLEGACY");
+  assert.equal(await installations.enrollLegacy({ tenantId: B, teamId: "TBLEGACY" }), true);
   assert.equal((await slackConnection(other, B)).source, "legacy");
   await installations.remove(B);
   assert.equal((await slackConnection(other, B)).linked, false);
@@ -600,6 +603,7 @@ test("orphan/deleted tenant legacy claims cannot enroll or route; live legacy is
 test("legacy eligibility-store failure cannot authorize a healthy cached Redis claim", async () => {
   const installations = createMemoryInstallationStore({});
   const workspace = await legacyFixture(installations);
+  assert.equal(await installations.enrollLegacy({ tenantId: A, teamId: "TLEGACY" }), true);
   assert.equal((await slackConnection(workspace, A)).source, "legacy");
   installations.legacyEligible = async () => { throw new Error("store offline"); };
   await assert.rejects(() => slackConnection(workspace, A));
@@ -609,7 +613,7 @@ test("legacy eligibility-store failure cannot authorize a healthy cached Redis c
 test("legacy/OAuth competing team ownership has one winner and failed first OAuth preserves a valid legacy grant", async () => {
   const store = createMemoryInstallationStore({});
   const results = await Promise.allSettled([
-    store.legacyEligible({ tenantId: A, teamId: "TRACED", enroll: true }),
+    store.enrollLegacy({ tenantId: A, teamId: "TRACED" }),
     store.save({ tenantId: B, teamId: "TRACED", token: "xoxb-b" }),
   ]);
   assert.equal(Number(results[0].status === "fulfilled" && results[0].value === true) + Number(results[1].status === "fulfilled"), 1);
@@ -625,4 +629,18 @@ test("a channel-only orphan claim cannot enroll a live tenant without authoritat
   workspace.tenantBind = { async resolve(_kind, key) { return key === "TLEGACY:CA" ? A : ""; } };
   assert.equal((await slackConnection(workspace, A)).linked, false);
   assert.equal(await installations.legacyEligible({ tenantId: A, teamId: "TLEGACY" }), false);
+});
+
+test("ordinary lookups/events do not enroll matching live legacy claims, including a forged enrollment query option", async () => {
+  const installations = createMemoryInstallationStore({});
+  const workspace = await legacyFixture(installations);
+  for (let i = 0; i < 3; i++) {
+    assert.equal((await slackConnection(workspace, A)).linked, false);
+    assert.equal((await slackEventTenant(workspace, { teamId: "TLEGACY", legacyTenantId: A })).tenantId, "");
+  }
+  assert.equal(await installations.legacyEligible({ tenantId: A, teamId: "TLEGACY", enroll: true }), false);
+  assert.equal(await installations.enrollLegacy({ tenantId: A, teamId: "TLEGACY" }), true, "explicit local backfill fixture");
+  assert.equal((await slackConnection(workspace, A)).source, "legacy");
+  assert.equal((await slackEventTenant(workspace, { teamId: "TLEGACY", legacyTenantId: A })).tenantId, A);
+  assert.equal(workspace.log.length, 0);
 });

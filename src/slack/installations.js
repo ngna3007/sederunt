@@ -70,11 +70,18 @@ export function createMemoryInstallationStore(env = process.env, { tenants } = {
       consumed.set(nonce, expiresAt);
       return true;
     },
-    async legacyEligible({ tenantId, teamId, enroll = false }) {
+    async legacyEligible({ tenantId, teamId }) {
+      const current = lifecycle.get(tenantId);
+      return live(tenantId) && Boolean(current?.mode === "legacy" && current.teamId === teamId)
+        && ![...rows.values()].some((r) => r.tenantId === tenantId || r.teamId === teamId);
+    },
+    // Explicit test/local backfill only. Production has no JS enrollment method;
+    // operators use the separately privileged, approved SQL backfill RPC.
+    async enrollLegacy({ tenantId, teamId }) {
       if (!live(tenantId) || !cleanTeam(teamId)) return false;
       const current = lifecycle.get(tenantId);
       if (current) return current.mode === "legacy" && current.teamId === teamId && ![...rows.values()].some((r) => r.tenantId === tenantId || r.teamId === teamId);
-      if (!enroll || [...rows.values()].some((r) => r.tenantId === tenantId || r.teamId === teamId)
+      if ([...rows.values()].some((r) => r.tenantId === tenantId || r.teamId === teamId)
         || [...lifecycle.values()].some((r) => r.mode === "legacy" && r.teamId === teamId)) return false;
       lifecycle.set(tenantId, { mode: "legacy", teamId });
       return true;
@@ -204,9 +211,9 @@ export function createSupabaseInstallationStore({ url, key, env = process.env, f
   return {
     durable: true,
     encrypted: true,
-    async legacyEligible({ tenantId, teamId, enroll = false }) {
+    async legacyEligible({ tenantId, teamId }) {
       if (!UUID.test(tenantId || "") || !cleanTeam(teamId)) return false;
-      return await call("POST", {}, { p_tenant_id: tenantId, p_team_id: teamId, p_enroll: enroll === true }, "slack_legacy_eligible") === true;
+      return await call("POST", {}, { p_tenant_id: tenantId, p_team_id: teamId }, "slack_legacy_eligible") === true;
     },
     async consumeState(nonce, expiresAt) {
       return await call("POST", {}, {

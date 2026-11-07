@@ -31,9 +31,13 @@ app configuration or installation is changed by this branch's tests.
    or posts a test message.
 7. Preserve existing legitimate single-bot ownership during rollout: verify the
    old bot's actual team and its authoritative Redis **team** owner, then enroll
-   that live tenant/team through the service-only `slack_legacy_eligible` RPC.
-   Normal verified connection lookups can perform the same atomic enrollment.
-   Never seed from a channel-only claim, cached account name or an absent tenant.
+   that live tenant/team through the separate service-only `slack_legacy_enroll`
+   operator/backfill RPC, **only after explicit owner/admin approval**. There is
+   no ordinary app enrollment endpoint or production JS enrollment method.
+   Connection-status reads and incoming events only query eligibility; they
+   never create or refresh it, even when a matching Redis claim is verified.
+   Never seed from a channel-only claim, cached account name, absent tenant or
+   fresh user. New connections must use the explicit OAuth install flow.
    Review/enroll existing ownership before allowing competing OAuth installs.
    No Redis cleanup is required for safety: stale claims cannot grant access to
    deleted tenants or override the durable lifecycle state. Any optional cleanup
@@ -57,7 +61,11 @@ app configuration or installation is changed by this branch's tests.
   uninstall, explicit disconnect, reloads and failed later reconsents never turn
   a superseded tenant back into a legacy tenant. An initial OAuth transaction
   that fails atomically does not destroy a still-valid prior legacy connection.
-- Legacy enrollment checks/locks the real tenant row and serializes with OAuth
+- `slack_legacy_eligible` is a read-only STABLE SQL query with no enrollment flag.
+  Read/event callers cannot turn it into a write. `slack_legacy_enroll` is a
+  different privileged operation reserved for approved, verified operator
+  backfill; browser anonymous/authenticated roles cannot invoke it.
+- Explicit legacy enrollment checks/locks the real tenant row and serializes with OAuth
   using tenant/team advisory locks. Orphan Redis claims for absent/deleted tenants
   cannot enroll or route events, even with healthy Redis and installation reads.
   Tenant deletion cascades its Slack rows; no client can authorize from an absent
@@ -107,7 +115,8 @@ The test uses the actual store over HTTP to PostgREST, not a fake REST adapter.
 Only Supabase's `/rest/v1` prefix is stripped for standalone PostgREST. It tests
 competing first installs, competing replacements, team claims, restart/session
 restoration, distributed state replay, lifecycle CAS/ABA, legacy supersession,
-orphan/deleted-tenant denial, eligibility-store failure, legacy/OAuth races,
+orphan/deleted-tenant denial, non-enrolling ordinary reads/events, explicit-only
+backfill, eligibility-store failure, legacy/OAuth races,
 transaction rollback and anonymous/member privilege denial. It truncates only
 those three proposed Slack tables in the named
 loopback test database. Without the explicit URLs it reports a skip.

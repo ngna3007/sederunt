@@ -40,6 +40,15 @@ test("real local Postgres + PostgREST: atomic install/replacement, encrypted per
   const store = createSupabaseInstallationStore(options);
   const save = (tenant, team, extra = {}) => store.save({ tenantId: id(tenant), teamId: team, token: `xoxb-local-${tenant}`, appId: "APP", botUserId: "UBOT", ...extra });
 
+  // Explicit synthetic operator-approved backfill, never an ordinary app read.
+  const backfill = async (tenant, team) => {
+    const response = await fetch(`${restUrl}/rpc/slack_legacy_enroll`, {
+      method: "POST", headers: {authorization: `Bearer ${jwt("service_role")}`, "content-type":"application/json"},
+      body: JSON.stringify({p_tenant_id:id(tenant),p_team_id:team}),
+    });
+    assert.equal(response.status, 200);
+    return response.json();
+  };
   await t.test("concurrent absent same-tenant installs have one winner", async () => {
     const results = await Promise.allSettled([save(1, "TONE"), save(1, "TTWO")]);
     assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
@@ -99,6 +108,7 @@ test("real local Postgres + PostgREST: atomic install/replacement, encrypted per
   };
   await t.test("live pre-OAuth legacy enrollment is durable; OAuth supersession survives revoke, failed reconnect, reinstall and explicit disconnect", async () => {
     const workspace = await legacyWorkspace(6, "TOLDLEGACY");
+    assert.equal(await backfill(6, "TOLDLEGACY"), true);
     const legacy = await slackConnection(workspace, id(6));
     assert.equal(legacy.source, "legacy");
     const oldRequest = installationFetch(workspace, id(6), legacy, async () => { throw Error("must not fetch"); });
@@ -115,11 +125,12 @@ test("real local Postgres + PostgREST: atomic install/replacement, encrypted per
     await save(6, "TREINSTALL");
     assert.equal((await slackConnection(workspace, id(6))).teamId, "TREINSTALL");
     assert.equal(await store.remove(id(6)), true);
-    assert.equal(await store.legacyEligible({ tenantId: id(6), teamId: "TOLDLEGACY", enroll: true }), false);
+    assert.equal(await backfill(6, "TOLDLEGACY"), false);
     assert.equal((await slackConnection(workspace, id(6))).linked, false);
   });
   await t.test("failed first OAuth transaction does not damage valid legacy eligibility or leave an installation", async () => {
     const workspace = await legacyWorkspace(8, "TVALIDLEGACY");
+    assert.equal(await backfill(8, "TVALIDLEGACY"), true);
     assert.equal((await slackConnection(workspace, id(8))).source, "legacy");
     await sql("alter table public.slack_connection_state add constraint local_reject_oauth check (mode <> 'oauth') not valid");
     try {
@@ -136,6 +147,7 @@ test("real local Postgres + PostgREST: atomic install/replacement, encrypted per
     assert.equal((await slackConnection(orphan, id(29))).linked, false);
     assert.equal((await slackEventTenant(orphan, { teamId: "TORPHAN", legacyTenantId: id(29) })).tenantId, "");
     const legacy = await legacyWorkspace(10, "TDELETEDLEGACY");
+    assert.equal(await backfill(10, "TDELETEDLEGACY"), true);
     assert.equal((await slackConnection(legacy, id(10))).source, "legacy");
     const oauth = await legacyWorkspace(11, "TDELETEDOLD");
     await save(11, "TDELETEDOAUTH");
@@ -149,19 +161,20 @@ test("real local Postgres + PostgREST: atomic install/replacement, encrypted per
   });
   await t.test("eligibility RPC persistence denial fails closed with live Redis claims and healthy installation reads", async () => {
     const workspace = await legacyWorkspace(9, "TOUTAGELEGACY");
+    assert.equal(await backfill(9, "TOUTAGELEGACY"), true);
     assert.equal((await slackConnection(workspace, id(9))).source, "legacy");
-    await sql("revoke execute on function public.slack_legacy_eligible(uuid,text,boolean) from service_role");
+    await sql("revoke execute on function public.slack_legacy_eligible(uuid,text) from service_role");
     try {
       assert.equal(await store.tokenFor(id(9)), null);
       await assert.rejects(() => slackConnection(workspace, id(9)));
       await assert.rejects(() => slackEventTenant(workspace, { teamId: "TOUTAGELEGACY", legacyTenantId: id(9) }));
-    } finally { await sql("grant execute on function public.slack_legacy_eligible(uuid,text,boolean) to service_role"); }
+    } finally { await sql("grant execute on function public.slack_legacy_eligible(uuid,text) to service_role"); }
   });
   await t.test("concurrent legacy/OAuth team claims serialize to one owner; same-tenant OAuth permanently supersedes legacy", async () => {
     for (let n=12; n<24; n+=2) {
       const team = `TRACED${n}`;
       const results = await Promise.allSettled([
-        store.legacyEligible({ tenantId: id(n), teamId: team, enroll: true }), save(n+1, team),
+        backfill(n, team), save(n+1, team),
       ]);
       const legacyWon = results[0].status === "fulfilled" && results[0].value === true;
       const oauthWon = results[1].status === "fulfilled";
@@ -169,9 +182,32 @@ test("real local Postgres + PostgREST: atomic install/replacement, encrypted per
       assert.equal(await store.legacyEligible({ tenantId: id(n), teamId: team }), legacyWon);
       assert.equal(Boolean(await store.byTeam(team)), oauthWon);
     }
-    await Promise.all([store.legacyEligible({ tenantId: id(26), teamId: "TSAMEOLD", enroll: true }), save(26,"TSAMENEW")]);
-    assert.equal(await store.legacyEligible({ tenantId: id(26), teamId: "TSAMEOLD", enroll: true }), false);
+    await Promise.all([backfill(26, "TSAMEOLD"), save(26,"TSAMENEW")]);
+    assert.equal(await backfill(26, "TSAMEOLD"), false);
     assert.equal((await store.get(id(26))).teamId, "TSAMENEW");
+  });
+  await t.test("ordinary reads/events never enroll a matching legacy claim; only explicit privileged backfill enables it", async () => {
+    const workspace = await legacyWorkspace(30, "TUNENROLLED");
+    for (let i=0; i<3; i++) {
+      assert.equal((await slackConnection(workspace, id(30))).linked, false);
+      assert.equal((await slackEventTenant(workspace, {teamId:"TUNENROLLED",legacyTenantId:id(30)})).tenantId, "");
+    }
+    // Even an obsolete/forged JS option cannot make the production query write.
+    assert.equal(await store.legacyEligible({tenantId:id(30),teamId:"TUNENROLLED",enroll:true}), false);
+    assert.equal(await sql(`select count(*) from slack_connection_state where tenant_id='${id(30)}'`), "0");
+    const readonly = await sql(`begin read only; set local role service_role; select slack_legacy_eligible('${id(30)}','TUNENROLLED'); rollback;`);
+    assert.ok(readonly.split("\n").includes("f"));
+    assert.equal(await backfill(30,"TUNENROLLED"), true);
+    assert.equal((await slackConnection(workspace,id(30))).source,"legacy");
+    assert.equal((await slackEventTenant(workspace,{teamId:"TUNENROLLED",legacyTenantId:id(30)})).tenantId,id(30));
+    const stamp = await sql(`select updated_at from slack_connection_state where tenant_id='${id(30)}'`);
+    await slackConnection(workspace,id(30));
+    assert.equal(await sql(`select updated_at from slack_connection_state where tenant_id='${id(30)}'`),stamp);
+    const oauth = await save(30,"TNEWTHIRTY");
+    assert.equal(await store.revoke({teamId:"TNEWTHIRTY",appId:"APP",botUserId:"UBOT",generation:oauth.generation,eventTime:Date.now()+5000}),1);
+    assert.equal((await slackConnection(workspace,id(30))).linked,false);
+    assert.equal((await slackEventTenant(workspace,{teamId:"TUNENROLLED",legacyTenantId:id(30)})).tenantId,"");
+    assert.equal(await backfill(30,"TUNENROLLED"),false);
   });
   await t.test("anon/authenticated cannot read tokens, write installations or invoke privileged functions", async () => {
     for (const role of ["anon", "authenticated"]) {
@@ -183,7 +219,8 @@ test("real local Postgres + PostgREST: atomic install/replacement, encrypted per
       const state = await fetch(`${restUrl}/slack_connection_state?select=*`, { headers });
       assert.ok([401,403].includes(state.status));
       for (const [fn, body] of [
-        ["slack_legacy_eligible", {p_tenant_id:id(6),p_team_id:"TOLDLEGACY",p_enroll:true}],
+        ["slack_legacy_eligible", {p_tenant_id:id(6),p_team_id:"TOLDLEGACY"}],
+        ["slack_legacy_enroll", {p_tenant_id:id(6),p_team_id:"TOLDLEGACY"}],
         ["slack_installation_disconnect", {p_tenant_id:id(6),p_expected_generation:null}],
       ]) {
         const result = await fetch(`${restUrl}/rpc/${fn}`, {method:"POST",headers,body:JSON.stringify(body)});

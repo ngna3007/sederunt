@@ -40,10 +40,22 @@ create unique index slack_legacy_team_owner on public.slack_connection_state(tea
 alter table public.slack_connection_state enable row level security;
 revoke all on public.slack_connection_state from public, anon, authenticated;
 
--- The caller has already verified auth.test and exact legacy Redis ownership.
--- Tenant and team locks are shared with installation_save: Redis is only input
--- to enrollment, never the authority after migration/supersession.
-create function public.slack_legacy_eligible(p_tenant_id uuid, p_team_id text, p_enroll boolean)
+-- Ordinary connection/event lookups are genuinely read-only. No flag can turn
+-- this query into enrollment, and STABLE forbids database writes.
+create function public.slack_legacy_eligible(p_tenant_id uuid, p_team_id text)
+returns boolean language sql stable security invoker set search_path = public, pg_temp as $$
+  select exists (
+    select 1 from public.slack_connection_state s join public.tenants t on t.id = s.tenant_id
+    where s.tenant_id = p_tenant_id and s.team_id = p_team_id and s.mode = 'legacy'
+      and not exists (select 1 from public.slack_installations where tenant_id = p_tenant_id or team_id = p_team_id)
+  );
+$$;
+
+-- Explicit operator backfill ONLY, never called by an ordinary app read/event.
+-- A privileged operator must obtain owner/admin approval and verify auth.test,
+-- exact authoritative Redis team ownership and the live tenant before calling.
+-- Tenant/team locks serialize approved enrollment against installation_save.
+create function public.slack_legacy_enroll(p_tenant_id uuid, p_team_id text)
 returns boolean language plpgsql security invoker set search_path = public, pg_temp as $$
 declare current_state public.slack_connection_state;
 begin
@@ -56,7 +68,7 @@ begin
     return current_state.mode = 'legacy' and current_state.team_id = p_team_id
       and not exists (select 1 from public.slack_installations where tenant_id = p_tenant_id or team_id = p_team_id);
   end if;
-  if p_enroll is not true or exists (select 1 from public.slack_installations where tenant_id = p_tenant_id or team_id = p_team_id)
+  if exists (select 1 from public.slack_installations where tenant_id = p_tenant_id or team_id = p_team_id)
     or exists (select 1 from public.slack_connection_state where team_id = p_team_id and mode = 'legacy') then return false; end if;
   insert into public.slack_connection_state(tenant_id, mode, team_id) values (p_tenant_id, 'legacy', p_team_id);
   return true;
@@ -179,8 +191,10 @@ grant all on public.slack_installations, public.slack_oauth_consumed, public.sla
 grant select, update (id) on public.tenants to service_role;
 revoke all on function public.slack_installation_disconnect(uuid, uuid) from public, anon, authenticated;
 grant execute on function public.slack_installation_disconnect(uuid, uuid) to service_role;
-revoke all on function public.slack_legacy_eligible(uuid, text, boolean) from public, anon, authenticated;
-grant execute on function public.slack_legacy_eligible(uuid, text, boolean) to service_role;
+revoke all on function public.slack_legacy_eligible(uuid, text) from public, anon, authenticated;
+grant execute on function public.slack_legacy_eligible(uuid, text) to service_role;
+revoke all on function public.slack_legacy_enroll(uuid, text) from public, anon, authenticated;
+grant execute on function public.slack_legacy_enroll(uuid, text) to service_role;
 revoke all on function public.slack_installation_save(uuid, text, text, text, text, text, text, text[], uuid, bytea, bytea, integer, boolean, uuid) from public, anon, authenticated;
 revoke all on function public.slack_installation_revoke(text, text, uuid, timestamptz, text) from public, anon, authenticated;
 revoke all on function public.slack_oauth_consume(text, timestamptz) from public, anon, authenticated;
