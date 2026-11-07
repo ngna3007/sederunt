@@ -15,7 +15,6 @@ import { createConsoleAdapter } from "./console/upload.js";
 import { createLinearClient } from "./linear/mcp.js";
 import { loadLinearToken } from "./linear/token.js";
 import { renderCameraPage } from "./meeting/camera.js";
-import { normalizeHearing } from "./hearing.js";
 import { createMeetingAdapter, mediaFromBot, meetingDoorReady, meetingEnded, recallBotUrl, recallTranscriptDelivery, verifyRecallRequest } from "./meeting/recall.js";
 import { createTatumReader } from "./tatum/get-object.js";
 import { resolveMcpSpace } from "./connectors/expose.js";
@@ -41,8 +40,9 @@ import { resolveSignInProviders } from "./identity/shared.js";
 import { clearOAuthCookie } from "./identity/pending.js";
 import { handleAuthRoute, requestOrigin } from "./identity/routes.js";
 import { refreshOAuthSession, rememberRefreshCookie } from "./identity/session.js";
-import { createMemoryPreferenceStore } from "./bot/preferences.js";
-import { canEditBot, handleBotSettings, readBot } from "./console/bot-settings.js";
+import { createBotPreferenceStore } from "./bot/preferences-supabase.js";
+import { assignEffectiveHearing, effectiveHearing, saveMeetingGuest } from "./bot/meeting-guest.js";
+import { authorizeBotWrite, canEditBot, handleBotSettings, hearingTenantFor, readBot } from "./console/bot-settings.js";
 import { handleToolPref, loadAccountProfile, loadToolAsk } from "./console-account.js";
 import { handleInvite, handleJoinLink, handleSpaceSwitch, handleWelcome, loadChecklist, loadSpaceView, welcomeLocation } from "./console-flow.js";
 import { roleLabel } from "./identity/onboarding.js";
@@ -348,6 +348,22 @@ async function doorsForRequest(workspace, { companyId = "", personId = "", req }
   } else if (identityConfigured(env)) {
     doors.calendar = false;
   }
+  const gate = req ? guardConsole(req, env) : { session: null };
+  if (workspace.identity && gate.session?.kind === "oauth" && workspace.tenantBind && env.SEDERUNT_TOOLS_FAKE !== "1") {
+    const view = await loadSpaceView(workspace.identity, gate.session);
+    const activeId = view?.activeId || "";
+    if (!activeId) {
+      doors.slack = false;
+    } else {
+      const claim = await slackClaimState({
+        tenantBind: workspace.tenantBind,
+        slack: workspace.deps?.slack,
+        channelId: workspace.deps?.app?.slackChannel || "",
+        slackConfigured: doors.slack === true,
+      }, activeId);
+      doors.slack = claim.linked === true;
+    }
+  }
   return doors;
 }
 
@@ -433,7 +449,9 @@ function fileFrom(file) {
 export function createApp(options = {}) {
   const session = options.session ?? createSession();
   const env = options.env ?? process.env;
-  const botPreferences = options.botPreferences ?? createMemoryPreferenceStore();
+  const botPreferences = options.botPreferences ?? createBotPreferenceStore(env, {
+    fetch: options.fetch,
+  });
   const deps = options.deps ?? defaultDeps({
     liveLinear: options.liveLinear === true,
     loadToken: options.loadToken,
@@ -921,26 +939,37 @@ export function createApp(options = {}) {
       const connectedDoors = oauth ? doorReport(env, workspace.linearReady === true) : null;
       // Slack "connected" for Home/checklist: verified tenant ownership, not env token doors alone.
       // Fake-tools demo keeps door+metadata behavior via toolsConnected inside loadToolAsk.
-      if (connectedDoors && spaces?.activeId && workspace.tenantBind && env.SEDERUNT_TOOLS_FAKE !== "1") {
-        const claim = await slackClaimState({
-          tenantBind: workspace.tenantBind,
-          slack: workspace.deps.slack,
-          channelId: workspace.deps.app?.slackChannel || "",
-          slackConfigured: connectedDoors.slack === true,
-        }, spaces.activeId);
-        connectedDoors.slack = claim.linked === true;
+      if (connectedDoors && workspace.tenantBind && env.SEDERUNT_TOOLS_FAKE !== "1") {
+        if (!spaces?.activeId) {
+          connectedDoors.slack = false;
+        } else {
+          const claim = await slackClaimState({
+            tenantBind: workspace.tenantBind,
+            slack: workspace.deps.slack,
+            channelId: workspace.deps.app?.slackChannel || "",
+            slackConfigured: connectedDoors.slack === true,
+          }, spaces.activeId);
+          connectedDoors.slack = claim.linked === true;
+        }
       }
       const accountProfile = oauth ? await loadAccountProfile(identity, gate.session, spaces) : null;
       const toolAsk = oauth ? await loadToolAsk(identity, gate.session, connectedDoors || {}, env) : null;
       const checklist = oauth && url.pathname === "/console" ? await loadChecklist(identity, gate.session, spaces, toolAsk) : null;
-      const botTenant = spaces?.activeId || "local";
+      const hearingView = await hearingTenantFor({ req, env, identity });
+      const botTenant = hearingView.tenantId;
       const botView = await readBot(workspace.botPreferences, botTenant);
+      const hearingCompany = hearingView.spaces?.activeId && hearingView.spaces.activeKind !== "personal"
+        ? hearingView.spaces.activeId
+        : "";
+      const hearingSession = sessionFor(workspace, hearingCompany);
+      if (botTenant) await assignEffectiveHearing(workspace, hearingSession, botTenant);
+      const hearing = await effectiveHearing(workspace, botTenant, hearingSession);
       const bot = {
         ...botView,
         canEdit: canEditBot({
           signedIn: Boolean(gate.session),
-          oauth: Boolean(spaces?.oauth),
-          role: spaces?.activeRole || "",
+          oauth: hearingView.oauth,
+          role: hearingView.role,
           authRequired: gate.required,
         }),
       };
@@ -972,6 +1001,7 @@ export function createApp(options = {}) {
         accountProfile,
         toolAsk,
         bot,
+        hearing,
       }));
       return;
     }
@@ -980,22 +1010,58 @@ export function createApp(options = {}) {
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/hearing") {
-      const body = await readJson(req);
+      const authz = await authorizeBotWrite({ req, env, identity });
+      if (!authz.ok) {
+        const error = authz.status === 401
+          ? "Sign in again."
+          : "Only an owner or admin can change the meeting guest.";
+        send(res, authz.status, "application/json; charset=utf-8", JSON.stringify({ ok: false, error }));
+        return;
+      }
+      let body = {};
+      try {
+        body = await readJson(req);
+      } catch {
+        send(res, 400, "application/json; charset=utf-8", JSON.stringify({ ok: false, error: "The guest was not saved." }));
+        return;
+      }
       const resolved = await resolveCompanyId(workspace, req, typeof body.company === "string" ? body.company : "");
       if (resolved.denied || resolved.unauthorized) {
         sendCompanyDenied(res, send, resolved);
         return;
       }
-      const companyId = resolved.companyId;
-      const current = await prepareWorkspace(workspace, companyId);
+      const tenantId = authz.tenantId;
+      if (!tenantId) {
+        send(res, 403, "application/json; charset=utf-8", JSON.stringify({
+          ok: false,
+          error: "Only an owner or admin can change the meeting guest.",
+        }));
+        return;
+      }
       const triggers = typeof body.triggers === "string"
         ? body.triggers.split(/\n+/)
         : body.triggers;
-      const hearing = await saveHearing(current, depsFor(workspace, companyId), {
-        name: body.name,
-        triggers,
-      });
-      send(res, 200, "application/json; charset=utf-8", JSON.stringify({ hearing: normalizeHearing(hearing) }));
+      let hearing;
+      try {
+        hearing = await saveMeetingGuest(workspace.botPreferences, tenantId, {
+          name: body.name,
+          triggers,
+        });
+      } catch {
+        send(res, 503, "application/json; charset=utf-8", JSON.stringify({ ok: false }));
+        return;
+      }
+      const companyId = resolved.companyId;
+      const current = await prepareWorkspace(workspace, companyId, false, 0, tenantId);
+      const savedAt = new Date().toISOString();
+      current.hearing = { ...hearing, savedAt, tenantId };
+      try {
+        const remembered = await saveHearing(current, depsFor(workspace, companyId), hearing);
+        current.hearing = { ...remembered, tenantId };
+      } catch {
+        current.hearing = { ...hearing, savedAt, tenantId };
+      }
+      send(res, 200, "application/json; charset=utf-8", JSON.stringify({ hearing }));
       return;
     }
     if (req.method === "GET" && url.pathname === "/room") {
@@ -1015,7 +1081,8 @@ export function createApp(options = {}) {
         return;
       }
       const companyId = resolved.companyId;
-      const current = await prepareWorkspace(workspace, companyId, false, 2000);
+      const hearingTenant = await hearingTenantId(workspace, req);
+      const current = await prepareWorkspace(workspace, companyId, false, 2000, hearingTenant);
       const workspaceKind = url.searchParams.get("workspace") || "";
       const memberId = consoleBoardMember(gate.session, env, workspaceKind, url.searchParams.get("member") || "");
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(await consolePayload(
@@ -1039,7 +1106,8 @@ export function createApp(options = {}) {
         return;
       }
       const companyId = resolved.companyId;
-      const current = await prepareWorkspace(workspace, companyId, true);
+      const hearingTenant = await hearingTenantId(workspace, req);
+      const current = await prepareWorkspace(workspace, companyId, true, 0, hearingTenant);
       const workspaceKind = url.searchParams.get("workspace") || "";
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(await consolePayload(
         workspace,
@@ -1105,8 +1173,10 @@ export function createApp(options = {}) {
         let status = "not-configured";
         if (deps.meeting?.join) {
           try {
-            const ready = await prepareWorkspace(workspace, joinCompanyId);
-            const guest = normalizeHearing(ready?.hearing).name;
+            const hearingTenant = await hearingTenantId(workspace, req);
+            const ready = await prepareWorkspace(workspace, joinCompanyId, false, 0, hearingTenant);
+            const hearing = await effectiveHearing(workspace, hearingTenant, ready);
+            const guest = hearing.name;
             const bot = await currentBot(workspace, req);
             const sent = await deps.meeting.join({ url: meetingUrl, name: guest, botName: bot.name });
             botId = typeof sent?.id === "string" ? sent.id : "";
@@ -1148,7 +1218,8 @@ export function createApp(options = {}) {
           const platform = meetingPlatform(meetingUrl);
           if (platform) {
             try {
-              const current = await prepareWorkspace(workspace, joinCompanyId || "");
+              const hearingTenant = await hearingTenantId(workspace, req);
+              const current = await prepareWorkspace(workspace, joinCompanyId || "", false, 0, hearingTenant);
               await handleUtterance({
                 session: current,
                 openedRoom: { platform, id: botId, ...(startedAt ? { startedAt } : {}) },
@@ -1234,7 +1305,8 @@ export function createApp(options = {}) {
         return;
       }
       const companyId = resolved.companyId;
-      const current = await prepareWorkspace(workspace, companyId);
+      const hearingTenant = await hearingTenantId(workspace, req);
+      const current = await prepareWorkspace(workspace, companyId, false, 0, hearingTenant);
       const result = await handleUtterance({ ...delivery, session: current }, depsFor(workspace, companyId));
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(result));
       return;
@@ -2348,12 +2420,7 @@ function sendCompanyDenied(res, send, { unauthorized = false } = {}) {
 }
 
 async function currentBot(workspace, req) {
-  const gate = guardConsole(req, workspace.env);
-  let tenantId = "local";
-  if (workspace.identity && gate.session?.kind === "oauth") {
-    const spaces = await loadSpaceView(workspace.identity, gate.session);
-    if (spaces?.activeId) tenantId = spaces.activeId;
-  }
+  const tenantId = await hearingTenantId(workspace, req);
   return readBot(workspace.botPreferences, tenantId);
 }
 
@@ -2372,10 +2439,17 @@ export function proofWarmOn(env) {
   return Boolean(env?.TATUM_API_KEY || env?.TATUM_MAINNET_API_KEY);
 }
 
-async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0) {
+async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0, hearingTenant) {
   const current = sessionFor(workspace, companyId);
+  // Undefined keeps callback tenancy (the bound company, or local). A request
+  // passes the resolved hearing tenant, including "" when OAuth spaces failed.
+  const tenant = hearingTenant === undefined
+    ? ((typeof companyId === "string" && companyId.trim()) || "local")
+    : (typeof hearingTenant === "string" ? hearingTenant.trim() : "");
+  const applyHearing = () => assignEffectiveHearing(workspace, current, tenant);
   if (!workspace.companyLoaded) {
     current.readReport = { ok: true, empty: true, blocked: true };
+    await applyHearing();
     return current;
   }
   const id = companyKey(workspace, companyId);
@@ -2399,13 +2473,35 @@ async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0)
   const pending = workspace.loads.get(id);
   if (!waitMs) {
     await pending;
+    await applyHearing();
     return current;
   }
   await Promise.race([
     pending,
     new Promise((resolve) => setTimeout(resolve, waitMs)),
   ]);
+  await applyHearing();
+  // A timed-out index can still absorb a legacy guest after this returns.
+  // Re-apply so a durable row stays the one typed-path addressing sees.
+  pending.then(() => applyHearing(), () => {}).catch(() => {});
   return current;
+}
+
+/**
+ * Hearing tenant for a console request. Same rule as bot settings:
+ * the active space for OAuth (personal uuid when personal is active),
+ * "" when that space cannot be loaded, and "local" otherwise.
+ *
+ * @param {{ env?: object, identity?: object | null }} workspace
+ * @param {import("node:http").IncomingMessage | undefined} req
+ */
+async function hearingTenantId(workspace, req) {
+  const hearing = await hearingTenantFor({
+    req,
+    env: workspace?.env || {},
+    identity: workspace?.identity || null,
+  });
+  return typeof hearing?.tenantId === "string" ? hearing.tenantId : "";
 }
 
 /**
@@ -2426,6 +2522,7 @@ async function consolePayload(workspace, current, memberId, kind = "company", op
   const open = kind === "personal" ? "personal" : "company";
   const req = options.req;
   const companyId = typeof options.companyId === "string" ? options.companyId : "";
+  const hearing = await effectiveHearing(workspace, await hearingTenantId(workspace, req), current);
   const gate = req ? guardConsole(req, workspace.env) : { session: null };
   const personId = String(gate.session?.userId || "").trim();
   const doors = req
@@ -2447,7 +2544,7 @@ async function consolePayload(workspace, current, memberId, kind = "company", op
       waiting: [],
       access: [],
       counts: { kept: 0, waiting: 0, sent: 0, failed: 0 },
-      hearing: normalizeHearing(null),
+      hearing,
     };
   }
   if (!current.readReport) {
@@ -2466,7 +2563,7 @@ async function consolePayload(workspace, current, memberId, kind = "company", op
       waiting: [],
       access: [],
       counts: { kept: 0, waiting: 0, sent: 0, failed: 0 },
-      hearing: normalizeHearing(current.hearing),
+      hearing,
     };
   }
   const report = current.readReport;
@@ -2488,7 +2585,7 @@ async function consolePayload(workspace, current, memberId, kind = "company", op
       waiting: [],
       access: [],
       counts: { kept: 0, waiting: 0, sent: 0, failed: 0 },
-      hearing: normalizeHearing(current.hearing),
+      hearing,
     };
   }
   const empty = report.empty && board.decisions.length === 0;
@@ -2511,7 +2608,7 @@ async function consolePayload(workspace, current, memberId, kind = "company", op
     tickets: board.tickets ?? [],
     access: board.access,
     counts: board.counts,
-    hearing: normalizeHearing(current.hearing),
+    hearing,
     meetings: await calendarMeetings(workspace, { companyId, personId, req }),
     chain: chainReport(workspace.deps?.tatum),
   };

@@ -75,9 +75,59 @@ export function canEditBot({ signedIn = false, oauth = false, role = "", authReq
 }
 
 /**
+ * Preference tenant for a console request.
+ * OAuth uses the active space, including a personal workspace.
+ * OAuth whose spaces did not load fails closed: tenantId is "" (never a
+ * company id and never "local"). A passphrase session and the local console
+ * use "local".
+ *
+ * @param {{ req?: import("node:http").IncomingMessage, env?: object, identity?: object | null }} input
+ */
+export async function hearingTenantFor({ req, env, identity } = {}) {
+  if (!req) return { oauth: false, tenantId: "local", role: "", spaces: null };
+  const gate = guardConsole(req, env);
+  if (gate.session?.kind === "oauth") {
+    let spaces = null;
+    try {
+      spaces = identity ? await loadSpaceView(identity, gate.session) : null;
+    } catch {
+      spaces = null;
+    }
+    return {
+      oauth: true,
+      tenantId: spaces?.activeId || "",
+      role: spaces?.activeRole || "",
+      spaces,
+    };
+  }
+  return { oauth: false, tenantId: "local", role: "", spaces: null };
+}
+
+/**
+ * Shared write gate for POST /api/hearing and POST /api/bot.
+ * Does not read or write preferences, the session, or semantic memory.
+ * Auth required and no session is 401. An OAuth caller who is not an owner
+ * or admin of the active tenant, including a non-member and a failed space
+ * load, is 403. Owner and admin pass, with that active tenant id.
+ *
+ * @param {{ req: import("node:http").IncomingMessage, env?: object, identity?: object | null }} input
+ */
+export async function authorizeBotWrite({ req, env, identity }) {
+  const gate = guardConsole(req, env);
+  if (gate.required && !gate.session) {
+    return { ok: false, status: 401, error: "Sign in again." };
+  }
+  const hearing = await hearingTenantFor({ req, env, identity });
+  if (hearing.oauth && (!hearing.tenantId || (hearing.role !== "owner" && hearing.role !== "admin"))) {
+    return { ok: false, status: 403, error: "Only an owner or admin can change this." };
+  }
+  return { ok: true, tenantId: hearing.tenantId, role: hearing.role, spaces: hearing.spaces };
+}
+
+/**
  * GET /api/bot reads the workspace persona. POST saves it.
- * The store is the same preference boundary the prompt uses. RLS is the
- * database gate; this handler is the console gate.
+ * POST uses authorizeBotWrite, the same gate as the meeting guest.
+ * RLS is bypassed by the service role; this handler is the gate.
  */
 export async function handleBotSettings(ctx) {
   const { req, res, send, env, identity } = ctx;
@@ -85,47 +135,50 @@ export async function handleBotSettings(ctx) {
     send(res, 405, "text/plain; charset=utf-8", "Method not allowed");
     return;
   }
+  if (req.method === "POST") {
+    const authz = await authorizeBotWrite({ req, env, identity });
+    if (!authz.ok) {
+      const error = authz.status === 401
+        ? "Sign in again."
+        : "Only an owner or admin can change the bot.";
+      send(res, authz.status, "application/json; charset=utf-8", JSON.stringify({ ok: false, error }));
+      return;
+    }
+    let body = {};
+    try {
+      body = await ctx.readJson(req);
+    } catch {
+      send(res, 400, "application/json; charset=utf-8", JSON.stringify({ ok: false, error: "That could not be saved." }));
+      return;
+    }
+    try {
+      const saved = await saveBotIdentity(ctx.store, { tenantId: authz.tenantId, name: body?.name, phrases: body?.phrases });
+      send(res, 200, "application/json; charset=utf-8", JSON.stringify({ ok: true, canEdit: true, ...saved }));
+    } catch (error) {
+      const message = error instanceof Error && error.message ? error.message : "That could not be saved.";
+      send(res, 400, "application/json; charset=utf-8", JSON.stringify({ ok: false, error: message }));
+    }
+    return;
+  }
   const gate = guardConsole(req, env);
   if (gate.required && !gate.session) {
     send(res, 401, "application/json; charset=utf-8", JSON.stringify({ ok: false, error: "Sign in again." }));
     return;
   }
-  const spaces = identity && gate.session?.kind === "oauth" ? await loadSpaceView(identity, gate.session) : null;
+  const hearing = await hearingTenantFor({ req, env, identity });
   const canEdit = canEditBot({
     signedIn: Boolean(gate.session),
-    oauth: Boolean(spaces?.oauth),
-    role: spaces?.activeRole || "",
+    oauth: hearing.oauth,
+    role: hearing.role,
     authRequired: gate.required,
   });
-  const tenantId = spaces?.activeId || "local";
-  const store = ctx.store;
-  if (req.method === "GET") {
-    const view = await readBot(store, tenantId);
-    send(res, 200, "application/json; charset=utf-8", JSON.stringify({ ok: true, canEdit, ...view }));
-    return;
-  }
-  if (!canEdit) {
-    send(res, 403, "application/json; charset=utf-8", JSON.stringify({ ok: false, error: "Only an owner or admin can change the bot." }));
-    return;
-  }
-  let body = {};
-  try {
-    body = await ctx.readJson(req);
-  } catch {
-    send(res, 400, "application/json; charset=utf-8", JSON.stringify({ ok: false, error: "That could not be saved." }));
-    return;
-  }
-  try {
-    const saved = await saveBotIdentity(store, { tenantId, name: body?.name, phrases: body?.phrases });
-    send(res, 200, "application/json; charset=utf-8", JSON.stringify({ ok: true, canEdit: true, ...saved }));
-  } catch (error) {
-    const message = error instanceof Error && error.message ? error.message : "That could not be saved.";
-    send(res, 400, "application/json; charset=utf-8", JSON.stringify({ ok: false, error: message }));
-  }
+  const view = await readBot(ctx.store, hearing.tenantId);
+  send(res, 200, "application/json; charset=utf-8", JSON.stringify({ ok: true, canEdit, ...view }));
 }
 
 export async function readBot(store, tenantId) {
-  if (!store) return resolveBotIdentity({});
-  const loaded = await loadPreferences(store, { tenantId, userId: null });
+  const id = typeof tenantId === "string" ? tenantId.trim() : "";
+  if (!store || !id) return resolveBotIdentity({});
+  const loaded = await loadPreferences(store, { tenantId: id, userId: null });
   return resolveBotIdentity(loaded.workspace);
 }
