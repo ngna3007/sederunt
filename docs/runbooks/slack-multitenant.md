@@ -6,8 +6,8 @@ Independent security review is required. No production schema, environment, Slac
 app configuration or installation is changed by this branch's tests.
 
 1. Review `20261107190000_slack_installations.sql` before applying it to the target
-   project. It creates service-role-only, RLS-enabled installation and OAuth nonce
-   tables plus SECURITY INVOKER RPCs. Generation UUIDs are compare-and-swap
+   project. It creates service-role-only, RLS-enabled installation, lifecycle eligibility and OAuth
+   nonce tables plus SECURITY INVOKER RPCs. Generation UUIDs are compare-and-swap
    preconditions, not a predictable counter that can reset after deletion.
 2. Configure durable server-side Supabase service access and a valid 32-byte
    `MCP_SECRETS_KEY_V1`, plus the existing stable session secret. Production,
@@ -29,6 +29,15 @@ app configuration or installation is changed by this branch's tests.
    channel readiness: Setup checks conversations.info and shows a remediation
    message if membership/access cannot be verified. It never automatically joins
    or posts a test message.
+7. Preserve existing legitimate single-bot ownership during rollout: verify the
+   old bot's actual team and its authoritative Redis **team** owner, then enroll
+   that live tenant/team through the service-only `slack_legacy_eligible` RPC.
+   Normal verified connection lookups can perform the same atomic enrollment.
+   Never seed from a channel-only claim, cached account name or an absent tenant.
+   Review/enroll existing ownership before allowing competing OAuth installs.
+   No Redis cleanup is required for safety: stale claims cannot grant access to
+   deleted tenants or override the durable lifecycle state. Any optional cleanup
+   must compare-and-delete only the exact expected owner; do not bulk-delete.
 
 ## Safety and lifecycle
 
@@ -41,7 +50,22 @@ app configuration or installation is changed by this branch's tests.
   connection. The unique team constraint prevents another tenant taking a team.
 - Installation-store errors are never interpreted as absent records or grounds
   to fall back to a deployment token. Existing verified single-bot legacy claims
-  remain compatible when the store is healthy; fresh tenants never inherit them.
+  remain compatible only after durable enrollment of an existing live tenant
+  with verified authoritative team ownership; fresh tenants never inherit them.
+- `slack_connection_state` records `legacy`, `oauth` or `disconnected`. Successful
+  OAuth saving and supersession commit in the same transaction. Revocation,
+  uninstall, explicit disconnect, reloads and failed later reconsents never turn
+  a superseded tenant back into a legacy tenant. An initial OAuth transaction
+  that fails atomically does not destroy a still-valid prior legacy connection.
+- Legacy enrollment checks/locks the real tenant row and serializes with OAuth
+  using tenant/team advisory locks. Orphan Redis claims for absent/deleted tenants
+  cannot enroll or route events, even with healthy Redis and installation reads.
+  Tenant deletion cascades its Slack rows; no client can authorize from an absent
+  row alone. Legacy and OAuth claims of the same team by different tenants have
+  one durable winner; a same-tenant OAuth connection supersedes its legacy team.
+- Retained legacy clients/events re-check durable eligibility at every network
+  hop, too. A previously captured deployment token cannot be used after OAuth
+  supersession or explicit disconnect.
 - Clients re-resolve the tenant installation per operation. Each network hop
   additionally validates the captured generation/team/token. A replaced or
   removed generation aborts before another request can use it. An already-sent
@@ -82,8 +106,10 @@ node --test --test-reporter=tap test/slack-installations-postgres.test.js
 The test uses the actual store over HTTP to PostgREST, not a fake REST adapter.
 Only Supabase's `/rest/v1` prefix is stripped for standalone PostgREST. It tests
 competing first installs, competing replacements, team claims, restart/session
-restoration, distributed state replay, lifecycle CAS/ABA and anonymous/member
-privilege denial. It truncates only those two proposed tables in the named
+restoration, distributed state replay, lifecycle CAS/ABA, legacy supersession,
+orphan/deleted-tenant denial, eligibility-store failure, legacy/OAuth races,
+transaction rollback and anonymous/member privilege denial. It truncates only
+those three proposed Slack tables in the named
 loopback test database. Without the explicit URLs it reports a skip.
 
 ## Limits / acceptance still requiring real services

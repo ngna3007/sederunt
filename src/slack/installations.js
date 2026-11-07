@@ -53,9 +53,11 @@ function validate(input) {
 }
 
 /** In-process store for tests and local runs. Same contract as the Supabase store. */
-export function createMemoryInstallationStore(env = process.env) {
+export function createMemoryInstallationStore(env = process.env, { tenants } = {}) {
   const rows = new Map(); // tenantId -> row (sealed token)
   const consumed = new Map();
+  const lifecycle = new Map();
+  const live = (tenant) => !tenants || tenants.has(tenant);
   const seal = (token) => (env.MCP_SECRETS_KEY_V1 ? sealSecret(token, env) : { plain: token });
   const open = (sealed) => (sealed?.plain != null ? sealed.plain : openSecret(sealed, env));
   return {
@@ -68,10 +70,21 @@ export function createMemoryInstallationStore(env = process.env) {
       consumed.set(nonce, expiresAt);
       return true;
     },
+    async legacyEligible({ tenantId, teamId, enroll = false }) {
+      if (!live(tenantId) || !cleanTeam(teamId)) return false;
+      const current = lifecycle.get(tenantId);
+      if (current) return current.mode === "legacy" && current.teamId === teamId && ![...rows.values()].some((r) => r.tenantId === tenantId || r.teamId === teamId);
+      if (!enroll || [...rows.values()].some((r) => r.tenantId === tenantId || r.teamId === teamId)
+        || [...lifecycle.values()].some((r) => r.mode === "legacy" && r.teamId === teamId)) return false;
+      lifecycle.set(tenantId, { mode: "legacy", teamId });
+      return true;
+    },
     async get(tenantId) {
+      if (!live(tenantId)) return null;
       return publicRow(rows.get(String(tenantId || "").trim()));
     },
     async tokenFor(tenantId) {
+      if (!live(tenantId)) return null;
       const row = rows.get(String(tenantId || "").trim());
       return row ? { ...publicRow(row), token: open(row.sealed) } : null;
     },
@@ -79,12 +92,16 @@ export function createMemoryInstallationStore(env = process.env) {
       const team = cleanTeam(teamId);
       if (!team) return null;
       for (const row of rows.values()) {
-        if (row.teamId === team) return { ...publicRow(row), token: open(row.sealed) };
+        if (row.teamId === team && live(row.tenantId)) return { ...publicRow(row), token: open(row.sealed) };
       }
       return null;
     },
     async save(input) {
       const { tenantId, teamId, token } = validate(input);
+      if (!live(tenantId)) throw installationError("missing-tenant");
+      for (const [owner, state] of lifecycle) {
+        if (owner !== tenantId && state.mode === "legacy" && state.teamId === teamId) throw installationError("conflict");
+      }
       for (const row of rows.values()) {
         if (row.teamId === teamId && row.tenantId !== tenantId) throw installationError("conflict", "Slack is already linked to another workspace.");
       }
@@ -108,6 +125,7 @@ export function createMemoryInstallationStore(env = process.env) {
         sealed: seal(token),
       };
       rows.set(tenantId, row);
+      lifecycle.set(tenantId, { mode: "oauth", teamId });
       return publicRow(row);
     },
     async revoke({ teamId, appId, generation, eventTime, botUserId }) {
@@ -116,10 +134,14 @@ export function createMemoryInstallationStore(env = process.env) {
         || !Number.isFinite(eventTime) || Date.parse(row.updatedAt) >= eventTime
         || (botUserId && row.botUserId !== botUserId)) return 0;
       rows.delete(row.tenantId);
+      lifecycle.set(row.tenantId, { mode: "disconnected", teamId: row.teamId });
       return 1;
     },
     async remove(tenantId) {
-      return rows.delete(String(tenantId || "").trim());
+      const tenant = String(tenantId || "").trim();
+      const prior = lifecycle.get(tenant);
+      if (prior) lifecycle.set(tenant, { ...prior, mode: "disconnected" });
+      return rows.delete(tenant) || Boolean(prior);
     },
   };
 }
@@ -182,6 +204,10 @@ export function createSupabaseInstallationStore({ url, key, env = process.env, f
   return {
     durable: true,
     encrypted: true,
+    async legacyEligible({ tenantId, teamId, enroll = false }) {
+      if (!UUID.test(tenantId || "") || !cleanTeam(teamId)) return false;
+      return await call("POST", {}, { p_tenant_id: tenantId, p_team_id: teamId, p_enroll: enroll === true }, "slack_legacy_eligible") === true;
+    },
     async consumeState(nonce, expiresAt) {
       return await call("POST", {}, {
         p_nonce_hash: createHash("sha256").update(nonce).digest("hex"),
@@ -244,8 +270,8 @@ export function createSupabaseInstallationStore({ url, key, env = process.env, f
     async remove(tenantId) {
       const id = String(tenantId || "").trim();
       if (!UUID.test(id)) return false;
-      await call("DELETE", { tenant_id: `eq.${id}` });
-      return true;
+      const current = await call("GET", { select: "generation", tenant_id: `eq.${id}` });
+      return await call("POST", {}, { p_tenant_id: id, p_expected_generation: current?.[0]?.generation || null }, "slack_installation_disconnect") === true;
     },
   };
 }
@@ -269,6 +295,6 @@ export function createInstallationStore(env = process.env, options = {}) {
     return createSupabaseInstallationStore({ url, key, env, fetchImpl: options.fetch || globalThis.fetch });
   } catch {
     const unavailable = async () => { throw installationError("unavailable", "Durable encrypted Slack storage is not configured."); };
-    return { durable: false, encrypted: false, get: unavailable, tokenFor: unavailable, byTeam: unavailable, save: unavailable, revoke: unavailable, consumeState: unavailable };
+    return { durable: false, encrypted: false, get: unavailable, tokenFor: unavailable, byTeam: unavailable, save: unavailable, revoke: unavailable, consumeState: unavailable, legacyEligible: unavailable };
   }
 }

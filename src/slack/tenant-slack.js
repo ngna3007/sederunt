@@ -44,6 +44,13 @@ export async function slackConnection(workspace, tenantId) {
     slackConfigured: true,
   }, tenant).catch(() => ({ linked: false }));
   if (claim.linked !== true) return { ...none, conflictOwner: claim.conflictOwner || "" };
+  // Redis ownership is not sufficient: the live tenant must have durable,
+  // explicitly enrolled legacy eligibility, never a superseded/disconnected row.
+  if (slackOAuthConfigured(env)) {
+    if (await workspace.tenantBind.resolve("slack", claim.teamId) !== tenant) return none;
+    if (!workspace.slackInstallations?.legacyEligible) throw installationError("unavailable");
+    if (!await workspace.slackInstallations.legacyEligible({ tenantId: tenant, teamId: claim.teamId, enroll: true })) return none;
+  }
   // A team that has its own OAuth installation belongs to that tenant only.
   if (slackOAuthConfigured(env) && workspace.slackInstallations && claim.teamId) {
     const owned = await workspace.slackInstallations.byTeam(claim.teamId);
@@ -75,7 +82,7 @@ export async function slackEventTenant(workspace, { teamId = "", legacyTenantId 
   if (legacyTenantId) {
     const legacy = await slackConnection(workspace, legacyTenantId);
     if (legacy.linked && legacy.source === "legacy" && (!teamId || !legacy.teamId || legacy.teamId === teamId)) {
-      return { tenantId: legacyTenantId, token: legacy.token, botUserId: "", source: "legacy" };
+      return { tenantId: legacyTenantId, token: legacy.token, botUserId: "", source: "legacy", teamId: legacy.teamId };
     }
     if (!slackOAuthConfigured(env)) {
       return { tenantId: legacyTenantId, token: env.SLACK_BOT_TOKEN || "", botUserId: "", source: "legacy" };
@@ -98,7 +105,6 @@ export function tenantSlackClient(workspace, tenantId, fetchImpl) {
   const client = () => {
     return slackConnection(workspace, tenantId).then((conn) => {
       if (!conn.linked) return null;
-      if (conn.source === "legacy") return fallback;
       return createSlackClient({
         ...workspace.env,
         SLACK_BOT_TOKEN: conn.token,
@@ -138,6 +144,12 @@ export function tenantSlackClient(workspace, tenantId, fetchImpl) {
  * An already-sent request cannot be recalled; Slack enforces its token access.
  */
 export function installationFetch(workspace, tenantId, expected, fetchImpl = globalThis.fetch) {
+  if (expected.source === "legacy" && slackOAuthConfigured(workspace.env || {})) {
+    return async (...args) => {
+      if (!await workspace.slackInstallations.legacyEligible({ tenantId, teamId: expected.teamId })) throw installationError("stale");
+      return fetchImpl(...args);
+    };
+  }
   if (expected.source !== "install") return fetchImpl;
   return async (...args) => {
     const current = await workspace.slackInstallations.tokenFor(tenantId);

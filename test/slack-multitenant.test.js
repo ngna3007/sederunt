@@ -547,3 +547,82 @@ test("actual Slack HTTP keep -> stored-file DM resend uses only the routed tenan
   assert.equal(log.some((r) => /files.info|files.getUploadURLExternal|\/private\/memo/.test(r.href)), false, "tenant B has no access to tenant A's stored file");
   assert.ok(log.filter((r) => r.auth).every((r) => r.auth === "Bearer xoxb-beta"));
 });
+
+async function legacyFixture(installations, tenant = A, team = "TLEGACY") {
+  const tenantBind = createTenantBind({}, { memory: new Map() });
+  await tenantBind.bind("slack", team, tenant);
+  const log = [];
+  return { env: env(), slackInstallations: installations, tenantBind,
+    deps: { slack: { fetch: slackFetch(log, () => ({})), async authTest() { return { ok: true, teamId: team }; } } }, log };
+}
+
+test("durable supersession: OAuth -> revoke -> failed reconnect -> reinstall -> remove never revives an older different legacy team", async () => {
+  const installations = createMemoryInstallationStore({});
+  const workspace = await legacyFixture(installations);
+  assert.equal((await slackConnection(workspace, A)).source, "legacy");
+  const oldClient = tenantSlackClient(workspace, A);
+  const old = await slackConnection(workspace, A);
+  const guardedOldRequest = (await import("../src/slack/tenant-slack.js")).installationFetch(workspace, A, old, async () => { throw new Error("must not request"); });
+  const installed = await installations.save({ tenantId: A, teamId: "TNEW", token: "xoxb-new", appId: "APP", botUserId: "UBOTA" });
+  await assert.rejects(() => guardedOldRequest("https://slack.com/api/chat.postMessage"), (e) => e.reason === "stale");
+  await installations.revoke({ teamId: "TNEW", appId: "APP", generation: installed.generation, botUserId: "UBOTA", eventTime: Date.now() + 5000 });
+  assert.equal((await slackConnection(workspace, A)).linked, false);
+  assert.equal((await slackEventTenant(workspace, { teamId: "TLEGACY", legacyTenantId: A })).tenantId, "");
+  await assert.rejects(() => oldClient.postMessage({ channel: "CA", text: "disconnected" }));
+  await installations.save({ tenantId: B, teamId: "TOCCUPIED", token: "xoxb-b" });
+  await assert.rejects(() => installations.save({ tenantId: A, teamId: "TOCCUPIED", token: "xoxb-conflict" }));
+  assert.equal((await slackConnection(workspace, A)).linked, false);
+  await installations.save({ tenantId: A, teamId: "TREINSTALL", token: "xoxb-reinstall" });
+  assert.equal((await slackConnection(workspace, A)).teamId, "TREINSTALL");
+  await installations.remove(A);
+  assert.equal((await slackConnection(workspace, A)).linked, false);
+  assert.equal(await installations.legacyEligible({ tenantId: A, teamId: "TLEGACY", enroll: true }), false);
+  assert.equal(workspace.log.length, 0);
+});
+
+test("orphan/deleted tenant legacy claims cannot enroll or route; live legacy is explicitly disconnectable", async () => {
+  const tenants = new Set([A, B]);
+  const installations = createMemoryInstallationStore({}, { tenants });
+  const orphan = await legacyFixture(installations, C);
+  assert.equal((await slackConnection(orphan, C)).linked, false);
+  assert.equal((await slackEventTenant(orphan, { teamId: "TLEGACY", legacyTenantId: C })).tenantId, "");
+  const live = await legacyFixture(installations);
+  assert.equal((await slackConnection(live, A)).source, "legacy");
+  tenants.delete(A);
+  assert.equal((await slackConnection(live, A)).linked, false);
+  assert.equal((await slackEventTenant(live, { teamId: "TLEGACY", legacyTenantId: A })).tenantId, "");
+  const other = await legacyFixture(installations, B, "TBLEGACY");
+  assert.equal((await slackConnection(other, B)).source, "legacy");
+  await installations.remove(B);
+  assert.equal((await slackConnection(other, B)).linked, false);
+});
+
+test("legacy eligibility-store failure cannot authorize a healthy cached Redis claim", async () => {
+  const installations = createMemoryInstallationStore({});
+  const workspace = await legacyFixture(installations);
+  assert.equal((await slackConnection(workspace, A)).source, "legacy");
+  installations.legacyEligible = async () => { throw new Error("store offline"); };
+  await assert.rejects(() => slackConnection(workspace, A));
+  await assert.rejects(() => slackEventTenant(workspace, { teamId: "TLEGACY", legacyTenantId: A }));
+});
+
+test("legacy/OAuth competing team ownership has one winner and failed first OAuth preserves a valid legacy grant", async () => {
+  const store = createMemoryInstallationStore({});
+  const results = await Promise.allSettled([
+    store.legacyEligible({ tenantId: A, teamId: "TRACED", enroll: true }),
+    store.save({ tenantId: B, teamId: "TRACED", token: "xoxb-b" }),
+  ]);
+  assert.equal(Number(results[0].status === "fulfilled" && results[0].value === true) + Number(results[1].status === "fulfilled"), 1);
+  await store.save({ tenantId: B, teamId: "TOCCUPIED", token: "xoxb-b" });
+  await assert.rejects(() => store.save({ tenantId: A, teamId: "TOCCUPIED", token: "xoxb-failed" }));
+  assert.equal(await store.legacyEligible({ tenantId: A, teamId: "TRACED" }), true);
+});
+
+test("a channel-only orphan claim cannot enroll a live tenant without authoritative legacy team ownership", async () => {
+  const installations = createMemoryInstallationStore({});
+  const workspace = await legacyFixture(installations);
+  workspace.deps.app = { slackChannel: "CA" };
+  workspace.tenantBind = { async resolve(_kind, key) { return key === "TLEGACY:CA" ? A : ""; } };
+  assert.equal((await slackConnection(workspace, A)).linked, false);
+  assert.equal(await installations.legacyEligible({ tenantId: A, teamId: "TLEGACY" }), false);
+});
