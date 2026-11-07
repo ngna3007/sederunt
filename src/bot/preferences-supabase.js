@@ -1,12 +1,18 @@
 /**
  * Bot preference store. Memory when sign-in is faked, when the caller asks
  * for memory, or when Supabase is not configured. Otherwise the service role
- * talks to public.bot_preferences. A tenant id that is not a uuid (the local
- * console uses "local") stays in an in-process store and is never sent.
+ * talks to public.bot_preferences. A non-uuid tenant is the non-oauth local
+ * console ("local"): it stays in an in-process store and is never sent.
+ * OAuth callers must pass a uuid; this module does not substitute "local".
  *
- * Rows map to { tenantId, userId, key, value }. Failures throw a fixed
- * message. The preference key, the value, and the service key are not logged
- * and are not copied into the error.
+ * Real mode does not catch a REST error and answer from memory. Failures
+ * throw a fixed message. The preference key, the value, and the service key
+ * are not logged and are not copied into the error.
+ *
+ * Rows are checked before any request: tenant uuid (or local non-uuid),
+ * user id uuid or null, key lowercase and 1-80 characters, value 1-500
+ * characters. Prod has no bot_name or wake_phrases value checks and no key
+ * enum; those limits are the table checks that are applied.
  */
 
 import { createMemoryPreferenceStore } from "./preferences.js";
@@ -36,6 +42,7 @@ export function createBotPreferenceStore(env = process.env, options = {}) {
 export function createSupabaseBotPreferenceStore({ url, key, fetchImpl }) {
   const rest = `${url}/rest/v1`;
   const memory = createMemoryPreferenceStore();
+  const columns = "tenant_id,user_id,pref_key,pref_value";
 
   function storeError(status) {
     const error = new Error(STORE_ERROR);
@@ -77,7 +84,7 @@ export function createSupabaseBotPreferenceStore({ url, key, fetchImpl }) {
       throw storeError();
     }
     if (response.status === 409) throw storeError(409);
-    if (!response.ok) throw storeError();
+    if (!response.ok) throw storeError(response.status || 0);
     if (!text) return null;
     try {
       return JSON.parse(text);
@@ -88,10 +95,42 @@ export function createSupabaseBotPreferenceStore({ url, key, fetchImpl }) {
 
   function filters(tenantId, userId, prefKey) {
     return {
+      select: columns,
       tenant_id: `eq.${tenantId}`,
       pref_key: `eq.${prefKey}`,
       user_id: userId ? `eq.${userId}` : "is.null",
     };
+  }
+
+  function ownerOf(userId) {
+    if (userId == null || userId === "") return null;
+    const id = String(userId).trim();
+    if (!isUuid(id)) throw storeError();
+    return id;
+  }
+
+  function keyOf(prefKey) {
+    const text = typeof prefKey === "string" ? prefKey : "";
+    if (text.length < 1 || text.length > 80 || text !== text.toLowerCase()) throw storeError();
+    return text;
+  }
+
+  function valueOf(value) {
+    const text = typeof value === "string" ? value : "";
+    if (text.length < 1 || text.length > 500) throw storeError();
+    return text;
+  }
+
+  /**
+   * Uuid goes to REST. Any other non-empty id is the local console and stays
+   * in memory. Empty is rejected. Nothing here turns a failed REST call into
+   * a memory read or write.
+   */
+  function placement(tenantId) {
+    const id = typeof tenantId === "string" ? tenantId.trim() : "";
+    if (!id) throw storeError();
+    if (isUuid(id)) return { local: false, id };
+    return { local: true, id };
   }
 
   async function patchRow(tenantId, userId, prefKey, value) {
@@ -104,29 +143,37 @@ export function createSupabaseBotPreferenceStore({ url, key, fetchImpl }) {
   }
 
   return {
+    durable: true,
     async list({ tenantId }) {
-      if (!isUuid(tenantId)) return memory.list({ tenantId });
+      const placed = placement(tenantId);
+      if (placed.local) return memory.list({ tenantId: placed.id });
       const rows = await call("bot_preferences", {
         query: {
-          select: "tenant_id,user_id,pref_key,pref_value",
-          tenant_id: `eq.${tenantId}`,
+          select: columns,
+          tenant_id: `eq.${placed.id}`,
         },
       });
       return (Array.isArray(rows) ? rows : []).map(mapRow).filter(Boolean);
     },
     async upsert({ tenantId, userId = null, key: prefKey, value }) {
-      const owner = userId || null;
-      if (!isUuid(tenantId)) return memory.upsert({ tenantId, userId: owner, key: prefKey, value });
-      const patched = await patchRow(tenantId, owner, prefKey, value);
+      const placed = placement(tenantId);
+      const owner = ownerOf(userId);
+      const cleanKey = keyOf(prefKey);
+      const cleanValue = valueOf(value);
+      if (placed.local) {
+        return memory.upsert({ tenantId: placed.id, userId: owner, key: cleanKey, value: cleanValue });
+      }
+      const patched = await patchRow(placed.id, owner, cleanKey, cleanValue);
       if (patched) return mapRow(patched);
       try {
         const created = await call("bot_preferences", {
           method: "POST",
+          query: { select: columns },
           body: {
-            tenant_id: tenantId,
+            tenant_id: placed.id,
             user_id: owner,
-            pref_key: prefKey,
-            pref_value: value,
+            pref_key: cleanKey,
+            pref_value: cleanValue,
           },
         });
         const row = firstRow(created);
@@ -134,17 +181,19 @@ export function createSupabaseBotPreferenceStore({ url, key, fetchImpl }) {
         return mapRow(row);
       } catch (error) {
         if (!error || error.status !== 409) throw error;
-        const retried = await patchRow(tenantId, owner, prefKey, value);
+        const retried = await patchRow(placed.id, owner, cleanKey, cleanValue);
         if (!retried) throw storeError();
         return mapRow(retried);
       }
     },
     async remove({ tenantId, userId = null, key: prefKey }) {
-      const owner = userId || null;
-      if (!isUuid(tenantId)) return memory.remove({ tenantId, userId: owner, key: prefKey });
+      const placed = placement(tenantId);
+      const owner = ownerOf(userId);
+      const cleanKey = keyOf(prefKey);
+      if (placed.local) return memory.remove({ tenantId: placed.id, userId: owner, key: cleanKey });
       const rows = await call("bot_preferences", {
         method: "DELETE",
-        query: filters(tenantId, owner, prefKey),
+        query: filters(placed.id, owner, cleanKey),
       });
       return Array.isArray(rows) && rows.length > 0;
     },

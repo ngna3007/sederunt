@@ -42,7 +42,7 @@ import { handleAuthRoute, requestOrigin } from "./identity/routes.js";
 import { refreshOAuthSession, rememberRefreshCookie } from "./identity/session.js";
 import { createBotPreferenceStore } from "./bot/preferences-supabase.js";
 import { assignEffectiveHearing, effectiveHearing, saveMeetingGuest } from "./bot/meeting-guest.js";
-import { canEditBot, handleBotSettings, readBot } from "./console/bot-settings.js";
+import { authorizeBotWrite, canEditBot, handleBotSettings, hearingTenantFor, readBot } from "./console/bot-settings.js";
 import { handleToolPref, loadAccountProfile, loadToolAsk } from "./console-account.js";
 import { handleInvite, handleJoinLink, handleSpaceSwitch, handleWelcome, loadChecklist, loadSpaceView, welcomeLocation } from "./console-flow.js";
 import { roleLabel } from "./identity/onboarding.js";
@@ -955,17 +955,21 @@ export function createApp(options = {}) {
       const accountProfile = oauth ? await loadAccountProfile(identity, gate.session, spaces) : null;
       const toolAsk = oauth ? await loadToolAsk(identity, gate.session, connectedDoors || {}, env) : null;
       const checklist = oauth && url.pathname === "/console" ? await loadChecklist(identity, gate.session, spaces, toolAsk) : null;
-      const botTenant = spaces?.activeId || "local";
+      const hearingView = await hearingTenantFor({ req, env, identity });
+      const botTenant = hearingView.tenantId;
       const botView = await readBot(workspace.botPreferences, botTenant);
-      const hearingTenant = botTenant;
-      const hearingCompany = spaces?.activeId && spaces.activeKind !== "personal" ? spaces.activeId : "";
-      const hearing = await effectiveHearing(workspace, hearingTenant, sessionFor(workspace, hearingCompany));
+      const hearingCompany = hearingView.spaces?.activeId && hearingView.spaces.activeKind !== "personal"
+        ? hearingView.spaces.activeId
+        : "";
+      const hearingSession = sessionFor(workspace, hearingCompany);
+      if (botTenant) await assignEffectiveHearing(workspace, hearingSession, botTenant);
+      const hearing = await effectiveHearing(workspace, botTenant, hearingSession);
       const bot = {
         ...botView,
         canEdit: canEditBot({
           signedIn: Boolean(gate.session),
-          oauth: Boolean(spaces?.oauth),
-          role: spaces?.activeRole || "",
+          oauth: hearingView.oauth,
+          role: hearingView.role,
           authRequired: gate.required,
         }),
       };
@@ -1006,41 +1010,57 @@ export function createApp(options = {}) {
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/hearing") {
-      const body = await readJson(req);
+      const authz = await authorizeBotWrite({ req, env, identity });
+      if (!authz.ok) {
+        const error = authz.status === 401
+          ? "Sign in again."
+          : "Only an owner or admin can change the meeting guest.";
+        send(res, authz.status, "application/json; charset=utf-8", JSON.stringify({ ok: false, error }));
+        return;
+      }
+      let body = {};
+      try {
+        body = await readJson(req);
+      } catch {
+        send(res, 400, "application/json; charset=utf-8", JSON.stringify({ ok: false, error: "The guest was not saved." }));
+        return;
+      }
       const resolved = await resolveCompanyId(workspace, req, typeof body.company === "string" ? body.company : "");
       if (resolved.denied || resolved.unauthorized) {
         sendCompanyDenied(res, send, resolved);
         return;
       }
-      const gate = guardConsole(req, env);
-      const spaces = workspace.identity && gate.session?.kind === "oauth"
-        ? await loadSpaceView(workspace.identity, gate.session)
-        : null;
-      const canEdit = canEditBot({
-        signedIn: Boolean(gate.session),
-        oauth: Boolean(spaces?.oauth),
-        role: spaces?.activeRole || "",
-        authRequired: gate.required,
-      });
-      if (!canEdit) {
+      const tenantId = authz.tenantId;
+      if (!tenantId) {
         send(res, 403, "application/json; charset=utf-8", JSON.stringify({
           ok: false,
           error: "Only an owner or admin can change the meeting guest.",
         }));
         return;
       }
-      const tenantId = spaces?.activeId || resolved.companyId || "local";
-      const companyId = resolved.companyId;
-      const current = await prepareWorkspace(workspace, companyId);
       const triggers = typeof body.triggers === "string"
         ? body.triggers.split(/\n+/)
         : body.triggers;
-      const saved = await saveHearing(current, depsFor(workspace, companyId), {
-        name: body.name,
-        triggers,
-      });
-      const hearing = await saveMeetingGuest(workspace.botPreferences, tenantId, saved);
-      current.hearing = { ...hearing, savedAt: saved.savedAt, tenantId };
+      let hearing;
+      try {
+        hearing = await saveMeetingGuest(workspace.botPreferences, tenantId, {
+          name: body.name,
+          triggers,
+        });
+      } catch {
+        send(res, 503, "application/json; charset=utf-8", JSON.stringify({ ok: false }));
+        return;
+      }
+      const companyId = resolved.companyId;
+      const current = await prepareWorkspace(workspace, companyId, false, 0, tenantId);
+      const savedAt = new Date().toISOString();
+      current.hearing = { ...hearing, savedAt, tenantId };
+      try {
+        const remembered = await saveHearing(current, depsFor(workspace, companyId), hearing);
+        current.hearing = { ...remembered, tenantId };
+      } catch {
+        current.hearing = { ...hearing, savedAt, tenantId };
+      }
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({ hearing }));
       return;
     }
@@ -1061,7 +1081,8 @@ export function createApp(options = {}) {
         return;
       }
       const companyId = resolved.companyId;
-      const current = await prepareWorkspace(workspace, companyId, false, 2000);
+      const hearingTenant = await hearingTenantId(workspace, req);
+      const current = await prepareWorkspace(workspace, companyId, false, 2000, hearingTenant);
       const workspaceKind = url.searchParams.get("workspace") || "";
       const memberId = consoleBoardMember(gate.session, env, workspaceKind, url.searchParams.get("member") || "");
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(await consolePayload(
@@ -1085,7 +1106,8 @@ export function createApp(options = {}) {
         return;
       }
       const companyId = resolved.companyId;
-      const current = await prepareWorkspace(workspace, companyId, true);
+      const hearingTenant = await hearingTenantId(workspace, req);
+      const current = await prepareWorkspace(workspace, companyId, true, 0, hearingTenant);
       const workspaceKind = url.searchParams.get("workspace") || "";
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(await consolePayload(
         workspace,
@@ -1151,8 +1173,8 @@ export function createApp(options = {}) {
         let status = "not-configured";
         if (deps.meeting?.join) {
           try {
-            const ready = await prepareWorkspace(workspace, joinCompanyId);
-            const hearingTenant = await hearingTenantId(workspace, req, joinCompanyId);
+            const hearingTenant = await hearingTenantId(workspace, req);
+            const ready = await prepareWorkspace(workspace, joinCompanyId, false, 0, hearingTenant);
             const hearing = await effectiveHearing(workspace, hearingTenant, ready);
             const guest = hearing.name;
             const bot = await currentBot(workspace, req);
@@ -1196,7 +1218,8 @@ export function createApp(options = {}) {
           const platform = meetingPlatform(meetingUrl);
           if (platform) {
             try {
-              const current = await prepareWorkspace(workspace, joinCompanyId || "");
+              const hearingTenant = await hearingTenantId(workspace, req);
+              const current = await prepareWorkspace(workspace, joinCompanyId || "", false, 0, hearingTenant);
               await handleUtterance({
                 session: current,
                 openedRoom: { platform, id: botId, ...(startedAt ? { startedAt } : {}) },
@@ -1282,7 +1305,8 @@ export function createApp(options = {}) {
         return;
       }
       const companyId = resolved.companyId;
-      const current = await prepareWorkspace(workspace, companyId);
+      const hearingTenant = await hearingTenantId(workspace, req);
+      const current = await prepareWorkspace(workspace, companyId, false, 0, hearingTenant);
       const result = await handleUtterance({ ...delivery, session: current }, depsFor(workspace, companyId));
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(result));
       return;
@@ -2396,12 +2420,7 @@ function sendCompanyDenied(res, send, { unauthorized = false } = {}) {
 }
 
 async function currentBot(workspace, req) {
-  const gate = guardConsole(req, workspace.env);
-  let tenantId = "local";
-  if (workspace.identity && gate.session?.kind === "oauth") {
-    const spaces = await loadSpaceView(workspace.identity, gate.session);
-    if (spaces?.activeId) tenantId = spaces.activeId;
-  }
+  const tenantId = await hearingTenantId(workspace, req);
   return readBot(workspace.botPreferences, tenantId);
 }
 
@@ -2420,10 +2439,14 @@ export function proofWarmOn(env) {
   return Boolean(env?.TATUM_API_KEY || env?.TATUM_MAINNET_API_KEY);
 }
 
-async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0) {
+async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0, hearingTenant) {
   const current = sessionFor(workspace, companyId);
-  const hearingTenant = (typeof companyId === "string" && companyId.trim()) || "local";
-  const applyHearing = () => assignEffectiveHearing(workspace, current, hearingTenant);
+  // Undefined keeps callback tenancy (the bound company, or local). A request
+  // passes the resolved hearing tenant, including "" when OAuth spaces failed.
+  const tenant = hearingTenant === undefined
+    ? ((typeof companyId === "string" && companyId.trim()) || "local")
+    : (typeof hearingTenant === "string" ? hearingTenant.trim() : "");
+  const applyHearing = () => assignEffectiveHearing(workspace, current, tenant);
   if (!workspace.companyLoaded) {
     current.readReport = { ok: true, empty: true, blocked: true };
     await applyHearing();
@@ -2465,24 +2488,20 @@ async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0)
 }
 
 /**
- * Preference tenant for a console request. OAuth uses the active space,
- * including a personal workspace. Otherwise the authorized company id, or
- * the local console.
+ * Hearing tenant for a console request. Same rule as bot settings:
+ * the active space for OAuth (personal uuid when personal is active),
+ * "" when that space cannot be loaded, and "local" otherwise.
  *
- * @param {{ env: NodeJS.ProcessEnv | Record<string, string | undefined>, identity: object | null }} workspace
+ * @param {{ env?: object, identity?: object | null }} workspace
  * @param {import("node:http").IncomingMessage | undefined} req
- * @param {string} [companyId]
  */
-async function hearingTenantId(workspace, req, companyId = "") {
-  if (req && workspace?.identity) {
-    const gate = guardConsole(req, workspace.env);
-    if (gate.session?.kind === "oauth") {
-      const spaces = await loadSpaceView(workspace.identity, gate.session);
-      if (spaces?.activeId) return spaces.activeId;
-    }
-  }
-  const id = typeof companyId === "string" ? companyId.trim() : "";
-  return id || "local";
+async function hearingTenantId(workspace, req) {
+  const hearing = await hearingTenantFor({
+    req,
+    env: workspace?.env || {},
+    identity: workspace?.identity || null,
+  });
+  return typeof hearing?.tenantId === "string" ? hearing.tenantId : "";
 }
 
 /**
@@ -2503,7 +2522,7 @@ async function consolePayload(workspace, current, memberId, kind = "company", op
   const open = kind === "personal" ? "personal" : "company";
   const req = options.req;
   const companyId = typeof options.companyId === "string" ? options.companyId : "";
-  const hearing = await effectiveHearing(workspace, await hearingTenantId(workspace, req, companyId), current);
+  const hearing = await effectiveHearing(workspace, await hearingTenantId(workspace, req), current);
   const gate = req ? guardConsole(req, workspace.env) : { session: null };
   const personId = String(gate.session?.userId || "").trim();
   const doors = req

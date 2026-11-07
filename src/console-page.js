@@ -6234,7 +6234,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       });
     }).then(function (payload) {
       var result = payload.result || {};
-      if (!payload.ok || !result.hearing || !result.hearing.name) {
+      if (!payload.ok || result.ok === false || !result.hearing || !result.hearing.name) {
         if (note) note.textContent = result.error || "The guest was not saved.";
         return;
       }

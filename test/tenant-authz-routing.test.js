@@ -8,6 +8,7 @@ import { CALENDAR_SCOPES, FORMS_SCOPES, createPersonGoogleStore } from "../src/c
 import { resolveMcpSpace } from "../src/connectors/expose.js";
 import { claimWorkspaceSlack, slackClaimState } from "../src/slack/claim.js";
 import { createTenantBind } from "../src/tenant-bind.js";
+import { createMemoryPreferenceStore } from "../src/bot/preferences.js";
 import { createApp } from "../src/server.js";
 
 const SECRET = "tenant-authz-session-secret";
@@ -1247,4 +1248,88 @@ test("passphrase Setup still SSRs Slack Connected from env doors", async (t) => 
   const page = await call(port, "GET", "/console/setup");
   assert.equal(page.status, 200);
   assert.match(page.raw, /id="slack-conn" class="conn-state">Connected/);
+});
+
+test("hearing and bot saves share the owner gate and do not mutate on 401 or 403", async (t) => {
+  const store = createMemoryPreferenceStore();
+  const memory = trackingMemory();
+  const byToken = {
+    "access-owner": [{ id: TENANT_A, name: "A", kind: "company", role: "owner" }],
+    "access-admin": [{ id: TENANT_A, name: "A", kind: "company", role: "admin" }],
+    "access-member": [{ id: TENANT_A, name: "A", kind: "company", role: "member" }],
+    "access-outsider": [],
+  };
+  const app = createApp({
+    companyLoaded: true,
+    env: identityEnv(),
+    identity: {
+      async myTenants(token) {
+        return (byToken[token] || []).map((row) => ({ ...row }));
+      },
+      async getUser() { return { user_metadata: {} }; },
+      async profile() { return null; },
+      async updateUser() {},
+    },
+    botPreferences: store,
+    deps: {
+      memory,
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+    },
+  });
+  const port = await listen(app);
+  t.after(() => app.close());
+
+  async function snap() {
+    return {
+      tenant: JSON.stringify(await store.list({ tenantId: TENANT_A })),
+      local: JSON.stringify(await store.list({ tenantId: "local" })),
+      remembered: memory.remembered.length,
+    };
+  }
+
+  const before = await snap();
+  const denied = [
+    ["/api/hearing", { name: "Zoe", triggers: "Hey Zoe" }, undefined, 401],
+    ["/api/bot", { name: "Zoe", phrases: ["Hey Zoe", "Zoe"] }, undefined, 401],
+    ["/api/hearing", { name: "Zoe", triggers: "Hey Zoe" }, oauthCookie({ accessToken: "access-member", tenantId: TENANT_A, userId: "user-member" }), 403],
+    ["/api/bot", { name: "Zoe", phrases: ["Hey Zoe", "Zoe"] }, oauthCookie({ accessToken: "access-member", tenantId: TENANT_A, userId: "user-member" }), 403],
+    ["/api/hearing", { name: "Zoe", triggers: "Hey Zoe" }, oauthCookie({ accessToken: "access-outsider", tenantId: TENANT_A, userId: "user-out" }), 403],
+    ["/api/bot", { name: "Zoe", phrases: ["Hey Zoe", "Zoe"] }, oauthCookie({ accessToken: "access-outsider", tenantId: TENANT_A, userId: "user-out" }), 403],
+  ];
+  for (const [path, body, cookie, status] of denied) {
+    const response = await call(port, "POST", path, body, cookie ? { cookie } : {});
+    assert.equal(response.status, status, path);
+    assert.equal(response.json?.ok, false);
+    assert.deepEqual(await snap(), before);
+  }
+
+  const adminHearing = await call(port, "POST", "/api/hearing", { name: "Nia", triggers: "Hey Nia" }, {
+    cookie: oauthCookie({ accessToken: "access-admin", tenantId: TENANT_A, userId: "user-admin" }),
+  });
+  assert.equal(adminHearing.status, 200, adminHearing.raw?.slice?.(0, 180));
+  assert.equal(adminHearing.json?.hearing?.name, "Nia");
+  const adminBot = await call(port, "POST", "/api/bot", { name: "Nia", phrases: ["Hey Nia", "Nia"] }, {
+    cookie: oauthCookie({ accessToken: "access-admin", tenantId: TENANT_A, userId: "user-admin" }),
+  });
+  assert.equal(adminBot.status, 200, adminBot.raw);
+  assert.equal(adminBot.json?.name, "Nia");
+  const ownerHearing = await call(port, "POST", "/api/hearing", { name: "Quinn", triggers: "red cedar" }, {
+    cookie: oauthCookie({ accessToken: "access-owner", tenantId: TENANT_A, userId: "user-owner" }),
+  });
+  assert.equal(ownerHearing.status, 200);
+  assert.equal(ownerHearing.json?.hearing?.name, "Quinn");
+  assert.ok(memory.remembered.some((item) => item.kind === "hearing"));
+  const written = await snap();
+  assert.notEqual(written.tenant, before.tenant);
+  assert.equal(written.local, before.local);
+
+  const memberHearing = await call(port, "POST", "/api/hearing", { name: "Zoe", triggers: "Hey Zoe" }, {
+    cookie: oauthCookie({ accessToken: "access-member", tenantId: TENANT_A, userId: "user-member" }),
+  });
+  const memberBot = await call(port, "POST", "/api/bot", { name: "Zoe", phrases: ["Hey Zoe", "Zoe"] }, {
+    cookie: oauthCookie({ accessToken: "access-member", tenantId: TENANT_A, userId: "user-member" }),
+  });
+  assert.equal(memberHearing.status, 403);
+  assert.equal(memberBot.status, 403);
+  assert.deepEqual(await snap(), written);
 });

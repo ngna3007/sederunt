@@ -1,9 +1,18 @@
 /**
  * Workspace meeting guest. One bot_preferences row per tenant, user_id null,
  * key meeting_guest. The value is JSON { name, triggers } of at most 500
- * characters. A saved row wins. Otherwise a legacy session hearing that was
- * actually saved wins. Otherwise the guest name is the workspace bot name
- * (Adam until someone renames it) and there are no extra triggers.
+ * characters.
+ *
+ * When the preference store is durable (Supabase configured), that row is
+ * the only settings source: the row, or else the workspace bot name (Adam
+ * until someone renames it) and no extra triggers. A hearing recalled from
+ * semantic memory is not a source in that mode, so one tenant cannot inherit
+ * another's guest.
+ *
+ * Semantic memory remains a source only for pure memory / no-store mode
+ * (sign-in faked, Supabase unset, or options.memory): a session hearing with
+ * savedAt for this same tenant, then the default bot name. That path is
+ * back-compat for a process that has nowhere else to keep the guest.
  */
 
 import { normalizeHearing } from "../hearing.js";
@@ -76,11 +85,13 @@ export async function effectiveHearing(workspace, tenantId, current) {
 
 /**
  * Copy the effective guest onto the session after the workspace is prepared.
- * A durable row replaces whatever semantic recall restored. A legacy hearing
- * with savedAt is left in place. The default name is stamped without savedAt
- * so it is not mistaken for a saved guest on another tenant.
+ * A durable store always stamps the canonical guest (row, or the default bot
+ * name) and drops a recalled hearing. Memory mode still leaves a legacy
+ * hearing that belongs to this tenant. The default name is stamped without
+ * savedAt so it is not mistaken for a saved guest on another tenant.
+ * An empty tenant fails closed: no "local" and no other tenant's guest.
  *
- * @param {{ botPreferences?: { list: Function } } | null | undefined} workspace
+ * @param {{ botPreferences?: { list: Function, durable?: boolean } } | null | undefined} workspace
  * @param {{ hearing?: object } | null | undefined} current
  * @param {string} tenantId
  */
@@ -88,12 +99,17 @@ export async function assignEffectiveHearing(workspace, current, tenantId) {
   const id = cleanTenant(tenantId);
   const resolved = await resolveHearing(workspace, id, current);
   if (!current) return resolved.hearing;
-  if (resolved.source === "durable") {
-    current.hearing = { ...resolved.hearing, savedAt: new Date().toISOString(), tenantId: id };
+  if (!id) {
+    if (storeIsDurable(workspace)) current.hearing = undefined;
     return resolved.hearing;
   }
   if (resolved.source === "legacy") return resolved.hearing;
-  if (!current.hearing?.savedAt) current.hearing = { ...resolved.hearing, tenantId: id };
+  const foreign = current.hearing?.tenantId && current.hearing.tenantId !== id;
+  const stamp = { ...resolved.hearing, tenantId: id };
+  if (resolved.source === "durable") stamp.savedAt = new Date().toISOString();
+  if (resolved.source === "durable" || storeIsDurable(workspace) || foreign || !current.hearing?.savedAt) {
+    current.hearing = stamp;
+  }
   return resolved.hearing;
 }
 
@@ -102,15 +118,23 @@ async function resolveHearing(workspace, tenantId, current) {
   let botName = DEFAULT_BOT_NAME;
   let stored = null;
   const store = workspace?.botPreferences;
-  if (store) {
+  if (store && id) {
     const loaded = await loadPreferences(store, { tenantId: id, userId: null });
     botName = resolveBotIdentity(loaded.workspace).name;
     stored = unpackMeetingGuest(loaded.workspace?.[MEETING_GUEST_KEY]);
   }
   if (stored) return { hearing: stored, source: "durable" };
-  const legacy = legacyHearing(current, id);
-  if (legacy) return { hearing: legacy, source: "legacy" };
+  // No durable store: a same-tenant hearing recalled from semantic memory
+  // still applies. A configured store never reads that as settings.
+  if (id && !storeIsDurable(workspace)) {
+    const legacy = legacyHearing(current, id);
+    if (legacy) return { hearing: legacy, source: "legacy" };
+  }
   return { hearing: normalizeHearing({ name: botName, triggers: [] }), source: "default" };
+}
+
+function storeIsDurable(workspace) {
+  return workspace?.botPreferences?.durable === true;
 }
 
 function legacyHearing(current, tenantId) {
@@ -121,6 +145,5 @@ function legacyHearing(current, tenantId) {
 }
 
 function cleanTenant(tenantId) {
-  const id = typeof tenantId === "string" ? tenantId.trim() : "";
-  return id || "local";
+  return typeof tenantId === "string" ? tenantId.trim() : "";
 }
