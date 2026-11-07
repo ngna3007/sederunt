@@ -1,6 +1,7 @@
 import { priorAsksForThread } from "./ask/thread.js";
 import { normalizeHearing } from "./hearing.js";
 import { CALENDAR_CONNECT_PATH } from "./connectors/calendar-preset.js";
+import { SLACK_INSTALL_PATH } from "./slack/oauth.js";
 import { brandLogo, brandSprite } from "./brand-logos.js";
 import { formatLastTested } from "./console/local-time.js";
 import { renderBotSettings } from "./console/bot-settings.js";
@@ -32,6 +33,8 @@ export function renderConsolePage(state = {}) {
   const calendarConnected = state.calendarConnected === true;
   const linearConnected = state.linearConnected === true;
   const slackConnected = state.slackConnected === true;
+  const slackInstall = state.slackInstall === true;
+  const slackWorkspace = String(state.slackWorkspace || "").trim();
   const hearingIn = state.hearing && typeof state.hearing === "object" ? state.hearing : null;
   // Effective guest (saved or default), never blank fields that look unset.
   const hearing = normalizeHearing(hearingIn);
@@ -329,7 +332,7 @@ ${slack}
           <div class="set-copy" data-col="tool">
             <strong>Slack</strong>
             <p id="slack-conn" class="conn-state${slackConnected ? "" : " off"}">${slackConnected ? "Connected" : "Not connected"}</p>
-            <p id="slack-line" class="conn-hint">Slack runs automatically.</p>
+            <p id="slack-line" class="conn-hint">${slackConnected && slackWorkspace ? `Slack workspace: ${escapeHtml(slackWorkspace)}` : "Slack runs automatically."}</p>
             <p id="slack-note" class="sr">Sederunt answers in a channel it has already joined.</p>
           </div>
           <div class="conn-actions" data-col="action">
@@ -5307,6 +5310,16 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var which = button.getAttribute("data-connect");
       if (which === "calendar") {
         location.href = ${JSON.stringify(CALENDAR_CONNECT_PATH)};
+        return;
+      }
+      if (which === "slack" && ${JSON.stringify(slackInstall)}) {
+        // Add to Slack for this workspace. Manage = an explicit change of Slack workspace.
+        if (button.id === "slack-manage") {
+          if (!window.confirm("Link a different Slack workspace to this Sederunt workspace? The current Slack link is replaced after you approve in Slack.")) return;
+          location.href = ${JSON.stringify(SLACK_INSTALL_PATH)} + "?change=1&next=" + encodeURIComponent("/console/setup");
+          return;
+        }
+        location.href = ${JSON.stringify(SLACK_INSTALL_PATH)} + "?next=" + encodeURIComponent("/console/setup");
         return;
       }
       var url = "https://developers.google.com/workspace/calendar/api/guides/configure-mcp-server";

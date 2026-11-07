@@ -1,3 +1,4 @@
+import { SLACK_INSTALL_PATH } from "./slack/oauth.js";
 import {
   CONSOLE_SESSION_MS,
   guardConsole,
@@ -212,7 +213,12 @@ async function renderStep(ctx, session, active, step, extra = {}) {
     // Fake-tools demo still uses live.slack so the photographed journey stays green.
     let slackLinked = live.slack;
     let conflictOwner = "";
-    if (!fakeToolsOn(env) && active?.id && ctx.tenantBind) {
+    let slackTeamName = "";
+    if (!fakeToolsOn(env) && active?.id && ctx.slackInstall && typeof ctx.slackConnection === "function") {
+      const conn = await ctx.slackConnection(active.id);
+      slackLinked = conn.linked === true;
+      slackTeamName = conn.teamName || "";
+    } else if (!fakeToolsOn(env) && active?.id && ctx.tenantBind) {
       const claim = await slackClaimState({
         tenantBind: ctx.tenantBind,
         slack: ctx.slack,
@@ -235,7 +241,9 @@ async function renderStep(ctx, session, active, step, extra = {}) {
       notice: noticeParts.join(" "),
       chat: {
         slack: slackLinked,
-        channel: slackLinked ? await slackChannelLabel(ctx, ctx.slackChannel || (doors.slack ? "" : "sederunt")) : "",
+        channel: slackLinked
+          ? (slackTeamName || await slackChannelLabel(ctx, ctx.slackChannel || (doors.slack ? "" : "sederunt")))
+          : "",
         asked: !slackLinked && prefs.slack === "connect",
       },
     });
@@ -517,6 +525,11 @@ async function chooseTool(ctx, session, active, tool, body) {
       }
       // Explicit Slack claim: verified auth.test team (+ default channel) → active tenant.
       // First-writer-wins; never bind from console browsing or a deploy SLACK_TEAM_ID.
+      // Per-workspace Add to Slack when the Slack OAuth client is configured.
+      if (tool === "slack" && active?.id && ctx.slackInstall) {
+        redirect(res, `${SLACK_INSTALL_PATH}?next=${encodeURIComponent(`/console/welcome?step=${here}`)}`);
+        return;
+      }
       if (tool === "slack" && active?.id && ctx.tenantBind) {
         const claimed = await claimWorkspaceSlack({
           tenantBind: ctx.tenantBind,

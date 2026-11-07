@@ -1072,7 +1072,15 @@ function remainingChanges(changes, appliedIndexes, partial) {
 async function slackChannelFor(deps, raw) {
   const direct = slackChannelId(raw);
   if (direct) return direct;
-  if (!slackName(raw)) return slackChannelId(deps.app?.slackChannel);
+  if (!slackName(raw)) {
+    const fixed = slackChannelId(deps.app?.slackChannel);
+    if (fixed) return fixed;
+    // Per-tenant Slack installation: the channel picked at install time.
+    if (typeof deps.slack?.defaultChannel === "function") {
+      try { return slackChannelId(await deps.slack.defaultChannel()); } catch { return ""; }
+    }
+    return "";
+  }
   if (typeof deps.slack?.resolveChannel !== "function") return "";
   try {
     return slackChannelId(await deps.slack.resolveChannel(raw));

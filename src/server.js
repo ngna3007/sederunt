@@ -23,6 +23,9 @@ import { bindToolMember, handleMcpRequest, memberRefusal, mcpJsonRpc } from "./m
 import { renderConsolePage } from "./console-page.js";
 import { contentWords, decisionRoomIds, roomsMatching } from "./room-match.js";
 import { createSlackClient } from "./slack/post.js";
+import { createInstallationStore, slackOAuthConfigured } from "./slack/installations.js";
+import { handleSlackOAuth } from "./slack/oauth.js";
+import { slackConnection, slackEventTenant, tenantSlackClient } from "./slack/tenant-slack.js";
 import { renderSignInPage } from "./console-sign-in.js";
 import {
   CONSOLE_SESSION_MS,
@@ -355,12 +358,14 @@ async function doorsForRequest(workspace, { companyId = "", personId = "", req }
     if (!activeId) {
       doors.slack = false;
     } else {
-      const claim = await slackClaimState({
-        tenantBind: workspace.tenantBind,
-        slack: workspace.deps?.slack,
-        channelId: workspace.deps?.app?.slackChannel || "",
-        slackConfigured: doors.slack === true,
-      }, activeId);
+      const claim = slackOAuthConfigured(env)
+        ? await slackConnection(workspace, activeId)
+        : await slackClaimState({
+          tenantBind: workspace.tenantBind,
+          slack: workspace.deps?.slack,
+          channelId: workspace.deps?.app?.slackChannel || "",
+          slackConfigured: doors.slack === true,
+        }, activeId);
       doors.slack = claim.linked === true;
     }
   }
@@ -370,7 +375,7 @@ async function doorsForRequest(workspace, { companyId = "", personId = "", req }
 /** Door flags for the room. The values are booleans, and the secrets stay out. */
 export function doorReport(env = process.env, linearReady = false) {
   const meeting = meetingDoorReady(env);
-  const slack = Boolean(env.SLACK_SIGNING_SECRET && env.SLACK_BOT_TOKEN);
+  const slack = Boolean(env.SLACK_SIGNING_SECRET && (env.SLACK_BOT_TOKEN || slackOAuthConfigured(env)));
   const member = Boolean(String(env.SEDERUNT_MEMBER || "").trim());
   const consoleReady = Boolean(env.CONSOLE_API_KEY && env.CONSOLE_SERVICE_PRIVATE_KEY && env.CONSOLE_FOLDER_ID);
   const company = Boolean(env.COMPANY_MEMWAL_KEY && env.COMPANY_MEMWAL_ACCOUNT_ID);
@@ -484,6 +489,7 @@ export function createApp(options = {}) {
     deps,
     memwalClient: options.memwal || null,
     tenantBind: options.tenantBind || createTenantBind(env, { fetchImpl: options.fetch || globalThis.fetch }),
+    slackInstallations: options.slackInstallations || createInstallationStore(env, { fetch: options.fetch }),
     companyLoaded: loadedCompany(options, deps, env, companies),
     linearReady: options.linearReady === true || (options.env ? false : linearReady()),
     recall: options.recall || null,
@@ -588,6 +594,30 @@ export function createApp(options = {}) {
     }
     if (url.pathname === "/console/auth" || url.pathname.startsWith("/console/auth/")) {
       await handleAuthRoute({ req, res, url, env, identity, send, redirect, googleGrants: workspace.googleGrants, calendarSave: workspace.calendarSave, fetchImpl: options.fetch || globalThis.fetch });
+      return;
+    }
+    if (await handleSlackOAuth(req, res, url, {
+      env,
+      installations: workspace.slackInstallations,
+      fetchImpl: options.slackOAuthFetch || options.fetch || globalThis.fetch,
+      activeTenant: async (request) => {
+        const gate = guardConsole(request, env);
+        if (!identity || gate.session?.kind !== "oauth") return { unauthorized: true };
+        const view = await loadSpaceView(identity, gate.session);
+        return { userId: String(gate.session.userId || ""), tenantId: view?.activeId || "", role: view?.activeRole || "" };
+      },
+      roleIn: async (request, tenantId) => {
+        const gate = guardConsole(request, env);
+        if (!identity || gate.session?.kind !== "oauth") return "";
+        try {
+          const tenants = await identity.myTenants(gate.session.accessToken);
+          const hit = (tenants || []).find((item) => item?.id === tenantId);
+          return hit?.role || "";
+        } catch {
+          return "";
+        }
+      },
+    })) {
       return;
     }
     if (req.method === "GET" && url.pathname === "/console/sign-in") {
@@ -827,6 +857,8 @@ export function createApp(options = {}) {
         doors,
         slack: workspace.deps.slack,
         slackChannel: workspace.deps.app?.slackChannel || "",
+        slackInstall: slackOAuthConfigured(env),
+        slackConnection: (tenantId) => slackConnection(workspace, tenantId),
         googleGrants: workspace.googleGrants,
         tenantId: companyId,
         personId,
@@ -943,12 +975,14 @@ export function createApp(options = {}) {
         if (!spaces?.activeId) {
           connectedDoors.slack = false;
         } else {
-          const claim = await slackClaimState({
-            tenantBind: workspace.tenantBind,
-            slack: workspace.deps.slack,
-            channelId: workspace.deps.app?.slackChannel || "",
-            slackConfigured: connectedDoors.slack === true,
-          }, spaces.activeId);
+          const claim = slackOAuthConfigured(env)
+            ? await slackConnection(workspace, spaces.activeId)
+            : await slackClaimState({
+              tenantBind: workspace.tenantBind,
+              slack: workspace.deps.slack,
+              channelId: workspace.deps.app?.slackChannel || "",
+              slackConfigured: connectedDoors.slack === true,
+            }, spaces.activeId);
           connectedDoors.slack = claim.linked === true;
         }
       }
@@ -995,6 +1029,10 @@ export function createApp(options = {}) {
         linearConnected: doors.linear === true,
         slackConnected: (connectedDoors || doors).slack === true,
         slackReady: Boolean(env.SLACK_SIGNING_SECRET && env.SLACK_BOT_TOKEN),
+        slackInstall: slackOAuthConfigured(env) && Boolean(identity),
+        slackWorkspace: slackOAuthConfigured(env) && spaces?.activeId && (connectedDoors || doors).slack === true
+          ? (await slackConnection(workspace, spaces.activeId)).teamName || ""
+          : "",
         signedIn: Boolean(gate.session),
         signInOff: !consoleSecret(env) && !identity,
         accountMember: gate.session?.kind === "oauth" ? "" : (gate.session?.memberId || String(env.SEDERUNT_MEMBER || "").trim()),
@@ -1397,7 +1435,27 @@ export function createApp(options = {}) {
         ? parsed.team_id.trim()
         : (typeof event.team === "string" ? event.team.trim() : "");
       const slackChannel = typeof event.channel === "string" ? event.channel.trim() : "";
-      const companyId = await resolveBoundTenant(workspace, { teamId: slackTeam, channelId: slackChannel });
+      // Uninstall / revoke: drop that team's installation so no tenant keeps a dead token.
+      if (slackOAuthConfigured(env) && slackTeam && (event.type === "app_uninstalled" || event.type === "tokens_revoked")) {
+        await workspace.slackInstallations?.removeTeam(slackTeam).catch(() => 0);
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify({ slack: "uninstalled" }));
+        return;
+      }
+      const legacyCompanyId = await resolveBoundTenant(workspace, { teamId: slackTeam, channelId: slackChannel });
+      // The team's own installation picks the tenant and the token; a team with
+      // no installation or claim is not ingested anywhere when OAuth is on.
+      const slackRoute = await slackEventTenant(workspace, { teamId: slackTeam, legacyTenantId: legacyCompanyId });
+      if (slackOAuthConfigured(env) && !slackRoute.tenantId) {
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify({ slack: "not-linked" }));
+        return;
+      }
+      const companyId = slackRoute.tenantId || legacyCompanyId;
+      const slackToken = slackRoute.token || "";
+      const slackEnv = {
+        ...env,
+        SLACK_BOT_TOKEN: slackToken,
+        SLACK_BOT_USER_ID: slackRoute.botUserId || (slackRoute.source === "install" ? "" : env.SLACK_BOT_USER_ID),
+      };
       const subtype = typeof event.subtype === "string" ? event.subtype : "";
       const changedFiles = subtype === "message_changed" && slackEventHasFiles(event);
       const noise = subtype
@@ -1422,14 +1480,14 @@ export function createApp(options = {}) {
       // Tests pass options.deps and read the response body; production acks first.
       // Only early-ack asks (DMs / @mentions). Channel keeps must finish the Kept
       // post before the response ends - waitUntil alone was freezing mid-keep.
-      const canLiveAck = parsed.type === "event_callback" && Boolean(env.SLACK_BOT_TOKEN) && options.deps == null;
-      const peek = slackDelivery(event, { botUserIds: slackBotUserIds(parsed, env) });
+      const canLiveAck = parsed.type === "event_callback" && Boolean(slackToken) && options.deps == null;
+      const peek = slackDelivery(event, { botUserIds: slackBotUserIds(parsed, slackEnv) });
       const liveAck = canLiveAck && peek.ask === true;
       const slackWork = (async () => {
       const current = await prepareWorkspace(workspace, companyId);
       const botName = (await currentBot(workspace, req)).name;
       try {
-        const delivery = slackDelivery(event, { botUserIds: slackBotUserIds(parsed, env) });
+        const delivery = slackDelivery(event, { botUserIds: slackBotUserIds(parsed, slackEnv) });
         if (filesRuntime && delivery.intent === "delete") {
           try { hideDeletedSlackMessages(filesRuntime, delivery.forgetIds); } catch { /* the event still acks */ }
         }
@@ -1442,7 +1500,7 @@ export function createApp(options = {}) {
         let downloadFailed = false;
         if (!question && delivery.intent !== "delete" && !huddle) {
           const channel = delivery.room?.askChannel || "";
-          const people = await slackPeople(env, deps, channel);
+          const people = await slackPeople(slackEnv, deps, channel);
           // conversations.members sometimes returns empty (rate limit / scope blip).
           // Falling back to the speaker keeps the channel file instead of going silent.
           // A non-empty list can still omit the poster (partial page / Connect id);
@@ -1454,9 +1512,9 @@ export function createApp(options = {}) {
             memberIds.push(delivery.memberId);
           }
           if (!memberIds.length) {
-            if (env.SLACK_BOT_TOKEN && channel) {
+            if (slackToken && channel) {
               await postSlackReply({
-                token: env.SLACK_BOT_TOKEN,
+                token: slackToken,
                 fetchImpl: deps.slack?.fetch,
                 channel,
                 text: "I could not see who is in this channel, so nothing was kept.",
@@ -1476,7 +1534,7 @@ export function createApp(options = {}) {
             : (delivery.file ? [delivery.file] : []);
           const downloaded = await Promise.all(incoming.map(async (item) => {
             try {
-              return await withinMs(slackBytes(env, deps, item), 12_000);
+              return await withinMs(slackBytes(slackEnv, deps, item), 12_000);
             } catch {
               return null;
             }
@@ -1551,7 +1609,7 @@ export function createApp(options = {}) {
             roomId: delivery.room?.id || "",
           });
         }
-        if (!question && !repeat && allowed && env.SLACK_BOT_TOKEN) {
+        if (!question && !repeat && allowed && slackToken) {
           const channel = delivery.room?.askChannel || (typeof event.channel === "string" ? event.channel : "");
           let notice = "";
           if (keptFile) notice = keptNotice(keptNames);
@@ -1562,7 +1620,7 @@ export function createApp(options = {}) {
             const wonKeep = await claimSlackAsk(env, keepClaim, deps.slack?.fetch || deps.fetch, "keep");
             if (wonKeep) {
               await postSlackReply({
-                token: env.SLACK_BOT_TOKEN,
+                token: slackToken,
                 fetchImpl: deps.slack?.fetch,
                 channel,
                 text: notice,
@@ -1578,7 +1636,7 @@ export function createApp(options = {}) {
             fetchImpl: deps.slack?.fetch || deps.fetch,
             botName,
             maxMemories: 20,
-            token: env.SLACK_BOT_TOKEN,
+            token: slackToken,
             channel,
             excludeTs: typeof event.ts === "string" ? event.ts : "",
             memberId: delivery.memberId,
@@ -1626,9 +1684,9 @@ export function createApp(options = {}) {
             }));
             return;
           }
-          if (env.SLACK_BOT_TOKEN) {
+          if (slackToken) {
             await postSlackReply({
-              token: env.SLACK_BOT_TOKEN,
+              token: slackToken,
               fetchImpl: deps.slack?.fetch,
               channel: reply.channel,
               text: reply.text,
@@ -1647,10 +1705,10 @@ export function createApp(options = {}) {
         }));
       } catch {
         const channel = typeof event?.channel === "string" ? event.channel : "";
-        if (env.SLACK_BOT_TOKEN && channel) {
+        if (slackToken && channel) {
           try {
             await postSlackReply({
-              token: env.SLACK_BOT_TOKEN,
+              token: slackToken,
               fetchImpl: deps.slack?.fetch,
               channel,
               text: "I could not keep that message.",
@@ -2290,8 +2348,11 @@ function sessionFor(workspace, companyId) {
 function depsFor(workspace, companyId) {
   const id = companyKey(workspace, companyId);
   const tenantId = id === "company" ? "" : id;
+  const slackScoped = slackOAuthConfigured(workspace.env || {})
+    ? { slack: tenantSlackClient(workspace, tenantId), app: { ...(workspace.deps.app || {}), slackChannel: "" } }
+    : {};
   if (workspace.companies) {
-    return { ...workspace.deps, memory: workspace.companies[id], tenantId };
+    return { ...workspace.deps, ...slackScoped, memory: workspace.companies[id], tenantId };
   }
   const memory = bindMemoryTenant(
     workspace.deps.memory,
@@ -2300,7 +2361,7 @@ function depsFor(workspace, companyId) {
     workspace.memwalClient,
     workspace.deps.tatum,
   );
-  return { ...workspace.deps, memory, tenantId };
+  return { ...workspace.deps, ...slackScoped, memory, tenantId };
 }
 
 /**
