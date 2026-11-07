@@ -35,6 +35,18 @@ export function renderConsolePage(state = {}) {
   const slackConnected = state.slackConnected === true;
   const slackInstall = state.slackInstall === true;
   const slackWorkspace = String(state.slackWorkspace || "").trim();
+  const slackNotice = ({
+    connected: "Slack is installed for this workspace.",
+    partial: "Slack did not grant all required permissions. Reconnect and approve the requested scopes.",
+    failed: "Slack could not be connected. Your previous saved connection was not changed. Try again.",
+    forbidden: "Only a workspace owner or admin can connect or change Slack.",
+    conflict: "That Slack workspace is already connected to another Sederunt workspace.",
+    "different-team": "This workspace already has a different Slack connection. Use Change Slack workspace to replace it.",
+    stale: "The Slack connection changed while setup was open. Reload and try again.",
+    expired: "This Slack setup link expired or was already used. Start again.",
+    declined: "Slack setup was cancelled. Your saved connection was not changed.",
+    unsupported: "Choose an individual Slack workspace. Organization-wide installations are not supported.",
+  })[String(state.slackResult || "")] || "";
   const hearingIn = state.hearing && typeof state.hearing === "object" ? state.hearing : null;
   // Effective guest (saved or default), never blank fields that look unset.
   const hearing = normalizeHearing(hearingIn);
@@ -331,8 +343,9 @@ ${slack}
           ${channelIcon}
           <div class="set-copy" data-col="tool">
             <strong>Slack</strong>
+            ${slackNotice ? `<p class="conn-hint" role="status">${escapeHtml(slackNotice)}</p>` : ""}
             <p id="slack-conn" class="conn-state${slackConnected ? "" : " off"}">${slackConnected ? "Connected" : "Not connected"}</p>
-            <p id="slack-line" class="conn-hint">${slackConnected && slackWorkspace ? `Slack workspace: ${escapeHtml(slackWorkspace)}` : "Slack runs automatically."}</p>
+            <p id="slack-line" class="conn-hint">${slackConnected && slackWorkspace ? `Slack workspace: ${escapeHtml(slackWorkspace)}${slackInstall && state.slackReady !== true ? ". Channel not ready: invite the app to the selected channel, check it is not archived, then reload." : ""}` : "Slack runs automatically."}</p>
             <p id="slack-note" class="sr">Sederunt answers in a channel it has already joined.</p>
           </div>
           <div class="conn-actions" data-col="action">

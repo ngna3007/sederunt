@@ -1,4 +1,5 @@
-import { openSecret, sealSecret } from "../connectors/secrets.js";
+import { createHash, randomUUID } from "node:crypto";
+import { openSecret, sealSecret, secretsKey } from "../connectors/secrets.js";
 
 /**
  * Per-tenant Slack app installations (Add to Slack, oauth.v2.access).
@@ -39,6 +40,7 @@ function publicRow(row) {
     scopes: Array.isArray(row.scopes) ? [...row.scopes] : [],
     installedBy: row.installedBy || "",
     updatedAt: row.updatedAt || "",
+    generation: row.generation || "",
   };
 }
 
@@ -53,10 +55,19 @@ function validate(input) {
 /** In-process store for tests and local runs. Same contract as the Supabase store. */
 export function createMemoryInstallationStore(env = process.env) {
   const rows = new Map(); // tenantId -> row (sealed token)
+  const consumed = new Map();
   const seal = (token) => (env.MCP_SECRETS_KEY_V1 ? sealSecret(token, env) : { plain: token });
   const open = (sealed) => (sealed?.plain != null ? sealed.plain : openSecret(sealed, env));
   return {
     durable: false,
+    encrypted: Boolean(env.MCP_SECRETS_KEY_V1),
+    async consumeState(nonce, expiresAt) {
+      const now = Date.now();
+      for (const [key, exp] of consumed) if (exp <= now) consumed.delete(key);
+      if (expiresAt <= now || consumed.has(nonce)) return false;
+      consumed.set(nonce, expiresAt);
+      return true;
+    },
     async get(tenantId) {
       return publicRow(rows.get(String(tenantId || "").trim()));
     },
@@ -81,7 +92,9 @@ export function createMemoryInstallationStore(env = process.env) {
       if (current && current.teamId !== teamId && input.replace !== true) {
         throw installationError("different-team", "This workspace is already linked to a different Slack workspace.");
       }
+      if ((current?.generation || null) !== (input.expectedGeneration || null)) throw installationError("stale", "Slack connection changed. Start again.");
       const row = {
+        generation: randomUUID(),
         tenantId,
         teamId,
         teamName: String(input.teamName || ""),
@@ -97,13 +110,13 @@ export function createMemoryInstallationStore(env = process.env) {
       rows.set(tenantId, row);
       return publicRow(row);
     },
-    async removeTeam(teamId) {
-      const team = cleanTeam(teamId);
-      let removed = 0;
-      for (const [key, row] of rows) {
-        if (row.teamId === team) { rows.delete(key); removed += 1; }
-      }
-      return removed;
+    async revoke({ teamId, appId, generation, eventTime, botUserId }) {
+      const row = [...rows.values()].find((row) => row.teamId === teamId);
+      if (!row || !appId || row.appId !== appId || row.generation !== generation
+        || !Number.isFinite(eventTime) || Date.parse(row.updatedAt) >= eventTime
+        || (botUserId && row.botUserId !== botUserId)) return 0;
+      rows.delete(row.tenantId);
+      return 1;
     },
     async remove(tenantId) {
       return rows.delete(String(tenantId || "").trim());
@@ -117,8 +130,8 @@ export function createMemoryInstallationStore(env = process.env) {
  */
 export function createSupabaseInstallationStore({ url, key, env = process.env, fetchImpl = globalThis.fetch }) {
   const rest = `${String(url).replace(/\/$/, "")}/rest/v1/slack_installations`;
-  async function call(method, query, body) {
-    const endpoint = new URL(rest);
+  async function call(method, query, body, rpc = "") {
+    const endpoint = new URL(rpc ? `${String(url).replace(/\/$/, "")}/rest/v1/rpc/${rpc}` : rest);
     for (const [name, value] of Object.entries(query || {})) endpoint.searchParams.set(name, String(value));
     const headers = {
       apikey: key,
@@ -130,7 +143,7 @@ export function createSupabaseInstallationStore({ url, key, env = process.env, f
     let payload;
     if (body !== undefined) {
       headers["content-type"] = "application/json";
-      headers.prefer = query?.on_conflict ? "return=representation,resolution=merge-duplicates" : "return=representation";
+      headers.prefer = "return=representation";
       payload = JSON.stringify(body);
     }
     let response;
@@ -157,14 +170,24 @@ export function createSupabaseInstallationStore({ url, key, env = process.env, f
     scopes: Array.isArray(row.scopes) ? row.scopes : [],
     installedBy: row.installed_by || "",
     updatedAt: row.updated_at || "",
+    generation: row.generation || "",
   };
-  const withToken = (row) => row && {
-    ...publicRow(fromRow(row)),
-    token: openSecret({ ciphertext: unhex(row.ciphertext), nonce: unhex(row.nonce), keyVersion: row.key_version }, env),
+  const withToken = (row) => {
+    if (!row) return null;
+    if (!UUID.test(row.generation || "") || row.key_version !== 1) throw installationError("unavailable");
+    return { ...publicRow(fromRow(row)),
+      token: openSecret({ ciphertext: unhex(row.ciphertext), nonce: unhex(row.nonce), keyVersion: row.key_version }, env) };
   };
-  const PUBLIC = "tenant_id,team_id,team_name,bot_user_id,app_id,channel_id,channel_name,scopes,installed_by,updated_at";
+  const PUBLIC = "tenant_id,team_id,team_name,bot_user_id,app_id,channel_id,channel_name,scopes,installed_by,updated_at,generation";
   return {
     durable: true,
+    encrypted: true,
+    async consumeState(nonce, expiresAt) {
+      return await call("POST", {}, {
+        p_nonce_hash: createHash("sha256").update(nonce).digest("hex"),
+        p_expires_at: new Date(expiresAt).toISOString(),
+      }, "slack_oauth_consume") === true;
+    },
     async get(tenantId) {
       const id = String(tenantId || "").trim();
       if (!UUID.test(id)) return null;
@@ -186,12 +209,6 @@ export function createSupabaseInstallationStore({ url, key, env = process.env, f
     async save(input) {
       const { tenantId, teamId, token } = validate(input);
       if (!UUID.test(tenantId)) throw installationError("invalid");
-      const owner = await call("GET", { select: "tenant_id", team_id: `eq.${teamId}` });
-      if (owner?.[0] && owner[0].tenant_id !== tenantId) throw installationError("conflict", "Slack is already linked to another workspace.");
-      const current = await call("GET", { select: "team_id", tenant_id: `eq.${tenantId}` });
-      if (current?.[0] && current[0].team_id !== teamId && input.replace !== true) {
-        throw installationError("different-team", "This workspace is already linked to a different Slack workspace.");
-      }
       const sealed = sealSecret(token, env);
       const body = {
         tenant_id: tenantId,
@@ -208,16 +225,21 @@ export function createSupabaseInstallationStore({ url, key, env = process.env, f
         key_version: sealed.keyVersion,
         updated_at: new Date().toISOString(),
       };
-      // tenant_id is the primary key; team_id is unique. A concurrent claim of
-      // the same team by another tenant fails on the unique index (409).
-      const rows = await call("POST", { on_conflict: "tenant_id" }, body);
-      return publicRow(fromRow(Array.isArray(rows) ? rows[0] : rows));
+      const args = Object.fromEntries(Object.entries(body).filter(([k]) => k !== "updated_at").map(([k,v]) => [`p_${k}`,v]));
+      args.p_replace = input.replace === true;
+      args.p_expected_generation = input.expectedGeneration || null;
+      const result = await call("POST", {}, args, "slack_installation_save");
+      if (!result || typeof result !== "object" || !result.generation) {
+        throw installationError(typeof result === "string" ? result : "network");
+      }
+      return publicRow(fromRow(result));
     },
-    async removeTeam(teamId) {
-      const team = cleanTeam(teamId);
-      if (!team) return 0;
-      const rows = await call("DELETE", { team_id: `eq.${team}` }, undefined);
-      return Array.isArray(rows) ? rows.length : 0;
+    async revoke({ teamId, appId, generation, eventTime, botUserId }) {
+      if (!cleanTeam(teamId) || !appId || !UUID.test(generation || "") || !Number.isFinite(eventTime)) return 0;
+      return await call("POST", {}, {
+        p_team_id: teamId, p_app_id: appId, p_generation: generation,
+        p_event_time: new Date(eventTime).toISOString(), p_bot_user_id: botUserId || null,
+      }, "slack_installation_revoke");
     },
     async remove(tenantId) {
       const id = String(tenantId || "").trim();
@@ -239,8 +261,14 @@ export function slackOAuthConfigured(env = process.env) {
 export function createInstallationStore(env = process.env, options = {}) {
   const url = String(env.SUPABASE_URL || "").trim();
   const key = String(env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
-  if (options.memory || String(env.SEDERUNT_AUTH_FAKE || "").trim() === "1" || !url || !key || !env.MCP_SECRETS_KEY_V1) {
-    return createMemoryInstallationStore(env);
+  const local = env.NODE_ENV !== "production" && !env.VERCEL_ENV && (options.memory || env.SEDERUNT_AUTH_FAKE === "1");
+  if (local) return createMemoryInstallationStore(env);
+  try {
+    if (!url || !key) throw installationError("unavailable");
+    secretsKey(env); // Validate the key before exposing OAuth, not after Slack consent.
+    return createSupabaseInstallationStore({ url, key, env, fetchImpl: options.fetch || globalThis.fetch });
+  } catch {
+    const unavailable = async () => { throw installationError("unavailable", "Durable encrypted Slack storage is not configured."); };
+    return { durable: false, encrypted: false, get: unavailable, tokenFor: unavailable, byTeam: unavailable, save: unavailable, revoke: unavailable, consumeState: unavailable };
   }
-  return createSupabaseInstallationStore({ url, key, env, fetchImpl: options.fetch || globalThis.fetch });
 }

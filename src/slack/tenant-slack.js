@@ -1,5 +1,5 @@
 import { slackClaimState } from "./claim.js";
-import { slackOAuthConfigured } from "./installations.js";
+import { installationError, slackOAuthConfigured } from "./installations.js";
 import { createSlackClient } from "./post.js";
 
 /**
@@ -21,12 +21,14 @@ export async function slackConnection(workspace, tenantId) {
   const env = workspace.env || {};
   const none = { linked: false, source: "", token: "", teamId: "", teamName: "", channelId: "" };
   if (!tenant) return none;
+  if (slackOAuthConfigured(env) && !workspace.slackInstallations) throw installationError("unavailable");
   if (slackOAuthConfigured(env) && workspace.slackInstallations) {
-    const install = await workspace.slackInstallations.tokenFor(tenant).catch(() => null);
+    const install = await workspace.slackInstallations.tokenFor(tenant);
     if (install?.token) {
       return {
         linked: true,
         source: "install",
+        generation: install.generation,
         token: install.token,
         teamId: install.teamId,
         teamName: install.teamName || "",
@@ -44,7 +46,7 @@ export async function slackConnection(workspace, tenantId) {
   if (claim.linked !== true) return { ...none, conflictOwner: claim.conflictOwner || "" };
   // A team that has its own OAuth installation belongs to that tenant only.
   if (slackOAuthConfigured(env) && workspace.slackInstallations && claim.teamId) {
-    const owned = await workspace.slackInstallations.byTeam(claim.teamId).catch(() => null);
+    const owned = await workspace.slackInstallations.byTeam(claim.teamId);
     if (owned && owned.tenantId !== tenant) return none;
   }
   return {
@@ -63,10 +65,11 @@ export async function slackConnection(workspace, tenantId) {
  */
 export async function slackEventTenant(workspace, { teamId = "", legacyTenantId = "" } = {}) {
   const env = workspace.env || {};
+  if (slackOAuthConfigured(env) && !workspace.slackInstallations) throw installationError("unavailable");
   if (slackOAuthConfigured(env) && workspace.slackInstallations && teamId) {
-    const install = await workspace.slackInstallations.byTeam(teamId).catch(() => null);
+    const install = await workspace.slackInstallations.byTeam(teamId);
     if (install?.token) {
-      return { tenantId: install.tenantId, token: install.token, botUserId: install.botUserId || "", source: "install" };
+      return { tenantId: install.tenantId, token: install.token, botUserId: install.botUserId || "", source: "install", teamId: install.teamId, generation: install.generation };
     }
   }
   if (legacyTenantId) {
@@ -92,29 +95,28 @@ export async function slackEventTenant(workspace, { teamId = "", legacyTenantId 
 export function tenantSlackClient(workspace, tenantId, fetchImpl) {
   const fallback = workspace.deps?.slack;
   if (!slackOAuthConfigured(workspace.env || {})) return fallback;
-  let pending = null;
   const client = () => {
-    pending ??= slackConnection(workspace, tenantId).then((conn) => {
+    return slackConnection(workspace, tenantId).then((conn) => {
       if (!conn.linked) return null;
       if (conn.source === "legacy") return fallback;
       return createSlackClient({
         ...workspace.env,
         SLACK_BOT_TOKEN: conn.token,
         SLACK_DEFAULT_CHANNEL: conn.channelId || "",
-      }, fetchImpl || workspace.deps?.fetch || globalThis.fetch);
+      }, installationFetch(workspace, tenantId, conn, fetchImpl || workspace.deps?.slack?.fetch || workspace.deps?.fetch || globalThis.fetch));
     });
-    return pending;
   };
   const empty = { resolveChannel: "", channelLabel: "", authTest: { ok: false, teamId: "", teamName: "" } };
   const methods = {
-    fetch: fetchImpl || workspace.deps?.fetch || globalThis.fetch,
+    tenantScoped: true,
+    fetch: fetchImpl || workspace.deps?.slack?.fetch || workspace.deps?.fetch || globalThis.fetch,
     /** The channel picked at install (or the legacy default) for this tenant only. */
     async defaultChannel() {
       const conn = await slackConnection(workspace, tenantId);
       return conn.linked ? conn.channelId || "" : "";
     },
   };
-  for (const name of ["postMessage", "resolveChannel", "channelLabel", "authTest", "members", "downloadFile"]) {
+  for (const name of ["postMessage", "resolveChannel", "channelLabel", "authTest", "members", "downloadFile", "channelReady"]) {
     methods[name] = async (...args) => {
       const real = await client();
       if (!real || typeof real[name] !== "function") {
@@ -129,4 +131,21 @@ export function tenantSlackClient(workspace, tenantId, fetchImpl) {
     };
   }
   return methods;
+}
+
+/** Revalidate every network hop of an operation, not just a retained client.
+ * A replaced/revoked generation aborts downloads/uploads before the next hop.
+ * An already-sent request cannot be recalled; Slack enforces its token access.
+ */
+export function installationFetch(workspace, tenantId, expected, fetchImpl = globalThis.fetch) {
+  if (expected.source !== "install") return fetchImpl;
+  return async (...args) => {
+    const current = await workspace.slackInstallations.tokenFor(tenantId);
+    if (!current || current.generation !== expected.generation || current.teamId !== expected.teamId || current.token !== expected.token) {
+      const error = new Error("Slack connection changed. Retry with the current workspace.");
+      error.reason = "stale";
+      throw error;
+    }
+    return fetchImpl(...args);
+  };
 }

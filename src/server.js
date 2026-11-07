@@ -25,7 +25,7 @@ import { contentWords, decisionRoomIds, roomsMatching } from "./room-match.js";
 import { createSlackClient } from "./slack/post.js";
 import { createInstallationStore, slackOAuthConfigured } from "./slack/installations.js";
 import { handleSlackOAuth } from "./slack/oauth.js";
-import { slackConnection, slackEventTenant, tenantSlackClient } from "./slack/tenant-slack.js";
+import { installationFetch, slackConnection, slackEventTenant, tenantSlackClient } from "./slack/tenant-slack.js";
 import { renderSignInPage } from "./console-sign-in.js";
 import {
   CONSOLE_SESSION_MS,
@@ -1028,8 +1028,11 @@ export function createApp(options = {}) {
         calendarConnected: (connectedDoors || doors).calendar === true,
         linearConnected: doors.linear === true,
         slackConnected: (connectedDoors || doors).slack === true,
-        slackReady: Boolean(env.SLACK_SIGNING_SECRET && env.SLACK_BOT_TOKEN),
+        slackReady: slackOAuthConfigured(env) && spaces?.activeId
+          ? Boolean(env.SLACK_SIGNING_SECRET && await tenantSlackClient(workspace, spaces.activeId).channelReady(await tenantSlackClient(workspace, spaces.activeId).defaultChannel()))
+          : Boolean(env.SLACK_SIGNING_SECRET && env.SLACK_BOT_TOKEN),
         slackInstall: slackOAuthConfigured(env) && Boolean(identity),
+        slackResult: url.searchParams.get("slack") || "",
         slackWorkspace: slackOAuthConfigured(env) && spaces?.activeId && (connectedDoors || doors).slack === true
           ? (await slackConnection(workspace, spaces.activeId)).teamName || ""
           : "",
@@ -1435,10 +1438,25 @@ export function createApp(options = {}) {
         ? parsed.team_id.trim()
         : (typeof event.team === "string" ? event.team.trim() : "");
       const slackChannel = typeof event.channel === "string" ? event.channel.trim() : "";
-      // Uninstall / revoke: drop that team's installation so no tenant keeps a dead token.
+      // Only matching bot/app lifecycle events can remove the observed generation.
       if (slackOAuthConfigured(env) && slackTeam && (event.type === "app_uninstalled" || event.type === "tokens_revoked")) {
-        await workspace.slackInstallations?.removeTeam(slackTeam).catch(() => 0);
-        send(res, 200, "application/json; charset=utf-8", JSON.stringify({ slack: "uninstalled" }));
+        let removed = 0;
+        try {
+          const install = await workspace.slackInstallations.byTeam(slackTeam);
+          const appId = String(parsed.api_app_id || "");
+          const eventTime = Number(parsed.event_time) * 1000;
+          const botRevoked = event.type === "tokens_revoked" && Array.isArray(event.tokens?.bot)
+            && event.tokens.bot.includes(install?.botUserId);
+          if (install && appId && install.appId === appId && Number.isFinite(eventTime) && eventTime > 0
+            && (event.type === "app_uninstalled" || botRevoked)) {
+            removed = await workspace.slackInstallations.revoke({ teamId: slackTeam, appId,
+              generation: install.generation, eventTime, botUserId: botRevoked ? install.botUserId : null });
+          }
+        } catch {
+          send(res, 503, "application/json; charset=utf-8", JSON.stringify({ slack: "retry" }));
+          return;
+        }
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify({ slack: removed ? "uninstalled" : "ignored" }));
         return;
       }
       const legacyCompanyId = await resolveBoundTenant(workspace, { teamId: slackTeam, channelId: slackChannel });
@@ -1451,6 +1469,8 @@ export function createApp(options = {}) {
       }
       const companyId = slackRoute.tenantId || legacyCompanyId;
       const slackToken = slackRoute.token || "";
+      const deps = { ...workspace.deps, slack: { ...workspace.deps.slack,
+        fetch: installationFetch(workspace, companyId, slackRoute, workspace.deps.slack?.fetch || globalThis.fetch) } };
       const slackEnv = {
         ...env,
         SLACK_BOT_TOKEN: slackToken,
@@ -1662,7 +1682,7 @@ export function createApp(options = {}) {
           }
           answer.text = prepareSlackCaption(answer.text, answer.file);
           const hint = named?.name ? named : answer.fileMeta;
-          const bytes = answer.file ? await storedFileBytes(current, answer.file, deps, env, hint) : null;
+          const bytes = answer.file ? await storedFileBytes(current, answer.file, depsFor(workspace, companyId), slackEnv, hint) : null;
           const reply = {
             channel,
             text: answer.text,
@@ -2909,6 +2929,7 @@ function isExplicitKeep(text, fileCount) {
 }
 
 async function slackBytes(env, deps, file) {
+  if (deps.slack?.tenantScoped === true) return deps.slack.downloadFile(file);
   if (env.SLACK_BOT_TOKEN) return slackFileBytes({ token: env.SLACK_BOT_TOKEN, file, fetchImpl: deps.slack?.fetch });
   if (typeof deps.slack?.downloadFile === "function") return deps.slack.downloadFile(file);
   return null;

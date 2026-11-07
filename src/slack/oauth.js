@@ -25,6 +25,7 @@ export const SLACK_BOT_SCOPES = Object.freeze([
   "chat:write",
   "chat:write.customize",
   "files:read",
+  "files:write",
   "groups:history",
   "groups:read",
   "im:history",
@@ -35,9 +36,8 @@ export const SLACK_BOT_SCOPES = Object.freeze([
   "users:read.email",
 ]);
 /** Scopes without which Sederunt cannot keep or answer: a narrower grant is "partial". */
-export const SLACK_REQUIRED_SCOPES = Object.freeze(["app_mentions:read", "channels:history", "channels:read", "chat:write", "files:read", "users:read"]);
+export const SLACK_REQUIRED_SCOPES = SLACK_BOT_SCOPES;
 const STATE_MS = 10 * 60 * 1000;
-const used = new Map(); // nonce -> expiry, single-use within this instance
 
 function safeNext(value) {
   const next = String(value || "");
@@ -103,6 +103,11 @@ export async function handleSlackOAuth(req, res, url, ctx) {
     fail(503, "Slack install is not set up on this deployment.");
     return true;
   }
+  const local = env.NODE_ENV !== "production" && !env.VERCEL_ENV && env.SEDERUNT_AUTH_FAKE === "1";
+  if (!ctx.installations?.consumeState || (!local && (ctx.installations.durable !== true || ctx.installations.encrypted !== true))) {
+    fail(503, "Durable encrypted Slack storage is not configured.");
+    return true;
+  }
   const admin = (role) => role === "owner" || role === "admin";
 
   if (url.pathname === SLACK_INSTALL_PATH) {
@@ -119,7 +124,10 @@ export async function handleSlackOAuth(req, res, url, ctx) {
     const nonce = randomBytes(24).toString("base64url");
     // "Change Slack workspace" is an explicit owner/admin choice, never implied by a new install.
     const replace = url.searchParams.get("change") === "1";
-    const sealed = sealPayload({ nonce, userId: who.userId, tenantId: who.tenantId, next, replace, exp: now + STATE_MS }, secret);
+    let current;
+    try { current = await ctx.installations.get(who.tenantId); }
+    catch { fail(503, "Slack connection storage is unavailable. Try again."); return true; }
+    const sealed = sealPayload({ expectedGeneration: current?.generation || null, nonce, userId: who.userId, tenantId: who.tenantId, next, replace, exp: now + STATE_MS }, secret);
     const authorize = new URL("https://slack.com/oauth/v2/authorize");
     authorize.searchParams.set("client_id", String(env.SLACK_CLIENT_ID).trim());
     authorize.searchParams.set("scope", SLACK_BOT_SCOPES.join(","));
@@ -134,12 +142,19 @@ export async function handleSlackOAuth(req, res, url, ctx) {
   const opened = openPayload(readCookie(req.headers?.cookie, SLACK_STATE_COOKIE), secret);
   const pending = opened.ok ? opened.payload : null;
   const state = url.searchParams.get("state") || "";
-  if (!pending || typeof pending.exp !== "number" || pending.exp <= now || !sameNonce(pending.nonce, state) || used.has(state)) {
+  if (!pending || typeof pending.exp !== "number" || pending.exp <= now || !sameNonce(pending.nonce, state)) {
     redirect(withResult(safeNext(pending?.next), "expired"), clear);
     return true;
   }
-  for (const [key, until] of used) if (until <= now) used.delete(key);
-  used.set(state, pending.exp);
+  try {
+    if (!await ctx.installations.consumeState(state, pending.exp)) {
+      redirect(withResult(safeNext(pending.next), "expired"), clear);
+      return true;
+    }
+  } catch {
+    fail(503, "Slack connection storage is unavailable. Try again.");
+    return true;
+  }
   const next = safeNext(pending.next);
   if (url.searchParams.get("error")) {
     redirect(withResult(next, "declined"), clear);
@@ -184,6 +199,11 @@ export async function handleSlackOAuth(req, res, url, ctx) {
     redirect(withResult(next, "unsupported"), clear);
     return true;
   }
+  if (!/^A[A-Z0-9]+$/.test(String(body.app_id || "")) || !/^[UW][A-Z0-9]+$/.test(String(body.bot_user_id || ""))
+    || (env.SLACK_APP_ID && env.SLACK_APP_ID !== body.app_id)) {
+    redirect(withResult(next, "failed"), clear);
+    return true;
+  }
   const scopes = String(body.scope || "").split(",").map((s) => s.trim()).filter(Boolean);
   if (SLACK_REQUIRED_SCOPES.some((scope) => !scopes.includes(scope))) {
     redirect(withResult(next, "partial"), clear);
@@ -202,9 +222,10 @@ export async function handleSlackOAuth(req, res, url, ctx) {
       token: body.access_token,
       installedBy: pending.userId,
       replace: pending.replace === true,
+      expectedGeneration: pending.expectedGeneration || null,
     });
   } catch (error) {
-    const reason = error?.reason === "conflict" ? "conflict" : error?.reason === "different-team" ? "different-team" : "failed";
+    const reason = error?.reason === "conflict" ? "conflict" : error?.reason === "different-team" ? "different-team" : error?.reason === "stale" ? "stale" : "failed";
     redirect(withResult(next, reason), clear);
     return true;
   }

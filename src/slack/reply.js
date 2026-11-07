@@ -671,7 +671,8 @@ export async function postSlackReply(input) {
       ...(speaker ? { username: speaker } : {}),
     }),
   });
-  return { posted: response.ok, file: "" };
+  const body = response.ok ? await response.json() : null;
+  return { posted: body?.ok === true, file: "", ...(body?.error ? { reason: body.error } : {}) };
 }
 
 /** People Slack currently lists in the channel. An empty list means the platform did not say. */
@@ -749,7 +750,7 @@ async function postSlackFile({ token, channel, text, thread, file, fetchImpl }) 
     length: Buffer.byteLength(bytes),
   });
   const uploadUrl = slackUploadUrl(opened?.upload_url);
-  if (!opened?.ok || !uploadUrl || !opened.file_id) return { posted: false, file: "" };
+  if (!opened?.ok || !uploadUrl || !opened.file_id) return { posted: false, file: "", reason: opened?.error || "upload_failed" };
   const uploaded = await fetchImpl(uploadUrl, { method: "POST", body: bytes });
   if (!uploaded.ok) return { posted: false, file: "" };
   const done = await slackJson(fetchImpl, token, "files.completeUploadExternal", {
@@ -758,7 +759,7 @@ async function postSlackFile({ token, channel, text, thread, file, fetchImpl }) 
     initial_comment: text,
     thread_ts: thread || undefined,
   });
-  return { posted: Boolean(done?.ok), file: file.name };
+  return { posted: Boolean(done?.ok), file: done?.ok ? file.name : "", ...(done?.error ? { reason: done.error } : {}) };
 }
 
 async function slackForm(fetchImpl, token, method, fields) {

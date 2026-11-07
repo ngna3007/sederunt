@@ -3,6 +3,8 @@
 -- (unique team_id): a team installed for another tenant is a conflict, never
 -- a silent reassignment. The bot token is AES-256-GCM ciphertext sealed with
 -- MCP_SECRETS_KEY_V1. RLS is on with no policies; only the service role reads.
+-- Writes go through the two functions below so each decision is one atomic
+-- statement (no read-then-write races between concurrent callbacks).
 
 create table public.slack_installations (
   tenant_id uuid primary key references public.tenants (id) on delete cascade,
@@ -17,10 +19,101 @@ create table public.slack_installations (
   ciphertext bytea not null,
   nonce bytea not null,
   key_version integer not null default 1,
+  generation uuid not null default gen_random_uuid(),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
 alter table public.slack_installations enable row level security;
-
 revoke all on public.slack_installations from public, anon, authenticated;
+
+-- Only service_role may call these SECURITY INVOKER functions or access rows.
+-- Serialize decisions for the same tenant, including an absent first install.
+-- The unique team constraint arbitrates claims by different tenants.
+create function public.slack_installation_save(
+  p_tenant_id uuid, p_team_id text, p_team_name text, p_bot_user_id text, p_app_id text,
+  p_channel_id text, p_channel_name text, p_scopes text[], p_installed_by uuid,
+  p_ciphertext bytea, p_nonce bytea, p_key_version integer, p_replace boolean,
+  p_expected_generation uuid
+) returns jsonb
+language plpgsql security invoker set search_path = public, pg_temp as $$
+declare
+  current_row public.slack_installations;
+  saved public.slack_installations;
+begin
+  perform pg_advisory_xact_lock(hashtextextended(p_tenant_id::text, 0));
+  select * into current_row from public.slack_installations where tenant_id = p_tenant_id for update;
+  if current_row.tenant_id is not null and current_row.team_id <> p_team_id and not p_replace then
+    return to_jsonb('different-team'::text);
+  end if;
+  if current_row.generation is distinct from p_expected_generation then
+    return to_jsonb('stale'::text);
+  end if;
+  insert into public.slack_installations as s (
+    tenant_id, team_id, team_name, bot_user_id, app_id, channel_id, channel_name,
+    scopes, installed_by, ciphertext, nonce, key_version
+  ) values (
+    p_tenant_id, p_team_id, p_team_name, p_bot_user_id, p_app_id, p_channel_id, p_channel_name,
+    p_scopes, p_installed_by, p_ciphertext, p_nonce, p_key_version
+  ) on conflict (tenant_id) do update set
+    team_id = excluded.team_id, team_name = excluded.team_name, bot_user_id = excluded.bot_user_id,
+    app_id = excluded.app_id, channel_id = excluded.channel_id, channel_name = excluded.channel_name,
+    scopes = excluded.scopes, installed_by = excluded.installed_by, ciphertext = excluded.ciphertext,
+    nonce = excluded.nonce, key_version = excluded.key_version,
+    generation = gen_random_uuid(), updated_at = clock_timestamp()
+  returning * into saved;
+  -- Return metadata only, not ciphertext or plaintext.
+  return to_jsonb(saved) - 'ciphertext' - 'nonce' - 'key_version';
+exception when unique_violation then
+  return to_jsonb('conflict'::text);
+end;
+$$;
+
+-- A lifecycle event lacks an installation id. Check app + bot (for revocation),
+-- event time AND the generation observed by the handler. A reinstall can never
+-- be deleted by an in-flight or delayed event. Ambiguous same-second events are
+-- deliberately ignored (Slack event_time has second precision).
+create function public.slack_installation_revoke(
+  p_team_id text, p_app_id text, p_generation uuid, p_event_time timestamptz, p_bot_user_id text
+) returns integer
+language plpgsql security invoker set search_path = public, pg_temp as $$
+declare removed integer;
+begin
+  delete from public.slack_installations
+   where team_id = p_team_id and app_id = p_app_id and generation = p_generation
+     and updated_at < p_event_time
+     and (p_bot_user_id is null or bot_user_id = p_bot_user_id);
+  get diagnostics removed = row_count;
+  return removed;
+end;
+$$;
+
+-- Distributed single-use state. Nonce is random and hashed; the signed, expiring
+-- browser cookie carries the user/tenant binding. Unique INSERT arbitrates all
+-- app instances. Cleanup is safe because expired cookies cannot be accepted.
+create table public.slack_oauth_consumed (
+  nonce_hash text primary key check (nonce_hash ~ '^[0-9a-f]{64}$'),
+  expires_at timestamptz not null
+);
+create index slack_oauth_consumed_expiry on public.slack_oauth_consumed (expires_at);
+alter table public.slack_oauth_consumed enable row level security;
+revoke all on public.slack_oauth_consumed from public, anon, authenticated;
+create function public.slack_oauth_consume(p_nonce_hash text, p_expires_at timestamptz)
+returns boolean language plpgsql security invoker set search_path = public, pg_temp as $$
+declare touched integer;
+begin
+  if p_expires_at <= clock_timestamp() or p_expires_at > clock_timestamp() + interval '11 minutes' then return false; end if;
+  delete from public.slack_oauth_consumed where expires_at <= clock_timestamp();
+  insert into public.slack_oauth_consumed values (p_nonce_hash, p_expires_at) on conflict do nothing;
+  get diagnostics touched = row_count;
+  return touched = 1;
+end;
+$$;
+
+grant all on public.slack_installations, public.slack_oauth_consumed to service_role;
+revoke all on function public.slack_installation_save(uuid, text, text, text, text, text, text, text[], uuid, bytea, bytea, integer, boolean, uuid) from public, anon, authenticated;
+revoke all on function public.slack_installation_revoke(text, text, uuid, timestamptz, text) from public, anon, authenticated;
+revoke all on function public.slack_oauth_consume(text, timestamptz) from public, anon, authenticated;
+grant execute on function public.slack_installation_save(uuid, text, text, text, text, text, text, text[], uuid, bytea, bytea, integer, boolean, uuid) to service_role;
+grant execute on function public.slack_installation_revoke(text, text, uuid, timestamptz, text) to service_role;
+grant execute on function public.slack_oauth_consume(text, timestamptz) to service_role;
