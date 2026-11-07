@@ -1,4 +1,5 @@
 import { priorAsksForThread } from "./ask/thread.js";
+import { normalizeHearing } from "./hearing.js";
 import { brandLogo, brandSprite } from "./brand-logos.js";
 import { formatLastTested } from "./console/local-time.js";
 import { renderBotSettings } from "./console/bot-settings.js";
@@ -29,7 +30,10 @@ export function renderConsolePage(state = {}) {
   const askDaily = Number.isInteger(state.askLimit) && state.askLimit >= 0 ? state.askLimit : 5;
   const calendarConnected = state.calendarConnected === true;
   const linearConnected = state.linearConnected === true;
-  const slackConnected = state.slackConnected === true || state.slackReady === true;
+  const slackConnected = state.slackConnected === true;
+  const hearingIn = state.hearing && typeof state.hearing === "object" ? state.hearing : null;
+  // Effective guest (saved or default), never blank fields that look unset.
+  const hearing = normalizeHearing(hearingIn);
   const signedIn = state.signedIn === true;
   const accountMember = String(state.accountMember || "").trim();
   const givenName = String(state.accountName || "").trim();
@@ -345,12 +349,12 @@ ${slack}
         <div class="hearing-field">
           <label for="hearing-name">Name</label>
           <p>Shown on the guest's camera.</p>
-          <input id="hearing-name" name="hearing-name" maxlength="40" value="" placeholder="Maple" autocomplete="off">
+          <input id="hearing-name" name="hearing-name" maxlength="40" value="${escapeHtml(hearing.name)}" placeholder="Maple" autocomplete="off">
         </div>
         <div class="hearing-field">
           <label for="hearing-triggers">Triggers</label>
           <p>One word or sentence on each line.</p>
-          <textarea id="hearing-triggers" name="hearing-triggers" rows="4" placeholder="keep this"></textarea>
+          <textarea id="hearing-triggers" name="hearing-triggers" rows="4" placeholder="keep this">${escapeHtml(hearing.triggers.join("\n"))}</textarea>
         </div>
         </div>
         <p class="section-next"><button id="hearing-save" class="primary" type="button">Save the guest</button></p>
@@ -1612,7 +1616,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var heard = hearing || { name: "Maple", triggers: [] };
     var name = document.getElementById("hearing-name");
     var triggers = document.getElementById("hearing-triggers");
-    if (name && document.activeElement !== name) name.value = heard.name && heard.name !== "Maple" ? heard.name : "";
+    if (name && document.activeElement !== name) name.value = heard.name || "Maple";
     if (triggers && document.activeElement !== triggers) triggers.value = (heard.triggers || []).join("\\n");
   }
 

@@ -5,6 +5,7 @@ import { request } from "node:http";
 import test from "node:test";
 import { CONSOLE_COOKIE, sealSession } from "../src/console-auth.js";
 import { CALENDAR_SCOPES, FORMS_SCOPES, createPersonGoogleStore } from "../src/connectors/google-person.js";
+import { resolveMcpSpace } from "../src/connectors/expose.js";
 import { claimWorkspaceSlack, slackClaimState } from "../src/slack/claim.js";
 import { createTenantBind } from "../src/tenant-bind.js";
 import { createApp } from "../src/server.js";
@@ -72,6 +73,56 @@ function identityFor(memberships) {
       return { user_metadata: {} };
     },
     async updateUser() {},
+  };
+}
+
+const PERSONAL = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+const NORTHLINE = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+
+function formsConnector(name) {
+  return {
+    id: `forms-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+    slug: "google-forms",
+    name,
+    preset: "google-forms",
+    status: "connected",
+    enabled: true,
+    tools: [{
+      name: "get_form",
+      description: "Get a form",
+      enabled: true,
+      changed: false,
+      inputSchema: { type: "object" },
+    }],
+  };
+}
+
+function fakeConnectors(rowsByTenant) {
+  return {
+    kind: "memory",
+    soleTenantId() {
+      const ids = Object.keys(rowsByTenant);
+      return ids.length === 1 ? ids[0] : "";
+    },
+    async list(tenantId) {
+      return rowsByTenant[tenantId] || [];
+    },
+  };
+}
+
+function slackAuth(teamId = "T_CLAIM") {
+  return {
+    async postMessage() {},
+    async members() { return ["U1"]; },
+    async authTest() { return { ok: true, teamId, teamName: "Claimed" }; },
+  };
+}
+
+function emptyDeps(extra = {}) {
+  return {
+    memory: trackingMemory(),
+    tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+    ...extra,
   };
 }
 
@@ -957,4 +1008,243 @@ test("unbound early Recall callback is retryable and does not ingest", async (t)
   const early = await call(port, "POST", "/api/recall", payload, signRecall(payload));
   assert.equal(early.status, 503);
   assert.equal(memory.remembered.length, 0);
+});
+
+test("oauth connector and MCP space follow membership, not restored session.tenantId", async (t) => {
+  const northlineForms = formsConnector("Northline Forms");
+  const personalForms = formsConnector("Personal Forms");
+  const foreignForms = formsConnector("Foreign Forms");
+  const store = fakeConnectors({
+    [NORTHLINE]: [northlineForms],
+    [PERSONAL]: [personalForms],
+    [TENANT_C]: [foreignForms],
+  });
+  const memberIdentity = identityFor([
+    { id: PERSONAL, name: "Personal", kind: "personal" },
+    { id: NORTHLINE, name: "Northline", kind: "company" },
+  ]);
+  const personalOnly = identityFor([
+    { id: PERSONAL, name: "Personal", kind: "personal" },
+  ]);
+  const failingIdentity = {
+    async myTenants() { throw new Error("spaces down"); },
+    async getUser() { return { user_metadata: {} }; },
+    async updateUser() {},
+  };
+
+  async function listedConnectors(port, cookie) {
+    return call(port, "GET", "/console/connectors", null, {
+      cookie,
+      accept: "application/json",
+    });
+  }
+
+  async function listedMcpTools(port, cookie) {
+    const res = await call(port, "POST", "/mcp", { jsonrpc: "2.0", id: 1, method: "tools/list" }, { cookie });
+    return (res.json?.result?.tools || []).map((tool) => tool.name);
+  }
+
+  await t.test("restored personal tenantId still lists Northline Forms and MCP space", async () => {
+    const app = createApp({
+      companyLoaded: true,
+      env: identityEnv(),
+      identity: memberIdentity,
+      connectors: store,
+      deps: emptyDeps(),
+    });
+    const port = await listen(app);
+    t.after(() => app.close());
+    const cookie = oauthCookie({ tenantId: PERSONAL });
+    const listed = await listedConnectors(port, cookie);
+    assert.equal(listed.status, 200);
+    assert.deepEqual((listed.json?.connectors || []).map((row) => row.name), ["Northline Forms"]);
+    const tools = await listedMcpTools(port, cookie);
+    assert.equal(tools.includes("google-forms__get_form"), true);
+    const gate = { session: { kind: "oauth", tenantId: PERSONAL, accessToken: "access-a" }, required: true };
+    assert.equal(await resolveMcpSpace(gate, memberIdentity, store), NORTHLINE);
+  });
+
+  await t.test("foreign session tenantId resolves to the authorized company, never the foreign space", async () => {
+    const app = createApp({
+      companyLoaded: true,
+      env: identityEnv(),
+      identity: memberIdentity,
+      connectors: store,
+      deps: emptyDeps(),
+    });
+    const port = await listen(app);
+    t.after(() => app.close());
+    const cookie = oauthCookie({ tenantId: TENANT_C });
+    const listed = await listedConnectors(port, cookie);
+    assert.equal(listed.status, 200);
+    const names = (listed.json?.connectors || []).map((row) => row.name);
+    assert.deepEqual(names, ["Northline Forms"]);
+    assert.equal(names.includes("Foreign Forms"), false);
+    const tools = await listedMcpTools(port, cookie);
+    assert.equal(tools.includes("google-forms__get_form"), true);
+    const gate = { session: { kind: "oauth", tenantId: TENANT_C, accessToken: "access-a" }, required: true };
+    assert.equal(await resolveMcpSpace(gate, memberIdentity, store), NORTHLINE);
+  });
+
+  await t.test("myTenants failure fails closed with 409 and no MCP leak", async () => {
+    const app = createApp({
+      companyLoaded: true,
+      env: identityEnv(),
+      identity: failingIdentity,
+      connectors: store,
+      deps: emptyDeps(),
+    });
+    const port = await listen(app);
+    t.after(() => app.close());
+    const cookie = oauthCookie({ tenantId: TENANT_C });
+    const listed = await listedConnectors(port, cookie);
+    assert.equal(listed.status, 409);
+    assert.equal(listed.json?.ok, false);
+    const tools = await listedMcpTools(port, cookie);
+    assert.equal(tools.includes("google-forms__get_form"), false);
+    const gate = { session: { kind: "oauth", tenantId: TENANT_C, accessToken: "access-a" }, required: true };
+    assert.equal(await resolveMcpSpace(gate, failingIdentity, store), "");
+  });
+
+  await t.test("personal-only user still resolves the personal space", async () => {
+    const app = createApp({
+      companyLoaded: true,
+      env: identityEnv(),
+      identity: personalOnly,
+      connectors: store,
+      deps: emptyDeps(),
+    });
+    const port = await listen(app);
+    t.after(() => app.close());
+    const cookie = oauthCookie({ tenantId: PERSONAL });
+    const listed = await listedConnectors(port, cookie);
+    assert.equal(listed.status, 200);
+    assert.deepEqual((listed.json?.connectors || []).map((row) => row.name), ["Personal Forms"]);
+    const gate = { session: { kind: "oauth", tenantId: PERSONAL, accessToken: "access-a" }, required: true };
+    assert.equal(await resolveMcpSpace(gate, personalOnly, store), PERSONAL);
+  });
+
+  await t.test("passphrase sessions keep session.tenantId and soleTenantId stays non-oauth", async () => {
+    const sole = fakeConnectors({ [NORTHLINE]: [northlineForms] });
+    assert.equal(await resolveMcpSpace({
+      session: { tenantId: PERSONAL, memberId: "mina" },
+      required: true,
+    }, memberIdentity, store), PERSONAL);
+    assert.equal(await resolveMcpSpace({ session: {}, required: false }, null, store), "local");
+    assert.equal(await resolveMcpSpace({ session: {}, required: true }, null, sole), NORTHLINE);
+    assert.equal(await resolveMcpSpace({
+      session: { kind: "oauth", tenantId: PERSONAL, accessToken: "access-a" },
+      required: true,
+    }, failingIdentity, sole), "");
+  });
+});
+
+test("oauth Slack Connected follows the claimed active tenant", async (t) => {
+  const membership = [
+    { id: PERSONAL, name: "Personal", kind: "personal" },
+    { id: NORTHLINE, name: "Northline", kind: "company" },
+  ];
+  const slackEnv = {
+    SLACK_SIGNING_SECRET: SLACK_SECRET,
+    SLACK_BOT_TOKEN: "xoxb-test",
+  };
+
+  async function slackApp({ claimedBy = "", extraEnv = {}, identity = identityFor(membership) } = {}) {
+    const binds = createTenantBind({}, { memory: new Map() });
+    const slack = slackAuth();
+    if (claimedBy) {
+      const claimed = await claimWorkspaceSlack({ tenantBind: binds, slack }, claimedBy);
+      assert.equal(claimed.ok, true);
+    }
+    const app = createApp({
+      companyLoaded: true,
+      env: identityEnv({ ...slackEnv, ...extraEnv }),
+      identity,
+      tenantBind: binds,
+      deps: emptyDeps({ slack }),
+    });
+    const port = await listen(app);
+    t.after(() => app.close());
+    return port;
+  }
+
+  await t.test("env-ready and unclaimed Setup SSR is Not connected and payload slack is not ready", async () => {
+    const port = await slackApp();
+    const cookie = oauthCookie({ tenantId: PERSONAL });
+    const page = await call(port, "GET", "/console/setup", null, { cookie });
+    assert.equal(page.status, 200);
+    assert.match(page.raw, /id="slack-conn" class="conn-state off">Not connected/);
+    const payload = await call(port, "GET", "/api/console", null, { cookie });
+    assert.equal(payload.status, 200);
+    assert.notEqual(payload.json?.slack, "ready");
+    assert.equal(payload.json?.doors?.slack, false);
+  });
+
+  await t.test("claimed for the active tenant shows Connected and ready", async () => {
+    const port = await slackApp({ claimedBy: NORTHLINE });
+    const cookie = oauthCookie({ tenantId: PERSONAL });
+    const page = await call(port, "GET", "/console/setup", null, { cookie });
+    assert.equal(page.status, 200);
+    assert.match(page.raw, /id="slack-conn" class="conn-state">Connected/);
+    const payload = await call(port, "GET", "/api/console", null, { cookie });
+    assert.equal(payload.json?.slack, "ready");
+    assert.equal(payload.json?.doors?.slack, true);
+  });
+
+  await t.test("claimed by another tenant stays Not connected", async () => {
+    const port = await slackApp({ claimedBy: TENANT_B });
+    const cookie = oauthCookie({ tenantId: PERSONAL });
+    const page = await call(port, "GET", "/console/setup", null, { cookie });
+    assert.equal(page.status, 200);
+    assert.match(page.raw, /id="slack-conn" class="conn-state off">Not connected/);
+    const payload = await call(port, "GET", "/api/console", null, { cookie });
+    assert.notEqual(payload.json?.slack, "ready");
+    assert.equal(payload.json?.doors?.slack, false);
+  });
+
+  await t.test("company query does not override the authorized active tenant for Slack", async () => {
+    const identity = identityFor([
+      ...membership,
+      { id: TENANT_B, name: "Zebra", kind: "company" },
+    ]);
+    const port = await slackApp({ claimedBy: TENANT_B, identity });
+    const cookie = oauthCookie({ tenantId: PERSONAL });
+    const payload = await call(port, "GET", `/api/console?company=${TENANT_B}`, null, { cookie });
+    assert.equal(payload.status, 200);
+    assert.notEqual(payload.json?.slack, "ready");
+  });
+
+  await t.test("no active tenant fails Slack closed", async () => {
+    const port = await slackApp({ identity: identityFor([]) });
+    const cookie = oauthCookie({ tenantId: PERSONAL });
+    const page = await call(port, "GET", "/console/setup", null, { cookie });
+    assert.match(page.raw, /id="slack-conn" class="conn-state off">Not connected/);
+    const payload = await call(port, "GET", "/api/console", null, { cookie });
+    assert.notEqual(payload.json?.slack, "ready");
+  });
+
+  await t.test("SEDERUNT_TOOLS_FAKE keeps the env Slack door without a claim", async () => {
+    const port = await slackApp({ extraEnv: { SEDERUNT_TOOLS_FAKE: "1" } });
+    const cookie = oauthCookie({ tenantId: PERSONAL });
+    const page = await call(port, "GET", "/console/setup", null, { cookie });
+    assert.match(page.raw, /id="slack-conn" class="conn-state">Connected/);
+    const payload = await call(port, "GET", "/api/console", null, { cookie });
+    assert.equal(payload.json?.slack, "ready");
+  });
+});
+
+test("passphrase Setup still SSRs Slack Connected from env doors", async (t) => {
+  const app = createApp({
+    companyLoaded: true,
+    env: {
+      SEDERUNT_MEMBER: "mina",
+      SLACK_SIGNING_SECRET: SLACK_SECRET,
+      SLACK_BOT_TOKEN: "xoxb-test",
+    },
+  });
+  const port = await listen(app);
+  t.after(() => app.close());
+  const page = await call(port, "GET", "/console/setup");
+  assert.equal(page.status, 200);
+  assert.match(page.raw, /id="slack-conn" class="conn-state">Connected/);
 });

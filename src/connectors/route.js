@@ -218,11 +218,12 @@ function personIdFrom(gate, env) {
 }
 
 async function spaceId(gate, identity) {
-  if (gate.session?.tenantId) return gate.session.tenantId;
+  // OAuth with identity always uses membership (company over personal). Fail closed.
   if (identity && gate.session?.kind === "oauth") {
     const view = await loadSpaceView(identity, gate.session);
-    if (view?.activeId) return view.activeId;
+    return view?.activeId || "";
   }
+  if (gate.session?.tenantId) return gate.session.tenantId;
   if (!gate.required) return "local";
   return "";
 }

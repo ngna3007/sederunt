@@ -42,6 +42,9 @@ test("Setup tools SSR Connected when doors are on, and MCP presets stay hidden u
   assert.match(off, /id="cal-conn" class="conn-state off">Not connected/);
   assert.match(off, /id="mcp-presets" hidden/);
 
+  const readyOnly = renderConsolePage({ slackReady: true });
+  assert.match(readyOnly, /id="slack-conn" class="conn-state off">Not connected/);
+
   const on = renderConsolePage({
     calendarConnected: true,
     linearConnected: true,

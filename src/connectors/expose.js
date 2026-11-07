@@ -211,11 +211,12 @@ export async function callCustomTool(input) {
  * @param {{ soleTenantId?: Function }} store
  */
 export async function resolveMcpSpace(gate, identity, store) {
-  if (gate?.session?.tenantId) return gate.session.tenantId;
+  // OAuth with identity always uses membership (company over personal). Fail closed.
   if (identity && gate?.session?.kind === "oauth") {
     const view = await loadSpaceView(identity, gate.session);
-    if (view?.activeId) return view.activeId;
+    return view?.activeId || "";
   }
+  if (gate?.session?.tenantId) return gate.session.tenantId;
   if (gate && gate.required === false) return "local";
   return store?.soleTenantId?.() || "";
 }

@@ -348,6 +348,22 @@ async function doorsForRequest(workspace, { companyId = "", personId = "", req }
   } else if (identityConfigured(env)) {
     doors.calendar = false;
   }
+  const gate = req ? guardConsole(req, env) : { session: null };
+  if (workspace.identity && gate.session?.kind === "oauth" && workspace.tenantBind && env.SEDERUNT_TOOLS_FAKE !== "1") {
+    const view = await loadSpaceView(workspace.identity, gate.session);
+    const activeId = view?.activeId || "";
+    if (!activeId) {
+      doors.slack = false;
+    } else {
+      const claim = await slackClaimState({
+        tenantBind: workspace.tenantBind,
+        slack: workspace.deps?.slack,
+        channelId: workspace.deps?.app?.slackChannel || "",
+        slackConfigured: doors.slack === true,
+      }, activeId);
+      doors.slack = claim.linked === true;
+    }
+  }
   return doors;
 }
 
@@ -921,14 +937,18 @@ export function createApp(options = {}) {
       const connectedDoors = oauth ? doorReport(env, workspace.linearReady === true) : null;
       // Slack "connected" for Home/checklist: verified tenant ownership, not env token doors alone.
       // Fake-tools demo keeps door+metadata behavior via toolsConnected inside loadToolAsk.
-      if (connectedDoors && spaces?.activeId && workspace.tenantBind && env.SEDERUNT_TOOLS_FAKE !== "1") {
-        const claim = await slackClaimState({
-          tenantBind: workspace.tenantBind,
-          slack: workspace.deps.slack,
-          channelId: workspace.deps.app?.slackChannel || "",
-          slackConfigured: connectedDoors.slack === true,
-        }, spaces.activeId);
-        connectedDoors.slack = claim.linked === true;
+      if (connectedDoors && workspace.tenantBind && env.SEDERUNT_TOOLS_FAKE !== "1") {
+        if (!spaces?.activeId) {
+          connectedDoors.slack = false;
+        } else {
+          const claim = await slackClaimState({
+            tenantBind: workspace.tenantBind,
+            slack: workspace.deps.slack,
+            channelId: workspace.deps.app?.slackChannel || "",
+            slackConfigured: connectedDoors.slack === true,
+          }, spaces.activeId);
+          connectedDoors.slack = claim.linked === true;
+        }
       }
       const accountProfile = oauth ? await loadAccountProfile(identity, gate.session, spaces) : null;
       const toolAsk = oauth ? await loadToolAsk(identity, gate.session, connectedDoors || {}, env) : null;
