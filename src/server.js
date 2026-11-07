@@ -15,7 +15,6 @@ import { createConsoleAdapter } from "./console/upload.js";
 import { createLinearClient } from "./linear/mcp.js";
 import { loadLinearToken } from "./linear/token.js";
 import { renderCameraPage } from "./meeting/camera.js";
-import { normalizeHearing } from "./hearing.js";
 import { createMeetingAdapter, mediaFromBot, meetingDoorReady, meetingEnded, recallBotUrl, recallTranscriptDelivery, verifyRecallRequest } from "./meeting/recall.js";
 import { createTatumReader } from "./tatum/get-object.js";
 import { resolveMcpSpace } from "./connectors/expose.js";
@@ -41,7 +40,8 @@ import { resolveSignInProviders } from "./identity/shared.js";
 import { clearOAuthCookie } from "./identity/pending.js";
 import { handleAuthRoute, requestOrigin } from "./identity/routes.js";
 import { refreshOAuthSession, rememberRefreshCookie } from "./identity/session.js";
-import { createMemoryPreferenceStore } from "./bot/preferences.js";
+import { createBotPreferenceStore } from "./bot/preferences-supabase.js";
+import { assignEffectiveHearing, effectiveHearing, saveMeetingGuest } from "./bot/meeting-guest.js";
 import { canEditBot, handleBotSettings, readBot } from "./console/bot-settings.js";
 import { handleToolPref, loadAccountProfile, loadToolAsk } from "./console-account.js";
 import { handleInvite, handleJoinLink, handleSpaceSwitch, handleWelcome, loadChecklist, loadSpaceView, welcomeLocation } from "./console-flow.js";
@@ -449,7 +449,9 @@ function fileFrom(file) {
 export function createApp(options = {}) {
   const session = options.session ?? createSession();
   const env = options.env ?? process.env;
-  const botPreferences = options.botPreferences ?? createMemoryPreferenceStore();
+  const botPreferences = options.botPreferences ?? createBotPreferenceStore(env, {
+    fetch: options.fetch,
+  });
   const deps = options.deps ?? defaultDeps({
     liveLinear: options.liveLinear === true,
     loadToken: options.loadToken,
@@ -955,6 +957,9 @@ export function createApp(options = {}) {
       const checklist = oauth && url.pathname === "/console" ? await loadChecklist(identity, gate.session, spaces, toolAsk) : null;
       const botTenant = spaces?.activeId || "local";
       const botView = await readBot(workspace.botPreferences, botTenant);
+      const hearingTenant = botTenant;
+      const hearingCompany = spaces?.activeId && spaces.activeKind !== "personal" ? spaces.activeId : "";
+      const hearing = await effectiveHearing(workspace, hearingTenant, sessionFor(workspace, hearingCompany));
       const bot = {
         ...botView,
         canEdit: canEditBot({
@@ -992,6 +997,7 @@ export function createApp(options = {}) {
         accountProfile,
         toolAsk,
         bot,
+        hearing,
       }));
       return;
     }
@@ -1006,16 +1012,36 @@ export function createApp(options = {}) {
         sendCompanyDenied(res, send, resolved);
         return;
       }
+      const gate = guardConsole(req, env);
+      const spaces = workspace.identity && gate.session?.kind === "oauth"
+        ? await loadSpaceView(workspace.identity, gate.session)
+        : null;
+      const canEdit = canEditBot({
+        signedIn: Boolean(gate.session),
+        oauth: Boolean(spaces?.oauth),
+        role: spaces?.activeRole || "",
+        authRequired: gate.required,
+      });
+      if (!canEdit) {
+        send(res, 403, "application/json; charset=utf-8", JSON.stringify({
+          ok: false,
+          error: "Only an owner or admin can change the meeting guest.",
+        }));
+        return;
+      }
+      const tenantId = spaces?.activeId || resolved.companyId || "local";
       const companyId = resolved.companyId;
       const current = await prepareWorkspace(workspace, companyId);
       const triggers = typeof body.triggers === "string"
         ? body.triggers.split(/\n+/)
         : body.triggers;
-      const hearing = await saveHearing(current, depsFor(workspace, companyId), {
+      const saved = await saveHearing(current, depsFor(workspace, companyId), {
         name: body.name,
         triggers,
       });
-      send(res, 200, "application/json; charset=utf-8", JSON.stringify({ hearing: normalizeHearing(hearing) }));
+      const hearing = await saveMeetingGuest(workspace.botPreferences, tenantId, saved);
+      current.hearing = { ...hearing, savedAt: saved.savedAt, tenantId };
+      send(res, 200, "application/json; charset=utf-8", JSON.stringify({ hearing }));
       return;
     }
     if (req.method === "GET" && url.pathname === "/room") {
@@ -1126,7 +1152,9 @@ export function createApp(options = {}) {
         if (deps.meeting?.join) {
           try {
             const ready = await prepareWorkspace(workspace, joinCompanyId);
-            const guest = normalizeHearing(ready?.hearing).name;
+            const hearingTenant = await hearingTenantId(workspace, req, joinCompanyId);
+            const hearing = await effectiveHearing(workspace, hearingTenant, ready);
+            const guest = hearing.name;
             const bot = await currentBot(workspace, req);
             const sent = await deps.meeting.join({ url: meetingUrl, name: guest, botName: bot.name });
             botId = typeof sent?.id === "string" ? sent.id : "";
@@ -2394,8 +2422,11 @@ export function proofWarmOn(env) {
 
 async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0) {
   const current = sessionFor(workspace, companyId);
+  const hearingTenant = (typeof companyId === "string" && companyId.trim()) || "local";
+  const applyHearing = () => assignEffectiveHearing(workspace, current, hearingTenant);
   if (!workspace.companyLoaded) {
     current.readReport = { ok: true, empty: true, blocked: true };
+    await applyHearing();
     return current;
   }
   const id = companyKey(workspace, companyId);
@@ -2419,13 +2450,39 @@ async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0)
   const pending = workspace.loads.get(id);
   if (!waitMs) {
     await pending;
+    await applyHearing();
     return current;
   }
   await Promise.race([
     pending,
     new Promise((resolve) => setTimeout(resolve, waitMs)),
   ]);
+  await applyHearing();
+  // A timed-out index can still absorb a legacy guest after this returns.
+  // Re-apply so a durable row stays the one typed-path addressing sees.
+  pending.then(() => applyHearing(), () => {}).catch(() => {});
   return current;
+}
+
+/**
+ * Preference tenant for a console request. OAuth uses the active space,
+ * including a personal workspace. Otherwise the authorized company id, or
+ * the local console.
+ *
+ * @param {{ env: NodeJS.ProcessEnv | Record<string, string | undefined>, identity: object | null }} workspace
+ * @param {import("node:http").IncomingMessage | undefined} req
+ * @param {string} [companyId]
+ */
+async function hearingTenantId(workspace, req, companyId = "") {
+  if (req && workspace?.identity) {
+    const gate = guardConsole(req, workspace.env);
+    if (gate.session?.kind === "oauth") {
+      const spaces = await loadSpaceView(workspace.identity, gate.session);
+      if (spaces?.activeId) return spaces.activeId;
+    }
+  }
+  const id = typeof companyId === "string" ? companyId.trim() : "";
+  return id || "local";
 }
 
 /**
@@ -2446,6 +2503,7 @@ async function consolePayload(workspace, current, memberId, kind = "company", op
   const open = kind === "personal" ? "personal" : "company";
   const req = options.req;
   const companyId = typeof options.companyId === "string" ? options.companyId : "";
+  const hearing = await effectiveHearing(workspace, await hearingTenantId(workspace, req, companyId), current);
   const gate = req ? guardConsole(req, workspace.env) : { session: null };
   const personId = String(gate.session?.userId || "").trim();
   const doors = req
@@ -2467,7 +2525,7 @@ async function consolePayload(workspace, current, memberId, kind = "company", op
       waiting: [],
       access: [],
       counts: { kept: 0, waiting: 0, sent: 0, failed: 0 },
-      hearing: normalizeHearing(null),
+      hearing,
     };
   }
   if (!current.readReport) {
@@ -2486,7 +2544,7 @@ async function consolePayload(workspace, current, memberId, kind = "company", op
       waiting: [],
       access: [],
       counts: { kept: 0, waiting: 0, sent: 0, failed: 0 },
-      hearing: normalizeHearing(current.hearing),
+      hearing,
     };
   }
   const report = current.readReport;
@@ -2508,7 +2566,7 @@ async function consolePayload(workspace, current, memberId, kind = "company", op
       waiting: [],
       access: [],
       counts: { kept: 0, waiting: 0, sent: 0, failed: 0 },
-      hearing: normalizeHearing(current.hearing),
+      hearing,
     };
   }
   const empty = report.empty && board.decisions.length === 0;
@@ -2531,7 +2589,7 @@ async function consolePayload(workspace, current, memberId, kind = "company", op
     tickets: board.tickets ?? [],
     access: board.access,
     counts: board.counts,
-    hearing: normalizeHearing(current.hearing),
+    hearing,
     meetings: await calendarMeetings(workspace, { companyId, personId, req }),
     chain: chainReport(workspace.deps?.tatum),
   };

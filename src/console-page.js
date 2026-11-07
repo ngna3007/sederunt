@@ -1613,11 +1613,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function fillHearing(hearing) {
-    var heard = hearing || { name: "Maple", triggers: [] };
     var name = document.getElementById("hearing-name");
     var triggers = document.getElementById("hearing-triggers");
-    if (name && document.activeElement !== name) name.value = heard.name || "Maple";
-    if (triggers && document.activeElement !== triggers) triggers.value = (heard.triggers || []).join("\\n");
+    var heard = hearing && typeof hearing === "object" ? hearing : null;
+    var nextName = heard && heard.name ? String(heard.name) : (name && name.value ? name.value : "");
+    if (name && document.activeElement !== name && nextName) name.value = nextName;
+    if (triggers && document.activeElement !== triggers && heard) triggers.value = (heard.triggers || []).join("\\n");
   }
 
   function member() {
@@ -6227,10 +6228,19 @@ if (sessionWhen && sessionWhen.dataset.at) {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: name, triggers: triggers })
-    }).then(function (response) { return response.json(); }).then(function (result) {
+    }).then(function (response) {
+      return response.json().then(function (result) {
+        return { ok: response.ok, result: result || {} };
+      });
+    }).then(function (payload) {
+      var result = payload.result || {};
+      if (!payload.ok || !result.hearing || !result.hearing.name) {
+        if (note) note.textContent = result.error || "The guest was not saved.";
+        return;
+      }
       fillHearing(result.hearing);
       if (note) note.textContent = "";
-      toast("Saved. The meeting guest is " + (result.hearing && result.hearing.name ? result.hearing.name : "Maple") + ".");
+      toast("Saved. The meeting guest is " + result.hearing.name + ".");
     }).catch(function () {
       if (note) note.textContent = "The guest was not saved.";
     });

@@ -4,8 +4,10 @@
  * workspace map with that person's keys on top.
  *
  * The store is the persistence boundary. `createMemoryPreferenceStore` is
- * the in-process stand-in. A Supabase store would implement the same three
- * methods: list, upsert, remove. RLS on `bot_preferences` is the real gate.
+ * the in-process stand-in. `createBotPreferenceStore` selects that stand-in
+ * or Supabase. Both implement list, upsert, and remove. RLS on
+ * `bot_preferences` is the real gate for a signed-in caller; the service
+ * role used by the server bypasses it, and the console handler is the gate.
  */
 
 export function createMemoryPreferenceStore() {
