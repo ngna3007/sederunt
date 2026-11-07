@@ -952,6 +952,15 @@ export function createApp(options = {}) {
           connectedDoors.slack = claim.linked === true;
         }
       }
+      // Calendar is the current person's Google grant on the active tenant, not deployment tokens.
+      if (connectedDoors) {
+        const personSpace = await resolvePersonTenantId(workspace, req, "");
+        const granted = await doorsForRequest(workspace, {
+          companyId: personSpace.tenantId || spaces?.activeId || "",
+          personId: String(gate.session?.userId || "").trim(),
+        });
+        connectedDoors.calendar = granted.calendar === true;
+      }
       const accountProfile = oauth ? await loadAccountProfile(identity, gate.session, spaces) : null;
       const toolAsk = oauth ? await loadToolAsk(identity, gate.session, connectedDoors || {}, env) : null;
       const checklist = oauth && url.pathname === "/console" ? await loadChecklist(identity, gate.session, spaces, toolAsk) : null;
@@ -982,7 +991,7 @@ export function createApp(options = {}) {
             : !env.RECALL_WEBHOOK_SECRET
               ? "Set RECALL_WEBHOOK_SECRET to the Recall workspace verification secret, then restart."
               : "Check that SEDERUNT_PUBLIC_ORIGIN is a public https address, then restart.",
-        calendarConnected: doors.calendar === true,
+        calendarConnected: (connectedDoors || doors).calendar === true,
         linearConnected: doors.linear === true,
         slackConnected: (connectedDoors || doors).slack === true,
         slackReady: Boolean(env.SLACK_SIGNING_SECRET && env.SLACK_BOT_TOKEN),

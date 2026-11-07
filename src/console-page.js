@@ -1,5 +1,6 @@
 import { priorAsksForThread } from "./ask/thread.js";
 import { normalizeHearing } from "./hearing.js";
+import { CALENDAR_CONNECT_PATH } from "./connectors/calendar-preset.js";
 import { brandLogo, brandSprite } from "./brand-logos.js";
 import { formatLastTested } from "./console/local-time.js";
 import { renderBotSettings } from "./console/bot-settings.js";
@@ -5304,6 +5305,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
   document.querySelectorAll("[data-connect]").forEach(function (button) {
     button.addEventListener("click", function () {
       var which = button.getAttribute("data-connect");
+      if (which === "calendar") {
+        location.href = ${JSON.stringify(CALENDAR_CONNECT_PATH)};
+        return;
+      }
       var url = "https://developers.google.com/workspace/calendar/api/guides/configure-mcp-server";
       if (which === "linear") url = "https://linear.app/docs/mcp";
       if (which === "slack") url = "https://docs.slack.dev/ai/slack-mcp-server";

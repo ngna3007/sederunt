@@ -201,14 +201,13 @@ test("fake auth onboarding stays on localhost", async (t) => {
         assert.match(calendar.raw, /id="calendar-google"/);
         assert.match(calendar.raw, /id="calendar-outlook"[\s\S]*Coming soon/);
         assert.match(calendar.raw, /id="calendar-status">Not connected/);
-        assert.match(calendar.raw, /id="calendar-connect"[^>]*data-docs="https:/);
+        // Calendar Connect submits to the real Google consent; no docs tab.
+        assert.doesNotMatch(calendar.raw, /id="calendar-connect"[^>]*data-docs=/);
         assert.match(calendar.raw, /href="\/console\/welcome\?step=workspace"[^>]*id="ob-back"/);
         assert.doesNotMatch(calendar.raw, /id="auto-join"/);
         const askedCalendar = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=calendar&choice=connect" });
         assert.equal(askedCalendar.status, 302);
-        assert.equal(askedCalendar.location, "/console/welcome?step=calendar&asked=1");
-        const asked = await call(port, "GET", askedCalendar.location, { cookie: header(jar) });
-        assert.match(asked.raw, /Finish in Setup/);
+        assert.equal(askedCalendar.location, "/console/auth/google?intent=calendar&next=%2Fconsole%2Fwelcome%3Fstep%3Dcalendar");
         const laterCalendar = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=calendar&choice=later" });
         assert.equal(laterCalendar.location, "/console/welcome?step=chat");
 

@@ -1333,3 +1333,84 @@ test("hearing and bot saves share the owner gate and do not mutate on 401 or 403
   assert.equal(memberBot.status, 403);
   assert.deepEqual(await snap(), written);
 });
+
+test("calendar status on Home/welcome/Setup follows the person grant; Connect goes to Google OAuth", async (t) => {
+  const { CALENDAR_CONNECT_PATH } = await import("../src/connectors/calendar-preset.js");
+  const { CALENDAR_WELCOME_CONNECT_PATH } = await import("../src/console-flow.js");
+  assert.equal(CALENDAR_WELCOME_CONNECT_PATH, "/console/auth/google?intent=calendar&next=%2Fconsole%2Fwelcome%3Fstep%3Dcalendar");
+  const env = identityEnv({
+    SEDERUNT_CALENDAR_FAKE: "0",
+    CALENDAR_MCP_TOKEN: "ya29.env-must-not-use",
+    CALENDAR_OAUTH_REFRESH_TOKEN: "rt-env-must-not-use",
+  });
+  async function appWith(scopes) {
+    const grants = createPersonGoogleStore({
+      env: grantEnv(),
+      grantRows: createGrantRows(),
+      fetchImpl: async () => ({ ok: true, status: 200, async json() { return { access_token: "ya29.x", expires_in: 3600 }; } }),
+    });
+    if (scopes) {
+      await grants.save("user-a", { refreshToken: "rt", accessToken: "ya29.x", expiresAt: Date.now() + 60_000, scopes }, { tenantId: TENANT_A });
+    }
+    const app = createApp({
+      companyLoaded: true,
+      env,
+      identity: identityFor([{ id: TENANT_A, role: "owner" }]),
+      googleGrants: grants,
+      deps: {
+        memory: trackingMemory(),
+        tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+        calendar: { async listUpcoming() { return []; }, async readDay() { return { day: "friday", events: [] }; } },
+      },
+      fetch: async () => ({ ok: true, status: 200, async text() { return "{}"; }, async json() { return {}; } }),
+    });
+    const port = await listen(app);
+    t.after(() => app.close());
+    return port;
+  }
+  const cookie = oauthCookie({ tenantId: TENANT_A, userId: "user-a" });
+  async function statuses(port) {
+    const setup = await call(port, "GET", "/console/setup", null, { cookie });
+    const home = await call(port, "GET", "/console", null, { cookie });
+    const welcome = await call(port, "GET", "/console/welcome?step=calendar", null, { cookie });
+    return {
+      setup: /id="cal-conn" class="conn-state">Connected/.test(setup.raw),
+      setupOff: /id="cal-conn" class="conn-state off">Not connected/.test(setup.raw),
+      setupScript: setup.raw.includes(JSON.stringify(CALENDAR_CONNECT_PATH)),
+      home: home.status === 200 && /id="cal-conn" class="conn-state">Connected/.test(home.raw),
+      welcome: /id="calendar-status">[\s\S]{0,400}?Connected</.test(welcome.raw) && !/id="calendar-status">Not connected/.test(welcome.raw),
+      welcomeStatus: welcome.status,
+    };
+  }
+
+  // Fresh owner, deployment calendar tokens set, no person grant: Not connected everywhere.
+  const none = await appWith(null);
+  const off = await statuses(none);
+  assert.equal(off.setup, false);
+  assert.equal(off.setupOff, true);
+  assert.equal(off.setupScript, true);
+  assert.equal(off.home, false);
+  assert.equal(off.welcome, false);
+  const connect = await call(none, "POST", "/console/welcome", "action=calendar&choice=connect", {
+    cookie,
+    "content-type": "application/x-www-form-urlencoded",
+  });
+  assert.equal(connect.status, 302);
+  assert.equal(connect.location, CALENDAR_WELCOME_CONNECT_PATH);
+  // Same verified Google route as the Connectors preset, only the safe console return differs.
+  assert.equal(CALENDAR_WELCOME_CONNECT_PATH.split("&next=")[0], CALENDAR_CONNECT_PATH.split("&next=")[0]);
+  const oauth = await call(none, "GET", CALENDAR_WELCOME_CONNECT_PATH, null, { cookie });
+  assert.notEqual(oauth.status, 404);
+
+  // Full calendar grant: Connected everywhere.
+  const on = await statuses(await appWith([...CALENDAR_SCOPES]));
+  assert.equal(on.setup, true);
+  assert.equal(on.home, true);
+  assert.equal(on.welcome, true);
+
+  // Forms-only (partial / declined calendar): Not connected.
+  const forms = await statuses(await appWith([...FORMS_SCOPES]));
+  assert.equal(forms.setup, false);
+  assert.equal(forms.home, false);
+  assert.equal(forms.welcome, false);
+});

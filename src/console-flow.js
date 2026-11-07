@@ -31,6 +31,9 @@ import {
 import { claimWorkspaceSlack, slackClaimState } from "./slack/claim.js";
 import { requiresDurableBind } from "./tenant-bind.js";
 
+/** Google Calendar consent, back to the welcome calendar step. */
+export const CALENDAR_WELCOME_CONNECT_PATH = `/console/auth/google?intent=calendar&next=${encodeURIComponent("/console/welcome?step=calendar")}`;
+
 const TENANT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
@@ -505,6 +508,11 @@ async function chooseTool(ctx, session, active, tool, body) {
         const fake = { ...(user?.user_metadata?.sederunt_fake_tools || {}), [tool]: true };
         await identity.updateUser(session.accessToken, { sederunt_fake_tools: fake });
         redirect(res, `/console/welcome?step=${here}`);
+        return;
+      }
+      // Calendar is a personal Google grant: send the person through the real OAuth consent.
+      if (tool === "calendar" && ctx.doors?.calendar !== true) {
+        redirect(res, CALENDAR_WELCOME_CONNECT_PATH);
         return;
       }
       // Explicit Slack claim: verified auth.test team (+ default channel) → active tenant.
