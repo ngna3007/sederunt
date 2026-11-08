@@ -174,7 +174,13 @@ export function createMeetingFollowups({ store, handleUtterance, slackFor, autho
       const claimed = await finish(record, "editing");
       if (!claimed) return { ok: false, error: "conflict" };
       await syncAction(claimed);
-      return { ok: true, ran: false, modal: { ...editModal({ ...record.data, id: `${record.id}:${record.data.argumentVersion}` }), private_metadata: `${record.id}:${record.data.argumentVersion}` } };
+      return { ok: true, ran: false, modal: { notify_on_close: true, ...editModal({ ...record.data, id: `${record.id}:${record.data.argumentVersion}` }), private_metadata: `${record.id}:${record.data.argumentVersion}` } };
+    }
+    if (input.verb === "cancel") {
+      if (record.status !== "editing") return { ok: false, error: "invalid_edit" };
+      const changed = await finish(record, "pending");
+      if (changed) await syncAction(changed);
+      return { ok: Boolean(changed), ran: false };
     }
     if (input.verb === "save") {
       if (record.status !== "editing" || typeof validateEdit !== "function") return { ok: false, error: "invalid_edit" };

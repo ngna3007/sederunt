@@ -192,3 +192,12 @@ test("a forged claim or expired domain capability cannot authorize a write", asy
   coordinator = state.coordinator;
   assert.equal((await coordinator.interact(state.payload)).ok, true);
 });
+
+
+test("closing an Edit modal restores approval without changing the arguments", async () => {
+  const { coordinator, payload, store, action } = await setup();
+  assert.equal((await coordinator.interact({ ...payload, verb: "edit" })).modal.notify_on_close, true);
+  assert.equal((await coordinator.interact({ ...payload, verb: "cancel" })).ok, true);
+  assert.equal((await store.get(tenantId, action.id)).status, "pending");
+  assert.equal((await coordinator.interact(payload)).status, "done");
+});
