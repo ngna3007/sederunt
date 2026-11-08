@@ -99,6 +99,21 @@ export async function handleUtterance(input, deps = {}) {
     return handleAdminAction(input, deps.admin);
   }
   const session = ensureSession(input.session);
+  if (input.intent === "delete-cleanup") {
+    const intent = input.deletionIntent;
+    if (!intent || !deps.deletions || intent.tenantId !== deps.deletionTenantId) return { ok: false };
+    const persisted = (await deps.deletions.list(intent.tenantId)).find((row) => row.id === intent.id);
+    if (!persisted || persisted.state !== "running" || persisted.leaseToken !== intent.leaseToken
+      || new Date(persisted.leaseUntil).getTime() <= Date.now()) return { ok: false };
+    const auth = authorize({ action: "delete", tool: "memory", preference: "ask", confirmed: true, actionId: intent.id, confirmActionId: intent.id });
+    if (!auth.allowed) return { ok: false };
+    const decision = input.deletionDecision;
+    const { deletionMatches, decisionDeletionScope } = await import("./memory/deletions.js");
+    if (!deletionMatches(intent, decisionDeletionScope(intent.tenantId, decision))) return { ok: false };
+    const tombstone = { ...decision, deleted: true, text: "", fileNames: [] };
+    const receipt = await remember(deps, { account: decision.account || "company", kind: "decision", text: `${decision.id} deleted`, idempotencyKey: `${decision.id}:deleted`, decision: decisionDocument(tombstone) });
+    return { ok: receipt != null, receipt };
+  }
   if (input.openedRoom) return openMeetingRoom(session, deps, input.openedRoom);
   if (!enters(input)) return silence();
 
@@ -1669,61 +1684,37 @@ async function keepDecision(input, session, deps, draft) {
 
 async function forgetDelivery(input, session, deps) {
   await loadIndex(session, deps);
-  const forgetIds = new Set(
-    [input.forgetId, ...(Array.isArray(input.forgetIds) ? input.forgetIds : []), input.deliveryId]
-      .map((value) => byteTrim(String(value ?? "").trim(), 255))
-      .filter((value) => value && !value.startsWith("delete:")),
-  );
+  const sourceIds = [...new Set([input.forgetId, ...(Array.isArray(input.forgetIds) ? input.forgetIds : []), input.deliveryId]
+    .map((value) => byteTrim(String(value ?? "").trim(), 255)).filter((id) => id && !id.startsWith("delete:")))];
   const roomId = input.room?.id || "";
-  const text = String(input.text || "").trim();
-  const decision = (session.decisions ?? []).find((item) => {
-    if (item.deleted) return false;
-    if (forgetIds.has(item.sourceDeliveryId)) return true;
-    return Boolean(roomId && text && item.roomId === roomId && item.text === text);
+  const matches = session.decisions.filter((item) => item.roomId === roomId && !item.deleted
+    && (sourceIds.includes(item.sourceDeliveryId) || (!sourceIds.length && input.text && item.text === input.text)));
+  if (!roomId || (!sourceIds.length && !matches.length)) return finish(session, {
+    status: "recorded", kind: "note", body: "Nothing was deleted.", allow: "read", preference: "ask",
   });
-  if (!decision) {
-    return finish(session, {
-      status: "recorded",
-      kind: "note",
-      body: "Nothing was deleted.\nrecorded\npreference ask",
-      allow: "read",
-      preference: "ask",
-    });
+  const actionId = sourceIds[0] || matches[0].id;
+  const auth = authorize({ action: "delete", tool: "memory", preference: "ask", confirmed: true, actionId, confirmActionId: actionId });
+  if (!auth.allowed) return refusal(session, auth.reason);
+  if (deps.deletions) {
+    try {
+      await deps.deletions.request({ tenantId: deps.deletionTenantId, roomId, sourceIds, decisionIds: matches.map((item) => item.id) });
+    } catch {
+      session.deliveries.delete(input.deliveryId);
+      return finish(session, { status: "failed", kind: "note", body: "Deletion could not be saved. Try again.", allow: auth.reason, preference: "ask", outcome: "deletion-failed" });
+    }
+    for (const decision of matches) decision.deleted = true;
+    return finish(session, { status: "recorded", kind: "note", body: "Deletion requested. Hidden from Sederunt while memory cleanup is pending.", allow: auth.reason, preference: "ask", outcome: "deletion-pending", decisionId: matches[0]?.id });
   }
-  const actionId = [...forgetIds][0] || decision.id;
-  const auth = authorize({
-    action: "delete",
-    tool: "memory",
-    preference: "ask",
-    confirmed: true,
-    actionId,
-    confirmActionId: actionId,
-  });
-  if (!auth.allowed) {
-    return finish(session, {
-      status: "recorded",
-      kind: "note",
-      body: `${decision.text}\nrecorded\npreference ask`,
-      allow: auth.reason,
-      preference: "ask",
-    });
+  for (const decision of matches) {
+    const tombstone = { ...decision, deleted: true, text: "", fileNames: [] };
+    const receipt = deps.memory?.remember ? await remember(deps, { account: decision.account || "company", kind: "decision", text: `${decision.id} deleted`, idempotencyKey: `${decision.id}:deleted`, decision: decisionDocument(tombstone) }) : null;
+    if (!receipt) {
+      session.deliveries.delete(input.deliveryId);
+      return finish(session, { status: "failed", kind: "note", body: "Deletion could not be saved. Try again.", allow: auth.reason, preference: "ask", outcome: "deletion-failed" });
+    }
+    decision.deleted = true;
   }
-  decision.deleted = true;
-  await remember(deps, {
-    account: "company",
-    kind: "decision",
-    text: decision.text,
-    idempotencyKey: `${decision.id}:deleted`,
-    decision: decisionDocument(decision),
-  });
-  return finish(session, {
-    status: "recorded",
-    kind: "note",
-    body: "deleted\nrecorded\npreference ask",
-    allow: auth.reason,
-    preference: "ask",
-    decisionId: decision.id,
-  });
+  return finish(session, { status: "recorded", kind: "note", body: matches.length ? "deleted\nrecorded\npreference ask" : "Nothing was deleted.", allow: auth.reason, preference: "ask", decisionId: matches[0]?.id });
 }
 
 function attachedUploads(input) {
@@ -1896,7 +1887,7 @@ async function loadSentences(session, deps) {
     if (!loaded) continue;
     decision.text = loaded.text;
     decision.connectorId = loaded.connectorId ?? decision.connectorId;
-    decision.deleted = loaded.deleted === true;
+    decision.deleted = decision.deleted === true || loaded.deleted === true;
     if (loaded.sourceDeliveryId) decision.sourceDeliveryId = loaded.sourceDeliveryId;
     decision.objectId = loaded.objectId ?? decision.objectId;
     decision.blobId = loaded.blobId ?? decision.blobId;

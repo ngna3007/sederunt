@@ -1,3 +1,5 @@
+import { createDeletionStore, createLocalDeletionStore, withDeletionOverlay, filterDeletedDecisions } from "./memory/deletions.js";
+import { drainDeletions } from "./memory/deletion-worker.js";
 import { scopeAskStore } from "./ask/context.js";
 import { createParticipantBindings } from "./participant-bindings.js";
 import { consolePrincipal } from "./console-principal.js";
@@ -547,14 +549,50 @@ export function createApp(options = {}) {
     : (options.files || (attachFiles(options, env) ? liveFiles(env, identity) : null));
   const adminStore = options.adminStore || createAdminStore(env, { fetchImpl: options.fetch || globalThis.fetch });
   workspace.adminStore = adminStore;
+  workspace.deletions = options.deletions || createDeletionStore(env);
   const handleAdmin = createAdminRoutes({ env, ask: workspace.ask, store: adminStore, async invalidate(userId, tenantIds) {
     for (const id of tenantIds) { workspace.sessions.delete(id); workspace.loads.delete(id); }
     filesRuntime?.invalidate?.(userId);
     await workspace.tenantBind.releaseTenants(tenantIds);
   } });
+  const recover = async (limit = 10) => {
+    const result = {};
+    if (workspace.deletions) result.deletions = await drainDeletions({ store: workspace.deletions, limit,
+      async resolveDecisions(intent) {
+        const companyId = intent.tenantId === "00000000-0000-4000-8000-000000000001" ? "" : intent.tenantId;
+        const memory = depsFor(workspace, companyId, true).memory;
+        if (typeof memory?.index !== "function") throw new Error("Memory cleanup is unavailable.");
+        const rows = await memory.index();
+        return rows.filter((row) => row.decision).map((row) => row.decision);
+      },
+      async writeTombstone({ intent, decision }) {
+        const companyId = intent.tenantId === "00000000-0000-4000-8000-000000000001" ? "" : intent.tenantId;
+        const result = await handleUtterance({ intent: "delete-cleanup", deletionIntent: intent, deletionDecision: decision, session: sessionFor(workspace, companyId) }, depsFor(workspace, companyId, true));
+        return result.ok ? result.receipt : null;
+      },
+    });
+    if (filesRuntime?.kick) await filesRuntime.kick();
+    return result;
+  };
   const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url || "/", `http://127.0.0.1:${port}`);
+    if (req.method === "POST" && url.pathname === "/api/recovery/drain") {
+      const secret = env.SEDERUNT_RECOVERY_SECRET;
+      const authorization = headerValue(req.headers.authorization);
+      if (!secret || !passphraseMatches(authorization, `Bearer ${secret}`)) {
+        send(res, 401, "application/json", JSON.stringify({ error: "Unauthorized." }));
+        return;
+      }
+      const body = await readJson(req);
+      const limit = body.limit ?? 10;
+      if (!Number.isInteger(limit) || limit < 1 || limit > 10) {
+        send(res, 400, "application/json", JSON.stringify({ error: "Limit must be between 1 and 10." }));
+        return;
+      }
+      send(res, 200, "application/json", JSON.stringify(await recover(limit)));
+      return;
+    }
     if (await handleAdmin(req, res, url, { send, redirect })) return;
     if (identity) rememberRefreshCookie(res, await refreshOAuthSession(req, identity, env));
     if (filesRuntime && await handleFileRequest(req, res, url, filesRuntime, { send })) return;
@@ -754,7 +792,8 @@ export function createApp(options = {}) {
       if (resolved.denied || resolved.unauthorized) { sendCompanyDenied(res, send, resolved); return; }
       const current = await prepareWorkspace(workspace, resolved.companyId);
       const principal = await consolePrincipal(workspace, req, resolved.companyId);
-      if (!(current.decisions || []).some((row) => row.roomId === id && canReadRecord(principal, row))) {
+      const roomDecisions = (current.decisions || []).filter((row) => row.roomId === id && !row.deleted);
+      if (!roomDecisions.length || !roomDecisions.every((row) => canReadRecord(principal, row))) {
         send(res, 404, "application/json; charset=utf-8", JSON.stringify({ error: "That room is not available." }));
         return;
       }
@@ -1871,6 +1910,15 @@ export function createApp(options = {}) {
         send(res, outcome.status, "application/json; charset=utf-8", JSON.stringify(outcome.body));
         return;
       }
+      if (bound.message?.method === "tools/call" && !String(bound.message.params?.name || "").includes("__")) {
+        const supplied = bound.message.params.arguments;
+        if (caller?.kind === "oauth" && (supplied.room || supplied.participants || supplied.door || supplied.followup || supplied.intent || supplied.readPrincipal)) {
+          sendCompanyDenied(res, send, {});
+          return;
+        }
+        bound.message.params.arguments = { ...deliveryFrom(supplied), workspace: supplied.workspace,
+          readPrincipal: await consolePrincipal(workspace, req, companyId, supplied.workspace) };
+      }
       const outcome = await mcpJsonRpc(bound.message, current, depsFor(workspace, companyId), await mcpCallContext(req));
       if (outcome.status === 202) {
         res.writeHead(202);
@@ -1909,11 +1957,16 @@ export function createApp(options = {}) {
         return;
       }
       const custom = typeof name === "string" && name.includes("__");
+      if (!custom && caller?.kind === "oauth" && (args.room || args.participants || args.door || args.followup || args.intent || args.readPrincipal)) {
+        sendCompanyDenied(res, send, {});
+        return;
+      }
       const result = await handleMcpRequest({
         name,
         arguments: custom
-          ? { ...args, session: current }
-          : { ...deliveryFrom(bound.message.params.arguments), session: current },
+          ? { ...bound.message.params.arguments, session: current }
+          : { ...deliveryFrom(bound.message.params.arguments), workspace: args.workspace,
+            readPrincipal: await consolePrincipal(workspace, req, companyId, args.workspace), session: current },
         _meta: message?._meta || message?.params?._meta,
       }, depsFor(workspace, companyId), await mcpCallContext(req));
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(result));
@@ -1939,6 +1992,7 @@ export function createApp(options = {}) {
   };
   /** The start-up proof warm, when it runs. Resolves to its report or null. */
   server.proofWarm = workspace.warm || null;
+  server.recover = recover;
   return server;
 }
 
@@ -2018,7 +2072,14 @@ let publicServer;
 if (isDirectRun() || process.env.VERCEL) {
   loadLocalEnv();
   loadCompanyEnv();
+  let deletions = createDeletionStore(process.env);
+  if (!deletions && !process.env.VERCEL && process.env.NODE_ENV !== "production") {
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(resolve(".local"), { recursive: true });
+    deletions = await createLocalDeletionStore(resolve(".local/memory-deletions.sqlite"));
+  }
   publicServer = createApp({
+    deletions,
     liveLinear: true,
     calendar: createCalendarAdapter(process.env, { save: saveCalendarEnv }),
     calendarSave: saveCalendarEnv,
@@ -2429,14 +2490,17 @@ function sessionFor(workspace, companyId) {
   return workspace.sessions.get(id);
 }
 
-function depsFor(workspace, companyId) {
+function depsFor(workspace, companyId, unfiltered = false) {
   const id = companyKey(workspace, companyId);
   const tenantId = id === "company" ? "" : id;
+  const deletionTenantId = tenantId || "00000000-0000-4000-8000-000000000001";
+  const deletionDeps = { deletions: workspace.deletions, deletionTenantId };
+  const filtered = (memory) => memory && workspace.deletions && !unfiltered ? withDeletionOverlay(memory, workspace.deletions, deletionTenantId) : memory;
   const slackScoped = slackOAuthConfigured(workspace.env || {})
     ? { slack: tenantSlackClient(workspace, tenantId), app: { ...(workspace.deps.app || {}), slackChannel: "" } }
     : {};
   if (workspace.companies) {
-    return { ...workspace.deps, ...slackScoped, memory: workspace.companies[id], tenantId };
+    return { ...workspace.deps, ...slackScoped, ...deletionDeps, memory: filtered(workspace.companies[id]), tenantId };
   }
   const memory = bindMemoryTenant(
     workspace.deps.memory,
@@ -2445,7 +2509,7 @@ function depsFor(workspace, companyId) {
     workspace.memwalClient,
     workspace.deps.tatum,
   );
-  return { ...workspace.deps, ...slackScoped, memory, tenantId };
+  return { ...workspace.deps, ...slackScoped, ...deletionDeps, memory: filtered(memory), tenantId };
 }
 
 /**
@@ -2600,7 +2664,16 @@ async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0,
   const tenant = hearingTenant === undefined
     ? ((typeof companyId === "string" && companyId.trim()) || "local")
     : (typeof hearingTenant === "string" ? hearingTenant.trim() : "");
-  const applyHearing = () => assignEffectiveHearing(workspace, current, tenant);
+  const applyHearing = async () => {
+    await assignEffectiveHearing(workspace, current, tenant);
+    if (workspace.deletions) {
+      const deletionTenant = depsFor(workspace, companyId).deletionTenantId;
+      const allowed = new Set(await filterDeletedDecisions(workspace.deletions, deletionTenant, current.decisions));
+      for (const decision of current.decisions) if (!allowed.has(decision)) decision.deleted = true;
+      const hiddenSources = new Set(current.decisions.filter((row) => row.deleted).map((row) => row.sourceDeliveryId).filter(Boolean));
+      current.actions = current.actions.filter((row) => !hiddenSources.has(row.deliveryId));
+    }
+  };
   if (!workspace.companyLoaded) {
     current.readReport = { ok: true, empty: true, blocked: true };
     await applyHearing();

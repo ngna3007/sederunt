@@ -34,7 +34,7 @@ export function withDeletionOverlay(memory, store, tenantId) {
     const intents = await store.list(tenantId);
     return rows.filter((row) => !row.decision || (!row.decision.deleted && !intents.some((intent) => deletionMatches(intent, decisionDeletionScope(tenantId, row.decision)))));
   };
-  return { ...memory, index: wrap("index"), recall: wrap("recall") };
+  return { ...memory, ...(typeof memory.index === "function" ? { index: wrap("index") } : {}), ...(typeof memory.recall === "function" ? { recall: wrap("recall") } : {}) };
 }
 const fromRow = (row) => ({ id: row.id, tenantId: row.tenant_id, roomKey: row.room_key, targetKind: row.target_kind, targetKey: row.target_key, state: row.state, attempts: row.attempts, leaseToken: row.lease_token, leaseUntil: row.lease_until, nextAttemptAt: row.next_attempt_at });
 export function createDeletionStore(env, { fetchImpl = globalThis.fetch } = {}) {

@@ -4935,7 +4935,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function loadRoomMedia() {
     var room = roomOf(fileRoom);
     var channel = room && /slack/i.test(room.platform || "");
-    if (!fileRoom || channel) {
+    if (!fileRoom || !room || channel) {
       roomMediaState = channel ? { state: "channel", title: roomName(room) } : { state: "none" };
       paintPlayer(roomMediaState);
       paintArtifacts(roomMediaState);
@@ -4946,7 +4946,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (mediaFlight === fileRoom || (roomMediaState && roomMediaState.forRoom === fileRoom)) return;
     var asked = fileRoom;
     mediaFlight = asked;
-    fetch("/console/rooms/" + encodeURIComponent(asked) + "/media").then(function (response) {
+    fetch("/console/rooms/" + encodeURIComponent(asked) + "/media" + consoleQuery()).then(function (response) {
       if (!response.ok) throw new Error("media");
       return response.json();
     }).then(function (media) {
@@ -4976,7 +4976,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
       loadSpeakerLanes().then(function () { paintTimeline(); });
     }).catch(function () {
-      roomMediaState = { state: "none" };
+      roomMediaState = { state: "none", forRoom: asked };
       paintPlayer(roomMediaState);
       paintArtifacts(roomMediaState);
       renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
