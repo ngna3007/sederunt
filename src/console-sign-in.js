@@ -2,9 +2,8 @@ import { providerMark } from "./provider-marks.js";
 import { sederuntMark, FAVICON_LINK } from "./sederunt-mark.js";
 
 /**
- * Console sign-in. Passphrase mode is unchanged. When Supabase or the fake
- * auth backend is configured, enabled providers (usually Google) are the primary path and the
- * passphrase form is a secondary fallback.
+ * Console sign-in uses Google when identity is configured. The passphrase
+ * surface exists only for explicitly configured local development.
  *
  * @param {{
  *   configured?: boolean,
@@ -33,7 +32,7 @@ export function renderSignInPage(state = {}) {
     : "";
   const lede = oauth ? "Sederunt joins your meetings and keeps what was decided." : "Enter your workspace passphrase.";
   const providers = oauth ? providerButtons(next, state.providers) : "";
-  const form = configured ? passphraseBlock(oauth, nextEscaped, name, passInvalid, passMessage) : "";
+  const form = configured && !oauth ? passphraseBlock(false, nextEscaped, name, passInvalid, passMessage) : "";
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -75,15 +74,11 @@ ${FAVICON_LINK}
 
 function providerButtons(next, providers = {}) {
   const query = `next=${escapeText(encodeURIComponent(next || "/console"))}`;
-  // Default: Google on, GitHub off. Callers pass identity.providerEnabled results.
+  // Callers resolve provider availability from identity settings.
   const googleOn = providers.google !== false;
-  const githubOn = providers.github === true;
   const links = [];
   if (googleOn) {
     links.push(`<a class="auth-provider" id="auth-google" href="/console/auth/google?${query}">${providerMark("google")}<span>Continue with Google</span></a>`);
-  }
-  if (githubOn) {
-    links.push(`<a class="auth-provider" id="auth-github" href="/console/auth/github?${query}">${providerMark("github")}<span>Continue with GitHub</span></a>`);
   }
   if (!links.length) return "";
   return `<div class="auth-providers">

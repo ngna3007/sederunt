@@ -21,7 +21,7 @@ import { displayNameFromUser, identityConfigured, providerFromUser, resolveSignI
 import { CALENDAR_SCOPES, applyCalendarConnection, calendarFakeEnabled, calendarScopesGranted } from "../calendar/mcp.js";
 import { FORMS_SCOPES } from "../connectors/google-person.js";
 
-const PROVIDERS = new Set(["google", "github"]);
+const PROVIDERS = new Set(["google"]);
 
 /**
  * @param {{
@@ -100,7 +100,7 @@ async function startProvider(ctx, provider) {
 
 async function fakeConsent(ctx, provider) {
   const { req, res, env, identity, send, redirect } = ctx;
-  if (!identity || typeof identity.issueConsentCode !== "function") {
+  if (!identity || !PROVIDERS.has(provider) || typeof identity.issueConsentCode !== "function") {
     send(res, 404, "text/plain; charset=utf-8", "Not found");
     return;
   }
@@ -153,7 +153,7 @@ async function finishCallback(ctx) {
   }
   const code = url.searchParams.get("code") || "";
   const pending = readPending(req, sessionSecret(env));
-  if (!pending.ok || !code) {
+  if (!pending.ok || !code || !PROVIDERS.has(pending.provider)) {
     send(res, 200, "text/html; charset=utf-8", await page(ctx, {
       notice: "Sign-in didn't complete. Try again.",
     }), { "set-cookie": clearOAuthCookie(req) });
@@ -166,7 +166,7 @@ async function finishCallback(ctx) {
       tokens.scope = scopes.join(" ");
     }
     const user = await identity.getUser(tokens.accessToken);
-    if (!user?.id) throw new Error("unverified");
+    if (!user?.id || providerFromUser(user) !== "google") throw new Error("unverified");
     let grantTenant = "";
     if ((pending.intent === "forms" || pending.intent === "calendar") && pending.provider === "google" && ctx.googleGrants) {
       try {
@@ -316,9 +316,8 @@ export async function providerScopesForGrant(tokens, intent, fetchImpl) {
   }
 }
 
-function providerNotice(provider) {
-  if (provider === "github") return "GitHub sign-in isn't turned on yet. Use Google or ask your admin.";
-  return "Google sign-in isn't turned on yet. Use GitHub or ask your admin.";
+function providerNotice() {
+  return "Google sign-in is not available. Ask your workspace admin to check the sign-in settings.";
 }
 
 export function oauthErrorNotice(error, description) {

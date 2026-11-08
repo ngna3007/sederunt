@@ -40,22 +40,13 @@ export function displayNameFromUser(user) {
   return local.slice(0, 120);
 }
 
-/**
- * Google or GitHub, from the verified user. Anything else is blank.
- *
- * @param {{ app_metadata?: { provider?: string }, identities?: Array<{ provider?: string }> } | null | undefined} user
- */
+/** The provider comes from the verified user record, never the email domain. */
 export function providerFromUser(user) {
-  const fromApp = user?.app_metadata?.provider;
-  if (fromApp === "google" || fromApp === "github") return fromApp;
-  const identities = Array.isArray(user?.identities) ? user.identities : [];
-  const found = identities.find((row) => row?.provider === "google" || row?.provider === "github");
-  return found?.provider || "";
+  return user?.app_metadata?.provider === "google" ? "google" : "";
 }
 
 /**
- * Which Continuations show on the sign-in page. Google stays the demo path when
- * settings cannot be read; GitHub only appears when the provider is actually on.
+ * Google is the only member web provider. Settings failure does not enable it.
  *
  * @param {{ providerEnabled?: (name: string) => Promise<boolean> } | null | undefined} identity
  * @returns {Promise<{ google: boolean, github: boolean }>}
@@ -68,13 +59,7 @@ export async function resolveSignInProviders(identity) {
   try {
     providers.google = await identity.providerEnabled("google") === true;
   } catch {
-    // Settings failed: keep Google as the demo path when OAuth is otherwise configured.
-    providers.google = true;
-  }
-  try {
-    providers.github = await identity.providerEnabled("github") === true;
-  } catch {
-    providers.github = false;
+    providers.google = false;
   }
   return providers;
 }

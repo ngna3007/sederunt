@@ -23,12 +23,17 @@ const REFRESH_SKEW_MS = 30 * 1000;
 export async function refreshOAuthSession(req, identity, env, now = Date.now()) {
   if (!identity) return "";
   const gate = guardConsole(req, env, now);
-  if (gate.session?.kind !== "oauth") return "";
+  if (!gate.session) return "";
+  if (gate.session.kind !== "oauth" || gate.session.provider !== "google") {
+    req.authFailure = "invalid";
+    req.headers.cookie = replaceCookie(req.headers.cookie, CONSOLE_COOKIE, "");
+    return clearedSessionCookie(req);
+  }
   if (typeof gate.session.accessExp === "number" && gate.session.accessExp - REFRESH_SKEW_MS > now) return "";
   try {
     const tokens = await identity.refresh(gate.session.refreshToken);
     const user = await identity.getUser(tokens.accessToken);
-    if (!user?.id) throw new Error("unverified");
+    if (!user?.id || user.id !== gate.session.userId || providerFromUser(user) !== "google") throw new Error("unverified");
     let name = displayNameFromUser(user).slice(0, 80);
     try {
       const profile = await identity.profile(tokens.accessToken);
@@ -48,7 +53,7 @@ export async function refreshOAuthSession(req, identity, env, now = Date.now()) 
       accessExp: tokens.expiresAt,
       tenantId: gate.session.tenantId || "",
       onboarded: gate.session.onboarded === true,
-      provider: providerFromUser(user) || gate.session.provider || "",
+      provider: "google",
     }, sessionSecret(env));
     req.headers.cookie = replaceCookie(req.headers.cookie, CONSOLE_COOKIE, sealed);
     const maxAge = Math.max(0, Math.floor((gate.session.exp - now) / 1000));
