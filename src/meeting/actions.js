@@ -3,10 +3,8 @@
  * until the requester presses Approve in the DM. Edit asks for a change.
  * Skip marks the item skipped. Results go back in that same DM thread.
  *
- * `createMemoryActionStore` is the persistence stand-in. A durable store
- * implements get, put, and update. Connector calls go through `callTool`
- * from src/connectors/client.js, or through an injected calendar port
- * whose `updateEventDetails` is the Calendar MCP write.
+ * Runtime delivery and approval use the durable coordinator in followups.js.
+ * These helpers format messages and adapt writes after the domain allow gate.
  */
 
 import { DEFAULT_BOT_NAME, normalizeBotName } from "../bot/identity.js";
@@ -198,71 +196,9 @@ export function parseActionPayload(input) {
   return input;
 }
 
-function threadOf(payload, item) {
-  return payload?.message?.thread_ts || payload?.message?.ts || item?.threadTs || "";
-}
-
-function channelOf(payload, item) {
-  return payload?.channel?.id || payload?.channel || item?.channelId || "";
-}
-
-/**
- * Approve is the only path that calls the connector. The actor must be the
- * requester. Results are posted with thread_ts so they stay in the DM.
- */
-export async function handleActionPayload({ payload, store, slack, connectors, actorSlackId, botName }) {
-  const body = parseActionPayload(payload);
-  const action = body?.actions?.[0];
-  if (!action?.value) return { ok: false, error: "missing", ran: false };
-  const item = await store.get(action.value);
-  if (!item) return { ok: false, error: "missing", ran: false };
-  const actor = actorSlackId || body.user?.id || "";
-  if (!actor || actor !== item.requesterSlackId) return { ok: false, error: "not_requester", ran: false };
-  const verb = String(action.action_id || "").split(":")[0];
-  const channel = channelOf(body, item);
-  const thread_ts = threadOf(body, item);
-  const username = normalizeBotName(botName) || normalizeBotName(item.botName) || DEFAULT_BOT_NAME;
-
-  if (verb === "skip") {
-    await store.update(item.id, { status: "skipped" });
-    await slack.postMessage({
-      channel,
-      thread_ts,
-      text: `Skipped: ${actionLine(item)}. I did not run it.`,
-      username,
-    });
-    return { ok: true, status: "skipped", ran: false };
-  }
-
-  if (verb === "edit") {
-    await store.update(item.id, { status: "editing" });
-    let opened = false;
-    if (typeof slack.openModal === "function" && body.trigger_id) {
-      await slack.openModal({ triggerId: body.trigger_id, view: editModal(item) });
-      opened = true;
-    }
-    if (!opened) {
-      await slack.postMessage({
-        channel,
-        thread_ts,
-        text: `What should change in "${actionLine(item)}"?`,
-        username,
-      });
-    }
-    return { ok: true, status: "editing", ran: false, modal: opened };
-  }
-
-  if (verb !== "approve") return { ok: false, error: "unknown", ran: false };
-  if (item.status === "done" || item.status === "skipped") return { ok: false, error: "closed", ran: false };
-  await store.update(item.id, { status: "approved" });
-  const result = await connectors.run(item);
-  const status = result?.ok ? "done" : "failed";
-  await store.update(item.id, { status, result: { ok: Boolean(result?.ok), link: result?.link || "", text: result?.text || "" } });
-  const text = result?.ok
-    ? `${actionLine(item)}. ${result.link || ""}`.trim()
-    : `I couldn't ${item.summary}. Next: ${result?.next || "check the connector, then approve again."}`;
-  await slack.postMessage({ channel, thread_ts, text, username });
-  return { ok: Boolean(result?.ok), status, ran: true };
+// Legacy callers cannot bypass the durable claim and domain allow gate.
+export async function handleActionPayload() {
+  return { ok: false, error: "durable_followup_required", ran: false };
 }
 
 function linkFrom(text) {
@@ -284,7 +220,8 @@ export async function runApprovedAction(item, ports = {}) {
     try {
       const updated = await ports.calendar.updateEventDetails(item.args || {});
       const link = updated?.link || updated?.htmlLink || "";
-      return { ok: true, link, text: updated?.text || "Updated the calendar event.", next: "" };
+      if (!updated?.id && !updated?.eventId) return { ok: false, submitted: true, next: "Check Google Calendar for the update before trying again." };
+      return { ok: true, connectorId: updated.id || updated.eventId, link, text: updated?.text || "Updated the calendar event.", next: "" };
     } catch (error) {
       return { ok: false, link: "", text: "", next: error?.message || "Check the calendar event, then approve again." };
     }
@@ -299,5 +236,5 @@ export async function runApprovedAction(item, ports = {}) {
   if (result?.ok !== true) {
     return { ok: false, link, text, next: "Check the connector, then approve again." };
   }
-  return { ok: true, link, text, next: "" };
+  return { ok: true, connectorId: result.connectorId || result.id || "", link, text, next: "" };
 }

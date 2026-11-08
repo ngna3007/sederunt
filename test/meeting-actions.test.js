@@ -65,7 +65,7 @@ test("the checklist is one line per item with Approve, Edit, and Skip", () => {
   assert.equal(blocks[1].elements.map((element) => element.value).join(","), "form-retro,form-retro,form-retro");
 });
 
-test("only Approve runs the item, and only the requester can approve", async () => {
+test("legacy interaction callers cannot bypass durable approval", async () => {
   const store = createMemoryActionStore();
   const posts = [];
   const modals = [];
@@ -92,79 +92,10 @@ test("only Approve runs the item, and only the requester can approve", async () 
   assert.equal(stored.botName, "Adam");
   assert.equal(stored.threadTs, "1710000000.000200");
 
-  const stranger = await handleActionPayload({
-    payload: payload("approve:form-retro", "UOTHER"),
-    store,
-    slack,
-    connectors,
-  });
-  assert.equal(stranger.error, "not_requester");
-  assert.equal(stranger.ran, false);
+  const blocked = await handleActionPayload({ payload: payload("approve:form-retro", "U04LAN"), store, slack, connectors });
+  assert.equal(blocked.error, "durable_followup_required");
+  assert.equal(blocked.ran, false);
   assert.equal(runs.length, 0);
-
-  const skipped = await handleActionPayload({
-    payload: payload("skip:form-retro", "U04LAN"),
-    store,
-    slack,
-    connectors,
-  });
-  assert.equal(skipped.ran, false);
-  assert.equal((await store.get("form-retro")).status, "skipped");
-  assert.equal(posts.at(-1).thread_ts, "1710000000.000200");
-  assert.match(posts.at(-1).text, /Skipped/);
-  assert.equal(posts.at(-1).username, "Adam");
-  assert.equal(runs.length, 0);
-
-  await store.update("form-retro", { status: "pending" });
-  const edited = await handleActionPayload({
-    payload: payload("edit:form-retro", "U04LAN"),
-    store,
-    slack,
-    connectors,
-  });
-  assert.equal(edited.modal, true);
-  assert.equal(edited.ran, false);
-  assert.equal(modals[0].view.callback_id, "edit:form-retro");
-  assert.equal(runs.length, 0);
-
-  const approved = await handleActionPayload({
-    payload: payload("approve:form-retro", "U04LAN"),
-    store,
-    slack,
-    connectors,
-  });
-  assert.equal(approved.ran, true);
-  assert.equal(approved.status, "done");
-  assert.equal(runs.length, 1);
-  assert.equal(posts.at(-1).thread_ts, "1710000000.000200");
-  assert.match(posts.at(-1).text, /https:\/\/docs\.google\.com\/forms\/d\/retro/);
-
-  const again = await handleActionPayload({
-    payload: payload("approve:form-retro", "U04LAN"),
-    store,
-    slack,
-    connectors,
-  });
-  assert.equal(again.error, "closed");
-  assert.equal(runs.length, 1);
-});
-
-test("edit without a modal asks in the same thread and does not run", async () => {
-  const store = createMemoryActionStore();
-  await store.put({ ...formItem, status: "pending", channelId: "D1", threadTs: "171.1" });
-  const posts = [];
-  const slack = { async postMessage(body) { posts.push(body); return { ts: "171.2" }; } };
-  let ran = false;
-  const result = await handleActionPayload({
-    payload: { type: "block_actions", user: { id: "U04LAN" }, channel: { id: "D1" }, message: { ts: "171.1" }, actions: [{ action_id: "edit:form-retro", value: "form-retro" }] },
-    store,
-    slack,
-    connectors: { async run() { ran = true; return { ok: true }; } },
-  });
-  assert.equal(result.modal, false);
-  assert.equal(ran, false);
-  assert.match(posts[0].text, /What should change/);
-  assert.equal(posts[0].thread_ts, "171.1");
 });
 
 test("action posts use the workspace bot name and leave the line unchanged", async () => {
@@ -178,15 +109,7 @@ test("action posts use the workspace bot name and leave the line unchanged", asy
   assert.equal(posts[0].username, "Lan");
   assert.equal(posts[0].text.includes("Lan"), false);
   assert.equal((await store.get("form-retro")).botName, "Lan");
-  await handleActionPayload({
-    payload: { type: "block_actions", user: { id: "U04LAN" }, channel: { id: "D9" }, message: { ts: "171.9" }, actions: [{ action_id: "skip:form-retro", value: "form-retro" }] },
-    store,
-    slack,
-    connectors: { async run() { return { ok: true }; } },
-    botName: "Mai",
-  });
-  assert.equal(posts.at(-1).username, "Mai");
-  assert.match(posts.at(-1).text, /Skipped/);
+
 });
 
 test("a form-encoded payload is accepted", () => {
@@ -208,7 +131,7 @@ test("runApprovedAction uses the injected connector and calendar ports", async (
   assert.equal(calls[0].name, "create_form");
   const calendar = await runApprovedAction(
     { ...formItem, id: "cal", kind: "edit_calendar", tool: "update_event", args: { id: "evt" } },
-    { calendar: { async updateEventDetails(args) { calls.push(args); return { htmlLink: "https://calendar.google.com/event?eid=evt" }; } } },
+    { calendar: { async updateEventDetails(args) { calls.push(args); return { id: "evt", htmlLink: "https://calendar.google.com/event?eid=evt" }; } } },
   );
   assert.equal(calendar.link, "https://calendar.google.com/event?eid=evt");
   const missing = await runApprovedAction({ ...formItem, kind: "other", tool: "custom_tool" }, { callTool: async () => ({ ok: true, text: "" }) });
