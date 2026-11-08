@@ -5286,7 +5286,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function armSlow() {
     if (slowTimer) return;
     slowTimer = setTimeout(function () {
-      // Keep the skeleton path only — never surface the error/Retry chrome for a slow read.
+      // Keep the skeleton visible while a slow read is pending.
       var label = document.getElementById("loading-label");
       if (label) label.textContent = "Still working…";
       var quiet = document.querySelector("#loading .sr");
@@ -6973,7 +6973,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(head)) head = "";
       // If label was already a when-string, prefer spokenAt once.
       if (head && when && head === when) head = "";
-      if (/^(today|yesterday|tomorrow)\b/i.test(head) && when) head = "";
+      if (/^(today|yesterday|tomorrow)\\b/i.test(head) && when) head = "";
       if (head && when) return head + " · " + when;
       return head || when || "";
     }

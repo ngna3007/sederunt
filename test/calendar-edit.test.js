@@ -524,25 +524,18 @@ test("console edit dialog, ask, and layout", { timeout: 180000 }, async (t) => {
   await offPage.click("#ob-continue");
   await offPage.waitForSelector("#calendar-status", { timeout: 45000 });
   await offPage.goto(`${offOrigin}/console`, { waitUntil: "domcontentloaded" });
-  await offPage.waitForSelector("body:not(.is-reading) #home-add-to-meeting", { timeout: 45000 });
+  await offPage.waitForSelector("body:not(.is-reading) #home-add-meeting", { timeout: 45000 });
   await offPage.waitForSelector("#tool-ask-calendar:not([hidden])", { timeout: 45000 });
-  await offPage.waitForSelector("#meeting-list [data-edit-event='launch-review']", { timeout: 45000 });
+  assert.equal(await offPage.locator("#meeting-list [data-edit-event]").count(), 0);
   const askHome = await offPage.evaluate(() => ({
-    add: document.getElementById("home-add-to-meeting").getClientRects().length > 0,
+    add: document.getElementById("home-add-meeting").getClientRects().length > 0,
     ask: !document.getElementById("tool-ask-calendar").hidden,
     dialog: document.getElementById("event-dialog").hidden,
   }));
   assert.equal(askHome.add, true);
   assert.equal(askHome.ask, true);
   assert.equal(askHome.dialog, true);
-  await offPage.click("#meeting-list [data-edit-event='launch-review']");
-  const afterEdit = await offPage.evaluate(() => ({
-    dialog: document.getElementById("event-dialog").hidden,
-    ask: !document.getElementById("tool-ask-calendar").hidden,
-  }));
-  assert.equal(afterEdit.dialog, true);
-  assert.equal(afterEdit.ask, true);
-  await offPage.click("#home-add-to-meeting");
+  await offPage.click("#home-add-meeting");
   const createHidden = await offPage.locator("#create-dialog").getAttribute("hidden");
   assert.notEqual(createHidden, null);
 

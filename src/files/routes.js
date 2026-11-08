@@ -95,8 +95,9 @@ export async function handleFileRequest(req, res, url, runtime, { send }) {
       const fileId = decodeURIComponent(signed[1]);
       const opened = runtime.links ? runtime.links.open(url.searchParams.get("token"), fileId) : null;
       if (!opened) throw new FileError(410, "link_expired", "This download link has expired. Go back and choose Download again.");
-      // The link carries the person, so it works in a new tab; access is checked again here.
-      const downloaded = await runtime.service.download(opened.userId, fileId);
+      if (!userId) throw new FileError(401, "auth", "Sign in again.");
+      if (userId !== opened.userId) throw new FileError(404, "not_found", "Not found");
+      const downloaded = await runtime.service.download(userId, fileId);
       sendFile(res, send, downloaded);
       return true;
     }

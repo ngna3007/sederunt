@@ -66,9 +66,7 @@ const FILE_NAME = /\b([\w.-]+\.(?:pdf|png|docx|txt|pptx))\b/i;
  * Hearing a name also marks the room for the rest of the session, and a
  * remember-this keep refreshes the hold so a dropped wake or a split
  * continuation can still enter.
- * @type {Map<string, number>}
  */
-const hearingHolds = new Map();
 const HEARING_HOLD_MS = 15_000;
 
 function meetingRoomId(input) {
@@ -78,7 +76,6 @@ function meetingRoomId(input) {
 function armMeetingHearing(session, roomId) {
   if (!roomId) return;
   const until = Date.now() + HEARING_HOLD_MS;
-  hearingHolds.set(roomId, until);
   session.hearingHold = { roomId, until };
   session.hearingArmedRooms ??= new Set();
   session.hearingArmedRooms.add(roomId);
@@ -127,7 +124,6 @@ export async function handleUtterance(input, deps = {}) {
     if (roomId && rememberKeep) {
       armMeetingHearing(session, roomId);
     } else if (roomId) {
-      hearingHolds.delete(roomId);
       if (session.hearingHold) delete session.hearingHold;
     }
   }
@@ -297,7 +293,7 @@ function enters(input) {
   if (meetingRememberKeep(input.text, hearing)) return true;
   const roomId = meetingRoomId(input);
   if (!roomId) return false;
-  const until = hearingHolds.get(roomId) || input.session?.hearingHold?.until || 0;
+  const until = input.session?.hearingHold?.roomId === roomId ? input.session.hearingHold.until : 0;
   if (typeof until === "number" && until > Date.now()) return true;
   return roomHearingArmed(input.session, roomId) && meetingRememberKeep(input.text, hearing);
 }
@@ -2332,7 +2328,7 @@ function refusal(session, reason) {
   return finish(session, {
     status: "recorded",
     kind: "answer",
-    body: `${reason}\nrecorded\npreference ${preference}`,
+    body: `${reason === "no-room" ? "No decision is stored because the bot is not in this room." : reason}\nrecorded\npreference ${preference}`,
     allow: reason === "missing-member" || reason === "not-invited" ? reason : "read",
     preference,
     outcome: reason,
@@ -2361,7 +2357,9 @@ function confirmInvite(input, session, action) {
 function writerInvite(input) {
   if (isHuddle(input.room)) return { ok: false, reason: "not-invited", room: null };
   const room = liveRoom(input);
-  const inviteMemberIds = room ? snapshot(input, room) : [];
+  const inviteMemberIds = room
+    ? (Array.isArray(input.participants) && input.participants.length ? input.participants : (room.memberIds ?? []))
+    : [];
   const invite = checkInvite(input.memberId, inviteMemberIds);
   if (!invite.ok || !room) return { ok: false, reason: invite.reason, room: null };
   return { ok: true, reason: invite.reason, room };

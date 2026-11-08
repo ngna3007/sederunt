@@ -4,9 +4,9 @@ Company meeting memory for the Total Recall hackathon.
 One Node process, `node src/server.js`, records a note, reads Linear, and files a ticket only after an allow.
 Status, allow, clash, and the checkpoint stamp live in `src/domain/`.
 
-Vendored skills are the canonical copies in `.agents/skills/`.
-Read the skill there before applying it.
-Files in `.grok/skills/` and `.claude/skills/` are discovery adapters and do not carry a second copy of the guidance.
+Optional local skills live in the ignored `.agents/skills/` directory.
+Read a skill there before applying it when installed. Local `.grok/skills/` and
+`.claude/skills/` adapters are not required to build, test, or run the app.
 
 The public name is Sederunt.
 
@@ -15,10 +15,8 @@ The public name is Sederunt.
 - `src/` — the server, the landing, the typed path, and `src/domain/`
 - `test/` — `node --test`
 - `public/` — models and media the server reads
-- `research/` — hackathon notes already written
-- `prototype/` — throwaway HTML
 - `docs/` — documentation tree
-- `.agents/skills/` — canonical ai-devkit skills
+- `.agents/skills/` — optional local skills (gitignored)
 
 ## Invariants
 

@@ -427,8 +427,9 @@ function guardedFetch(input, timeoutSignal) {
       const location = response.status >= 300 && response.status < 400 ? response.headers.get("location") : "";
       if (!location) return response;
       if (hop === MAX_HOPS) throw connectorError("blocked-url");
-      await response.arrayBuffer().catch(() => {});
+      await response.body?.cancel().catch(() => {});
       const next = new URL(location, current);
+      if (next.origin !== current.origin) throw connectorError("blocked-url");
       if (response.status !== 307 && response.status !== 308) {
         method = "GET";
         body = undefined;

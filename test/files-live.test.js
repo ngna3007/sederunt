@@ -102,7 +102,8 @@ test("signed links open once per person and file, and stop after 15 minutes", ()
 });
 
 test("a workspace member uploads in the background, then lists, downloads by link and deletes", async () => {
-  const server = await liveApp({ users: USERS });
+  const users = structuredClone(USERS);
+  const server = await liveApp({ users });
   try {
     const empty = await call(server.port, "GET", "/api/files", { user: "mina" });
     assert.equal(empty.status, 200);
@@ -139,10 +140,18 @@ test("a workspace member uploads in the background, then lists, downloads by lin
     const link = await call(server.port, "POST", `/api/files/${file.id}/link`, { user: "rowan" });
     assert.equal(link.status, 200);
     assert.match(link.body.url, /^\/api\/files\/[^/]+\/download\?token=/);
-    const opened = await call(server.port, "GET", link.body.url);
+    const anonymous = await call(server.port, "GET", link.body.url);
+    assert.equal(anonymous.status, 401);
+    const other = await call(server.port, "GET", link.body.url, { user: "mina" });
+    assert.equal(other.status, 404);
+    const opened = await call(server.port, "GET", link.body.url, { user: "rowan" });
     assert.equal(opened.status, 200);
     assert.equal(opened.raw.toString("utf8"), "floor plan");
     assert.match(String(opened.headers["content-disposition"]), /filename\*=UTF-8''floor%20plan%20%C3%A9\.txt/);
+    users.rowan.space.activeId = OTHER;
+    const revoked = await call(server.port, "GET", link.body.url, { user: "rowan" });
+    assert.equal(revoked.status, 404, "a signed link cannot reuse membership from the previous workspace");
+    users.rowan.space.activeId = TENANT;
     const bad = await call(server.port, "GET", `/api/files/${file.id}/download?token=nope`);
     assert.equal(bad.status, 410);
 
@@ -151,7 +160,7 @@ test("a workspace member uploads in the background, then lists, downloads by lin
     await server.runtime.kick();
     assert.equal(server.store.getFile(file.id).status, "deleted");
     assert.equal(server.storage.calls.some((item) => item.op === "remove"), true);
-    const after = await call(server.port, "GET", link.body.url);
+    const after = await call(server.port, "GET", link.body.url, { user: "rowan" });
     assert.equal(after.status, 404, "a link stops working once the file is deleted");
   } finally {
     await server.close();

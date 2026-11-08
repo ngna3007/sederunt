@@ -49,7 +49,7 @@ export function createSupabaseIdentity(env, options = {}) {
     }
     let response;
     try {
-      response = await fetchImpl(endpoint(path, query), { method, headers, body: payload, redirect: "manual" });
+      response = await fetchImpl(endpoint(path, query), { method, headers, body: payload, redirect: "manual", signal: AbortSignal.timeout(15000) });
     } catch {
       throw new IdentityError("upstream", "Sign-in could not be reached.");
     }

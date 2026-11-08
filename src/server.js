@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { readRequestBytes } from "./http-body.js";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
@@ -80,7 +81,9 @@ function memoryAdapter(env = process.env, client, tatum, tenantId = "") {
   const adapter = {
     tenantId: boundTenant,
     __bind(nextTenant) {
-      return memoryAdapter(env, client, tatum, nextTenant);
+      const rebound = memoryAdapter(env, client, tatum, nextTenant);
+      if (rebound) rebound.allowUnscoped = this.allowUnscoped === true;
+      return rebound;
     },
     async remember(input) {
       if (input.account === "personal") {
@@ -141,13 +144,13 @@ export function bindMemoryTenant(memory, tenantId, env = process.env, client, ta
       }
       return memory.remember({ ...input, tenantId: stamp });
     },
-    async index() {
+    index: typeof memory.index !== "function" ? undefined : async function () {
       const docs = await memory.index();
       if (!Array.isArray(docs)) return docs;
       const { tenantOwns } = await import("./memory/company.js");
       return docs.filter((doc) => tenantOwns(doc, bound, { allowUnscoped }));
     },
-    async recall(query) {
+    recall: typeof memory.recall !== "function" ? undefined : async function (query) {
       const docs = await memory.recall(query);
       if (!Array.isArray(docs)) return docs;
       const { tenantOwns } = await import("./memory/company.js");
@@ -579,10 +582,6 @@ export function createApp(options = {}) {
     }
     if (req.method === "GET" && url.pathname === "/hold.js") {
       send(res, 200, "text/javascript; charset=utf-8", await readFile(new URL("./hold.js", import.meta.url), "utf8"));
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/prototype/hero") {
-      send(res, 200, "text/html; charset=utf-8", await readFile(resolve("prototype/hero-drafts.html"), "utf8"));
       return;
     }
     if (req.method === "GET" && url.pathname === "/") {
@@ -1530,17 +1529,8 @@ export function createApp(options = {}) {
         let downloadFailed = false;
         if (!question && delivery.intent !== "delete" && !huddle) {
           const channel = delivery.room?.askChannel || "";
-          const people = await slackPeople(slackEnv, deps, channel);
-          // conversations.members sometimes returns empty (rate limit / scope blip).
-          // Falling back to the speaker keeps the channel file instead of going silent.
-          // A non-empty list can still omit the poster (partial page / Connect id);
-          // always union the speaker so invite does not refuse a real keep.
-          const memberIds = people.length
-            ? [...people]
-            : (delivery.memberId ? [delivery.memberId] : []);
-          if (delivery.memberId && !memberIds.includes(delivery.memberId)) {
-            memberIds.push(delivery.memberId);
-          }
+          const people = await slackPeople(slackEnv, deps, channel, options.deps?.slack);
+          const memberIds = people;
           if (!memberIds.length) {
             if (slackToken && channel) {
               await postSlackReply({
@@ -1555,6 +1545,10 @@ export function createApp(options = {}) {
               body: "The channel has not sent who is there.",
               decisions: current.decisions.filter((item) => !item.deleted).length,
             }));
+            return;
+          }
+          if (!memberIds.includes(delivery.memberId)) {
+            replyHttp(200, "application/json; charset=utf-8", JSON.stringify({ body: "not-invited" }));
             return;
           }
           delivery.participants = memberIds;
@@ -1800,6 +1794,17 @@ export function createApp(options = {}) {
       }
       return;
     }
+    if ((url.pathname === "/mcp" || url.pathname === "/api/mcp") && req.method === "POST") {
+      const gate = guardConsole(req, env);
+      if (gate.required && !gate.session) {
+        sendCompanyDenied(res, send, { unauthorized: true });
+        return;
+      }
+      if (!activitySameOrigin(req)) {
+        send(res, 403, "text/plain; charset=utf-8", "That request was refused.");
+        return;
+      }
+    }
     if (url.pathname === "/mcp") {
       if (req.method !== "POST") {
         res.writeHead(405, { allow: "POST", "content-type": "text/plain; charset=utf-8" });
@@ -1819,9 +1824,16 @@ export function createApp(options = {}) {
         return;
       }
       const args = message?.params?.arguments ?? {};
-      const companyId = typeof args.company === "string" ? args.company : "";
+      const resolved = await resolveCompanyId(workspace, req, typeof args.company === "string" ? args.company : "");
+      if (resolved.denied || resolved.unauthorized) {
+        sendCompanyDenied(res, send, resolved);
+        return;
+      }
+      const companyId = resolved.companyId;
       const current = await prepareWorkspace(workspace, companyId);
-      const bound = bindToolMember(message, env.SEDERUNT_MEMBER);
+      const caller = guardConsole(req, env).session;
+      const memberId = caller?.userId || caller?.memberId || env.SEDERUNT_MEMBER;
+      const bound = bindToolMember(message, memberId);
       if (bound.refusal) {
         const refusal = memberRefusal(bound.refusal);
         const outcome = {
@@ -1861,9 +1873,16 @@ export function createApp(options = {}) {
       const message = await readJson(req);
       const name = message?.name ?? message?.params?.name;
       const args = message?.arguments ?? message?.params?.arguments ?? {};
-      const companyId = typeof args.company === "string" ? args.company : "";
+      const resolved = await resolveCompanyId(workspace, req, typeof args.company === "string" ? args.company : "");
+      if (resolved.denied || resolved.unauthorized) {
+        sendCompanyDenied(res, send, resolved);
+        return;
+      }
+      const companyId = resolved.companyId;
       const current = await prepareWorkspace(workspace, companyId);
-      const bound = bindToolMember({ method: "tools/call", params: { arguments: args } }, env.SEDERUNT_MEMBER);
+      const caller = guardConsole(req, env).session;
+      const memberId = caller?.userId || caller?.memberId || env.SEDERUNT_MEMBER;
+      const bound = bindToolMember({ method: "tools/call", params: { arguments: args } }, memberId);
       if (bound.refusal) {
         send(res, 200, "application/json; charset=utf-8", JSON.stringify(memberRefusal(bound.refusal)));
         return;
@@ -1881,8 +1900,10 @@ export function createApp(options = {}) {
     }
     send(res, 404, "text/plain; charset=utf-8", "Not found");
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Request failed";
-    send(res, 500, "text/plain; charset=utf-8", redact(message));
+    if (res.headersSent) { res.end(); return; }
+    const status = error.status === 413 ? 413 : error.status === 400 || error instanceof URIError || error instanceof SyntaxError ? 400 : 500;
+    const message = status === 413 ? "Request body is too large." : status === 400 ? "Invalid request." : "Request failed.";
+    send(res, status, "text/plain; charset=utf-8", message);
   }
   });
   const closeServer = server.close.bind(server);
@@ -2855,7 +2876,11 @@ async function loadRoomMedia(workspace, id, current, empty) {
   return body;
 }
 
-async function slackPeople(env, deps, channel) {
+async function slackPeople(env, deps, channel, injected) {
+  if (typeof injected?.members === "function") {
+    const people = await injected.members(channel);
+    return Array.isArray(people) ? people.map(String).filter(Boolean) : [];
+  }
   if (env.SLACK_BOT_TOKEN) {
     return slackChannelMembers({ token: env.SLACK_BOT_TOKEN, channel, fetchImpl: deps.slack?.fetch });
   }
@@ -3076,9 +3101,7 @@ async function sendClip(req, res, pathname) {
 }
 
 async function readBody(req) {
-  const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
-  return Buffer.concat(chunks).toString("utf8");
+  return (await readRequestBytes(req)).toString("utf8");
 }
 
 async function readJson(req) {

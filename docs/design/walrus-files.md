@@ -34,7 +34,7 @@ graph TD
 
 `src/files/` uploads, lists, downloads, and deletes. `src/console/upload.js` speaks the Console HTTP API and Seal. The files adapter is `createConsoleFiles`. `resolveFolder({ tenantId, channelId })` is the tenancy seam. A row in `console_tenant_folders` selects that workspace's folder and child key. Every other workspace gets the shared folder.
 
-The Files page groups rows by channel and shows the owner, the size, and the date. The menu is Download, Delete for the owner or an admin, and Ask owner to delete for anyone else. A pending row says Deleting…. The owner sees incoming requests. An admin sees unanswered requests older than 72 hours. The page says the bytes are stored on Walrus Console. Screenshots: `docs/pr-screens/files-*.png`.
+The Files page groups rows by channel and shows the owner, the size, and the date. The menu is Download, Delete for the owner or an admin, and Ask owner to delete for anyone else. A pending row says Deleting…. The owner sees incoming requests. An admin sees unanswered requests older than 72 hours. The page says the bytes are stored on Walrus Console.
 
 ## Folder strategy
 
@@ -157,7 +157,7 @@ These names are used only on a provisioning machine. The runtime does not read t
 | `CONSOLE_WEB_ACCOUNT_ADDRESS` | Expected `owner_address` on a new folder |
 | `CONSOLE_KEY_ADMIN_ADDRESS` | Expected `admin_signer_address` on a new folder |
 
-`scripts/console-live-proof.mjs` reads the runtime names from the environment, uploads a small text file, checks the decrypted SHA-256, reads the file metadata and tags, deletes it, reads the metadata once more, and writes a JSON proof to the path in argv. The proof has ids, states, the hash, timings, the metadata keys that came back, the values of `sederunt_file_id`, `tenant_id`, `channel_id`, `owner_person_id`, and `slack_file_id`, the tags, and the metadata status after delete (or `404`). It has no key. When `CONSOLE_FOLDER_ID` is set the script does not create a folder. The earlier testnet proof is history under `docs/archive/`.
+`scripts/console-live-proof.mjs` reads the runtime names from the environment, uploads a small text file, checks the decrypted SHA-256, reads the file metadata and tags, deletes it, reads the metadata once more, and writes a JSON proof to the path in argv. The proof has ids, states, the hash, timings, the metadata keys that came back, the values of `sederunt_file_id`, `tenant_id`, `channel_id`, `owner_person_id`, and `slack_file_id`, the tags, and the metadata status after delete (or `404`). It has no key. When `CONSOLE_FOLDER_ID` is set the script does not create a folder. Earlier testnet proof artifacts are kept in the ignored local archive.
 
 ## Schema
 

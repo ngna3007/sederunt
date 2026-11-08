@@ -1,7 +1,7 @@
 {
   "functions": {
     "src/server.js": {
-      "includeFiles": "{public/**,src/**,prototype/**}"
+      "includeFiles": "{public/**,src/**}"
     }
   }
 }

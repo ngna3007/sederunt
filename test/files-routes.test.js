@@ -113,7 +113,8 @@ test("upload, download, a non-member 404, and the delete request path", async ()
     const hidden = await call(server.port, "GET", `/api/files/${uploaded.body.id}`, { user: BOB });
     assert.equal(hidden.status, 404);
     const listed = await call(server.port, "GET", "/api/files", { user: ALICE });
-    assert.equal(listed.body.files.some((file) => file.deleting), true);
+    assert.equal(server.store.getFile(uploaded.body.id).status, "deleted");
+    assert.equal(listed.body.files.some((file) => file.id === uploaded.body.id), false);
   } finally {
     await server.close();
   }

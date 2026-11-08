@@ -13,3 +13,7 @@ actually produced, on a specific date, with the evidence.
 ## When to read
 
 Before re-running an experiment or gate someone may already have run.
+
+## Source audit
+
+- [2026-11-08-source-audit.md](./2026-11-08-source-audit.md): repository cleanup, security fixes, test results and remaining hardening work.

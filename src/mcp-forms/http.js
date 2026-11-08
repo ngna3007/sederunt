@@ -1,3 +1,4 @@
+import { readRequestBytes } from "../http-body.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/server";
 import { requestOrigin } from "../identity/routes.js";
 import { sederuntMark, FAVICON_LINK } from "../sederunt-mark.js";
@@ -142,9 +143,7 @@ async function nodeToWebRequest(req, url) {
   const method = req.method || "GET";
   const absolute = new URL(url.pathname + url.search, "http://127.0.0.1");
   if (method === "GET" || method === "HEAD") return new Request(absolute, { method, headers });
-  const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
-  return new Request(absolute, { method, headers, body: Buffer.concat(chunks) });
+  return new Request(absolute, { method, headers, body: await readRequestBytes(req) });
 }
 
 /**

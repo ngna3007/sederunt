@@ -16,4 +16,4 @@ questions, kept for the reasoning as much as the answer.
 
 Before investigating a question someone may already have explored.
 
-Hackathon notes already in the repository stay at [`../../research/`](../../research/). This folder is for later investigations written in this tree.
+Early hackathon notes are kept in the ignored local archive. This folder is for investigations useful to maintainers of the running app.
