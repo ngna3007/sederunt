@@ -96,6 +96,10 @@ function meetingRememberKeep(text, hearing) {
 }
 
 export async function handleUtterance(input, deps = {}) {
+  if (input.door === "admin") {
+    const { handleAdminAction } = await import("./domain/admin.js");
+    return handleAdminAction(input, deps.admin);
+  }
   const session = ensureSession(input.session);
   if (input.openedRoom) return openMeetingRoom(session, deps, input.openedRoom);
   if (!enters(input)) return silence();

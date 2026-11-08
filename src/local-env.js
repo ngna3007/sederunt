@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-const FILES = ["recall.env", "calendar-oauth.env", "public.env", "console.env", "slack.env", "tatum.env", "openrouter.env"];
+const FILES = ["recall.env", "calendar-oauth.env", "public.env", "console.env", "slack.env", "tatum.env", "openrouter.env", "admin.env"];
 
 /**
  * Fills missing process env names from the gitignored local files.

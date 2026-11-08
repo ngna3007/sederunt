@@ -133,6 +133,7 @@ export function createFileStore({ clock = () => new Date() } = {}) {
         membership.channelIds = membership.channelIds.filter((id) => id !== channelId);
       }
     },
+    removeMember(userId) { members.delete(userId); },
     bindExternal({ provider, externalChannelId, channelId }) {
       bindings.set(`${provider}:${externalChannelId}`, channelId);
     },

@@ -165,18 +165,28 @@ function commandStore(env, kind, run, clock = Date.now) {
     async claim(user, limit) {
       const today = quotaDay(env, clock());
       const quotaKey = key("quota", user, today.day);
-      const [count] = await run([["INCR", quotaKey], ["EXPIRE", quotaKey, today.secondsLeft + 3600]]);
+      const [count, , generation] = await run([["INCR", quotaKey], ["EXPIRE", quotaKey, today.secondsLeft + 3600], ["GET", key("generation", user)]]);
       const used = Number(count);
       if (used > limit) {
-        await one("DECR", quotaKey);
+        await one("EVAL", "if (redis.call('GET', KEYS[2]) or '0') ~= ARGV[1] then return 0 end; if tonumber(redis.call('GET', KEYS[1]) or '0') > 0 then return redis.call('DECR', KEYS[1]) end; return 0", 2, quotaKey, key("generation", user), String(generation || "0"));
         return { ok: false, used: limit, limit, remaining: 0, resetAt: today.resetAt };
       }
-      return { ok: true, used, limit, remaining: Math.max(0, limit - used), resetAt: today.resetAt };
+      return { ok: true, used, limit, remaining: Math.max(0, limit - used), resetAt: today.resetAt, quotaKey: { key: quotaKey, generation: String(generation || "0") } };
     },
-    async refund(user) {
+    async refund(user, claimedKey) {
+      if (claimedKey) {
+        await one("EVAL", "if (redis.call('GET', KEYS[2]) or '0') ~= ARGV[1] then return 0 end; local n = redis.call('DECR', KEYS[1]); if n < 0 then redis.call('SET', KEYS[1], 0, 'EX', 90000) end; return 1", 2, claimedKey.key, key("generation", user), claimedKey.generation);
+        return;
+      }
       const quotaKey = key("quota", user, quotaDay(env, clock()).day);
       const left = Number(await one("DECR", quotaKey));
       if (left < 0) await one("SET", quotaKey, "0", "EX", 90000);
+    },
+    async resetQuota(user) {
+      await run([["DEL", key("quota", user, quotaDay(env, clock()).day)], ["INCR", key("generation", user)]]);
+    },
+    async resetHistory(user) {
+      await one("EVAL", "local ids = redis.call('LRANGE', KEYS[1], 0, -1); local all = redis.call('SMEMBERS', KEYS[2]); for _, id in ipairs(all) do table.insert(ids, id) end; for _, id in ipairs(ids) do redis.call('SET', ARGV[1] .. ':reset:' .. id, '1', 'EX', ARGV[2]); redis.call('DEL', ARGV[1] .. ':meta:' .. id, ARGV[1] .. ':chunks:' .. id); end; redis.call('DEL', KEYS[1], KEYS[2]); return #ids", 2, key("user", user), key("all", user), prefix, ttl);
     },
     async create(user, question) {
       const id = newId();
@@ -187,33 +197,24 @@ function commandStore(env, kind, run, clock = Date.now) {
         ["LPUSH", key("user", user), id],
         ["LTRIM", key("user", user), 0, KEEP_PER_USER - 1],
         ["EXPIRE", key("user", user), ttl],
+        ["SADD", key("all", user), id],
+        ["EXPIRE", key("all", user), ttl],
       ]);
       return id;
     },
     async append(id, text) {
       if (!text) return;
-      await run([
-        ["RPUSH", key("chunks", id), text],
-        ["EXPIRE", key("chunks", id), ttl],
-        ["HSET", key("meta", id), "updatedAt", String(Date.now())],
-      ]);
+      await one("EVAL", "if redis.call('EXISTS', KEYS[3]) == 1 then return 0 end; redis.call('RPUSH', KEYS[1], ARGV[1]); redis.call('EXPIRE', KEYS[1], ARGV[2]); redis.call('HSET', KEYS[2], 'updatedAt', ARGV[3]); return 1", 3, key("chunks", id), key("meta", id), key("reset", id), text, ttl, Date.now());
     },
     async replace(id, text) {
-      const commands = [
-        ["DEL", key("chunks", id)],
-        ["HSET", key("meta", id), "updatedAt", String(Date.now())],
-      ];
-      if (text) {
-        commands.splice(1, 0, ["RPUSH", key("chunks", id), String(text)], ["EXPIRE", key("chunks", id), ttl]);
-      }
-      await run(commands);
+      await one("EVAL", "if redis.call('EXISTS', KEYS[3]) == 1 then return 0 end; redis.call('DEL', KEYS[1]); if ARGV[1] ~= '' then redis.call('RPUSH', KEYS[1], ARGV[1]); redis.call('EXPIRE', KEYS[1], ARGV[2]); end; redis.call('HSET', KEYS[2], 'updatedAt', ARGV[3]); return 1", 3, key("chunks", id), key("meta", id), key("reset", id), text || "", ttl, Date.now());
     },
     async finish(id, fields = {}) {
       const update = ["status", fields.status || "done", "updatedAt", String(Date.now())];
       if (fields.source) update.push("source", fields.source);
       if (fields.sources) update.push("sources", JSON.stringify(fields.sources));
       if (fields.result) update.push("result", JSON.stringify(fields.result));
-      await one("HSET", key("meta", id), ...update);
+      await one("EVAL", "if redis.call('EXISTS', KEYS[2]) == 1 then return 0 end; return redis.call('HSET', KEYS[1], unpack(ARGV))", 2, key("meta", id), key("reset", id), ...update);
     },
     async meta(id) {
       return shapeMeta(pairs(await one("HGETALL", key("meta", id))));
@@ -281,25 +282,35 @@ function memoryStore(env, clock = Date.now) {
   const metas = new Map();
   const chunkMap = new Map();
   const users = new Map();
+  const generations = new Map();
+  const resetIds = new Set();
+  const quotaSlot = (user) => `${user}:${quotaDay(env, clock()).day}:${generations.get(user) || 0}`;
   return {
     kind: "memory",
     async close() {},
     async quota(user, limit) {
       const today = quotaDay(env, clock());
-      const used = Math.min(limit, quotas.get(`${user}:${today.day}`) || 0);
+      const used = Math.min(limit, quotas.get(quotaSlot(user)) || 0);
       return { used, limit, remaining: Math.max(0, limit - used), resetAt: today.resetAt };
     },
     async claim(user, limit) {
       const today = quotaDay(env, clock());
-      const slot = `${user}:${today.day}`;
+      const slot = quotaSlot(user);
       const used = (quotas.get(slot) || 0) + 1;
       if (used > limit) return { ok: false, used: limit, limit, remaining: 0, resetAt: today.resetAt };
       quotas.set(slot, used);
-      return { ok: true, used, limit, remaining: Math.max(0, limit - used), resetAt: today.resetAt };
+      return { ok: true, used, limit, remaining: Math.max(0, limit - used), resetAt: today.resetAt, quotaKey: slot };
     },
-    async refund(user) {
-      const slot = `${user}:${quotaDay(env, clock()).day}`;
+    async refund(user, claimedKey) {
+      const slot = claimedKey || quotaSlot(user);
       quotas.set(slot, Math.max(0, (quotas.get(slot) || 0) - 1));
+    },
+    async resetQuota(user) { generations.set(user, (generations.get(user) || 0) + 1); },
+    async resetHistory(user) {
+      for (const [id, meta] of metas) {
+        if (meta.user === user) { resetIds.add(id); metas.delete(id); chunkMap.delete(id); }
+      }
+      users.delete(user);
     },
     async create(user, question) {
       const id = newId();
@@ -312,6 +323,7 @@ function memoryStore(env, clock = Date.now) {
     },
     async append(id, text) {
       if (!text) return;
+      if (resetIds.has(id)) return;
       const list = chunkMap.get(id) || [];
       list.push(text);
       chunkMap.set(id, list);
@@ -319,6 +331,7 @@ function memoryStore(env, clock = Date.now) {
       if (meta) meta.updatedAt = String(Date.now());
     },
     async replace(id, text) {
+      if (resetIds.has(id)) return;
       chunkMap.set(id, text ? [String(text)] : []);
       const meta = metas.get(id);
       if (meta) meta.updatedAt = String(Date.now());

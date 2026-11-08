@@ -66,6 +66,8 @@ import { slackBotUserIds, slackDelivery, slackEventHasFiles, verifySlackRequest 
 import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded, warmProofs } from "./typed-path.js";
 import { wireCalls } from "./tatum/client.js";
 import { createTenantBind, requiresDurableBind } from "./tenant-bind.js";
+import { createAdminStore } from "./admin-store.js";
+import { createAdminRoutes } from "./admin-route.js";
 import { slackClaimState } from "./slack/claim.js";
 
 const port = Number(process.env.PORT || 8787);
@@ -535,10 +537,18 @@ export function createApp(options = {}) {
   const filesRuntime = options.files === false
     ? null
     : (options.files || (attachFiles(options, env) ? liveFiles(env, identity) : null));
+  const adminStore = options.adminStore || createAdminStore(env, { fetchImpl: options.fetch || globalThis.fetch });
+  workspace.adminStore = adminStore;
+  const handleAdmin = createAdminRoutes({ env, ask: workspace.ask, store: adminStore, async invalidate(userId, tenantIds) {
+    for (const id of tenantIds) { workspace.sessions.delete(id); workspace.loads.delete(id); }
+    filesRuntime?.invalidate?.(userId);
+    await workspace.tenantBind.releaseTenants(tenantIds);
+  } });
   const server = createServer(async (req, res) => {
   try {
-    if (identity) rememberRefreshCookie(res, await refreshOAuthSession(req, identity, env));
     const url = new URL(req.url || "/", `http://127.0.0.1:${port}`);
+    if (await handleAdmin(req, res, url, { send, redirect })) return;
+    if (identity) rememberRefreshCookie(res, await refreshOAuthSession(req, identity, env));
     if (filesRuntime && await handleFileRequest(req, res, url, filesRuntime, { send })) return;
     if (await handleNodeForms(req, res, { forms: workspace.forms, env, url })) return;
     if (req.method === "GET" && url.pathname.startsWith("/media/")) {
@@ -1939,6 +1949,7 @@ function liveFiles(env, identity) {
     viewer: (req) => session.viewer(req),
   });
   session = createSessionFiles({ env, identity, store, storage: runtime.storage });
+  runtime.invalidate = (userId) => session.invalidate(userId);
   if (background && runtime.storage) runtime.startWorker(30_000);
   return runtime;
 }
@@ -2076,7 +2087,7 @@ async function handleAsk(workspace, req, res, url) {
       try {
         id = await store.create(user, question);
       } catch (error) {
-        await store.refund(user).catch(() => {});
+        await store.refund(user, claimed.quotaKey).catch(() => {});
         throw error;
       }
       // Reserve a slot on the way in, then give it back unless the answer is real text.
@@ -2095,7 +2106,7 @@ async function handleAsk(workspace, req, res, url) {
           }
           if (askId === id && !refunded && !askSpendsQuota(next.source, next.status || status)) {
             refunded = true;
-            await store.refund(user).catch(() => {});
+            await store.refund(user, claimed.quotaKey).catch(() => {});
           }
           return store.finish(askId, next);
         },
@@ -2480,7 +2491,7 @@ async function resolveBoundTenant(workspace, { botId = "", teamId = "", channelI
   const bot = String(botId || "").trim();
   if (bot) {
     const fromBot = await bind.resolve("bot", bot);
-    if (fromBot) return fromBot;
+    if (fromBot) return await workspace.adminStore?.tenantRetired(fromBot) ? "" : fromBot;
   }
   const team = String(teamId || "").trim();
   const channel = String(channelId || "").trim();
@@ -2491,12 +2502,12 @@ async function resolveBoundTenant(workspace, { botId = "", teamId = "", channelI
     if (fromChannel) {
       if (fromTeam && fromTeam !== fromChannel) return "";
       if (!fromTeam) return ""; // channel without authoritative team ownership
-      return fromChannel;
+      return await workspace.adminStore?.tenantRetired(fromChannel) ? "" : fromChannel;
     }
   }
   if (team) {
     const fromTeam = await bind.resolve("slack", team);
-    if (fromTeam) return fromTeam;
+    if (fromTeam) return await workspace.adminStore?.tenantRetired(fromTeam) ? "" : fromTeam;
   }
   return "";
 }

@@ -2,13 +2,12 @@ import { createHash } from "node:crypto";
 import { guardConsole } from "../console-auth.js";
 import { loadSpaceView } from "../console-flow.js";
 
-const VIEW_CACHE_MS = 60 * 1000;
 const RESTORE_RETRY_MS = 60 * 1000;
 
 /**
  * Files for the signed-in Console. One shared space per workspace: everyone in
  * the workspace sees its files, owners and admins can delete any of them.
- * Membership comes from the identity service on each request (cached a minute).
+ * Membership comes from the identity service on each request so a reset revokes access.
  */
 export function workspaceChannelId(tenantId) {
   const hex = createHash("sha256").update(`sederunt-workspace-files:${tenantId}`).digest("hex");
@@ -31,18 +30,11 @@ export function createSessionFiles(options) {
   const spaceView = options.spaceView || loadSpaceView;
   const guard = options.guard || guardConsole;
   const clock = options.clock || Date.now;
-  const views = new Map();
   let restored = null;
   let restoredAt = 0;
 
   async function view(session) {
-    const key = `${session.userId || session.memberId}:${session.tenantId || ""}:${session.accessExp || 0}`;
-    const hit = views.get(key);
-    if (hit && clock() - hit.at < VIEW_CACHE_MS) return hit.value;
-    const value = await spaceView(identity, session);
-    if (value && !value.error) views.set(key, { at: clock(), value });
-    if (views.size > 500) views.clear();
-    return value;
+    return spaceView(identity, session);
   }
 
   /** Rebuild the list from Console once per process. A failure retries after a minute. */
@@ -80,6 +72,7 @@ export function createSessionFiles(options) {
 
   return {
     restore,
+    invalidate(userId) { store.removeMember?.(userId); },
     /** @returns {Promise<{ userId: string, name: string, tenantId: string, channels: Array<{ id: string, name: string }> } | null>} */
     async viewer(req) {
       const gate = guard(req, env);
