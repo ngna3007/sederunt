@@ -167,7 +167,11 @@
 .admin-table th:nth-child(2) { width: 18%; }
 .admin-table td { border-top: 1px solid var(--border); padding: var(--space-4); font-size: var(--text-sm); vertical-align: middle; overflow-wrap: anywhere; }
 .admin-table td:first-child { padding: 0; }
-.admin-table tr.selected { background: var(--primary-subtle); }
+.admin-table tbody tr { cursor: pointer; }
+.admin-table tbody tr:not(.selected):hover { background: var(--muted); }
+.admin-table tbody tr.selected { background: var(--primary-subtle); }
+.admin-table .admin-account:hover { background: transparent; }
+.admin-table .admin-account:active { transform: none; }
 .admin-account { width: 100%; min-height: 88px; border: 0; border-radius: 0; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 0; padding: var(--space-3) var(--space-4); background: transparent; text-align: left; line-height: var(--leading-normal); overflow-wrap: anywhere; }
 .admin-account strong { font-weight: var(--weight-medium); }
 .admin-account span, .admin-account small { color: var(--muted-foreground); font-size: var(--text-xs); }

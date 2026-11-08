@@ -99,7 +99,7 @@ function adminClient(csrf) {
         <section class="admin-detail-section"><h3>Delete user data</h3><p class="admin-muted">Delete this account’s app data and reset onboarding. Keep its Google login. End running meetings and close this account’s app tabs first.</p>${blocked ? '<p class="alert warn">This account is the only owner of a workspace with other members. Transfer ownership before deleting this account’s data.</p>' : ""}<button class="danger" data-action="restart-demo" ${blocked ? "disabled" : ""}>Delete user data</button></section>`;
     } catch (error) { if (request === detailRequest) $("detail").innerHTML = `<p class="alert" role="alert">${esc(error.message)}</p>`; }
   }
-  $("accounts").addEventListener("click", (event) => { const button = event.target.closest("[data-account]"); if (button) loadDetail(button.dataset.account); });
+  $("accounts").addEventListener("click", (event) => { const button = event.target.closest("tr")?.querySelector("[data-account]"); if (button) loadDetail(button.dataset.account); });
   $("search-form").addEventListener("submit", (event) => { event.preventDefault(); offset = 0; loadAccounts(); });
   $("refresh").addEventListener("click", () => { loadAccounts(); if (selected) loadDetail(selected); });
   $("previous").addEventListener("click", () => { offset = Math.max(0, offset - 25); loadAccounts(); });
