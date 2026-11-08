@@ -52,7 +52,7 @@ function identityFor() {
 
 function cookie({ userId, tenantId, accessToken }) {
   const token = sealSession({
-    kind: "oauth",
+    kind: "oauth", provider: "google",
     memberId: userId,
     userId,
     name: userId,

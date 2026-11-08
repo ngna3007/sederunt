@@ -131,7 +131,7 @@ test("supabase sign-in stays on localhost", async (t) => {
 
     await t.test("an oauth session seal rejects a tampered body and a bad key", () => {
       const token = sealSession({
-        kind: "oauth",
+        kind: "oauth", provider: "google",
         memberId: "user-1",
         userId: "user-1",
         name: "Ada Lovelace",
@@ -173,7 +173,7 @@ test("supabase sign-in stays on localhost", async (t) => {
         if (url.pathname === "/auth/v1/user") {
           assert.equal(call.headers.authorization, "Bearer access");
           assert.equal(call.headers.apikey, "sb_publishable_test");
-          return { status: 200, body: { id: "user-1", email: "ada@example.com", user_metadata: { full_name: "Ada Lovelace" } } };
+          return { status: 200, body: { id: "user-1", email: "ada@example.com", app_metadata: { provider: "google" }, user_metadata: { full_name: "Ada Lovelace" } } };
         }
         if (url.pathname === "/auth/v1/token" && url.searchParams.get("grant_type") === "refresh_token") {
           assert.deepEqual(call.body, { refresh_token: "refresh" });
@@ -286,9 +286,9 @@ test("supabase sign-in stays on localhost", async (t) => {
         assert.doesNotMatch(page.raw, /id="sign-pass"/);
         assert.doesNotMatch(page.raw, /Sign-in is not set up on this server/);
         const github = await call(port, "GET", "/console/auth/github?next=/console/history");
-        assert.equal(github.status, 200);
+        assert.equal(github.status, 404);
         assert.equal(github.location, "");
-        assert.match(github.raw, /GitHub sign-in isn't turned on yet\. Use Google or ask your admin\./);
+        assert.doesNotMatch(github.raw, /Continue with GitHub/);
         const home = await call(port, "GET", "/console");
         assert.equal(home.status, 302);
         assert.match(home.location, /^\/console\/sign-in\?next=/);
@@ -298,7 +298,7 @@ test("supabase sign-in stays on localhost", async (t) => {
       });
     });
 
-    await t.test("github appears on the sign-in page when the fake provider is on", async () => {
+    await t.test("github stays hidden even when the fake provider is on", async () => {
       const env = {
         SEDERUNT_AUTH_FAKE: "1",
         SEDERUNT_AUTH_FAKE_GITHUB: "1",
@@ -309,8 +309,8 @@ test("supabase sign-in stays on localhost", async (t) => {
         const page = await call(port, "GET", "/console/sign-in");
         assert.equal(page.status, 200);
         assert.match(page.raw, /Continue with Google/);
-        assert.match(page.raw, /Continue with GitHub/);
-        assert.match(page.raw, /id="auth-github" href="\/console\/auth\/github\?next=/);
+        assert.doesNotMatch(page.raw, /Continue with GitHub/);
+        assert.doesNotMatch(page.raw, /id="auth-github"/);
       });
     });
 
@@ -349,7 +349,7 @@ test("supabase sign-in stays on localhost", async (t) => {
         async getUser() {
           calls.push("user");
           if (!acceptUser) return null;
-          return { id: "user-1", email: "ada@example.com", user_metadata: { full_name: "From Token" } };
+          return { id: "user-1", email: "ada@example.com", app_metadata: { provider: "google" }, user_metadata: { full_name: "From Token" } };
         },
         async profile() {
           calls.push("profile");
@@ -386,9 +386,9 @@ test("supabase sign-in stays on localhost", async (t) => {
         assert.equal(opened.name, "From Profile");
         assert.notEqual(opened.memberId, "evil");
         const off = await call(port, "GET", "/console/auth/github");
-        assert.equal(off.status, 200);
+        assert.equal(off.status, 404);
         assert.equal(off.location, "");
-        assert.match(off.raw, /GitHub sign-in isn't turned on yet/);
+        assert.doesNotMatch(off.raw, /Continue with GitHub/);
         identity.providerEnabled = async () => { throw new Error("settings down"); };
         const checked = await call(port, "GET", "/console/auth/google");
         assert.equal(checked.status, 200);
@@ -431,16 +431,8 @@ test("supabase sign-in stays on localhost", async (t) => {
         await assert.rejects(() => identity.createInvite(opened.accessToken, tenants[0].id, "grace@example.com", "member"));
         const token = await identity.createInvite(opened.accessToken, team, "grace@example.com", "admin");
         await assert.rejects(() => identity.acceptInvite(opened.accessToken, token), (error) => error instanceof IdentityError && error.code === "forbidden");
-        identity.setProviderEnabled("github", true);
-        const graceJar = {};
-        await followProvider(port, graceJar, "github", "/console");
-        const grace = openSession(decodeURIComponent(graceJar.sederunt_session), SECRET);
-        assert.equal(grace.name, "Grace Hopper");
-        const joined = await identity.acceptInvite(grace.accessToken, token);
-        assert.equal(joined, team);
-        await assert.rejects(() => identity.acceptInvite(grace.accessToken, token));
-        const graceTenants = await identity.myTenants(grace.accessToken);
-        assert.equal(graceTenants.find((row) => row.id === team).role, "admin");
+        const github = await call(port, "GET", "/console/auth/github");
+        assert.equal(github.status, 404);
         const stale = sealSession({ ...opened, accessExp: Date.now() - 1000 }, SECRET);
         const refreshed = await call(port, "GET", "/console", { cookie: `sederunt_session=${encodeURIComponent(stale)}` });
         assert.equal(refreshed.status, 200);
@@ -478,39 +470,15 @@ test("supabase sign-in stays on localhost", async (t) => {
       }, identity);
     });
 
-    await t.test("the passphrase still signs in when OAuth is configured", async () => {
-      const env = {
-        SEDERUNT_AUTH_FAKE: "1",
-        SEDERUNT_SESSION_SECRET: SECRET,
-        SEDERUNT_CONSOLE_SECRET: PASS,
-        SEDERUNT_MEMBER: "Mina",
-      };
+    await t.test("OAuth configuration rejects passphrase sign-in", async () => {
+      const env = { SEDERUNT_AUTH_FAKE: "1", SEDERUNT_SESSION_SECRET: SECRET, SEDERUNT_CONSOLE_SECRET: PASS };
       await withServer(env, async (port) => {
-        const page = await call(port, "GET", "/console/sign-in?reason=mismatch");
-        assert.equal(page.status, 200);
+        const page = await call(port, "GET", "/console/sign-in");
         assert.match(page.raw, /Continue with Google/);
-        assert.match(page.raw, /Use a passphrase/);
-        assert.match(page.raw, /That passphrase does not match/);
-        assert.match(page.raw, /id="sign-pass"/);
-        const wrong = await call(port, "POST", "/console/sign-in", {
-          body: "name=Mina&passphrase=nope&next=/console/history",
-        });
-        assert.equal(wrong.status, 401);
-        assert.match(wrong.raw, /That passphrase does not match/);
-        const signed = await call(port, "POST", "/console/sign-in", {
-          body: "name=Mina&passphrase=fixture-passphrase&next=/console/history",
-        });
-        assert.equal(signed.status, 302);
-        assert.equal(signed.location, "/console/history");
-        const token = decodeURIComponent(cookieValue(signed.cookie, "sederunt_session"));
-        const opened = openSession(token, PASS);
-        assert.equal(opened.ok, true);
-        assert.equal(opened.memberId, "Mina");
-        assert.equal(opened.kind, undefined);
-        const home = await call(port, "GET", "/console/history", { cookie: `sederunt_session=${encodeURIComponent(token)}` });
-        assert.equal(home.status, 200);
-        assert.match(home.raw, /id="account-name">Mina</);
-        assert.equal(home.cookie, undefined);
+        assert.doesNotMatch(page.raw, /id="sign-pass"/);
+        const signed = await call(port, "POST", "/console/sign-in", { body: "name=Mina&passphrase=fixture-passphrase" });
+        assert.equal(signed.status, 403);
+        assert.equal(cookieValue(signed.cookie, "sederunt_session"), "");
       });
     });
 

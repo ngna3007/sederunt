@@ -91,7 +91,7 @@ test("HTTP MCP rejects another workspace even with a valid OAuth cookie", async 
   const env = { SEDERUNT_AUTH_FAKE: "1", SEDERUNT_SESSION_SECRET: secret };
   const identity = { async myTenants() { return [{ id: own, kind: "team", name: "Fixture workspace" }]; } };
   const base = await listen(t, createApp({ env, identity, deps: deps(), files: false }));
-  const cookie = `sederunt_session=${sealSession({ kind: "oauth", userId: "fixture-user", memberId: "fixture-user", tenantId: own, accessToken: "fixture-token", accessExp: Date.now() + 3600000 }, secret)}`;
+  const cookie = `sederunt_session=${sealSession({ kind: "oauth", provider: "google", userId: "fixture-user", memberId: "fixture-user", tenantId: own, accessToken: "fixture-token", accessExp: Date.now() + 3600000 }, secret)}`;
   for (const path of ["/mcp", "/api/mcp"]) {
     const response = await fetch(base + path, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", name: "recall", arguments: { company: other }, params: { name: "recall", arguments: { company: other } } }) });
     assert.equal(response.status, 403);

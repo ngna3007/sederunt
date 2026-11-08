@@ -454,7 +454,7 @@ test("passphrase session cannot select a company UUID while identity is on", asy
   const denied = await call(port, "GET", `/api/console?company=${TENANT_A}`, null, {
     cookie: passphraseCookie(),
   });
-  assert.equal(denied.status, 403);
+  assert.equal(denied.status, 401);
 });
 
 test("unauthorized signed-in Ask/console denied for foreign company", async (t) => {
@@ -1061,7 +1061,7 @@ test("oauth connector and MCP space follow membership, not restored session.tena
     assert.deepEqual((listed.json?.connectors || []).map((row) => row.name), ["Northline Forms"]);
     const tools = await listedMcpTools(port, cookie);
     assert.equal(tools.includes("google-forms__get_form"), true);
-    const gate = { session: { kind: "oauth", tenantId: PERSONAL, accessToken: "access-a" }, required: true };
+    const gate = { session: { kind: "oauth", provider: "google", tenantId: PERSONAL, accessToken: "access-a" }, required: true };
     assert.equal(await resolveMcpSpace(gate, memberIdentity, store), NORTHLINE);
   });
 
@@ -1083,7 +1083,7 @@ test("oauth connector and MCP space follow membership, not restored session.tena
     assert.equal(names.includes("Foreign Forms"), false);
     const tools = await listedMcpTools(port, cookie);
     assert.equal(tools.includes("google-forms__get_form"), true);
-    const gate = { session: { kind: "oauth", tenantId: TENANT_C, accessToken: "access-a" }, required: true };
+    const gate = { session: { kind: "oauth", provider: "google", tenantId: TENANT_C, accessToken: "access-a" }, required: true };
     assert.equal(await resolveMcpSpace(gate, memberIdentity, store), NORTHLINE);
   });
 
@@ -1103,7 +1103,7 @@ test("oauth connector and MCP space follow membership, not restored session.tena
     assert.equal(listed.json?.ok, false);
     const tools = await listedMcpTools(port, cookie);
     assert.equal(tools.includes("google-forms__get_form"), false);
-    const gate = { session: { kind: "oauth", tenantId: TENANT_C, accessToken: "access-a" }, required: true };
+    const gate = { session: { kind: "oauth", provider: "google", tenantId: TENANT_C, accessToken: "access-a" }, required: true };
     assert.equal(await resolveMcpSpace(gate, failingIdentity, store), "");
   });
 
@@ -1121,7 +1121,7 @@ test("oauth connector and MCP space follow membership, not restored session.tena
     const listed = await listedConnectors(port, cookie);
     assert.equal(listed.status, 200);
     assert.deepEqual((listed.json?.connectors || []).map((row) => row.name), ["Personal Forms"]);
-    const gate = { session: { kind: "oauth", tenantId: PERSONAL, accessToken: "access-a" }, required: true };
+    const gate = { session: { kind: "oauth", provider: "google", tenantId: PERSONAL, accessToken: "access-a" }, required: true };
     assert.equal(await resolveMcpSpace(gate, personalOnly, store), PERSONAL);
   });
 
@@ -1134,7 +1134,7 @@ test("oauth connector and MCP space follow membership, not restored session.tena
     assert.equal(await resolveMcpSpace({ session: {}, required: false }, null, store), "local");
     assert.equal(await resolveMcpSpace({ session: {}, required: true }, null, sole), NORTHLINE);
     assert.equal(await resolveMcpSpace({
-      session: { kind: "oauth", tenantId: PERSONAL, accessToken: "access-a" },
+      session: { kind: "oauth", provider: "google", tenantId: PERSONAL, accessToken: "access-a" },
       required: true,
     }, failingIdentity, sole), "");
   });

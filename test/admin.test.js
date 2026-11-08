@@ -105,7 +105,7 @@ test("an account reset is immediately respected by file membership checks", asyn
   let activeId = "old-space";
   const store = createFileStore();
   const files = createSessionFiles({ env: {}, identity: {}, store,
-    guard: () => ({ required: true, session: { kind: "oauth", userId } }),
+    guard: () => ({ required: true, session: { kind: "oauth", provider: "google", userId } }),
     spaceView: async () => ({ activeId, activeName: activeId, activeRole: "owner" }),
   });
   assert.equal((await files.viewer({})).tenantId, "old-space");

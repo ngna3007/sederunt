@@ -77,7 +77,7 @@ async function withApp(env, identity, fn, store = createMemoryPreferenceStore())
 
 function oauthCookie(role) {
   const token = sealSession({
-    kind: "oauth",
+    kind: "oauth", provider: "google",
     memberId: `user-${role}`,
     userId: `user-${role}`,
     name: role === "owner" ? "Ada" : "Bob",

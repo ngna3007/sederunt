@@ -39,7 +39,7 @@ function liveApp({ users, rows = [], background = true } = {}) {
     identity: {},
     guard: (req) => {
       const who = users[String(req.headers["x-test-user"] || "")];
-      return { required: true, session: who ? { kind: "oauth", ...who.session } : null };
+      return { required: true, session: who ? { kind: "oauth", provider: "google", ...who.session } : null };
     },
     spaceView: async (_identity, s) => Object.values(users).find((who) => who.session.userId === s.userId).space,
   });
