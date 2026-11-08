@@ -2,7 +2,7 @@
 
 Use this before a new recording when an existing Google account needs a fresh onboarding attempt. **Ask AI stays before the Slack demonstration** in the [new-user live-demo procedure](./new-user-live-demo.md).
 
-The admin page is implemented at `/admin`. It becomes available on a deployment only after its database migration and admin environment variables are installed. Local screenshots below use clearly labelled test fixtures, not production accounts.
+The admin page is live at [sederunt.vercel.app/admin](https://sederunt.vercel.app/admin). Its database migration and production admin environment variables are installed. Local screenshots below use clearly labelled test fixtures, not production accounts.
 
 ## Pick the right action
 
@@ -97,7 +97,7 @@ The isolated release branch is `feat/admin-demo-recovery`, based on production's
 
 An additional release validation on 8 November 2026 passed **110 selected tests, zero failures and zero skips**, covering admin authentication/actions, the real PostgreSQL migration and Redis cleanup, Slack multitenancy, onboarding, tenant authorization, design tokens, Ask AI streaming and Files sessions. The database fixture explicitly proves that a restart removes a sole-member workspace's Slack installation and connection state, preserves the shared workspace's connection, and permits the same Slack team to install into the newly created workspace. These are local database checks; they do not prove a live Slack consent exchange.
 
-Production rollout remains pending approval. No production migration, environment-variable upload, deployment or account reset has been performed for this release. After approval, follow the deployment steps above and run the read-only smoke checks before using a disposable account for recovery rehearsal.
+Production rollout was approved and completed on 8 November 2026. The new migration, production admin credentials and release deployment are installed. Live browser checks passed for login, account/workspace details, AI quota display, responsive layout, sign-out and ordinary Google sign-in. No account reset or quota reset was executed. See the [production rollout evidence](../reports/2026-11-08-admin-production-rollout.md). Use an expressly disposable account for any destructive recovery rehearsal.
 
 ### UI delivery gate
 
