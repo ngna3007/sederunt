@@ -6,7 +6,7 @@ const head = (title) => `<!doctype html><html lang="en"><head><meta charset="utf
 export function renderAdminSignIn({ error = "", configured = true } = {}) {
   return `${head("Admin sign in")}<body><main class="auth"><section class="auth-card" aria-labelledby="admin-title">
     <p class="auth-mark">${sederuntMark()}<span class="brand-word">Sederunt</span></p>
-    <h1 id="admin-title">Admin sign in</h1><p class="page-lede">Manage accounts and prepare the next demo.</p>
+    <h1 id="admin-title">Admin sign in</h1><p class="page-lede">Manage accounts, workspaces, and user data.</p>
     ${error ? `<p class="alert" role="alert">${escape(error)}</p>` : ""}
     ${configured ? `<form method="post" action="/admin/login" class="admin-login">
       <label for="username">Username</label><input id="username" name="username" autocomplete="username" maxlength="80" required autofocus>
@@ -21,8 +21,8 @@ export function renderAdminPage({ csrf, username }) {
       <p class="admin-nav-label">Administration</p><nav aria-label="Admin"><a href="/admin" aria-current="page">Accounts</a><a href="/console">Open app</a></nav>
       <div class="admin-sidebar-foot"><span>Signed in as ${escape(username)}</span><form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="${escape(csrf)}"><button class="ghost">Sign out</button></form></div>
     </aside>
-    <main class="admin-main"><header class="admin-topbar">Administration <span>Accounts &amp; demo recovery</span></header>
-      <div class="admin-content"><div class="admin-heading"><div><h1>Accounts</h1><p class="admin-muted">Find an account, inspect its workspaces, and prepare a fresh demo.</p></div><button id="refresh">Refresh</button></div>
+    <main class="admin-main"><header class="admin-topbar">Administration <span>Accounts &amp; user data</span></header>
+      <div class="admin-content"><div class="admin-heading"><div><h1>Accounts</h1><p class="admin-muted">Find an account, review its workspaces, and manage its data.</p></div><button id="refresh">Refresh</button></div>
       <p id="notice" role="status" class="alert info" hidden></p>
       <div class="admin-grid"><section class="admin-panel" aria-label="Account directory">
         <form id="search-form" class="admin-search"><label class="sr" for="search">Search accounts by email or name</label><input id="search" type="search" placeholder="Search email or name" maxlength="120"><button type="submit">Search</button></form>
@@ -30,7 +30,7 @@ export function renderAdminPage({ csrf, username }) {
         <div class="admin-table-wrap"><table class="admin-table"><caption class="sr">Sederunt accounts</caption><thead><tr><th scope="col">Account</th><th scope="col">Workspaces</th><th scope="col">Last sign in</th></tr></thead><tbody id="accounts"></tbody></table></div>
         <footer class="admin-pagination"><span id="page-label"></span><div><button id="previous" disabled>Previous</button><button id="next" disabled>Next</button></div></footer>
       </section><section class="admin-panel admin-detail" aria-labelledby="detail-title"><div id="detail"><h2 id="detail-title">Select an account</h2><p class="admin-muted">Choose a row to see workspaces, today’s AI usage, and recovery actions.</p></div></section></div>
-      <p class="admin-retention">Demo restart removes app workspace access and onboarding data. Contributions in shared workspaces, external recordings, Walrus blobs, Slack messages, and published proofs remain.</p>
+      <p class="admin-retention">Data deletion removes app workspace access and onboarding data. The Google login is kept. Contributions in shared workspaces, external recordings, Walrus blobs, Slack messages, and published proofs remain.</p>
       </div>
     </main>
     <dialog id="confirm-dialog" class="admin-dialog" aria-labelledby="confirm-title"><form id="confirm-form">
@@ -96,7 +96,7 @@ function adminClient(csrf) {
         <section class="admin-detail-section"><h3>Workspaces</h3><ul class="admin-workspaces">${account.workspaces.map((space) => `<li><div><strong>${esc(space.name)}</strong><span>${esc(space.kind)} · ${esc(space.role)} · ${Number(space.members)} member${Number(space.members) === 1 ? "" : "s"}</span></div></li>`).join("") || '<li class="admin-muted">No workspaces</li>'}</ul></section>
         <section class="admin-detail-section"><h3>Ask AI today</h3><div class="admin-quota"><strong>${Number(account.quota.used)} <span>/ ${Number(account.quota.limit)}</span></strong><span>${Number(account.quota.remaining)} prompt${Number(account.quota.remaining) === 1 ? "" : "s"} available</span></div><p class="admin-muted">Resets ${esc(new Date(account.quota.resetAt).toLocaleString())}. Usage is shared across this account’s workspaces.</p>${account.backend === "memory" ? '<p class="alert warn">Usage is held in this process only. Configure Redis for reliable resets across deployments.</p>' : ""}
         <button data-action="reset-quota">Reset AI quota</button></section>
-        <section class="admin-detail-section"><h3>Restart a demo</h3><p class="admin-muted">Keep this Google account and return to onboarding. End running meetings and close this account’s app tabs first.</p>${blocked ? '<p class="alert warn">This account is the only owner of a workspace with other members. Transfer ownership before restarting.</p>' : ""}<button class="danger" data-action="restart-demo" ${blocked ? "disabled" : ""}>Preview demo restart</button></section>`;
+        <section class="admin-detail-section"><h3>Delete user data</h3><p class="admin-muted">Delete this account’s app data and reset onboarding. Keep its Google login. End running meetings and close this account’s app tabs first.</p>${blocked ? '<p class="alert warn">This account is the only owner of a workspace with other members. Transfer ownership before deleting this account’s data.</p>' : ""}<button class="danger" data-action="restart-demo" ${blocked ? "disabled" : ""}>Delete user data</button></section>`;
     } catch (error) { if (request === detailRequest) $("detail").innerHTML = `<p class="alert" role="alert">${esc(error.message)}</p>`; }
   }
   $("accounts").addEventListener("click", (event) => { const button = event.target.closest("[data-account]"); if (button) loadDetail(button.dataset.account); });
@@ -113,14 +113,14 @@ function adminClient(csrf) {
     try {
       preview = await api("preview", { userId: selected, action: button.dataset.action });
       const restart = preview.action === "restart-demo";
-      $("confirm-title").textContent = restart ? "Restart this demo account?" : "Reset today’s AI quota?";
+      $("confirm-title").textContent = restart ? "Delete this user’s data?" : "Reset today’s AI quota?";
       $("confirm-account").textContent = preview.plan.email || preview.plan.id;
       $("confirm-scope").innerHTML = restart ? `<ul class="admin-scope">${preview.plan.workspaces.map((space) => `<li><strong>${esc(space.name)}</strong><span>${esc(scope(space))}</span></li>`).join("")}</ul><p>Remove this account’s Google grants and bot preferences. Replace its personal space. Clear the current Ask AI conversation and reset today’s quota.</p><p class="alert warn">Contributions in shared workspaces, external recordings, Walrus blobs, Slack messages and published proofs remain. This action cannot be undone.</p>` : "<p>Restore the full daily prompt allowance for this account. Keep its conversation, files, workspace memberships, and settings.</p>";
       $("confirm-help").textContent = `Enter ${preview.confirmation}. This preview expires in 5 minutes.`;
       $("confirm-input").previousElementSibling.textContent = preview.plan.email ? "Type the account email to confirm" : "Type the account ID to confirm";
       $("confirm-input").value = "";
       $("confirm-error").hidden = true;
-      $("confirm-submit").textContent = restart ? "Restart demo" : "Reset quota";
+      $("confirm-submit").textContent = restart ? "Delete user data" : "Reset quota";
       $("confirm-submit").disabled = true;
       $("confirm-dialog").showModal();
       $("confirm-input").focus();

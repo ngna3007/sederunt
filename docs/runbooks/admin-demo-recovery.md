@@ -9,7 +9,7 @@ The admin page is live at [sederunt.vercel.app/admin](https://sederunt.vercel.ap
 | What went wrong | Action | Result |
 | --- | --- | --- |
 | The daily question allowance ran out | **Reset AI quota** | Restore today's allowance for this account. Keep questions, files, settings and workspaces. |
-| Onboarding or workspace setup needs a new take | **Preview demo restart** | Keep the Google login, replace the personal space, delete workspaces where this account is the only member and owner, and leave other shared workspaces. Clear its app Google grants, bot preferences, tool choices and current AI conversation. |
+| Onboarding or workspace setup needs a new take | **Delete user data** | Keep the Google login, replace the personal space, delete workspaces where this account is the only member and owner, and leave other shared workspaces. Clear its app Google grants, bot preferences, tool choices and current AI conversation. |
 | The account is the only owner of a workspace containing other members | Restart is blocked | Transfer ownership through an approved workspace administration procedure first. There is no ownership-transfer button on this admin page. Other members' data must remain available. |
 
 AI usage belongs to the account across all its workspaces. It is not a separate allowance per workspace.
@@ -47,13 +47,13 @@ If the page reports that an AI answer is still running, let it finish, then prev
 
 ## Restart onboarding with the same Google login
 
-1. In the account detail panel, scroll to **Restart a demo** and click the red **Preview demo restart** button.
-2. Read **Restart this demo account?**. Each affected workspace has a separate row:
+1. In the account detail panel, scroll to **Delete user data** and click the red **Delete user data** button.
+2. Read **Delete this user’s data?**. Each affected workspace has a separate row:
    - **Delete workspace and its app records** applies only when this account is its sole member and owner. This includes replacing the old personal space.
    - **Leave workspace; other members keep their data** removes this account's membership. Contributions already in that shared workspace remain with it.
 3. Read the retention notice. This is a fresh app attempt, not erasure of recordings, Walrus blobs, Slack messages or published proofs. Existing Google consent at Google can also remain.
-4. Enter the exact displayed account email in the confirmation field. Click **Restart demo** at the bottom right once. Expected: **Applying…**, then a success notice and refreshed account details showing a new personal space and no shared workspace memberships.
-5. If the preview expires after five minutes, or membership changed, cancel and click **Preview demo restart** again. Review the new scope. A consumed confirmation cannot be replayed.
+4. Enter the exact displayed account email in the confirmation field. Click **Delete user data** at the bottom right once. Expected: **Applying…**, then a success notice and refreshed account details showing a new personal space and no shared workspace memberships.
+5. If the preview expires after five minutes, or membership changed, cancel and click **Delete user data** again. Review the new scope. A consumed confirmation cannot be replayed.
 6. If a connection/AI cleanup warning appears, do not begin recording. Restore Redis, then preview and confirm the restart again. The server retains retired workspace IDs so the retry can release old meeting and Slack bindings as well as retry AI cleanup. The deleted workspace stays inaccessible during recovery.
 7. In the ordinary Sederunt browser profile, open `/console/sign-in`. If still signed in, use Sederunt's account menu to **Sign out** first. Click **Continue with Google** and choose the **same Google account**. Expected: **Create your workspace**, step 1 of 4. Google's chooser may skip consent already granted; do not describe this as a first-ever Google authorization.
 8. Start the [new-user live-demo runbook](./new-user-live-demo.md) again with a new workspace. Reconnect Calendar and Slack when prompted. The story sequence remains **meeting → Ask AI → Slack → Files**.
@@ -147,7 +147,7 @@ This gate covers the new admin surface. The ordinary console has existing failur
 | C-5, evidence | PASS: backend values and recorded local browser actions; no fabricated metrics. |
 | R-05, structure | PASS: directory and contextual actions follow the recovery workflow. |
 | R-11, radii | PASS: existing control/card/dialog radius tokens, no blanket pill shapes. |
-| R-15, labels | PASS: Search, Reset AI quota and Preview demo restart name their actions. |
+| R-15, labels | PASS: Search, Reset AI quota and Delete user data name their actions. |
 | R-16, language | PASS: no marketing buzzwords. |
 | R-20, specificity | PASS: Google account retention, workspace ownership and Ask AI usage belong to Sederunt's recovery workflow. |
 | R-21, theme | PASS: existing light console identity is preserved. |

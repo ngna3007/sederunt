@@ -65,7 +65,7 @@ export function createAdminRoutes({ env, ask, store = createAdminStore(env), inv
           const plan = await store.plan(body.userId);
           if (!plan) { json(404, { error: "Account not found." }); return true; }
           const blockers = plan.workspaces.filter((s) => s.role === "owner" && s.members > 1 && !s.otherOwners);
-          if (body.action === "restart-demo" && blockers.length) { json(409, { error: `Transfer ownership of ${blockers.map((s) => s.name).join(", ")} before restarting this account.` }); return true; }
+          if (body.action === "restart-demo" && blockers.length) { json(409, { error: `Transfer ownership of ${blockers.map((s) => s.name).join(", ")} before deleting this account’s data.` }); return true; }
           if (await busy(body.userId)) { json(409, { error: "An AI answer is still running. Wait for it to finish, then preview again." }); return true; }
           const nonce = randomUUID();
           const exp = Date.now() + 300000;
@@ -96,9 +96,9 @@ export function createAdminRoutes({ env, ask, store = createAdminStore(env), inv
               await ask.resetQuota(preview.userId);
               await ask.resetHistory(preview.userId);
             } catch {
-              return { message: "Onboarding was restarted, but connection or AI cleanup failed. After Redis recovers, preview and confirm the restart again to retry cleanup; the old workspace stays inaccessible.", partial: true };
+              return { message: "Workspace and onboarding data was deleted, but connection or AI cleanup failed. After Redis recovers, preview and confirm data deletion again to retry cleanup; the old workspace stays inaccessible.", partial: true };
             }
-            return { message: "Demo restarted. Sign in with the same Google account to begin onboarding again. External recordings, stored blobs and published proofs are retained." };
+            return { message: "User app data deleted. The Google login is kept. Sign in with the same account to begin onboarding again. Contributions in shared workspaces, external recordings, stored blobs, Slack messages and published proofs remain." };
           } } });
           json(200, result.result); return true;
         }
