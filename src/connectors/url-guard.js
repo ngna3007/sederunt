@@ -11,6 +11,7 @@ const LOOKUP_MS = 2000;
  * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
  */
 export function loopbackFakeAllowed(env = process.env) {
+  if (env.VERCEL_ENV === "production" || env.NODE_ENV === "production") return false;
   const flag = String(env.SEDERUNT_MCP_FAKE ?? "").trim();
   if (flag === "1") return true;
   if (flag === "0") return false;
@@ -23,8 +24,13 @@ export function loopbackFakeAllowed(env = process.env) {
  * @returns {Promise<URL>}
  */
 export async function guardConnectorUrl(raw, options = {}) {
+  return (await resolveConnectorDestination(raw, { ...options, validationOnly: true })).url;
+}
+
+export async function resolveConnectorDestination(raw, options = {}) {
   if (options.allowCalendarPreset === true && isCalendarMcpUrl(raw)) {
-    return new URL(GOOGLE_CALENDAR_MCP_URL);
+    if (options.validationOnly) return { url: new URL(GOOGLE_CALENDAR_MCP_URL), addresses: [] };
+    raw = GOOGLE_CALENDAR_MCP_URL;
   }
   if (typeof raw !== "string" || !raw.trim() || raw.length > 2048) throw connectorError("invalid-url");
   let url;
@@ -43,15 +49,19 @@ export async function guardConnectorUrl(raw, options = {}) {
   if (/^\d+$/.test(host)) throw connectorError("blocked-url");
   const fakeLoopback = loopbackFakeAllowed(options.env || process.env) && url.protocol === "http:" && isLoopbackHost(host);
   if (url.protocol === "http:" && !fakeLoopback) throw connectorError("invalid-url");
-  if (fakeLoopback) return url;
-  if (isBlockedAddress(host)) throw connectorError("blocked-url");
-  if (isIP(host)) return url;
+  if (fakeLoopback) {
+    const addresses = isIP(host) ? [host] : await resolveHost(host, options.lookup || dnsLookup);
+    if (!addresses.length || addresses.some((address) => !isLoopbackHost(address))) throw connectorError("blocked-url");
+    return { url, addresses };
+  }
+  if (isIP(host) && isBlockedAddress(host)) throw connectorError("blocked-url");
+  if (isIP(host)) return { url, addresses: [host] };
   if (looksLikeTrickHost(host)) throw connectorError("blocked-url");
   const addresses = await resolveHost(host, options.lookup || dnsLookup);
   if (addresses.length === 0 || addresses.some((address) => isBlockedAddress(address))) {
     throw connectorError("blocked-url");
   }
-  return url;
+  return { url, addresses };
 }
 
 function hostnameOf(url) {
@@ -85,7 +95,7 @@ async function resolveHost(host, lookup) {
       }),
     ]);
     const rows = Array.isArray(answered) ? answered : [answered];
-    return rows.map((row) => String(row?.address || "")).filter(Boolean);
+    return rows.map((row) => String(row?.address || ""));
   } catch (error) {
     if (error?.code === "blocked-url") throw error;
     throw connectorError("blocked-url");
@@ -103,7 +113,7 @@ export function isBlockedAddress(address) {
   const mapped = raw.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
   if (mapped) return isBlockedAddress(mapped[1]);
   if (raw.includes(":") || isIP(raw) === 6) return blockedV6(raw);
-  if (isIP(raw) !== 4) return false;
+  if (isIP(raw) !== 4) return true;
   if (raw.split(".").some((part) => part.length > 1 && part.startsWith("0"))) return true;
   const parts = raw.split(".").map((part) => Number(part));
   if (parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return true;
@@ -143,7 +153,8 @@ function blockedV6(raw) {
     const v4 = `${expanded[6] >> 8}.${expanded[6] & 0xff}.${expanded[7] >> 8}.${expanded[7] & 0xff}`;
     return isBlockedAddress(v4);
   }
-  if (expanded.every((part) => part === 0)) return true;
+  if ((head & 0xe000) !== 0x2000) return true;
+  if (head === 0x2002 || (head === 0x2001 && expanded[1] < 0x0200)) return true;
   return false;
 }
 

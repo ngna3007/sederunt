@@ -47,3 +47,12 @@ The refresh grant is sealed with `MCP_SECRETS_KEY_V1` and stored per space and p
 Tokens are write-only. The console shows "Token set" and the last four characters. They are not written to the activity log or returned by the API.
 
 The connector list is `GET /console/connectors` with `Accept: application/json`. The same path without that header is the console page.
+
+
+## Outbound connection boundaries
+
+Custom MCP HTTP and SSE connections resolve the destination once for each request and pin those vetted IPv4/IPv6 addresses into the socket lookup. The original hostname remains the HTTP host and TLS server name, with certificate verification enabled. Private, loopback, link-local and metadata destinations are refused, including mixed public/private DNS answers. Each redirect is checked again; credentials are never forwarded to another origin. Connections use the direct transport rather than environment proxy settings or a second global-fetch DNS lookup.
+
+Development can explicitly allow an HTTP loopback fake server. Production (`NODE_ENV=production` or `VERCEL_ENV=production`) ignores fake-loopback flags and injected fetch adapters. There is no production fallback to an unpinned fetch when DNS, TLS or connection validation fails. A connector using an untrusted/self-signed TLS certificate must install a valid certificate; disabling verification is not supported.
+
+The transport streams request and response bodies, supports cancellation and applies the connector's existing timeout. Gzip, deflate and Brotli response decoding preserves the SDK's fetch contract. The pinning tests use local sockets and a generated disposable TLS certificate; they never probe a real metadata service.
