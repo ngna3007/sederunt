@@ -2211,7 +2211,7 @@ test("a Slack challenge is echoed and the console confirm uses the configured me
   const port = await listen(app);
   try {
     const challengeBody = JSON.stringify({ type: "url_verification", challenge: "challenge-token" });
-    const timestamp = "1700000000";
+    const timestamp = String(Math.floor(Date.now() / 1000));
     const signature = `v0=${createHmac("sha256", secret).update(`v0:${timestamp}:${challengeBody}`).digest("hex")}`;
     const challenge = await post(port, "/api/slack", challengeBody, {
       "x-slack-request-timestamp": timestamp,
@@ -2251,7 +2251,7 @@ test("a Slack challenge is echoed and the console confirm uses the configured me
 
 function signed(event, secret) {
   const payload = JSON.stringify({ event });
-  const timestamp = "1700000000";
+  const timestamp = String(Math.floor(Date.now() / 1000));
   const signature = `v0=${createHmac("sha256", secret).update(`v0:${timestamp}:${payload}`).digest("hex")}`;
   return {
     payload,

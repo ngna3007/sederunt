@@ -122,11 +122,11 @@ export function tenantSlackClient(workspace, tenantId, fetchImpl) {
       return conn.linked ? conn.channelId || "" : "";
     },
   };
-  for (const name of ["postMessage", "resolveChannel", "channelLabel", "authTest", "members", "downloadFile", "channelReady"]) {
+  for (const name of ["postMessage", "openConversation", "openModal", "updateMessage", "messageHistory", "resolveChannel", "channelLabel", "authTest", "members", "downloadFile", "channelReady"]) {
     methods[name] = async (...args) => {
       const real = await client();
       if (!real || typeof real[name] !== "function") {
-        if (name === "postMessage") {
+        if (["postMessage", "openConversation", "openModal", "updateMessage", "messageHistory"].includes(name)) {
           const error = new Error("unsupported");
           error.reason = "unsupported";
           throw error;

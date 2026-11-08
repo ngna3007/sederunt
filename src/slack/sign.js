@@ -1,10 +1,11 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 /** Slack signing check. The secret stays with the caller and is not returned. */
-export function verifySlackRequest({ secret, timestamp, signature, payload }) {
+export function verifySlackRequest({ secret, timestamp, signature, payload, now = Date.now() }) {
   if (typeof secret !== "string" || !secret) return false;
   if (typeof timestamp !== "string" || !timestamp) return false;
   if (typeof signature !== "string" || !signature) return false;
+  if (!/^\d+$/.test(timestamp) || Math.abs(now / 1000 - Number(timestamp)) > 300) return false;
   const digest = `v0=${createHmac("sha256", secret).update(`v0:${timestamp}:${payload}`).digest("hex")}`;
   const left = Buffer.from(digest);
   const right = Buffer.from(signature);

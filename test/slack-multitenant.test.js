@@ -40,7 +40,7 @@ function env(extra = {}) {
 
 function cookieFor({ userId = "user-a", tenantId = A } = {}) {
   const token = sealSession({
-    kind: "oauth", memberId: userId, userId, name: "Ada", email: "ada@example.test",
+    kind: "oauth", provider: "google", memberId: userId, userId, name: "Ada", email: "ada@example.test",
     exp: Date.now() + 3_600_000, accessToken: `access-${userId}`, refreshToken: "r",
     accessExp: Date.now() + 3_600_000, tenantId, onboarded: true, provider: "google",
   }, SECRET);
