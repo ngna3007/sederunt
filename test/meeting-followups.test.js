@@ -201,3 +201,19 @@ test("closing an Edit modal restores approval without changing the arguments", a
   assert.equal((await store.get(tenantId, action.id)).status, "pending");
   assert.equal((await coordinator.interact(payload)).status, "done");
 });
+
+test("new minutes replace pending text before the first Slack delivery", async () => {
+  const store = createMemoryFollowupStore(); const texts = [];
+  const coordinator = createMeetingFollowups({ store, authorizeDelivery: async () => true, slackFor: async () => ({ teamId: "T1", openConversation: async () => ({ channel: "D1" }), postMessage: async message => { texts.push(message.text); return { ts: String(texts.length) }; } }) });
+  await coordinator.enqueue(evidence()); await coordinator.drain();
+  const revised = evidence(); revised.minutes = { tldr: "Latest" };
+  await coordinator.enqueue(revised);
+  const outcome = (await store.list(tenantId, { kind: "outcome", statuses: ["pending"] }))[0];
+  // Hold deliveries so the revised outcome is materialized first.
+  const jobs = await store.list(tenantId, { kind: "delivery" });
+  for (const job of jobs) await store.change(job, { data: { ...job.data, nextAttemptAt: Date.now() + 60000 } });
+  await coordinator.drain();
+  assert.equal((await store.get(tenantId, outcome.id)).status, "done");
+  const minutes = (await store.list(tenantId, { kind: "delivery" })).find(job => !job.data.actionId);
+  assert.ok(minutes.data.text.includes("Latest"));
+});

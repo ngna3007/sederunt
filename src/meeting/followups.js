@@ -99,7 +99,9 @@ export function createMeetingFollowups({ store, handleUtterance, slackFor, autho
       const destination = target.channelId || target.requesterSlackId;
       const id = followupId("delivery", input.tenantId, input.meetingId, ["minutes", destination]);
       const existing = await store.put({ id, tenantId: input.tenantId, meetingId: input.meetingId, kind: "delivery", status: "pending", data: { ...target, teamId: input.teamId, text, botName: input.botName || "Adam", messageId: hash(id).slice(0, 32), attempts: 0 } });
-      if (existing.status === "done" && existing.data.text !== text) await finish(existing, "pending", { text, attempts: 0 });
+      if (existing.data.text !== text) {
+        if (!["done", "pending", "failed"].includes(existing.status) || !await finish(existing, "pending", { text, attempts: 0 })) throw new Error("Wait for the existing minutes delivery to settle before amending it.");
+      }
     }
     return finish(outcome, "done", { notReached: plan.notReached });
   }
@@ -108,8 +110,9 @@ export function createMeetingFollowups({ store, handleUtterance, slackFor, autho
     const id = followupId("delivery", record.tenantId, record.meetingId, record.id);
     const delivery = await store.get(record.tenantId, id);
     const blocks = followupBlocks(record);
-    if (delivery?.status === "done" && JSON.stringify(delivery.data.blocks) !== JSON.stringify(blocks)) {
-      await finish(delivery, "pending", { blocks, attempts: 0 });
+    if (delivery && JSON.stringify(delivery.data.blocks) !== JSON.stringify(blocks)) {
+      if (delivery.status === "running") return;
+      if (["done", "pending", "failed"].includes(delivery.status) && !await finish(delivery, "pending", { blocks, attempts: 0 })) return;
     }
     if (!["done", "skipped", "outcome_unknown", "failed"].includes(record.status)) {
       await finish(record, record.status, { notificationsDirty: false });
