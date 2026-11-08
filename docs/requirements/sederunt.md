@@ -2,7 +2,7 @@
 
 **Status:** active
 **Owner:** @ngna3007
-**Last updated:** 2026-10-23
+**Last updated:** 2026-11-09
 **Notation:** rfc2119
 **ID prefix:** SED
 
@@ -73,12 +73,12 @@ A decision may name a file. The sentence comes back. The bytes stay in Walrus Co
 - **SED-3.2** The system MUST return a decision sentence only to a member id stored with that decision.
 - **SED-3.3** The system MUST refuse a caller who presents no member id.
 - **SED-3.4** The meeting door, the channel door, and the MCP door MUST use the same invite check.
-- **SED-3.5** A member MUST be able to ask without a Sederunt password, a Google sign-in, or a wallet connection.
+- **SED-3.5** Member web access MUST use Google sign-in only. Signed platform requests and configured local MCP identities MUST continue to work without a separate web login. No member wallet connection is required.
 
 ### Act on a request
 
 - **SED-4.1** The system MUST store each write tool's preference, ask or do, with the account.
-- **SED-4.2** A write tool with no stored preference MUST behave as ask.
+- **SED-4.2** A write tool with no stored preference MUST behave as do (Run automatically). An explicit ask preference MUST continue to pause a write until that specific action is authorized.
 - **SED-4.3** When the preference is ask, the system MUST state the one action and wait.
 - **SED-4.4** When the preference is do, the system MUST perform an explicit request without a pending confirmation.
 - **SED-4.5** The system MUST stop an action while a fact it needs is missing.
@@ -86,6 +86,23 @@ A decision may name a file. The sentence comes back. The bytes stay in Walrus Co
 - **SED-4.7** The system MUST make one connector call for one delivered request.
 - **SED-4.8** A read MUST ignore the write preference.
 - **SED-4.9** A connector call that returns no id MUST leave the action available to send.
+
+### Reliable access and recovery
+
+- **SED-8.1** Room, board, proof, semantic recall and generated output MUST continue to enforce the stored invitation and current tenant boundary; a shared configured member MUST NOT grant another web user attendance.
+- **SED-8.2** A deleted decision MUST remain hidden after retry, replay and restart. The system MUST NOT report completed deletion without durable acceptance.
+- **SED-8.3** Ask history, streams and model context MUST be scoped to the authenticated user, tenant and personal/company selection. Rejected requests MUST NOT consume quota.
+- **SED-8.4** File visibility and pending operations MUST survive process changes and remain consistent across application instances. Current session and membership checks MUST continue to protect downloads.
+- **SED-8.5** Custom connector connections MUST use validated public destinations, including the actual socket connection and every redirect.
+
+### Meeting follow-ups
+
+- **SED-9.1** Meeting completion MUST create a durable outcome and recoverable delivery work. Repeated callbacks MUST NOT create duplicate completed actions.
+- **SED-9.2** Explicit authorized requests MUST continue to follow the selected preference and missing-fact rules. AI-inferred proposals MUST require the verified requester's approval before execution; completed requests MUST NOT be proposed as new writes.
+- **SED-9.3** The requester MUST be able to Approve, Edit or Skip a proposal in Slack. Authorization MUST cover the exact argument version and tenant, and every write MUST continue through the common allow gate.
+- **SED-9.4** Concurrent or repeated approvals MUST NOT knowingly execute a completed write again. An unknown provider outcome MUST be reconciled before retrying a non-idempotent write.
+- **SED-9.5** Minutes MUST reach only permitted recipients, using one channel destination or attendee DMs. Private meeting minutes MUST NOT be posted to a channel. Unmatched people MUST be reported as not reached, without claiming email delivery.
+- **SED-9.6** Follow-up state and delivery receipts MUST survive restart. Failure and pending states MUST have a clear recovery action.
 
 ### Prove the object
 
@@ -124,9 +141,9 @@ A decision may name a file. The sentence comes back. The bytes stay in Walrus Co
 
 ### Out of Scope
 
-- A Sederunt login, zkLogin, or wallet connection for members.
+- Non-Google member web sign-in, member passwords, zkLogin and wallet connection.
 - A product page at `/record`.
-- A second database as the source of truth.
+- A second semantic memory source of truth. Durable access, job and execution metadata may use the existing application database.
 - Sponsored-transaction infrastructure. Memory's public relayer and Console already pay for their own writes.
 - Slack huddles. The meeting door covers Zoom, Google Meet, Teams, and Webex.
 - Spending, a wallet flow, the Tatum Data API, and the Tatum Storage API.
@@ -144,12 +161,12 @@ A decision may name a file. The sentence comes back. The bytes stay in Walrus Co
 ### Assumptions
 
 - Recall reports a stable participant id for the length of a meeting. A display name is not that id.
-- The same human in two meetings may have two member ids. Sederunt does not merge them.
+- The same human in two meetings may have two member ids. Only verified provider evidence may link those ids to a signed-in person.
 - The operator registers Sederunt's delegate key on Walrus Memory, using the zkLogin that product already has.
 
 ## Constraints
 
-- One ESM Node process. Runtime dependencies are `@mysten-incubation/memwal` and `@mysten/sui`.
+- One ESM Node package and server process. Runtime dependencies are declared in `package.json`.
 - The landing does not post, does not load a MemWal key, and does not render an account id.
 - The product name is Sederunt.
 
