@@ -1,3 +1,4 @@
+import { scopeAskStore } from "./ask/context.js";
 import { createParticipantBindings } from "./participant-bindings.js";
 import { consolePrincipal } from "./console-principal.js";
 import { canReadRecord, readPrincipalId, readableSession } from "./domain/read-access.js";
@@ -2087,11 +2088,26 @@ async function handleAsk(workspace, req, res, url) {
     json(401, { error: "Sign in." });
     return;
   }
-  const store = workspace.ask;
   const user = askUser(gate, env);
   const limit = askLimit(env);
   const live = openRouterConfig(env).enabled;
   try {
+    const body = req.method === "POST" && url.pathname === "/api/ask" ? await readJson(req) : {};
+    const requestedScope = body.workspace ?? url.searchParams.get("workspace") ?? "company";
+    if (requestedScope !== "personal" && requestedScope !== "company") {
+      json(400, { error: "Choose a personal or company workspace." });
+      return;
+    }
+    const scope = requestedScope;
+    const requestedCompany = body.company ?? url.searchParams.get("company") ?? "";
+    const resolved = await resolveCompanyId(workspace, req, typeof requestedCompany === "string" ? requestedCompany : "");
+    if (resolved.denied || resolved.unauthorized || (identityConfigured(env) && scope === "company" && !resolved.companyId)) {
+      json(resolved.unauthorized ? 401 : 403, { error: resolved.unauthorized ? "Sign in again." : "That workspace is not available." });
+      return;
+    }
+    const companyId = scope === "personal" ? "" : resolved.companyId;
+    const tenantId = scope === "personal" ? `personal:${user}` : companyId || "local";
+    const store = scopeAskStore(workspace.ask, { user, tenantId, workspace: scope });
     if (req.method === "GET" && url.pathname === "/api/ask") {
       const { quota, ids } = await store.overview(user, limit);
       const asks = [];
@@ -2109,7 +2125,6 @@ async function handleAsk(workspace, req, res, url) {
         json(403, { error: "Ask from the console." });
         return;
       }
-      const body = await readJson(req);
       const question = typeof body.text === "string" ? body.text.trim() : "";
       if (!question) {
         json(400, { error: "Type a question first." });
@@ -2152,15 +2167,6 @@ async function handleAsk(workspace, req, res, url) {
           return store.finish(askId, next);
         },
       };
-      const resolved = await resolveCompanyId(workspace, req, typeof body.company === "string" ? body.company : "");
-      if (resolved.denied || resolved.unauthorized) {
-        json(resolved.unauthorized ? 401 : 403, resolved.unauthorized
-          ? { error: "Sign in again.", reason: "missing" }
-          : { error: "That workspace is not available.", reason: "forbidden" });
-        return;
-      }
-      const companyId = resolved.companyId;
-      const scope = body.workspace === "personal" ? "personal" : "company";
       const work = (async () => {
         const previous = [];
         const priorIds = (await store.list(user).catch(() => [])).filter((prior) => prior !== id).slice(0, 3).reverse();
@@ -2170,8 +2176,9 @@ async function handleAsk(workspace, req, res, url) {
           }
         }
         const current = await prepareWorkspace(workspace, companyId);
-        const memberId = consoleBoardMember(gate.session, env, scope, "");
-        const visible = (scope === "personal" ? personalBoard(current, memberId) : companyBoard(current, memberId)).decisions || [];
+        const principal = await consolePrincipal(workspace, req, companyId, scope);
+        const memberId = readPrincipalId(principal);
+        const visible = (scope === "personal" ? personalBoard(current, principal) : companyBoard(current, principal)).decisions || [];
         const doorDeps = depsFor(workspace, companyId);
         const bot = await currentBot(workspace, req).catch(() => null);
         return runAsk({
@@ -2185,9 +2192,10 @@ async function handleAsk(workspace, req, res, url) {
           fetchImpl: workspace.openrouterFetch || undefined,
           botName: bot?.name || "",
           // withMemWal ask path: MemWal.recall(query) before generate.
-          recall: doorDeps.memory?.recall ? async (query) => doorDeps.memory.recall(query) : undefined,
+          recall: doorDeps.memory?.recall ? async (query) => (await doorDeps.memory.recall(query)).filter((hit) => canReadRecord(principal, hit.decision))
+            .map((hit) => ({ ...hit, decision: { ...hit.decision, inviteMemberIds: [memberId] } })) : undefined,
           // The signed-in board member, not a client-supplied id and not only SEDERUNT_MEMBER.
-          retrieval: () => chatReply(workspace, { text: question, workspace: scope, company: companyId }, memberId),
+          retrieval: () => chatReply(workspace, { text: question, workspace: scope, company: companyId }, principal),
         });
       })().catch(() => askStore.finish(id, { status: "error" }).catch(() => {}));
       if (env.VERCEL) {
@@ -2273,7 +2281,7 @@ async function chatReply(workspace, body, trustedMember = "", req = null) {
     };
   }
   const companyId = resolved.companyId;
-  const current = await prepareWorkspace(workspace, companyId);
+  let current = await prepareWorkspace(workspace, companyId);
   const text = typeof body.text === "string" ? body.text.trim() : "";
   const requested = typeof body.workspace === "string" ? body.workspace : "";
   const scope = requested === "personal" || requested === "company" ? requested : "";
@@ -2293,8 +2301,10 @@ async function chatReply(workspace, body, trustedMember = "", req = null) {
       stored: false,
     };
   }
-  const trusted = typeof trustedMember === "string" ? trustedMember.trim() : "";
+  const principal = req ? await consolePrincipal(workspace, req, companyId, scope) : trustedMember;
+  const trusted = readPrincipalId(principal);
   const bound = trusted ? { ok: true, memberId: trusted } : bindMember(env, body.memberId);
+  current = readableSession(current, trusted ? principal : bound.memberId);
   if (!bound.ok) {
     return {
       body: memberRefusal(bound.reason).body,
@@ -2324,6 +2334,7 @@ async function chatReply(workspace, body, trustedMember = "", req = null) {
         intent: "recall",
         door: "mcp",
         memberId: bound.memberId,
+        readPrincipal: principal || bound.memberId,
         workspace: scope,
         room: { id },
         session: current,
@@ -2348,6 +2359,7 @@ async function chatReply(workspace, body, trustedMember = "", req = null) {
     intent: "recall",
     door: "mcp",
     memberId: bound.memberId,
+        readPrincipal: principal || bound.memberId,
     workspace: scope,
     room: namedRoom ? { id: namedRoom } : undefined,
     session: current,
@@ -2647,10 +2659,8 @@ async function hearingTenantId(workspace, req) {
 }
 
 /**
- * Who the company board is read as. An OAuth user id is not a meeting
- * participant, so a company board uses SEDERUNT_MEMBER when it is set.
- * A personal board stays on the signed-in user. A passphrase session keeps
- * its own member id, and an unsigned read can still ask with ?member=.
+ * Member web reads use the signed-in identity. Verified provider aliases are
+ * resolved separately by consolePrincipal, scoped to the current tenant.
  */
 export function consoleBoardMember(session, env, workspace, requested = "") {
   const configured = typeof env?.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
@@ -2711,7 +2721,7 @@ async function consolePayload(workspace, current, memberId, kind = "company", op
   const report = current.readReport;
   const config = appConfig(workspace.env);
   if (open !== "personal") await hydrateSlackChannels(current, workspace.deps);
-  const principal = req ? await consolePrincipal(workspace, req, companyId, open) : memberId;
+  const principal = req && gate.session?.kind === "oauth" ? await consolePrincipal(workspace, req, companyId, open) : memberId;
   const board = open === "personal" ? personalBoard(current, principal) : companyBoard(current, principal, { timeZone: config.timeZone, slackChannel: config.slackChannel });
   if (!report.ok) {
     return {

@@ -5113,7 +5113,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (failed) box.checked = !on;
       if (failed && failed.allow === "missing-member") text("room-edit-note", "This server has no member configured.");
       else if (failed) text("room-edit-note", "Run automatically was not saved.");
-      else text("room-edit-note", on ? "This room runs a change as soon as it is asked." : "This room does not run a change.");
+      else text("room-edit-note", on ? "This room runs a change as soon as it is asked." : "This room asks before making a change.");
     }).catch(function () {
       box.checked = !on;
       text("room-edit-note", "The account could not be read. Read the account again.");
@@ -5268,6 +5268,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (!home.hidden) showSection("home");
     paintChip();
     if (!changed) return;
+    resetAskContext();
     document.getElementById("chat-text").value = "";
     document.querySelectorAll("#chat-log .chat-turn").forEach(function (node) { node.remove(); });
     var emptyChat = document.getElementById("chat-empty");
@@ -6480,6 +6481,15 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   var askState = { limit: ${askDaily}, remaining: null, live: false, loaded: false, resetAt: "", streams: {} };
+  function resetAskContext() {
+    Object.keys(askState.streams).forEach(function (id) { askState.streams[id].close(); });
+    askState.streams = {};
+    askState.loaded = false;
+    askLive = null;
+    askBusy = false;
+    askCancel = false;
+    setAskSending(false);
+  }
   function askResetLabel() {
     return "They come back at midnight.";
   }
@@ -6532,10 +6542,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
     paintAskQuota();
   }
   function refreshAskQuota() {
-    fetch("/api/ask", { headers: { accept: "application/json" } }).then(function (response) {
+    var context = consoleQuery();
+    fetch("/api/ask" + context, { headers: { accept: "application/json" } }).then(function (response) {
       return response.ok ? response.json() : null;
     }).then(function (data) {
-      if (data) takeAskQuota(data);
+      if (context === consoleQuery() && data) takeAskQuota(data);
     }).catch(function () {});
   }
   function setAskSending(on) {
@@ -6563,10 +6574,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function loadAsks() {
     // Render and resume only. A reload must not POST the question again.
     // priorAsksForThread leaves friendly failures and protocol-only turns out of the thread.
-    fetch("/api/ask", { headers: { accept: "application/json" } }).then(function (response) {
+    var context = consoleQuery();
+    fetch("/api/ask" + context, { headers: { accept: "application/json" } }).then(function (response) {
       return response.ok ? response.json() : null;
     }).then(function (data) {
-      if (!data) return;
+      if (!data || context !== consoleQuery()) return;
       takeAskQuota(data);
       if (askState.loaded) return;
       askState.loaded = true;
@@ -6643,7 +6655,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (typeof EventSource !== "function") return false;
     var got = from || 0;
     var span = turn.querySelector(".chat-body > span");
-    var source = new EventSource("/api/ask/" + encodeURIComponent(id) + "/stream?from=" + got);
+    var source = new EventSource("/api/ask/" + encodeURIComponent(id) + "/stream" + consoleQuery() + "&from=" + got);
     askState.streams[id] = source;
     askLive = { id: id, turn: turn, source: source };
     setAskSending(true);
@@ -6834,13 +6846,15 @@ if (sessionWhen && sessionWhen.dataset.at) {
     setAskSending(true);
     input.value = "";
     growChat();
+    var submittedContext = consoleQuery();
     fetch("/api/ask", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: askedNow, workspace: workspaceKind })
+      body: JSON.stringify({ text: askedNow, workspace: workspaceKind, company: consoleSpaces && consoleSpaces.activeKind !== "personal" ? consoleSpaces.activeId : "" })
     }).then(function (response) {
       return response.json().then(function (body) { return { status: response.status, body: body || {} }; });
     }).then(function (reply) {
+      if (submittedContext !== consoleQuery()) return;
       var span = turn.querySelector(".chat-body > span");
       if (askCancel) {
         askCancel = false;

@@ -171,7 +171,7 @@ test("a join route reports failure without the error text and keeps no sentence"
     assert.equal(joined.body.join, "not-configured");
     assert.deepEqual(calls, []);
     assert.equal(joined.raw.includes("secret-value"), false);
-    const ledger = JSON.parse((await get(blocked.address().port, "/api/room?room=desk")).raw);
+    const ledger = JSON.parse((await get(blocked.address().port, "/api/room?room=desk&member=mina")).raw);
     assert.deepEqual(ledger.decisions, []);
   } finally {
     await new Promise((resolve, reject) => blocked.close((error) => (error ? reject(error) : resolve())));
@@ -303,7 +303,7 @@ test("a question and a repeated sentence are not kept", async () => {
     participants: ["mina"],
     session,
   }, { memory: null });
-  const ledger = roomLedger(session, "desk");
+  const ledger = roomLedger(session, "desk", "rowan");
   assert.equal(ledger.decisions.length, 1);
   assert.equal(ledger.decisions[0].speaker, "rowan");
   assert.equal(ledger.decisions[0].status, "current");
@@ -359,7 +359,7 @@ test("the room keeps a clash and a replacement for the person in the room", asyn
     assert.equal(joined.status, 200);
     assert.deepEqual(joined.body, { join: "not-configured" });
     assert.equal(joined.raw.includes("secret"), false);
-    const before = JSON.parse((await get(port, "/api/room?room=desk")).raw);
+    const before = JSON.parse((await get(port, "/api/room?room=desk&member=mina")).raw);
     assert.deepEqual(before.decisions, []);
     assert.deepEqual(before.preferences, { linear: "do", calendar: "do" });
 
@@ -415,7 +415,7 @@ test("the room keeps a clash and a replacement for the person in the room", asyn
     assert.equal(kept.body.visible.find((row) => row.text.includes("Madrid")).status, "current");
     assert.match(kept.body.body, /replaced/);
 
-    const ledger = JSON.parse((await get(port, "/api/room?room=desk")).raw);
+    const ledger = JSON.parse((await get(port, "/api/room?room=desk&member=mina")).raw);
     assert.equal(ledger.decisions.length, 3);
     assert.equal(ledger.decisions.find((row) => row.text.includes("Lisbon")).status, "replaced");
     assert.equal(ledger.decisions.find((row) => row.text.includes("Lisbon")).speaker, "mina");

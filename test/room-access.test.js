@@ -19,7 +19,7 @@ test("meeting aliases are scoped to a room and cannot open personal or deleted r
   assert.equal(canReadRecord("bob", decision()), false);
   assert.equal(canReadRecord("", decision()), false);
   assert.equal(canReadRecord("alice", decision()), true);
-  assert.equal(consoleBoardMember({ kind: "oauth", memberId: "bob", userId: "bob" }, { SEDERUNT_MEMBER: "alice" }, "company"), "bob");
+  assert.equal(consoleBoardMember({ kind: "oauth", provider: "google", memberId: "bob", userId: "bob" }, { SEDERUNT_MEMBER: "alice" }, "company"), "bob");
 });
 
 test("room HTTP cannot reveal decisions or waiting actions to a nonparticipant", async (t) => {

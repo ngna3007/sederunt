@@ -23,6 +23,7 @@ shaped that way.
 - [entities.md](./entities.md) — the records and their invariants.
 - [access.md](./access.md) — who may hear a sentence.
 - [record.md](./record.md) — Walrus Memory, Walrus Console, and the Tatum proof.
+- [ask-context.md](./ask-context.md) — scoped Ask history and per-person quota.
 - [actions.md](./actions.md) — write preference and connector calls.
 - [activity-log.md](./activity-log.md) — one event shape for every request and its effect.
 - [workspace.md](./workspace.md) — the operator workspace. Shell, home, and history.

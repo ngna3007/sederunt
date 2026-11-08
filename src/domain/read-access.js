@@ -8,6 +8,7 @@ export function canReadRecord(principal, record) {
   if (record.account === "personal") return false;
   return (principal.identities || []).some((identity) =>
     (!identity.roomId || identity.roomId === record.roomId)
+    && (identity.provider !== "slack" || /^[CGD][A-Z0-9]{8,}$/.test(record.roomId || ""))
     && checkInvite(identity.memberId, record.inviteMemberIds).ok);
 }
 

@@ -2242,7 +2242,7 @@ async function answerRecall(input, session, deps) {
 
 function renderVisible(session, memberId, roomId, proofs, failed = false, scope = "", question = "") {
   const preference = resolvePreference(session.preferences, "linear", roomId);
-  const statuses = clashStatuses(session.decisions.filter((decision) => keptInWorkspace(decision, scope)));
+  const statuses = clashStatuses(session.decisions.filter((decision) => keptInWorkspace(decision, scope) && canReadRecord(memberId, decision)));
   const statusOf = new Map(statuses.map((row) => [row.id, row.status]));
   const lines = [];
   const visible = [];
