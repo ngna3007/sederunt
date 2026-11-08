@@ -4,6 +4,7 @@ import { seedDemoFiles, demoUserId } from "./demo.js";
 import { createMemoryConsole } from "./memory-console.js";
 import { createMemoryCleaner, createRelayerMemoryClient, memoryAccountFromEnv } from "./memory.js";
 import { createFileService } from "./service.js";
+import { createSupabaseFileStore } from "./supabase-store.js";
 import { createFileStore } from "./store.js";
 import { createFileLinks } from "./links.js";
 import { runFileWorker } from "./worker.js";
@@ -16,7 +17,8 @@ import { runFileWorker } from "./worker.js";
 export function createFileRuntime(options = {}) {
   const env = options.env || {};
   const clock = options.clock || (() => new Date());
-  const store = options.store || createFileStore({ clock });
+  const configured = env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY && env.FILES_DEMO !== "1" && options.demo !== true;
+  const store = options.store || (configured ? createSupabaseFileStore({ env, clock, fetch: options.fetch }) : createFileStore({ clock }));
   const demo = options.demo === true || env.FILES_DEMO === "1";
   if (demo && options.store == null) seedDemoFiles(store, clock());
   const storage = options.storage !== undefined
@@ -53,7 +55,7 @@ export function createFileRuntime(options = {}) {
     clock,
     links,
     /** Uploads return at once and the worker stores the bytes. */
-    background: options.background === true,
+    background: options.background === true || store.durable === true,
     /** Run due jobs now. One pass at a time; a kick during a pass runs one more. */
     kick() {
       if (running) {

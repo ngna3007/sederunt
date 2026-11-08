@@ -37,28 +37,27 @@ export function createSessionFiles(options) {
     return spaceView(identity, session);
   }
 
-  /** Rebuild the list from Console once per process. A failure retries after a minute. */
+  /** Reconcile Console imports at a bounded interval. Database rows remain authoritative. */
   function restore() {
     if (typeof storage?.listShared !== "function") return Promise.resolve(0);
-    if (restored && (restoredAt === Infinity || clock() - restoredAt < RESTORE_RETRY_MS)) return restored;
+    if (restored && clock() - restoredAt < RESTORE_RETRY_MS) return restored;
     restoredAt = clock();
     restored = storage.listShared()
-      .then((rows) => {
-        restoredAt = Infinity;
-        for (const row of rows) store.importActive(row);
+      .then(async (rows) => {
+        for (const row of rows) await store.importActive(row);
         return rows.length;
       })
-      .catch(() => 0);
+      .catch((error) => { restored = null; throw error; });
     return restored;
   }
 
-  function ensure({ userId, name, tenantId, workspaceName, role }) {
+  async function ensure({ userId, name, tenantId, workspaceName, role }) {
     const channelId = workspaceChannelId(tenantId);
     const label = workspaceName || "Workspace";
-    const existing = store.channel(channelId);
-    if (!existing) store.addChannel({ id: channelId, tenantId, name: label, visibility: "tenant" });
+    const existing = await store.channel(channelId);
+    if (!existing) await store.addChannel({ id: channelId, tenantId, name: label, visibility: "tenant" });
     else if (existing.name !== label) existing.name = label;
-    const member = store.addMember({
+    const member = await store.addMember({
       userId,
       name: name || "You",
       tenantId,
@@ -104,8 +103,8 @@ export function createSessionFiles(options) {
         }
       }
       if (!userId || !tenantId) return null;
-      await restore();
-      const channelId = ensure({ userId, name, tenantId, workspaceName, role });
+      if (!store.durable) await restore();
+      const channelId = await ensure({ userId, name, tenantId, workspaceName, role });
       return { userId, name: name || "You", tenantId, channels: [{ id: channelId, name: workspaceName || "Workspace" }] };
     },
   };

@@ -64,10 +64,10 @@ test("the owner deletes, an admin moderates, and a member cannot", async () => {
     actorUserId: BOB, channelId: CHANNEL, name: "bob.txt", bytes: Buffer.from("bob"),
   });
   assert.throws(() => service.deleteFile(BOB, owned.id), (error) => error.status === 403);
-  const memberView = service.list(BOB).files.find((file) => file.id === owned.id);
+  const memberView = (await service.list(BOB)).files.find((file) => file.id === owned.id);
   assert.equal(memberView.canRequest, true);
   assert.equal(memberView.canDelete, false);
-  const adminView = service.list(ADMIN).files.find((file) => file.id === shared.id);
+  const adminView = (await service.list(ADMIN)).files.find((file) => file.id === shared.id);
   assert.equal(adminView.canDelete, true);
   assert.equal(adminView.canRequest, false);
   const byOwner = service.deleteFile(ALICE, owned.id);
@@ -95,17 +95,17 @@ test("a member can ask, the owner can approve, and a 72 hour request is visible 
   const old = service.requestDelete(BOB, oldFile.id, "please");
   store.patchRequest(old.id, { createdAt: new Date("2026-11-01T00:00:00.000Z") });
   setNow(new Date("2026-11-04T12:00:00.000Z"));
-  const unanswered = service.list(ADMIN).unanswered.map((request) => request.id);
+  const unanswered = (await service.list(ADMIN)).unanswered.map((request) => request.id);
   assert.equal(unanswered.includes(old.id), true);
   assert.equal(unanswered.includes(recent.id), false);
-  assert.equal(service.list(BOB).unanswered.length, 0);
+  assert.equal((await service.list(BOB)).unanswered.length, 0);
   const answered = service.answerDelete(ALICE, recent.id, true);
   assert.equal(answered.request.status, "approved");
   assert.equal(answered.file.status, "pending_delete");
   assert.equal(answered.file.deleteReason, "request_approved");
   assert.equal(store.listVisible(BOB).some((item) => item.id === file.id), false);
   service.dismissDelete(ADMIN, old.id);
-  assert.equal(service.list(ADMIN).unanswered.some((request) => request.id === old.id), false);
+  assert.equal((await service.list(ADMIN)).unanswered.some((request) => request.id === old.id), false);
 });
 
 test("leaving an invited channel hides the file, and a guest owner becomes the user on merge", async () => {

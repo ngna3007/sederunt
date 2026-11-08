@@ -27,12 +27,12 @@ export async function handleFileRequest(req, res, url, runtime, { send }) {
         send(res, 200, "application/json; charset=utf-8", JSON.stringify({ viewer: null, files: [], requests: [], unanswered: [] }));
         return true;
       }
-      send(res, 200, "application/json; charset=utf-8", JSON.stringify(runtime.service.list(userId, { channels })));
+      send(res, 200, "application/json; charset=utf-8", JSON.stringify(await runtime.service.list(userId, { channels })));
       return true;
     }
     if (req.method === "GET" && path === "/api/files/unanswered") {
       if (!userId) throw new FileError(401, "auth", "Sign in again.");
-      send(res, 200, "application/json; charset=utf-8", JSON.stringify({ unanswered: runtime.service.list(userId).unanswered }));
+      send(res, 200, "application/json; charset=utf-8", JSON.stringify({ unanswered: (await runtime.service.list(userId, { channels })).unanswered }));
       return true;
     }
     if (req.method === "POST" && path === "/api/files") {
@@ -60,7 +60,7 @@ export async function handleFileRequest(req, res, url, runtime, { send }) {
     if (req.method === "POST" && answer) {
       if (!userId) throw new FileError(401, "auth", "Sign in again.");
       const body = await readJson(req);
-      const result = runtime.service.answerDelete(userId, decodeURIComponent(answer[1]), body.approve === true);
+      const result = await runtime.service.answerDelete(userId, decodeURIComponent(answer[1]), body.approve === true);
       if (result.file) await settleJobs();
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({
         request: { id: result.request.id, status: result.request.status },
@@ -71,7 +71,7 @@ export async function handleFileRequest(req, res, url, runtime, { send }) {
     const dismiss = /^\/api\/files\/requests\/([^/]+)\/dismiss$/.exec(path);
     if (req.method === "POST" && dismiss) {
       if (!userId) throw new FileError(401, "auth", "Sign in again.");
-      const request = runtime.service.dismissDelete(userId, decodeURIComponent(dismiss[1]));
+      const request = await runtime.service.dismissDelete(userId, decodeURIComponent(dismiss[1]));
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({ id: request.id, status: request.status }));
       return true;
     }
@@ -79,7 +79,7 @@ export async function handleFileRequest(req, res, url, runtime, { send }) {
     if (req.method === "POST" && link) {
       if (!userId || !runtime.links) throw new FileError(404, "not_found", "Not found");
       const fileId = decodeURIComponent(link[1]);
-      const file = runtime.store.getVisible(userId, fileId);
+      const file = await runtime.store.getVisible(userId, fileId);
       if (!file || file.status !== "active") throw new FileError(404, "not_found", "Not found");
       const issued = runtime.links.issue(fileId, userId);
       const query = new URLSearchParams({ token: issued.token });
@@ -104,7 +104,7 @@ export async function handleFileRequest(req, res, url, runtime, { send }) {
     const discard = /^\/api\/files\/([^/]+)\/discard$/.exec(path);
     if (req.method === "POST" && discard) {
       if (!userId) throw new FileError(401, "auth", "Sign in again.");
-      const file = runtime.service.discardFailed(userId, decodeURIComponent(discard[1]));
+      const file = await runtime.service.discardFailed(userId, decodeURIComponent(discard[1]));
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({ id: file.id, status: file.status }));
       return true;
     }
@@ -119,16 +119,16 @@ export async function handleFileRequest(req, res, url, runtime, { send }) {
     if (req.method === "POST" && sub && sub[2] === "delete") {
       if (!userId) throw new FileError(401, "auth", "Sign in again.");
       const deletedId = decodeURIComponent(sub[1]);
-      runtime.service.deleteFile(userId, deletedId);
+      await runtime.service.deleteFile(userId, deletedId);
       await settleJobs();
-      const file = runtime.store.getFile(deletedId);
+      const file = await runtime.store.getFile(deletedId);
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({ id: file.id, status: file.status, deleteReason: file.deleteReason }));
       return true;
     }
     if (req.method === "POST" && sub && sub[2] === "request-delete") {
       if (!userId) throw new FileError(401, "auth", "Sign in again.");
       const body = await readJson(req);
-      const request = runtime.service.requestDelete(userId, decodeURIComponent(sub[1]), body.reason);
+      const request = await runtime.service.requestDelete(userId, decodeURIComponent(sub[1]), body.reason);
       send(res, 201, "application/json; charset=utf-8", JSON.stringify({ id: request.id, status: request.status }));
       return true;
     }

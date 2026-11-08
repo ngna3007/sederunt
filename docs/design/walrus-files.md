@@ -2,8 +2,10 @@
 
 **Status:** active
 **Owner:** @ngna3007
-**Last updated:** 2026-11-04
+**Last updated:** 2026-11-09
 **Scope:** Feature-level. How a file sent in a Sederunt channel is stored, shown, deleted, and forgotten.
+
+Requirements: [Sederunt](../requirements/sederunt.md).
 
 Upstream: [system.md](./system.md), [rooms.md](./rooms.md), [access.md](./access.md), ADR [0003 room membership](../decisions/0003-room-membership.md), ADR [0005 Walrus is the record](../decisions/0005-walrus-is-the-record.md).
 
@@ -80,7 +82,17 @@ The runtime and Vercel load the shared working key (`CONSOLE_API_KEY`, an `hbr_`
 
 ## Upload
 
-The route checks channel visibility, then writes an `uploading` row and queues an `upload` job. The bytes are Seal-encrypted for the folder policy and posted as multipart to `POST /api/v1/buckets/{folderId}/files`. Console answers 202. The file id is saved on the row before polling, so a retry finishes that file and does not post a second copy.
+The route checks current channel visibility. Configured deployments use `createSupabaseFileStore` with `SUPABASE_URL` and the server-only `SUPABASE_SERVICE_ROLE_KEY`. One transaction checks membership again, inserts the message and `uploading` file, validates the content SHA-256, stages the bytes, and queues an `upload` job. HTTP 202 means this transaction committed, not that Console finished storing the file. A fresh process can resume from the staging table. The service and Console adapter methods are asynchronous.
+
+`file_upload_staging` temporarily contains plaintext bytes with a 100 MiB per-file limit. Only the service role can access it. The deployment must protect database storage and backups; Console encryption does not encrypt this temporary database copy. Activation and deletion remove staged bytes. Exhausted uploads remain failed until the owner discards them, which queues remote cleanup even when an earlier attempt already received a Console id.
+
+The worker claims jobs in a database transaction with `FOR UPDATE SKIP LOCKED`, a random token, and a five-minute lease. It renews a running lease every minute. Completion, retries, and file transitions require the current token and a live lease. An expired claim can be recovered by another process; the stale worker cannot commit metadata or settle its successor's job. Twelve failed attempts exhaust a job. Delete-blob claims wait for a live upload claim to finish so an accepted remote receipt can be retained for cleanup.
+
+The existing Node process drains jobs. Intervals and request kicks are best-effort wakeups, so hosted deployments also need a protected host-invoked drain. Durable state survives a stopped process; a durable queue does not itself guarantee that the host will invoke the worker.
+
+ The bytes are Seal-encrypted for the folder policy and posted as multipart to `POST /api/v1/buckets/{folderId}/files`. Console answers 202. The file id is saved on the row before polling, so a retry with a saved receipt finishes that file. A crash between Console acceptance and persisting that receipt has an unknown remote outcome; no exactly-once remote upload guarantee is claimed. Job fencing protects database state, while Console's API remains a separate side effect.
+
+A message deletion hides active, uploading and failed files atomically and queues cleanup. A delayed upload may retain its Console receipt on the pending-delete row, but cannot activate it. The deletion worker removes that receipt's bytes.
 
 The multipart body carries the display name prefixed with the Sederunt file id (Console file names are unique inside a folder, and the field is at most 255 characters). It also carries metadata. It does not send a separate content size. Metadata is a JSON object, at most 8 KiB:
 
@@ -177,3 +189,16 @@ These names are used only on a provisioning machine. The runtime does not read t
 | Delete metadata still `deleting` | The job retries until it dies at 12 |
 | Delete or metadata returns 404 | The delete counts as done |
 | Memory account unset | The memory job is skipped and the namespace is recorded |
+
+
+## Shared visibility and imports
+
+Every production list reads a fresh database snapshot of current memberships, channels, file rows and delete requests. Download and signed-link redemption check active file state and current channel membership again. A cached Console listing is never an authorization source. Database removal or pending deletion immediately disappears from another instance's subsequent list.
+
+Console reconciliation in the memory/demo adapter repeats after one minute and surfaces failures. The durable adapter does not scan the shared Console folder on member requests. A controlled import is insert-only and requires a known owner, an existing matching channel/tenant, a size and a validated SHA-256. It cannot overwrite pending-delete or deleted rows. Existing Console metadata that lacks a checksum requires an explicit bounded backfill; it is not silently promoted to trusted database records. Removing a Console object outside Sederunt makes a download fail; it does not authorize deletion of database metadata or memory without a recorded intent.
+
+Slack ingestion requires an active binding identified by workspace and channel, plus a verified linked workspace member. Unknown identities are skipped in durable mode. Message-deletion calls carry both workspace and channel, preventing a Slack timestamp collision from deleting another workspace's file. Guest ingestion in the memory demo is not a durable identity fallback.
+
+## Disposable integration check
+
+Run `FILES_TEST_INTEGRATION=1 node --test test/files-database.test.js` with Docker available. It creates its own PostgreSQL 16 and PostgREST 12 containers and isolated network, applies all migrations, performs real HTTP/SQL checks across independent runtimes, and removes its resources in `finally`. It does not connect to configured Supabase or reuse another project's database. Missing Docker or images fails this explicitly enabled check. The normal Files unit command is `node --test test/files*.test.js`; its database test is skipped unless enabled.

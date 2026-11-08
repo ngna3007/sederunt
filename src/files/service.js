@@ -13,10 +13,10 @@ const NAME_LIMIT = 255;
 export function createFileService({ store, storage, memory }) {
   return {
     async upload(input) {
-      const channel = store.channel(input.channelId);
+      const channel = await store.channel(input.channelId);
       const trustedGuest = Boolean(input.trusted && input.ownerGuestId && !input.actorUserId);
       if (!channel) throw new FileError(404, "not_found", "Not found");
-      if (!trustedGuest && !store.canSeeChannel(input.actorUserId, channel.id)) {
+      if (!trustedGuest && !await store.canSeeChannel(input.actorUserId, channel.id)) {
         throw new FileError(404, "not_found", "Not found");
       }
       const name = cleanName(input.name);
@@ -35,25 +35,29 @@ export function createFileService({ store, storage, memory }) {
       };
       assertFileMetadata(fileMetadata(draft));
       assertFileTags(fileTags(draft));
-      const message = input.messageId
+      const message = store.durable ? null : input.messageId
         ? { id: input.messageId }
-        : store.insertMessage({
+        : await store.insertMessage({
           tenantId: channel.tenantId,
           channelId: channel.id,
           externalMessageId: input.externalMessageId || null,
           authorUserId: input.actorUserId || null,
         });
-      const row = store.insertUploading({
+      const metadata = {
         ...draft,
-        messageId: message.id,
-        ownerName: input.ownerName || store.viewerName(input.actorUserId) || "",
+        messageId: message?.id || input.messageId || null,
+        externalMessageId: input.externalMessageId || null,
+        externalWorkspaceId: input.externalWorkspaceId || null,
+        externalChannelId: input.externalChannelId || null,
+        ownerName: input.ownerName || await store.viewerName(input.actorUserId) || "",
         mimeType,
         sizeBytes: bytes.length,
         sha256: sha256Bytes(bytes),
-      });
-      store.stashUpload(row.id, bytes);
+      };
+      const row = store.durable ? await store.stageUpload(metadata, bytes) : await store.insertUploading(metadata);
+      if (!store.durable) await store.stashUpload(row.id, bytes);
       // Background mode: the queued upload job places the bytes. The list shows "Uploading…" meanwhile.
-      if (input.defer === true) return row;
+      if (input.defer === true || store.durable) return row;
       try {
         return await placeStoredFile({ store, storage }, row, bytes);
       } catch (error) {
@@ -66,7 +70,7 @@ export function createFileService({ store, storage, memory }) {
     },
 
     async download(userId, fileId) {
-      const file = store.getVisible(userId, fileId);
+      const file = await store.getVisible(userId, fileId);
       if (!file || !file.consoleFileId) throw new FileError(404, "not_found", "Not found");
       if (!storage?.download) throw new FileError(503, "paused", "Storage is paused, try later");
       let plain;
@@ -99,14 +103,14 @@ export function createFileService({ store, storage, memory }) {
     },
 
     async rememberAboutFile({ fileId, text, writer }) {
-      const file = store.getFile(fileId);
+      const file = await store.getFile(fileId);
       if (!file) throw new FileError(404, "not_found", "Not found");
       const namespace = fileNamespace(fileId);
       if (!writer) {
         throw new FileError(503, "memory", "No Sederunt Walrus Memory account is configured");
       }
       const saved = await writer.remember({ text, namespace });
-      const link = store.addLink({
+      const link = await store.addLink({
         fileId,
         memoryBlobId: saved.blobId,
         memoryObjectId: saved.objectId || null,
@@ -119,33 +123,37 @@ export function createFileService({ store, storage, memory }) {
       return store.discardFailed(userId, fileId);
     },
 
-    list(userId, { channels = [] } = {}) {
-      const files = store.listVisible(userId).map((file) => presentFile(store, userId, file));
-      const uploading = typeof store.listOwnInFlight === "function"
-        ? store.listOwnInFlight(userId).map((file) => presentFile(store, userId, file))
-        : [];
-      const requests = store.listRequests(userId).map((request) => presentRequest(store, userId, request));
-      const unanswered = store.listUnanswered(userId).map((request) => presentRequest(store, userId, request));
+    async list(userId, { channels = [] } = {}) {
+      if (store.snapshot) return createFileService({ store: await store.snapshot(userId), storage, memory }).list(userId, { channels });
+      const visible = await store.listVisible(userId);
+      const inFlight = typeof store.listOwnInFlight === "function" ? await store.listOwnInFlight(userId) : [];
+      const selected = new Set(channels.map((channel) => channel.id));
+      const inScope = (file) => !selected.size || selected.has(file.channelId);
+      const files = await Promise.all(visible.filter(inScope).map((file) => presentFile(store, userId, file)));
+      const uploading = await Promise.all(inFlight.filter(inScope).map((file) => presentFile(store, userId, file)));
+      const requests = await Promise.all((await store.listRequests(userId)).map((request) => presentRequest(store, userId, request)));
+      const unanswered = await Promise.all((await store.listUnanswered(userId)).map((request) => presentRequest(store, userId, request)));
+      const allowed = await Promise.all(channels.map(async (channel) => await store.canSeeChannel(userId, channel.id) ? { id: channel.id, name: channel.name } : null));
+      const admin = channels.length
+        ? (await Promise.all(channels.map(async (channel) => {
+          const row = await store.channel(channel.id);
+          return row ? store.isAdmin(userId, row.tenantId) : false;
+        }))).some(Boolean)
+        : await store.isWorkspaceAdmin(userId);
       return {
-        viewer: {
-          userId,
-          name: store.viewerName(userId),
-          admin: store.isWorkspaceAdmin(userId),
-        },
-        files,
-        uploading,
-        channels: channels.filter((channel) => store.canSeeChannel(userId, channel.id)).map((channel) => ({ id: channel.id, name: channel.name })),
-        requests,
-        unanswered,
+        viewer: { userId, name: await store.viewerName(userId), admin },
+        files, uploading, channels: allowed.filter(Boolean),
+        requests: requests.filter((request) => !selected.size || selected.has(request.channelId)),
+        unanswered: unanswered.filter((request) => !selected.size || selected.has(request.channelId)),
       };
     },
   };
 }
 
-function presentFile(store, userId, file) {
-  const channel = store.channel(file.channelId);
+async function presentFile(store, userId, file) {
+  const channel = await store.channel(file.channelId);
   const owner = file.ownerUserId === userId;
-  const admin = store.isAdmin(userId, file.tenantId);
+  const admin = await store.isAdmin(userId, file.tenantId);
   return {
     id: file.id,
     name: file.name,
@@ -159,7 +167,7 @@ function presentFile(store, userId, file) {
     status: file.status,
     deleting: file.status === "pending_delete",
     canDelete: file.status === "active" && (owner || admin),
-    canRequest: file.status === "active" && !owner && !admin && store.canSeeChannel(userId, file.channelId),
+    canRequest: file.status === "active" && !owner && !admin && await store.canSeeChannel(userId, file.channelId),
     uploading: file.status === "uploading",
     failed: file.status === "failed",
     // Shown only behind the "Verified on Walrus" badge, never on the list itself.
@@ -169,16 +177,17 @@ function presentFile(store, userId, file) {
   };
 }
 
-function presentRequest(store, userId, request) {
-  const file = store.getFile(request.fileId);
+async function presentRequest(store, userId, request) {
+  const file = await store.getFile(request.fileId);
   const owner = file?.ownerUserId === userId;
-  const admin = store.isAdmin(userId, request.tenantId);
+  const admin = await store.isAdmin(userId, request.tenantId);
   const ageMs = store.now().getTime() - new Date(request.createdAt).getTime();
   return {
     id: request.id,
     fileId: request.fileId,
     fileName: file?.name || "File",
-    channelName: file ? (store.channel(file.channelId)?.name || "") : "",
+    channelId: file?.channelId || null,
+    channelName: file ? ((await store.channel(file.channelId))?.name || "") : "",
     requestedBy: request.requestedBy,
     requestedByName: request.requestedByName || "Someone",
     reason: request.reason,
@@ -208,7 +217,7 @@ export async function placeStoredFile(runtime, file, plain) {
       folderId: file.consoleFolderId,
       fileId: file.consoleFileId,
       state: "active",
-    });
+    }, runtime.job);
   }
   const metadata = assertFileMetadata(fileMetadata(file));
   const folder = await storage.resolveFolder({ tenantId: file.tenantId, channelId: file.channelId });
@@ -219,7 +228,10 @@ export async function placeStoredFile(runtime, file, plain) {
     tags,
     folder,
     onAccepted: async (accepted) => {
-      store.patchFile(file.id, {
+      if (runtime.job && store.durable) return store.workerMutation(runtime.job, "accepted", {
+        spaceId: accepted.spaceId || folder.spaceId, folderId: accepted.folderId || folder.folderId, fileId: accepted.fileId,
+      });
+      await store.patchFile(file.id, {
         consoleSpaceId: accepted.spaceId || folder.spaceId,
         consoleFolderId: accepted.folderId || folder.folderId,
         consoleFileId: accepted.fileId,
@@ -227,11 +239,12 @@ export async function placeStoredFile(runtime, file, plain) {
       });
     },
   });
-  return commitStoredFile(store, file.id, placed);
+  return commitStoredFile(store, file.id, placed, runtime.job);
 }
 
-function commitStoredFile(store, fileId, placed) {
-  const current = store.getFile(fileId);
+async function commitStoredFile(store, fileId, placed, job) {
+  if (store.durable) return store.workerMutation(job, "active", placed);
+  const current = await store.getFile(fileId);
   if (current && current.status !== "uploading" && current.status !== "active") return current;
   return store.markActive(fileId, placed);
 }
