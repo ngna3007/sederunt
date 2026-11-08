@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { askContext, askContextKey } from "./context.js";
+
 /**
  * Durable Ask AI stream state.
  *
@@ -165,15 +168,22 @@ function commandStore(env, kind, run, clock = Date.now) {
     async claim(user, limit) {
       const today = quotaDay(env, clock());
       const quotaKey = key("quota", user, today.day);
-      const [count, , generation] = await run([["INCR", quotaKey], ["EXPIRE", quotaKey, today.secondsLeft + 3600], ["GET", key("generation", user)]]);
+      const claimId = randomUUID();
+      const receipt = key("claim", user, claimId);
+      const [count, , generation] = await run([["INCR", quotaKey], ["EXPIRE", quotaKey, today.secondsLeft + 3600], ["GET", key("generation", user)], ["SET", receipt, quotaKey, "EX", today.secondsLeft + 3600]]);
       const used = Number(count);
       if (used > limit) {
         await one("EVAL", "if (redis.call('GET', KEYS[2]) or '0') ~= ARGV[1] then return 0 end; if tonumber(redis.call('GET', KEYS[1]) or '0') > 0 then return redis.call('DECR', KEYS[1]) end; return 0", 2, quotaKey, key("generation", user), String(generation || "0"));
+        await one("DEL", receipt);
         return { ok: false, used: limit, limit, remaining: 0, resetAt: today.resetAt };
       }
-      return { ok: true, used, limit, remaining: Math.max(0, limit - used), resetAt: today.resetAt, quotaKey: { key: quotaKey, generation: String(generation || "0") } };
+      return { ok: true, used, limit, remaining: Math.max(0, limit - used), resetAt: today.resetAt, quotaKey: { key: quotaKey, generation: String(generation || "0"), claimId } };
     },
     async refund(user, claimedKey) {
+      if (claimedKey?.claimId) {
+        await one("EVAL", "if (redis.call('GET', KEYS[2]) or '0') ~= ARGV[1] then return 0 end; if redis.call('GET', KEYS[3]) ~= KEYS[1] then return 0 end; redis.call('DEL', KEYS[3]); local n = redis.call('DECR', KEYS[1]); if n < 0 then redis.call('SET', KEYS[1], 0, 'EX', 90000) end; return 1", 3, claimedKey.key, key("generation", user), key("claim", user, claimedKey.claimId), claimedKey.generation);
+        return;
+      }
       if (claimedKey) {
         await one("EVAL", "if (redis.call('GET', KEYS[2]) or '0') ~= ARGV[1] then return 0 end; local n = redis.call('DECR', KEYS[1]); if n < 0 then redis.call('SET', KEYS[1], 0, 'EX', 90000) end; return 1", 2, claimedKey.key, key("generation", user), claimedKey.generation);
         return;
@@ -186,19 +196,27 @@ function commandStore(env, kind, run, clock = Date.now) {
       await run([["DEL", key("quota", user, quotaDay(env, clock()).day)], ["INCR", key("generation", user)]]);
     },
     async resetHistory(user) {
-      await one("EVAL", "local ids = redis.call('LRANGE', KEYS[1], 0, -1); local all = redis.call('SMEMBERS', KEYS[2]); for _, id in ipairs(all) do table.insert(ids, id) end; for _, id in ipairs(ids) do redis.call('SET', ARGV[1] .. ':reset:' .. id, '1', 'EX', ARGV[2]); redis.call('DEL', ARGV[1] .. ':meta:' .. id, ARGV[1] .. ':chunks:' .. id); end; redis.call('DEL', KEYS[1], KEYS[2]); return #ids", 2, key("user", user), key("all", user), prefix, ttl);
+      await one("EVAL", "local ids = redis.call('LRANGE', KEYS[1], 0, -1); local all = redis.call('SMEMBERS', KEYS[2]); for _, id in ipairs(all) do table.insert(ids, id) end; for _, id in ipairs(ids) do redis.call('SET', ARGV[1] .. ':reset:' .. id, '1', 'EX', ARGV[2]); redis.call('DEL', ARGV[1] .. ':meta:' .. id, ARGV[1] .. ':chunks:' .. id); end; local contexts = redis.call('SMEMBERS', KEYS[3]); for _, context in ipairs(contexts) do redis.call('DEL', context) end; redis.call('DEL', KEYS[1], KEYS[2], KEYS[3]); return #ids", 3, key("user", user), key("all", user), key("contexts", user), prefix, ttl);
     },
-    async create(user, question) {
+    async create(user, question, context) {
+      const provenance = context === undefined ? null : askContext(context);
       const id = newId();
       const now = String(Date.now());
       await run([
-        ["HSET", key("meta", id), "id", id, "user", user, "question", question, "status", "streaming", "createdAt", now, "updatedAt", now],
+        ["HSET", key("meta", id), "id", id, "user", user, "question", question, "status", "streaming", "createdAt", now, "updatedAt", now, ...(provenance ? ["tenantId", provenance.tenantId, "workspace", provenance.workspace] : [])],
         ["EXPIRE", key("meta", id), ttl],
         ["LPUSH", key("user", user), id],
         ["LTRIM", key("user", user), 0, KEEP_PER_USER - 1],
         ["EXPIRE", key("user", user), ttl],
         ["SADD", key("all", user), id],
         ["EXPIRE", key("all", user), ttl],
+        ...(provenance ? [
+          ["LPUSH", key("context", askContextKey(user, provenance)), id],
+          ["LTRIM", key("context", askContextKey(user, provenance)), 0, KEEP_PER_USER - 1],
+          ["EXPIRE", key("context", askContextKey(user, provenance)), ttl],
+          ["SADD", key("contexts", user), key("context", askContextKey(user, provenance))],
+          ["EXPIRE", key("contexts", user), ttl],
+        ] : []),
       ]);
       return id;
     },
@@ -223,14 +241,16 @@ function commandStore(env, kind, run, clock = Date.now) {
       const rows = await one("LRANGE", key("chunks", id), Math.max(0, from), -1);
       return Array.isArray(rows) ? rows.map(String) : [];
     },
-    async list(user) {
-      const rows = await one("LRANGE", key("user", user), 0, KEEP_PER_USER - 1);
+    async list(user, context) {
+      const index = context === undefined ? key("user", user) : key("context", askContextKey(user, context));
+      const rows = await one("LRANGE", index, 0, KEEP_PER_USER - 1);
       return Array.isArray(rows) ? rows.map(String) : [];
     },
     /** Quota and the newest-first ask ids in one round trip. */
-    async overview(user, limit) {
+    async overview(user, limit, context) {
       const today = quotaDay(env, clock());
-      const [count, rows] = await run([["GET", key("quota", user, today.day)], ["LRANGE", key("user", user), 0, KEEP_PER_USER - 1]]);
+      const index = context === undefined ? key("user", user) : key("context", askContextKey(user, context));
+      const [count, rows] = await run([["GET", key("quota", user, today.day)], ["LRANGE", index, 0, KEEP_PER_USER - 1]]);
       const used = Math.min(limit, Number(count) || 0);
       return {
         quota: { used, limit, remaining: Math.max(0, limit - used), resetAt: today.resetAt },
@@ -260,6 +280,8 @@ function shapeMeta(raw) {
   return {
     id: raw.id,
     user: raw.user || "",
+    tenantId: raw.tenantId || "",
+    workspace: raw.workspace || "",
     question: raw.question || "",
     status: raw.status || "streaming",
     source: raw.source || "",
@@ -282,7 +304,9 @@ function memoryStore(env, clock = Date.now) {
   const metas = new Map();
   const chunkMap = new Map();
   const users = new Map();
+  const contexts = new Map();
   const generations = new Map();
+  const claims = new Map();
   const resetIds = new Set();
   const quotaSlot = (user) => `${user}:${quotaDay(env, clock()).day}:${generations.get(user) || 0}`;
   return {
@@ -299,26 +323,48 @@ function memoryStore(env, clock = Date.now) {
       const used = (quotas.get(slot) || 0) + 1;
       if (used > limit) return { ok: false, used: limit, limit, remaining: 0, resetAt: today.resetAt };
       quotas.set(slot, used);
-      return { ok: true, used, limit, remaining: Math.max(0, limit - used), resetAt: today.resetAt, quotaKey: slot };
+      const claimId = randomUUID();
+      claims.set(claimId, { user, slot });
+      return { ok: true, used, limit, remaining: Math.max(0, limit - used), resetAt: today.resetAt, quotaKey: { key: slot, claimId } };
     },
     async refund(user, claimedKey) {
+      if (claimedKey?.claimId) {
+        const receipt = claims.get(claimedKey.claimId);
+        if (!receipt || receipt.user !== user || receipt.slot !== claimedKey.key) return;
+        claims.delete(claimedKey.claimId);
+        quotas.set(receipt.slot, Math.max(0, (quotas.get(receipt.slot) || 0) - 1));
+        return;
+      }
       const slot = claimedKey || quotaSlot(user);
       quotas.set(slot, Math.max(0, (quotas.get(slot) || 0) - 1));
     },
-    async resetQuota(user) { generations.set(user, (generations.get(user) || 0) + 1); },
+    async resetQuota(user) {
+      generations.set(user, (generations.get(user) || 0) + 1);
+      for (const [id, receipt] of claims) if (receipt.user === user) claims.delete(id);
+    },
     async resetHistory(user) {
       for (const [id, meta] of metas) {
-        if (meta.user === user) { resetIds.add(id); metas.delete(id); chunkMap.delete(id); }
+        if (meta.user === user) {
+          resetIds.add(id);
+          if (meta.tenantId && meta.workspace) contexts.delete(askContextKey(user, meta));
+          metas.delete(id);
+          chunkMap.delete(id);
+        }
       }
       users.delete(user);
     },
-    async create(user, question) {
+    async create(user, question, context) {
+      const provenance = context === undefined ? null : askContext(context);
       const id = newId();
       const now = Date.now();
-      metas.set(id, { id, user, question, status: "streaming", createdAt: String(now), updatedAt: String(now) });
+      metas.set(id, { id, user, question, status: "streaming", createdAt: String(now), updatedAt: String(now), ...provenance });
       chunkMap.set(id, []);
       const list = [id, ...(users.get(user) || [])].slice(0, KEEP_PER_USER);
       users.set(user, list);
+      if (provenance) {
+        const index = askContextKey(user, provenance);
+        contexts.set(index, [id, ...(contexts.get(index) || [])].slice(0, KEEP_PER_USER));
+      }
       return id;
     },
     async append(id, text) {
@@ -351,11 +397,11 @@ function memoryStore(env, clock = Date.now) {
     async chunks(id, from = 0) {
       return (chunkMap.get(id) || []).slice(Math.max(0, from));
     },
-    async list(user) {
-      return users.get(user) || [];
+    async list(user, context) {
+      return [...(context === undefined ? users.get(user) || [] : contexts.get(askContextKey(user, context)) || [])];
     },
-    async overview(user, limit) {
-      return { quota: await this.quota(user, limit), ids: await this.list(user) };
+    async overview(user, limit, context) {
+      return { quota: await this.quota(user, limit), ids: await this.list(user, context) };
     },
     async reads(ids, from = 0) {
       return Promise.all(ids.map(async (id) => ({ meta: await this.meta(id), chunks: await this.chunks(id, from) })));
