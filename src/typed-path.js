@@ -1,3 +1,4 @@
+import { canReadRecord, readPrincipalId, readableSession } from "./domain/read-access.js";
 import { randomBytes } from "node:crypto";
 import { displayName, logAction, logFailure, logRequest, logUndo, renderActivity, undoRefusal } from "./activity.js";
 import { formatActivitySentence, selectActivity } from "./activity-feed.js";
@@ -230,7 +231,7 @@ export async function downloadFile(input, deps = {}) {
   await loadIndex(session, deps);
   const roomId = input.room?.id || "";
   const decision = session.decisions.find((item) => {
-    if (roomId && item.roomId !== roomId) return false;
+    if (item.deleted || (roomId && item.roomId !== roomId)) return false;
     if (!checkInvite(memberId, item.inviteMemberIds).ok) return false;
     return item.fileNames?.some((file) => file.name === name);
   });
@@ -1516,7 +1517,7 @@ async function storeDecision(input, session, deps, parsed) {
   }
   const room = liveRoom(input);
   if (!room) return refusal(session, "no-room");
-  const inviteMemberIds = snapshot(input, room);
+  const inviteMemberIds = Array.isArray(input.participants) && input.participants.length ? input.participants : (room.memberIds || []);
   const invite = checkInvite(input.memberId, inviteMemberIds);
   if (!invite.ok) return refusal(session, invite.reason === "missing-member" ? "missing-member" : "not-invited");
   if (input.intent !== "keep" && looksLikeOpenQuestion(sentence)) {
@@ -2209,7 +2210,8 @@ async function answerRecall(input, session, deps) {
   const roomId = input.room?.id || "";
   const candidates = session.decisions.filter((decision) =>
     !decision.deleted && (!roomId || decision.roomId === roomId) && keptInWorkspace(decision, scope));
-  const visible = candidates.filter((decision) => checkInvite(memberId, decision.inviteMemberIds).ok);
+  const principal = input.readPrincipal || memberId;
+  const visible = candidates.filter((decision) => canReadRecord(principal, decision));
   if (visible.length === 0) {
     const reason = candidates.length === 0 ? "there are no notes yet" : "not-invited";
     if (reason === "not-invited") await noteOutsideAsk(session, deps, input, candidates);
@@ -2235,7 +2237,7 @@ async function answerRecall(input, session, deps) {
       proofs.set(decision.id, { failed: true });
     }
   }
-  return renderVisible(session, memberId, roomId, proofs, failed, scope, input.text);
+  return renderVisible(session, principal, roomId, proofs, failed, scope, input.text);
 }
 
 function renderVisible(session, memberId, roomId, proofs, failed = false, scope = "", question = "") {
@@ -2252,7 +2254,7 @@ function renderVisible(session, memberId, roomId, proofs, failed = false, scope 
   for (const decision of session.decisions) {
     if (decision.deleted || !keptInWorkspace(decision, scope)) continue;
     if (roomId && decision.roomId !== roomId) continue;
-    if (!checkInvite(memberId, decision.inviteMemberIds).ok) continue;
+    if (!canReadRecord(memberId, decision)) continue;
     const proof = proofs?.get(decision.id);
     if (proof?.failed) {
       lines.push("unknown");
@@ -2281,7 +2283,7 @@ function renderVisible(session, memberId, roomId, proofs, failed = false, scope 
     ? shapeAnswer({
       question,
       sentences: visible.map((row) => row.text).filter(Boolean),
-      memories: memoriesFor(session),
+      memories: memoriesFor(readableSession(session, memberId)),
     })
     : null;
   let body = lines.join("\n");
@@ -2815,11 +2817,12 @@ export async function endMeeting(session, deps, roomId) {
  * @param {string} [memberId]
  */
 export function companyBoard(session, memberId, options = {}) {
-  const member = typeof memberId === "string" ? memberId.trim() : "";
+  if (typeof memberId === "object") session = readableSession(session, memberId);
+  const member = typeof memberId === "object" ? memberId : readPrincipalId(memberId);
   const visible = [];
   for (const decision of session?.decisions ?? []) {
     if (decision.deleted || decision.account === "personal" || decision.kind === "note") continue;
-    if (!member || !checkInvite(member, decision.inviteMemberIds).ok) continue;
+    if (!readPrincipalId(member) || !canReadRecord(member, decision)) continue;
     visible.push(decision);
   }
   const statuses = new Map(clashStatuses(visible).map((row) => [row.id, row.status]));
@@ -2904,7 +2907,7 @@ export function companyBoard(session, memberId, options = {}) {
   for (const action of session?.actions ?? []) {
     if (action.state !== "closed" || action.tool !== "linear" || typeof action.connectorId !== "string" || !action.connectorId) continue;
     const invite = action.inviteMemberIds?.length ? action.inviteMemberIds : [action.memberId];
-    if (!member || !checkInvite(member, invite).ok) continue;
+    if (!readPrincipalId(member) || !canReadRecord(member, { ...action, inviteMemberIds: invite })) continue;
     tickets.push({
       actionId: action.id,
       connectorId: action.connectorId,
@@ -3046,11 +3049,11 @@ function accessRows(session, rooms) {
  * @param {string} [memberId]
  */
 export function personalBoard(session, memberId) {
-  const member = typeof memberId === "string" ? memberId.trim() : "";
+  const member = typeof memberId === "object" ? memberId : readPrincipalId(memberId);
   const visible = [];
   for (const decision of session?.decisions ?? []) {
     if (decision.account !== "personal") continue;
-    if (!member || !checkInvite(member, decision.inviteMemberIds).ok) continue;
+    if (!readPrincipalId(member) || !canReadRecord(member, decision)) continue;
     visible.push(decision);
   }
   const decisions = visible.map((decision) => ({
@@ -3091,10 +3094,11 @@ export function personalBoard(session, memberId) {
   };
 }
 
-export function roomLedger(session, roomId = "desk") {
+export function roomLedger(session, roomId = "desk", memberId = "") {
+  session = readableSession(session, memberId);
   const id = typeof roomId === "string" && roomId ? roomId : "desk";
   const decisions = (session?.decisions ?? []).filter((decision) =>
-    decision.roomId === id && decision.account !== "personal" && decision.kind !== "note");
+    !decision.deleted && decision.roomId === id && decision.account !== "personal" && decision.kind !== "note");
   const statuses = new Map(clashStatuses(decisions).map((row) => [row.id, row.status]));
   const preferences = session?.preferences ?? [];
   return {

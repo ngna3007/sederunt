@@ -180,7 +180,7 @@ export function recallTranscriptDelivery(payload) {
   const participant = inner.participant && typeof inner.participant === "object" ? inner.participant : {};
   const memberId = participant.id != null && String(participant.id).trim()
     ? String(participant.id).trim()
-    : (typeof participant.name === "string" ? participant.name.trim() : "");
+    : "";
   const botId = typeof data.bot?.id === "string" && data.bot.id
     ? data.bot.id
     : (typeof data.bot_id === "string" && data.bot_id ? data.bot_id : "meeting");

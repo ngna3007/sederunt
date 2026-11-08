@@ -1,3 +1,6 @@
+import { createParticipantBindings } from "./participant-bindings.js";
+import { consolePrincipal } from "./console-principal.js";
+import { canReadRecord, readPrincipalId, readableSession } from "./domain/read-access.js";
 import { createServer } from "node:http";
 import { readRequestBytes } from "./http-body.js";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
@@ -502,6 +505,7 @@ export function createApp(options = {}) {
     identity: null,
     ask: options.askStore || createAskStore(env),
     openrouterFetch: options.openrouterFetch || null,
+    participantBindings: options.participantBindings || createParticipantBindings(env, { fetchImpl: options.fetch || globalThis.fetch }),
   };
   if (proofWarmOn(env) && workspace.companyLoaded && deps.tatum) {
     // Read the company proofs once at start so the first room load is
@@ -653,6 +657,10 @@ export function createApp(options = {}) {
       return;
     }
     if (req.method === "POST" && url.pathname === "/console/sign-in") {
+      if (identity) {
+        send(res, 403, "text/html; charset=utf-8", renderSignInPage({ oauth: true, configured: false, providers: { google: true, github: false }, notice: "Continue with Google to sign in." }));
+        return;
+      }
       const body = await readPosted(req);
       const next = safeConsoleNext(typeof body.next === "string" ? body.next : "/console");
       const secret = consoleSecret(env);
@@ -741,7 +749,15 @@ export function createApp(options = {}) {
         return;
       }
       const id = decodeURIComponent(url.pathname.slice("/console/rooms/".length, -"/media".length));
-      const body = await roomMedia(workspace, id);
+      const resolved = await resolveCompanyId(workspace, req, url.searchParams.get("company") || "");
+      if (resolved.denied || resolved.unauthorized) { sendCompanyDenied(res, send, resolved); return; }
+      const current = await prepareWorkspace(workspace, resolved.companyId);
+      const principal = await consolePrincipal(workspace, req, resolved.companyId);
+      if (!(current.decisions || []).some((row) => row.roomId === id && canReadRecord(principal, row))) {
+        send(res, 404, "application/json; charset=utf-8", JSON.stringify({ error: "That room is not available." }));
+        return;
+      }
+      const body = await roomMedia({ ...workspace, session: current }, id);
       const secret = typeof env.RECALL_API_KEY === "string" ? env.RECALL_API_KEY : "";
       const raw = secret.length >= 12 ? JSON.stringify(body).split(secret).join("") : JSON.stringify(body);
       send(res, 200, "application/json; charset=utf-8", raw);
@@ -1191,7 +1207,7 @@ export function createApp(options = {}) {
         return;
       }
       const current = await prepareWorkspace(workspace, resolved.companyId);
-      send(res, 200, "application/json; charset=utf-8", JSON.stringify(roomLedger(current, roomId)));
+      send(res, 200, "application/json; charset=utf-8", JSON.stringify(roomLedger(current, roomId, await consolePrincipal(workspace, req, resolved.companyId))));
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/join") {
@@ -1317,15 +1333,6 @@ export function createApp(options = {}) {
           const payload = JSON.parse(raw || "{}");
           const delivery = recallTranscriptDelivery(payload);
           if (delivery) {
-            const configured = typeof env.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
-            if (configured) {
-              const people = [...new Set([...(delivery.participants ?? []), configured].filter(Boolean))];
-              delivery.participants = people;
-              delivery.room.memberIds = people;
-              // Tab-share and some streams arrive with words but no speaker.
-              // Typed fills this in; without it, storeDecision refuses as missing-member.
-              if (!delivery.memberId) delivery.memberId = configured;
-            }
             const botId = typeof delivery.room?.id === "string" ? delivery.room.id : "";
             const companyId = await resolveBoundTenant(workspace, { botId });
             // Race: join bound after Recall fires — ask provider to retry; never ingest unbound.
@@ -1335,6 +1342,11 @@ export function createApp(options = {}) {
             }
             // Unbound production memory fails closed (empty tenant + no allowUnscoped).
             const current = await prepareWorkspace(workspace, companyId);
+            const participant = payload?.data?.data?.participant || payload?.data?.participant;
+            // Display names and unverified mailbox claims never establish attendance identity.
+            if (participant?.email_verified === true && typeof participant.email === "string" && delivery.memberId) {
+              await workspace.participantBindings.record({ tenantId: companyId, roomId: delivery.room.id, memberId: delivery.memberId, email: participant.email });
+            }
             await handleUtterance({ ...delivery, session: current }, depsFor(workspace, companyId));
           }
           const ended = meetingEnded(payload);
@@ -1357,7 +1369,15 @@ export function createApp(options = {}) {
     if (req.method === "POST" && url.pathname === "/api/typed") {
       const delivery = await readRequest(req);
       const configured = typeof env.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
-      if (!delivery.memberId && configured) delivery.memberId = configured;
+      const caller = guardConsole(req, env).session;
+      if (caller?.kind === "oauth") {
+        const own = String(caller.userId || caller.memberId || "");
+        if ((delivery.memberId && delivery.memberId !== own) || delivery.room?.id || delivery.participants?.length || delivery.intent === "delete") {
+          send(res, 403, "application/json; charset=utf-8", JSON.stringify({ error: "Use the meeting or channel for a room request." }));
+          return;
+        }
+        delivery.memberId = own;
+      } else if (!delivery.memberId && configured) delivery.memberId = configured;
       const resolved = await resolveCompanyId(workspace, req, typeof delivery.company === "string" ? delivery.company : "");
       if (resolved.denied || resolved.unauthorized) {
         sendCompanyDenied(res, send, resolved);
@@ -1380,7 +1400,7 @@ export function createApp(options = {}) {
       }
       const companyId = resolved.companyId;
       const current = await prepareWorkspace(workspace, companyId);
-      const memberId = consoleBoardMember(null, env, "company", typeof body.memberId === "string" ? body.memberId : "");
+      const memberId = await consolePrincipal(workspace, req, companyId);
       const visible = companyBoard(current, memberId);
       const row = (visible.decisions ?? []).find((item) => item.id === id) || null;
       if (!row) {
@@ -2636,7 +2656,7 @@ export function consoleBoardMember(session, env, workspace, requested = "") {
   const configured = typeof env?.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
   const asked = String(requested || "").trim();
   const signed = session ? (String(session.memberId || "").trim() || configured) : (asked || configured);
-  if (session?.kind === "oauth" && workspace !== "personal" && configured) return configured;
+  if (session?.kind === "oauth") return String(session.userId || session.memberId || "").trim();
   return signed;
 }
 
@@ -2691,7 +2711,8 @@ async function consolePayload(workspace, current, memberId, kind = "company", op
   const report = current.readReport;
   const config = appConfig(workspace.env);
   if (open !== "personal") await hydrateSlackChannels(current, workspace.deps);
-  const board = open === "personal" ? personalBoard(current, memberId) : companyBoard(current, memberId, { timeZone: config.timeZone, slackChannel: config.slackChannel });
+  const principal = req ? await consolePrincipal(workspace, req, companyId, open) : memberId;
+  const board = open === "personal" ? personalBoard(current, principal) : companyBoard(current, principal, { timeZone: config.timeZone, slackChannel: config.slackChannel });
   if (!report.ok) {
     return {
       companyLoaded: true,
