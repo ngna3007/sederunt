@@ -17,7 +17,7 @@ import { runFileWorker } from "./worker.js";
 export function createFileRuntime(options = {}) {
   const env = options.env || {};
   const clock = options.clock || (() => new Date());
-  const configured = env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY && env.FILES_DEMO !== "1" && options.demo !== true;
+  const configured = env.SUPABASE_URL && (env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SECRET_KEY) && env.FILES_DEMO !== "1" && options.demo !== true;
   const store = options.store || (configured ? createSupabaseFileStore({ env, clock, fetch: options.fetch }) : createFileStore({ clock }));
   const demo = options.demo === true || env.FILES_DEMO === "1";
   if (demo && options.store == null) seedDemoFiles(store, clock());

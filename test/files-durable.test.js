@@ -49,3 +49,11 @@ test("Console reconciliation refreshes after a minute and does not hide failures
   assert.equal(await session.restore(), 1);
   assert.equal(calls, 4);
 });
+
+test("durable Files accepts the existing server-only Supabase key name", async () => {
+  const store = createSupabaseFileStore({ env: { SUPABASE_URL: env.SUPABASE_URL, SUPABASE_SECRET_KEY: "fixture-alias" }, fetch: async (_, options) => {
+    assert.equal(options.headers.apikey, "fixture-alias");
+    return new Response("[]");
+  } });
+  assert.equal(await store.claimJob(), null);
+});

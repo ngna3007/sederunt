@@ -82,7 +82,7 @@ The runtime and Vercel load the shared working key (`CONSOLE_API_KEY`, an `hbr_`
 
 ## Upload
 
-The route checks current channel visibility. Configured deployments use `createSupabaseFileStore` with `SUPABASE_URL` and the server-only `SUPABASE_SERVICE_ROLE_KEY`. One transaction checks membership again, inserts the message and `uploading` file, validates the content SHA-256, stages the bytes, and queues an `upload` job. HTTP 202 means this transaction committed, not that Console finished storing the file. A fresh process can resume from the staging table. The service and Console adapter methods are asynchronous.
+The route checks current channel visibility. Configured deployments use `createSupabaseFileStore` with `SUPABASE_URL` and the server-only `SUPABASE_SERVICE_ROLE_KEY` (or the existing `SUPABASE_SECRET_KEY` alias). One transaction checks membership again, inserts the message and `uploading` file, validates the content SHA-256, stages the bytes, and queues an `upload` job. HTTP 202 means this transaction committed, not that Console finished storing the file. A fresh process can resume from the staging table. The service and Console adapter methods are asynchronous.
 
 `file_upload_staging` temporarily contains plaintext bytes with a 100 MiB per-file limit. Only the service role can access it. The deployment must protect database storage and backups; Console encryption does not encrypt this temporary database copy. Activation and deletion remove staged bytes. Exhausted uploads remain failed until the owner discards them, which queues remote cleanup even when an earlier attempt already received a Console id.
 

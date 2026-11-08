@@ -7,7 +7,7 @@ const dateFields = new Set(["createdAt", "updatedAt", "deletedAt", "pendingDelet
 /** Service-role adapter. Every viewer read obtains current database membership. */
 export function createSupabaseFileStore({ env = {}, fetch: fetchImpl = globalThis.fetch, clock = () => new Date() } = {}) {
   const base = String(env.SUPABASE_URL || "").trim().replace(/\/$/, "");
-  const key = String(env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+  const key = String(env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SECRET_KEY || "").trim();
   if (!base || !key) throw new Error("Durable Files storage is not configured");
   async function request(path, { method = "GET", body, prefer } = {}) {
     let response;
