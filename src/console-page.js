@@ -102,11 +102,11 @@ export function renderConsolePage(state = {}) {
     : "";
   const switcher = renderWorkspaceSwitcher(state.spaces, switchIcon);
   const canInvite = state.spaces?.oauth === true && (state.spaces.activeRole === "owner" || state.spaces.activeRole === "admin");
-  const inviteHref = "/console/welcome?step=team&amp;mode=manage";
-  const peopleInvite = canInvite ? `<a class="secondary" href="${inviteHref}" id="people-invite">${glyph('<path d="M8 3.2v9.6M3.2 8h9.6"/>')}Invite people</a>` : "";
+  const peopleInvite = canInvite ? `<button type="button" class="secondary" id="people-invite" data-invite>${glyph('<path d="M8 3.2v9.6M3.2 8h9.6"/>')}Invite people</button>` : "";
   const membersCard = canInvite
-    ? `<div class="settings-card" id="members-card"><p class="section-label">Members</p><p class="card-help">Invite people by email, copy the workspace invite link, or let anyone with your company email join.</p><div class="wait-actions"><a class="secondary" href="${inviteHref}" id="setup-invite">Invite people</a></div></div>`
+    ? `<div class="settings-card" id="members-card"><p class="section-label">Members</p><p class="card-help">Invite people by email, copy the workspace invite link, or let anyone with your company email join.</p><div class="wait-actions"><button type="button" class="secondary" id="setup-invite" data-invite>Invite people</button></div></div>`
     : "";
+  const inviteDialog = canInvite ? renderInviteDialog(closeIcon, state.spaces?.activeName || "") : "";
   const spaceDialog = state.spaces?.oauth ? renderSpaceDialog(closeIcon) : "";
   const profile = state.accountProfile?.oauth ? state.accountProfile : null;
   const asks = state.toolAsk?.oauth === true;
@@ -835,6 +835,7 @@ ${slack}
   </div>
 </div>
 ${spaceDialog}
+${inviteDialog}
 <div id="decision-dialog" class="dialog" hidden role="dialog" aria-modal="true" aria-labelledby="decision-sentence">
   <div class="shade" data-close="decision-dialog"></div>
   <div class="panel">
@@ -3193,7 +3194,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function dialogOpen() {
-    var ids = ["proof-dialog", "event-dialog", "profile-dialog", "decision-dialog", "create-dialog", "workspace-dialog", "space-dialog", "mcp-dialog", "mcp-manage-dialog", "mcp-token-dialog", "mcp-remove-dialog", "file-proof-dialog", "file-delete-dialog"];
+    var ids = ["proof-dialog", "event-dialog", "profile-dialog", "decision-dialog", "create-dialog", "workspace-dialog", "space-dialog", "invite-dialog", "mcp-dialog", "mcp-manage-dialog", "mcp-token-dialog", "mcp-remove-dialog", "file-proof-dialog", "file-delete-dialog"];
     for (var i = 0; i < ids.length; i += 1) {
       var node = document.getElementById(ids[i]);
       if (node && !node.hidden) return true;
@@ -5298,7 +5299,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
     }, 10000);
   }
 
-  function load() {
+  var loadedAt = 0;
+  function load(force) {
+    if (force === false && loadedAt && Date.now() - loadedAt < 10000) return Promise.resolve();
     var token = loadToken + 1;
     loadToken = token;
     armSlow();
@@ -5311,6 +5314,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       return response.json();
     }).then(function (next) {
       if (!next || token !== loadToken) return;
+      loadedAt = Date.now();
       paint(next);
     }).catch(function () {
       if (token !== loadToken) return;
@@ -5348,7 +5352,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       text("connector-who", "Finish in the window that opened, then come back here. This page never asks for a key.");
     });
   });
-  window.addEventListener("focus", function () { load(); });
+  window.addEventListener("focus", function () { load(false); });
   document.getElementById("crumb-home").addEventListener("click", function () {
     showSection("home");
   });
@@ -5505,6 +5509,25 @@ if (sessionWhen && sessionWhen.dataset.at) {
       leaveOnboard();
       showSection(button.getAttribute("data-show") || "connectors");
     });
+  });
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var link = event.target && event.target.closest ? event.target.closest("a[href]") : null;
+    if (!link || link.target === "_blank" || link.hasAttribute("download")) return;
+    var url;
+    try { url = new URL(link.href, location.origin); } catch (error) { return; }
+    if (url.origin !== location.origin) return;
+    var path = url.pathname;
+    if (sectionFromPath(path) === "missing") return;
+    event.preventDefault();
+    leaveOnboard();
+    var roomId = roomFromPath(path);
+    if (roomId) openFile(roomId);
+    else showSection(sectionFromPath(path));
+    if (url.hash.length > 1) {
+      var target = document.getElementById(decodeURIComponent(url.hash.slice(1)));
+      if (target && target.scrollIntoView) target.scrollIntoView({ block: "start" });
+    }
   });
   function shouldAsk(tool) {
     if (!toolAsk || !toolAsk.oauth) return false;
@@ -6222,6 +6245,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     else if (!document.getElementById("file-dialog").hidden) closeDialog("file-dialog");
     else if (!document.getElementById("workspace-dialog").hidden) closeDialog("workspace-dialog");
     else if (document.getElementById("space-dialog") && !document.getElementById("space-dialog").hidden) closeDialog("space-dialog");
+    else if (document.getElementById("invite-dialog") && !document.getElementById("invite-dialog").hidden) closeDialog("invite-dialog");
     else if (!document.getElementById("workspace-menu").hidden) closeMenu();
   });
   document.querySelectorAll("[data-scope]").forEach(function (button) {
@@ -7410,7 +7434,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     else showSection(name);
   });
   window.addEventListener("pageshow", function (event) {
-    if (event.persisted) location.reload();
+    if (event.persisted) load(true);
   });
   function openPalette() {
     var palette = document.getElementById("palette");
@@ -8177,6 +8201,230 @@ if (sessionWhen && sessionWhen.dataset.at) {
   var mcpRemoveConfirm = document.getElementById("mcp-remove-confirm");
   if (mcpRemoveConfirm) mcpRemoveConfirm.addEventListener("click", confirmMcpRemove);
 
+  var inviteRows = [];
+  function inviteError(message) {
+    var node = document.getElementById("invite-dialog-error");
+    if (!node) return;
+    node.hidden = !message;
+    node.textContent = message || "";
+  }
+  function paintInviteSend() {
+    var send = document.getElementById("invite-dialog-send");
+    if (!send || send.getAttribute("aria-busy") === "true") return;
+    var count = inviteRows.length;
+    send.textContent = count === 0 ? "Done" : count === 1 ? "Invite 1 person" : ("Invite " + count + " people");
+  }
+  function paintInviteRows() {
+    var list = document.getElementById("invite-dialog-list");
+    if (!list) return;
+    list.textContent = "";
+    inviteRows.forEach(function (row, index) {
+      var item = document.createElement("li");
+      var email = document.createElement("span");
+      email.textContent = row.email;
+      var role = document.createElement("select");
+      role.setAttribute("aria-label", "Role for " + row.email);
+      ["member", "admin"].forEach(function (value) {
+        var option = document.createElement("option");
+        option.value = value;
+        option.textContent = value === "admin" ? "Admin" : "Member";
+        if (row.role === value) option.selected = true;
+        role.appendChild(option);
+      });
+      role.addEventListener("change", function () { inviteRows[index].role = role.value; });
+      var remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "secondary";
+      remove.textContent = "Remove";
+      remove.setAttribute("aria-label", "Remove " + row.email);
+      remove.addEventListener("click", function () {
+        inviteRows.splice(index, 1);
+        paintInviteRows();
+      });
+      item.append(email, role, remove);
+      list.appendChild(item);
+    });
+    list.hidden = inviteRows.length === 0;
+    paintInviteSend();
+  }
+  function addInviteText(value) {
+    String(value || "").split(/[,;\\s]+/).filter(Boolean).forEach(function (email) {
+      var key = email.toLowerCase();
+      if (inviteRows.some(function (row) { return row.email === key; })) return;
+      var roleNode = document.getElementById("invite-role");
+      inviteRows.push({ email: key, role: roleNode && roleNode.value === "admin" ? "admin" : "member" });
+    });
+    paintInviteRows();
+  }
+  function resetInviteDialog() {
+    inviteRows = [];
+    var email = document.getElementById("invite-email");
+    if (email) email.value = "";
+    inviteError("");
+    var sent = document.getElementById("invite-dialog-sent");
+    if (sent) { sent.hidden = true; sent.textContent = ""; }
+    var compose = document.getElementById("invite-compose");
+    var hint = document.getElementById("invite-hint");
+    if (compose) compose.hidden = false;
+    if (hint) hint.hidden = false;
+    ["invite-dialog-share", "invite-dialog-domain"].forEach(function (id) {
+      var node = document.getElementById(id);
+      if (node) node.hidden = true;
+    });
+    var send = document.getElementById("invite-dialog-send");
+    var cancel = document.getElementById("invite-dialog-cancel");
+    if (send) { send.hidden = false; send.disabled = false; send.removeAttribute("aria-busy"); }
+    if (cancel) cancel.textContent = "Cancel";
+    paintInviteRows();
+  }
+  function openInvite() {
+    var dialog = document.getElementById("invite-dialog");
+    if (!dialog) return;
+    resetInviteDialog();
+    openDialog("invite-dialog");
+    var email = document.getElementById("invite-email");
+    if (email) email.focus();
+    fetch("/api/console/invites", { headers: { accept: "application/json" } }).then(function (response) {
+      if (!response.ok) throw new Error("no");
+      return response.json();
+    }).then(function (sheet) {
+      if (!sheet || dialog.hidden) return;
+      var sub = document.getElementById("invite-dialog-sub");
+      if (sub && sheet.workspaceName) sub.textContent = "Add people to " + sheet.workspaceName + ".";
+      if (sheet.link) {
+        var share = document.getElementById("invite-dialog-share");
+        var field = document.getElementById("invite-dialog-link");
+        if (share) share.hidden = false;
+        if (field) field.value = sheet.link;
+      }
+      if (sheet.domain) {
+        var domain = document.getElementById("invite-dialog-domain");
+        var copy = document.getElementById("invite-domain-copy");
+        var box = document.getElementById("invite-domain-join");
+        if (domain) domain.hidden = false;
+        if (copy) copy.textContent = "Anyone with an @" + sheet.domain + " email can join. They join as Members.";
+        if (box) box.checked = sheet.domainOn === true;
+      }
+    }).catch(function () {
+      inviteError("The invite link could not be loaded. You can still invite by email.");
+    });
+  }
+  document.querySelectorAll("[data-invite]").forEach(function (button) {
+    button.addEventListener("click", function (event) {
+      event.preventDefault();
+      openInvite();
+    });
+  });
+  var inviteAdd = document.getElementById("invite-add");
+  if (inviteAdd) inviteAdd.addEventListener("click", function () {
+    var email = document.getElementById("invite-email");
+    if (!email) return;
+    addInviteText(email.value);
+    email.value = "";
+    email.focus();
+  });
+  var inviteCopy = document.getElementById("invite-dialog-copy");
+  if (inviteCopy) inviteCopy.addEventListener("click", function () {
+    var field = document.getElementById("invite-dialog-link");
+    if (!field || !field.value) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(field.value);
+    else { field.focus(); field.select(); }
+  });
+  var inviteForm = document.getElementById("invite-dialog-form");
+  if (inviteForm) inviteForm.addEventListener("submit", function (event) {
+    event.preventDefault();
+    var send = document.getElementById("invite-dialog-send");
+    if (!send || send.getAttribute("aria-busy") === "true") return;
+    var email = document.getElementById("invite-email");
+    if (email && email.value.trim()) {
+      addInviteText(email.value);
+      email.value = "";
+    }
+    var domainRow = document.getElementById("invite-dialog-domain");
+    var domainBox = document.getElementById("invite-domain-join");
+    var body = {
+      emails: inviteRows.map(function (row) { return row.email; }),
+      roles: inviteRows.map(function (row) { return row.role; }),
+      domain_present: !!(domainRow && !domainRow.hidden),
+      domain_join: !!(domainBox && domainBox.checked)
+    };
+    if (!body.emails.length && !body.domain_present) {
+      closeDialog("invite-dialog");
+      return;
+    }
+    send.setAttribute("aria-busy", "true");
+    send.textContent = "Sending…";
+    inviteError("");
+    fetch("/api/console/invites", {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (response) {
+      return response.json().then(function (payload) { return { ok: response.ok, payload: payload || {} }; });
+    }).then(function (result) {
+      send.removeAttribute("aria-busy");
+      if (!result.ok) {
+        inviteError(result.payload.error || "Those invites could not be created.");
+        paintInviteSend();
+        return;
+      }
+      var invites = result.payload.invites || [];
+      if (!invites.length) {
+        closeDialog("invite-dialog");
+        return;
+      }
+      var sent = document.getElementById("invite-dialog-sent");
+      ["invite-compose", "invite-hint", "invite-dialog-list", "invite-dialog-share", "invite-dialog-domain"].forEach(function (id) {
+        var node = document.getElementById(id);
+        if (node) node.hidden = true;
+      });
+      if (sent) {
+        sent.hidden = false;
+        sent.textContent = "";
+        var note = document.createElement("p");
+        note.textContent = "Sederunt doesn't email invites yet. Copy each link and send it. Links work for 14 days.";
+        sent.appendChild(note);
+        if (result.payload.error) {
+          var partial = document.createElement("p");
+          partial.className = "invite-error";
+          partial.textContent = result.payload.error;
+          sent.appendChild(partial);
+        }
+        invites.forEach(function (row) {
+          var line = document.createElement("p");
+          line.textContent = row.email + " · " + (row.role === "admin" ? "Admin" : "Member");
+          var field = document.createElement("input");
+          field.readOnly = true;
+          field.value = row.href || "";
+          var copy = document.createElement("button");
+          copy.type = "button";
+          copy.className = "secondary";
+          copy.textContent = "Copy link";
+          copy.addEventListener("click", function () {
+            if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(field.value);
+            else { field.focus(); field.select(); }
+          });
+          sent.append(line, field, copy);
+        });
+      }
+      send.hidden = true;
+      var cancel = document.getElementById("invite-dialog-cancel");
+      if (cancel) cancel.textContent = "Done";
+    }).catch(function () {
+      send.removeAttribute("aria-busy");
+      inviteError("Those invites could not be created.");
+      paintInviteSend();
+    });
+  });
+  if (document.getElementById("invite-dialog") && new URLSearchParams(location.search).get("invite") === "1") {
+    openInvite();
+    try {
+      var cleanInvite = new URL(location.href);
+      cleanInvite.searchParams.delete("invite");
+      history.replaceState(history.state || { section: sectionName }, "", cleanInvite.pathname + cleanInvite.search + cleanInvite.hash);
+    } catch (error) { /* keep the query */ }
+  }
+
   load();
   syncRail();
 
@@ -8666,16 +8914,16 @@ function jsonForScript(value) {
 function renderChecklist(list, closeIcon) {
   if (!list || !list.tenantId) return "";
   const tick = `<svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-  const item = (id, done, title, action) => `<li class="check-item${done ? " done" : ""}" id="checklist-${id}">
+  const item = (id, done, title, action, keepAction = false) => `<li class="check-item${done ? " done" : ""}" id="checklist-${id}">
         <span class="check-dot" aria-hidden="true">${tick}</span>
         <span class="check-title">${title}</span>
         <span class="sr check-state">${done ? "Done" : "To do"}</span>
-        ${done ? "" : action}
+        ${done && !keepAction ? "" : action}
       </li>`;
   const rows = [
     item("calendar", list.calendar, list.calendar ? "Calendar connected" : "Connect your calendar", `<a class="check-go" href="/console/setup#tools-card">Connect</a>`),
     item("chat", list.chat, list.chat ? "Slack connected" : "Choose where Sederunt posts", `<a class="check-go" href="/console/setup#tools-card">Set up</a>`),
-    list.canInvite ? item("team", list.team, list.team ? "Team invited" : "Invite your team", `<a class="check-go" href="/console/welcome?step=team&amp;mode=manage">Invite</a>`) : "",
+    list.canInvite ? item("team", list.team, list.team ? "Team invited" : "Invite your team", `<button type="button" class="check-go" id="checklist-invite" data-invite>Invite</button>`, true) : "",
     item("meeting", false, "Add Sederunt to a meeting", `<button type="button" class="check-go" id="checklist-add-meeting">Add</button>`),
   ].filter(Boolean);
   const total = rows.length;
@@ -8758,6 +9006,46 @@ function renderSpaceDialog(closeIcon) {
       <div class="wait-actions">
         <button type="button" class="secondary" data-close="space-dialog">Cancel</button>
         <button class="primary" type="submit" id="space-submit">Create workspace</button>
+      </div>
+    </form>
+  </div>
+</div>`;
+}
+
+function renderInviteDialog(closeIcon, workspaceName) {
+  const name = escapeHtml(workspaceName || "this workspace");
+  return `<div id="invite-dialog" class="dialog" hidden role="dialog" aria-modal="true" aria-labelledby="invite-dialog-title">
+  <div class="shade" data-close="invite-dialog"></div>
+  <div class="panel">
+    <div class="panel-bar">
+      <h2 id="invite-dialog-title">Invite people</h2>
+      <button type="button" class="close" data-close="invite-dialog" aria-label="Close">${closeIcon}</button>
+    </div>
+    <form class="panel-body" id="invite-dialog-form">
+      <p id="invite-dialog-sub">Add people to ${name}.</p>
+      <div class="invite-add" id="invite-compose">
+        <label class="sr" for="invite-email">Email address</label>
+        <input id="invite-email" type="text" inputmode="email" placeholder="name@company.com" autocomplete="off" spellcheck="false">
+        <label class="sr" for="invite-role">Role</label>
+        <select id="invite-role"><option value="member">Member</option><option value="admin">Admin</option></select>
+        <button type="button" id="invite-add">Add</button>
+      </div>
+      <p class="card-help" id="invite-hint">Paste several addresses at once, separated by commas or spaces.</p>
+      <p class="invite-error" id="invite-dialog-error" role="alert" hidden></p>
+      <ul class="invite-list" id="invite-dialog-list" hidden></ul>
+      <div class="invite-share" id="invite-dialog-share" hidden>
+        <label class="sr" for="invite-dialog-link">Invite link</label>
+        <input id="invite-dialog-link" readonly value="">
+        <button type="button" class="secondary" id="invite-dialog-copy">Copy link</button>
+      </div>
+      <label class="invite-domain" id="invite-dialog-domain" hidden>
+        <input type="checkbox" id="invite-domain-join">
+        <span id="invite-domain-copy"></span>
+      </label>
+      <div id="invite-dialog-sent" hidden></div>
+      <div class="wait-actions">
+        <button type="button" class="secondary" data-close="invite-dialog" id="invite-dialog-cancel">Cancel</button>
+        <button class="primary" type="submit" id="invite-dialog-send">Done</button>
       </div>
     </form>
   </div>

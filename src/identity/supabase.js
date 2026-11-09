@@ -1,6 +1,10 @@
+import { createHash } from "node:crypto";
 import { IdentityError } from "./shared.js";
 
 const SETTINGS_TTL_MS = 60 * 1000;
+// One navigation fires the same membership read from several handlers.
+// Keep the answer for a few seconds so the page and the board share it.
+const READ_TTL_MS = 5000;
 
 /**
  * GoTrue and PostgREST over REST. The token response is not trusted until
@@ -16,6 +20,36 @@ export function createSupabaseIdentity(env, options = {}) {
   const cacheMs = Number.isFinite(options.cacheMs) ? options.cacheMs : SETTINGS_TTL_MS;
   let external = null;
   let externalAt = 0;
+  const userReads = new Map();
+  const tenantReads = new Map();
+  const statReads = new Map();
+
+  function tokenKey(accessToken) {
+    return createHash("sha256").update(String(accessToken || "")).digest("base64url");
+  }
+
+  function cached(map, key, load) {
+    const now = Date.now();
+    const hit = map.get(key);
+    if (hit && hit.value !== undefined && now - hit.at < READ_TTL_MS) return Promise.resolve(hit.value);
+    if (hit?.pending) return hit.pending;
+    const pending = Promise.resolve().then(load).then((value) => {
+      map.set(key, { at: Date.now(), value });
+      if (map.size > 200) map.delete(map.keys().next().value);
+      return value;
+    }, (error) => {
+      if (map.get(key)?.pending === pending) map.delete(key);
+      throw error;
+    });
+    map.set(key, { at: 0, pending });
+    return pending;
+  }
+
+  function forgetPrefix(map, prefix) {
+    for (const key of map.keys()) {
+      if (key === prefix || key.startsWith(`${prefix}:`)) map.delete(key);
+    }
+  }
 
   if (!base || !apiKey) {
     throw new IdentityError("not_configured", "Supabase URL and publishable key are required.");
@@ -127,11 +161,13 @@ export function createSupabaseIdentity(env, options = {}) {
     },
 
     async getUser(accessToken) {
-      const user = await call("/auth/v1/user", { token: accessToken });
-      if (!user || typeof user.id !== "string" || !user.id) {
-        throw new IdentityError("unverified", "Sign-in could not be verified.");
-      }
-      return user;
+      return cached(userReads, tokenKey(accessToken), async () => {
+        const user = await call("/auth/v1/user", { token: accessToken });
+        if (!user || typeof user.id !== "string" || !user.id) {
+          throw new IdentityError("unverified", "Sign-in could not be verified.");
+        }
+        return user;
+      });
     },
 
     async refresh(refreshToken) {
@@ -153,11 +189,13 @@ export function createSupabaseIdentity(env, options = {}) {
     },
 
     async myTenants(accessToken) {
-      const rows = await call("/rest/v1/my_tenants?select=id,kind,name,role,created_at", {
-        token: accessToken,
-        profile: true,
+      return cached(tenantReads, tokenKey(accessToken), async () => {
+        const rows = await call("/rest/v1/my_tenants?select=id,kind,name,role,created_at", {
+          token: accessToken,
+          profile: true,
+        });
+        return Array.isArray(rows) ? rows : [];
       });
-      return Array.isArray(rows) ? rows : [];
     },
 
     async createTenant(accessToken, kind, name) {
@@ -168,6 +206,7 @@ export function createSupabaseIdentity(env, options = {}) {
         body: { p_kind: kind, p_name: name },
       });
       if (typeof id !== "string" || !id) throw new IdentityError("invalid_tenant", "Tenant was not created.");
+      tenantReads.delete(tokenKey(accessToken));
       return id;
     },
 
@@ -179,6 +218,7 @@ export function createSupabaseIdentity(env, options = {}) {
         body: { p_tenant_id: tenantId, p_email: email, p_role: role },
       });
       if (typeof token !== "string" || !token) throw new IdentityError("invalid_invite", "Invite was not created.");
+      statReads.delete(`${tokenKey(accessToken)}:${tenantId}`);
       return token;
     },
 
@@ -189,6 +229,7 @@ export function createSupabaseIdentity(env, options = {}) {
         body: { data },
       });
       if (!user || typeof user.id !== "string") throw new IdentityError("upstream", "Profile could not be saved.");
+      userReads.set(tokenKey(accessToken), { at: Date.now(), value: user });
       return user;
     },
 
@@ -199,6 +240,7 @@ export function createSupabaseIdentity(env, options = {}) {
         profile: true,
         body: { name },
       });
+      tenantReads.delete(tokenKey(accessToken));
     },
 
     async setAllowedDomain(accessToken, tenantId, domain) {
@@ -208,6 +250,7 @@ export function createSupabaseIdentity(env, options = {}) {
         profile: true,
         body: { allowed_domain: domain },
       });
+      statReads.delete(`${tokenKey(accessToken)}:${tenantId}`);
     },
 
     async acceptInvite(accessToken, token) {
@@ -218,6 +261,8 @@ export function createSupabaseIdentity(env, options = {}) {
         body: { p_token: token },
       });
       if (typeof id !== "string" || !id) throw new IdentityError("invalid_invite", "Invite was not accepted.");
+      tenantReads.delete(tokenKey(accessToken));
+      forgetPrefix(statReads, tokenKey(accessToken));
       return id;
     },
 
@@ -229,6 +274,7 @@ export function createSupabaseIdentity(env, options = {}) {
         body: { p_tenant_id: tenantId, p_reset: reset === true },
       });
       if (typeof token !== "string" || !token) throw new IdentityError("invalid_invite", "Invite link was not created.");
+      if (reset === true) statReads.delete(`${tokenKey(accessToken)}:${tenantId}`);
       return token;
     },
 
@@ -240,6 +286,8 @@ export function createSupabaseIdentity(env, options = {}) {
         body: { p_token: token },
       });
       if (typeof id !== "string" || !id) throw new IdentityError("invalid_invite", "Invite was not accepted.");
+      tenantReads.delete(tokenKey(accessToken));
+      forgetPrefix(statReads, tokenKey(accessToken));
       return id;
     },
 
@@ -261,19 +309,24 @@ export function createSupabaseIdentity(env, options = {}) {
         body: { p_tenant_id: tenantId },
       });
       if (typeof id !== "string" || !id) throw new IdentityError("forbidden", "That workspace could not be joined.");
+      tenantReads.delete(tokenKey(accessToken));
       return id;
     },
 
     async workspaceStats(accessToken, tenantId) {
-      const id = encodeURIComponent(tenantId);
-      const members = await call(`/rest/v1/memberships?select=user_id&tenant_id=eq.${id}`, { token: accessToken, profile: true });
-      const invites = await call(`/rest/v1/invites?select=id&tenant_id=eq.${id}&accepted_at=is.null`, { token: accessToken, profile: true });
-      const tenant = await call(`/rest/v1/tenants?select=allowed_domain&id=eq.${id}`, { token: accessToken, profile: true });
-      return {
-        members: Array.isArray(members) ? members.length : 0,
-        openInvites: Array.isArray(invites) ? invites.length : 0,
-        allowedDomain: Array.isArray(tenant) && tenant[0]?.allowed_domain ? String(tenant[0].allowed_domain) : "",
-      };
+      return cached(statReads, `${tokenKey(accessToken)}:${tenantId}`, async () => {
+        const id = encodeURIComponent(tenantId);
+        const [members, invites, tenant] = await Promise.all([
+          call(`/rest/v1/memberships?select=user_id&tenant_id=eq.${id}`, { token: accessToken, profile: true }),
+          call(`/rest/v1/invites?select=id&tenant_id=eq.${id}&accepted_at=is.null`, { token: accessToken, profile: true }),
+          call(`/rest/v1/tenants?select=allowed_domain&id=eq.${id}`, { token: accessToken, profile: true }),
+        ]);
+        return {
+          members: Array.isArray(members) ? members.length : 0,
+          openInvites: Array.isArray(invites) ? invites.length : 0,
+          allowedDomain: Array.isArray(tenant) && tenant[0]?.allowed_domain ? String(tenant[0].allowed_domain) : "",
+        };
+      });
     },
   };
 }

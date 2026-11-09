@@ -61,7 +61,7 @@ import { createBotPreferenceStore } from "./bot/preferences-supabase.js";
 import { assignEffectiveHearing, effectiveHearing, saveMeetingGuest } from "./bot/meeting-guest.js";
 import { authorizeBotWrite, canEditBot, handleBotSettings, hearingTenantFor, readBot } from "./console/bot-settings.js";
 import { handleToolPref, loadAccountProfile, loadToolAsk } from "./console-account.js";
-import { handleInvite, handleJoinLink, handleSpaceSwitch, handleWelcome, loadChecklist, loadSpaceView, welcomeLocation } from "./console-flow.js";
+import { handleConsoleInvites, handleInvite, handleJoinLink, handleSpaceSwitch, handleWelcome, loadChecklist, loadSpaceView, welcomePath } from "./console-flow.js";
 import { roleLabel } from "./identity/onboarding.js";
 import { renderLanding } from "./landing.js";
 import { handleFileRequest } from "./files/routes.js";
@@ -743,7 +743,7 @@ export function createApp(options = {}) {
       return;
     }
     if (req.method === "GET" && url.pathname === "/console.css") {
-      send(res, 200, "text/css; charset=utf-8", await readFile(new URL("./console.css", import.meta.url), "utf8"));
+      send(res, 200, "text/css; charset=utf-8", await consoleStyles(), { "cache-control": "public, max-age=3600" });
       return;
     }
     if (req.method === "GET" && (url.pathname === "/fonts/Geist-Variable.woff2" || url.pathname === "/fonts/GeistMono-Variable.woff2")) {
@@ -1015,16 +1015,21 @@ export function createApp(options = {}) {
       return;
     }
     if ((req.method === "GET" || req.method === "POST") && url.pathname === "/console/welcome") {
-      const resolved = await resolveCompanyId(workspace, req, "");
+      const [resolved, personSpace] = await Promise.all([
+        resolveCompanyId(workspace, req, ""),
+        resolvePersonTenantId(workspace, req, ""),
+      ]);
       if (resolved.denied || resolved.unauthorized) {
         sendCompanyDenied(res, send, resolved);
         return;
       }
-      const personSpace = await resolvePersonTenantId(workspace, req, "");
       const companyId = resolved.companyId;
       const personId = String(guardConsole(req, env).session?.userId || "").trim();
-      const calendar = await calendarForRequest(workspace, { companyId: personSpace.tenantId || companyId, personId, req });
-      const doors = await doorsForRequest(workspace, { companyId: personSpace.tenantId || companyId, personId, req });
+      const grantTenant = personSpace.tenantId || companyId;
+      const [calendar, doors] = await Promise.all([
+        calendarForRequest(workspace, { companyId: grantTenant, personId, req }),
+        doorsForRequest(workspace, { companyId: grantTenant, personId, req }),
+      ]);
       await handleWelcome({
         req, res, url, env, identity, send, redirect,
         readPosted: readPostedAll,
@@ -1112,13 +1117,6 @@ export function createApp(options = {}) {
         redirect(res, `/console/sign-in?next=${next}${reason}`);
         return;
       }
-      if (req.method === "GET" && url.pathname === "/console") {
-        const welcome = await welcomeLocation(req, env, identity);
-        if (welcome) {
-          redirect(res, welcome);
-          return;
-        }
-      }
       const doors = doorReport(env, workspace.linearReady === true);
       const roomPath = /^\/console\/rooms\/([^/]+)$/.exec(url.pathname);
       const consolePage = url.pathname === "/console"
@@ -1144,51 +1142,50 @@ export function createApp(options = {}) {
       }
       const oauth = identity && gate.session?.kind === "oauth";
       const spaces = oauth ? await loadSpaceView(identity, gate.session) : null;
-      const connectedDoors = oauth ? doorReport(env, workspace.linearReady === true) : null;
-      // Slack "connected" for Home/checklist: verified tenant ownership, not env token doors alone.
-      // Fake-tools demo keeps door+metadata behavior via toolsConnected inside loadToolAsk.
-      if (connectedDoors && workspace.tenantBind && env.SEDERUNT_TOOLS_FAKE !== "1") {
-        if (!spaces?.activeId) {
-          connectedDoors.slack = false;
-        } else {
-          const claim = slackOAuthConfigured(env)
-            ? await slackConnection(workspace, spaces.activeId)
-            : await slackClaimState({
-              tenantBind: workspace.tenantBind,
-              slack: workspace.deps.slack,
-              channelId: workspace.deps.app?.slackChannel || "",
-              slackConfigured: connectedDoors.slack === true,
-            }, spaces.activeId);
-          connectedDoors.slack = claim.linked === true;
+      if (url.pathname === "/console") {
+        const welcome = welcomePath(spaces);
+        if (welcome) {
+          redirect(res, welcome);
+          return;
         }
       }
-      // Calendar is the current person's Google grant on the active tenant, not deployment tokens.
-      if (connectedDoors) {
-        const personSpace = await resolvePersonTenantId(workspace, req, "");
-        const granted = await doorsForRequest(workspace, {
-          companyId: personSpace.tenantId || spaces?.activeId || "",
-          personId: String(gate.session?.userId || "").trim(),
-        });
-        connectedDoors.calendar = granted.calendar === true;
-      }
-      const accountProfile = oauth ? await loadAccountProfile(identity, gate.session, spaces) : null;
-      const toolAsk = oauth ? await loadToolAsk(identity, gate.session, connectedDoors || {}, env) : null;
-      const checklist = oauth && url.pathname === "/console" ? await loadChecklist(identity, gate.session, spaces, toolAsk) : null;
-      const hearingView = await hearingTenantFor({ req, env, identity });
-      const botTenant = hearingView.tenantId;
-      const botView = await readBot(workspace.botPreferences, botTenant);
-      const hearingCompany = hearingView.spaces?.activeId && hearingView.spaces.activeKind !== "personal"
-        ? hearingView.spaces.activeId
-        : "";
+      const connectedDoors = oauth ? doorReport(env, workspace.linearReady === true) : null;
+      const personId = String(gate.session?.userId || "").trim();
+      const botTenant = oauth ? (spaces?.activeId || "") : "local";
+      const hearingCompany = spaces?.activeId && spaces.activeKind !== "personal" ? spaces.activeId : "";
       const hearingSession = sessionFor(workspace, hearingCompany);
-      if (botTenant) await assignEffectiveHearing(workspace, hearingSession, botTenant);
-      const hearing = await effectiveHearing(workspace, botTenant, hearingSession);
+      const warmUser = oauth && gate.session?.accessToken && typeof identity.getUser === "function"
+        ? identity.getUser(gate.session.accessToken).catch(() => null)
+        : null;
+      const knownStats = oauth && url.pathname === "/console" && spaces?.activeId && typeof identity.workspaceStats === "function"
+        ? identity.workspaceStats(gate.session.accessToken, spaces.activeId).catch(() => null)
+        : Promise.resolve(undefined);
+      const [slackClaim, calendarOn, accountProfile, botView, hearing, stats] = await Promise.all([
+        pageSlack(workspace, env, spaces, connectedDoors),
+        connectedDoors
+          ? calendarGranted(workspace, spaces?.activeId || "", personId)
+          : Promise.resolve(false),
+        oauth ? loadAccountProfile(identity, gate.session, spaces) : Promise.resolve(null),
+        readBot(workspace.botPreferences, botTenant),
+        botTenant
+          ? assignEffectiveHearing(workspace, hearingSession, botTenant)
+          : effectiveHearing(workspace, botTenant, hearingSession),
+        Promise.all([knownStats, warmUser]).then(([rows]) => rows),
+      ]);
+      if (connectedDoors && workspace.tenantBind && env.SEDERUNT_TOOLS_FAKE !== "1") {
+        connectedDoors.slack = slackClaim.linked === true;
+      }
+      if (connectedDoors) connectedDoors.calendar = calendarOn === true;
+      const toolAsk = oauth ? await loadToolAsk(identity, gate.session, connectedDoors || {}, env) : null;
+      const checklist = oauth && url.pathname === "/console"
+        ? await loadChecklist(identity, gate.session, spaces, toolAsk, stats)
+        : null;
       const bot = {
         ...botView,
         canEdit: canEditBot({
           signedIn: Boolean(gate.session),
-          oauth: hearingView.oauth,
-          role: hearingView.role,
+          oauth,
+          role: oauth ? (spaces?.activeRole || "") : "",
           authRequired: gate.required,
         }),
       };
@@ -1210,7 +1207,7 @@ export function createApp(options = {}) {
         slackInstall: slackOAuthConfigured(env) && Boolean(identity),
         slackResult: url.searchParams.get("slack") || "",
         slackWorkspace: slackOAuthConfigured(env) && spaces?.activeId && (connectedDoors || doors).slack === true
-          ? (await slackConnection(workspace, spaces.activeId)).teamName || ""
+          ? (slackClaim.teamName || "")
           : "",
         signedIn: Boolean(gate.session),
         signInOff: !consoleSecret(env) && !identity,
@@ -1295,6 +1292,10 @@ export function createApp(options = {}) {
       res.end();
       return;
     }
+    if ((req.method === "GET" || req.method === "POST") && url.pathname === "/api/console/invites") {
+      await handleConsoleInvites({ req, res, env, identity, send, readJson });
+      return;
+    }
     if (req.method === "GET" && url.pathname === "/api/console") {
       const gate = guardConsole(req, env);
       if (gate.required && !gate.session) {
@@ -1311,12 +1312,15 @@ export function createApp(options = {}) {
       const current = await prepareWorkspace(workspace, companyId, false, 2000, hearingTenant);
       const workspaceKind = url.searchParams.get("workspace") || "";
       const memberId = consoleBoardMember(gate.session, env, workspaceKind, url.searchParams.get("member") || "");
+      const stamped = workspace.botPreferences?.durable === true && current.hearing?.tenantId === hearingTenant
+        ? current.hearing
+        : null;
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(await consolePayload(
         workspace,
         current,
         memberId,
         workspaceKind,
-        { req, companyId },
+        { req, companyId, hearing: stamped, hearingTenant },
       )));
       return;
     }
@@ -3094,7 +3098,8 @@ async function consolePayload(workspace, current, memberId, kind = "company", op
   const open = kind === "personal" ? "personal" : "company";
   const req = options.req;
   const companyId = typeof options.companyId === "string" ? options.companyId : "";
-  const hearing = await effectiveHearing(workspace, await hearingTenantId(workspace, req), current);
+  const hearing = options.hearing
+    || await effectiveHearing(workspace, options.hearingTenant || await hearingTenantId(workspace, req), current);
   const gate = req ? guardConsole(req, workspace.env) : { session: null };
   const personId = String(gate.session?.userId || "").trim();
   const doors = req
@@ -3466,6 +3471,49 @@ export async function storedFileBytes(session, name, deps, env = {}, hint = null
 function headerValue(value) {
   if (Array.isArray(value)) return typeof value[0] === "string" ? value[0] : "";
   return typeof value === "string" ? value : "";
+}
+
+let consoleCss = "";
+
+async function consoleStyles() {
+  if (!consoleCss) consoleCss = await readFile(new URL("./console.css", import.meta.url), "utf8");
+  return consoleCss;
+}
+
+async function calendarGranted(workspace, tenantId, personId) {
+  const env = workspace.env;
+  const id = typeof tenantId === "string" ? tenantId.trim() : "";
+  const person = typeof personId === "string" ? personId.trim() : "";
+  const grants = workspace.googleGrants;
+  if (id && person && grants && typeof grants.granted === "function") {
+    try {
+      return await grants.granted(person, { tenantId: id, scopes: CALENDAR_SCOPES }) === true;
+    } catch {
+      return false;
+    }
+  }
+  if (identityConfigured(env)) return false;
+  return calendarPresentedConnected(env);
+}
+
+async function pageSlack(workspace, env, spaces, connectedDoors) {
+  const claimSeparately = connectedDoors && workspace.tenantBind && env.SEDERUNT_TOOLS_FAKE !== "1";
+  if (!claimSeparately) {
+    if (slackOAuthConfigured(env) && spaces?.activeId && connectedDoors?.slack === true) {
+      const named = await slackConnection(workspace, spaces.activeId);
+      return { linked: true, teamName: named.teamName || "" };
+    }
+    return { linked: connectedDoors?.slack === true, teamName: "" };
+  }
+  if (!spaces?.activeId) return { linked: false, teamName: "" };
+  if (slackOAuthConfigured(env)) return slackConnection(workspace, spaces.activeId);
+  const claim = await slackClaimState({
+    tenantBind: workspace.tenantBind,
+    slack: workspace.deps.slack,
+    channelId: workspace.deps.app?.slackChannel || "",
+    slackConfigured: connectedDoors.slack === true,
+  }, spaces.activeId);
+  return { linked: claim.linked === true, teamName: "" };
 }
 
 function send(res, status, type, body, extra = {}) {

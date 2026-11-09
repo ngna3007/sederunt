@@ -36,6 +36,7 @@ function call(port, method, path, { body, headers, cookie } = {}) {
         status: res.statusCode,
         location: res.headers.location || "",
         cookie: res.headers["set-cookie"],
+        cache: String(res.headers["cache-control"] || ""),
         raw: Buffer.concat(chunks).toString("utf8"),
       }));
     });
@@ -293,6 +294,9 @@ test("fake auth onboarding stays on localhost", async (t) => {
         assert.match(home.raw, /1 of 4 done/);
         assert.match(home.raw, /id="home-connect-tools">Connect tools</);
         assert.match(home.raw, /id="people-invite"/);
+        assert.match(home.raw, /id="invite-dialog"/);
+        assert.match(home.raw, /id="checklist-invite"/);
+        assert.doesNotMatch(home.raw, /\/console\/welcome\?step=team(?:&amp;|&)mode=manage/);
         assert.match(home.raw, /id="members-card"/);
         assert.match(home.raw, /<input type="hidden" name="from" value="switcher">/);
         assert.doesNotMatch(home.raw, /id="space-kind"/);
@@ -393,7 +397,7 @@ test("fake auth onboarding stays on localhost", async (t) => {
 
         const second = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=create&from=switcher&name=Side+Project" });
         assert.equal(second.status, 302);
-        assert.equal(second.location, "/console/welcome?step=team&mode=manage");
+        assert.equal(second.location, "/console?invite=1");
         absorb(jar, second.cookie);
         const ada = sessionOf(jar);
         const tenants = await identity.myTenants(ada.accessToken);
@@ -813,6 +817,79 @@ test("onboarding screens fit at desktop and phone widths", { timeout: 180000 }, 
 
   assert.deepEqual(errors, []);
   assert.deepEqual(outbound, []);
+});
+
+test("invite from Home stays in a dialog", async () => {
+  const env = { SEDERUNT_AUTH_FAKE: "1", SEDERUNT_SESSION_SECRET: SECRET };
+  await withServer(env, async (port) => {
+    const jar = {};
+    await followProvider(port, jar, "google", "/console");
+    const created = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=create&name=Northwind" });
+    absorb(jar, created.cookie);
+    const people = await call(port, "GET", "/console/people", { cookie: header(jar) });
+    assert.equal(people.status, 200);
+    assert.match(people.raw, /<button[^>]*id="people-invite"[^>]*data-invite/);
+    assert.match(people.raw, /function openInvite/);
+    assert.doesNotMatch(people.raw, /\/console\/welcome\?step=team(?:&amp;|&)mode=manage/);
+    const sheet = await call(port, "GET", "/api/console/invites", { cookie: header(jar), headers: { accept: "application/json" } });
+    assert.equal(sheet.status, 200, sheet.raw);
+    const opened = JSON.parse(sheet.raw);
+    assert.equal(opened.ok, true);
+    assert.equal(opened.workspaceName, "Northwind");
+    assert.match(opened.link, /\/console\/join\/[A-Za-z0-9_-]{16,}/);
+    const sent = await call(port, "POST", "/api/console/invites", {
+      cookie: header(jar),
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ emails: ["grace@example.com"], roles: ["admin"] }),
+    });
+    assert.equal(sent.status, 200, sent.raw);
+    const made = JSON.parse(sent.raw);
+    assert.equal(made.ok, true);
+    assert.equal(made.invites[0].email, "grace@example.com");
+    assert.equal(made.invites[0].role, "admin");
+    assert.match(made.invites[0].href, /\/console\/invite\//);
+    const self = await call(port, "POST", "/api/console/invites", {
+      cookie: header(jar),
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ emails: ["ada@example.com"], roles: ["member"] }),
+    });
+    assert.equal(self.status, 400);
+    assert.match(self.raw, /Remove your own address/);
+  });
+});
+
+test("a console page reads the workspace list once", async () => {
+  const env = { SEDERUNT_AUTH_FAKE: "1", SEDERUNT_SESSION_SECRET: SECRET };
+  const identity = createIdentity({ ...env, SEDERUNT_AUTH_FAKE_GITHUB: "1" });
+  const original = identity.myTenants.bind(identity);
+  let calls = 0;
+  identity.myTenants = async (token) => {
+    calls += 1;
+    return original(token);
+  };
+  const app = createApp({ companyLoaded: true, env, identity });
+  const port = await listen(app);
+  try {
+    const jar = {};
+    await followProvider(port, jar, "google", "/console");
+    const created = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=create&name=Northwind" });
+    absorb(jar, created.cookie);
+    calls = 0;
+    const home = await call(port, "GET", "/console", { cookie: header(jar) });
+    assert.equal(home.status, 200, home.raw.slice(0, 300));
+    assert.equal(calls, 1);
+    calls = 0;
+    const people = await call(port, "GET", "/console/people", { cookie: header(jar) });
+    assert.equal(people.status, 200);
+    assert.equal(calls, 1);
+    const style = await call(port, "GET", "/console.css");
+    assert.equal(style.status, 200);
+    assert.match(style.cache, /public, max-age=3600/);
+    const again = await call(port, "GET", "/console.css");
+    assert.equal(again.raw, style.raw);
+  } finally {
+    app.close();
+  }
 });
 
 test("upcoming meetings show start times when the calendar lists them", async () => {

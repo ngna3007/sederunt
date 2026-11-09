@@ -224,7 +224,12 @@ test("supabase sign-in stays on localhost", async (t) => {
       assert.equal(user.id, "user-1");
       assert.equal((await identity.profile(tokens.accessToken)).display_name, "Ada Lovelace");
       assert.equal((await identity.myTenants(tokens.accessToken))[0].name, "Personal");
+      const tenantReads = calls.filter((item) => item.url.includes("/my_tenants")).length;
+      assert.equal((await identity.myTenants(tokens.accessToken))[0].name, "Personal");
+      assert.equal(calls.filter((item) => item.url.includes("/my_tenants")).length, tenantReads);
       assert.equal(await identity.createTenant(tokens.accessToken, "team", "Acme"), "tenant-1");
+      await identity.myTenants(tokens.accessToken);
+      assert.equal(calls.filter((item) => item.url.includes("/my_tenants")).length, tenantReads + 1);
       assert.equal(await identity.createInvite(tokens.accessToken, "tenant-1", "grace@example.com", "member"), "invite-token");
       assert.equal(await identity.acceptInvite(tokens.accessToken, "invite-token"), "tenant-1");
       const refreshed = await identity.refresh("refresh");
