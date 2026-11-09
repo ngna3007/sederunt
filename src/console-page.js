@@ -345,7 +345,7 @@ ${slack}
             <strong>Slack</strong>
             ${slackNotice ? `<p class="conn-hint" role="status">${escapeHtml(slackNotice)}</p>` : ""}
             <p id="slack-conn" class="conn-state${slackConnected ? "" : " off"}">${slackConnected ? "Connected" : "Not connected"}</p>
-            <p id="slack-line" class="conn-hint">${slackConnected && slackWorkspace ? `Slack workspace: ${escapeHtml(slackWorkspace)}. Invite @Sederunt into each channel you want it to keep.` : "Slack runs automatically."}</p>
+            <p id="slack-line" class="conn-hint">${slackConnected && slackWorkspace ? `Slack workspace: ${escapeHtml(slackWorkspace)}. Add @Sederunt to a channel in Slack when you want it there.` : "Slack runs automatically."}</p>
             <p id="slack-note" class="sr">Sederunt answers in a channel it has already joined.</p>
           </div>
           <div class="conn-actions" data-col="action">

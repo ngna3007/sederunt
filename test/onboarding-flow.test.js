@@ -228,8 +228,12 @@ test("fake auth onboarding stays on localhost", async (t) => {
         assert.equal(chat.status, 200);
         assert.match(chat.raw, /Step 3 of 4/);
         assert.match(chat.raw, /Connect Slack/);
-        assert.match(chat.raw, /invite @Sederunt into a channel/);
+        assert.match(chat.raw, /One allow adds the Sederunt bot/);
+        assert.match(chat.raw, /sederunt-slack-wait/);
         assert.doesNotMatch(chat.raw, /Where should Sederunt post\?/);
+        assert.doesNotMatch(chat.raw, /invite @Sederunt into a channel/);
+        const declined = await call(port, "GET", "/console/welcome?step=chat&slack=declined", { cookie: header(jar) });
+        assert.match(declined.raw, /Slack setup was cancelled/);
         for (const id of ["chat-slack", "chat-teams", "chat-gchat", "chat-discord", "chat-email"]) assert.match(chat.raw, new RegExp(`id="${id}"`));
         assert.match(chat.raw, /Coming soon/);
         assert.match(chat.raw, /id="ob-skip"[^>]*>Not now</);
@@ -564,7 +568,9 @@ test("welcome shows the Slack bot as connected without a post channel", async ()
   const named = await chatPage("sederunt-demo");
   assert.equal(named.status, 200);
   assert.match(named.raw, /id="slack-status">[\s\S]*?Connected/);
+  assert.match(named.raw, /Slack is connected/);
   assert.match(named.raw, /Bot connected/);
+  assert.match(named.raw, /Add @Sederunt to a channel in Slack when you want it there/);
   assert.doesNotMatch(named.raw, /Posts to #|Where should Sederunt post|#C0DEMO|#sederunt-demo/);
   const blank = await chatPage("");
   assert.equal(blank.status, 200);

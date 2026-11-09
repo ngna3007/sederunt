@@ -102,7 +102,11 @@ export async function handleWelcome(ctx) {
       return;
     }
     if (asked === "calendar" || asked === "chat" || asked === "team") {
-      await renderStep(ctx, session, active, asked, { manage, asked: url.searchParams.get("asked") === "1" });
+      await renderStep(ctx, session, active, asked, {
+        manage,
+        asked: url.searchParams.get("asked") === "1",
+        slack: url.searchParams.get("slack") || "",
+      });
       return;
     }
     redirect(res, "/console");
@@ -145,6 +149,20 @@ export async function handleWelcome(ctx) {
 
 function one(value) {
   return Array.isArray(value) ? String(value[value.length - 1] || "") : String(value || "");
+}
+
+function slackWelcomeNotice(result) {
+  return {
+    partial: "Slack did not grant all required permissions. Connect again and approve the requested scopes.",
+    failed: "Slack could not be connected. Try again.",
+    forbidden: "Only a workspace owner or admin can connect Slack.",
+    conflict: "That Slack workspace is already connected to another Sederunt workspace.",
+    "different-team": "This workspace already has a different Slack connection. Use Change Slack workspace to replace it.",
+    stale: "The Slack connection changed while setup was open. Reload and try again.",
+    expired: "This Slack setup link expired or was already used. Start again.",
+    declined: "Slack setup was cancelled.",
+    unsupported: "Choose an individual Slack workspace. Organization-wide installations are not supported.",
+  }[result] || "Slack could not be connected. Try again.";
 }
 
 function many(value) {
@@ -229,8 +247,13 @@ async function renderStep(ctx, session, active, step, extra = {}) {
       conflictOwner = claim.conflictOwner || "";
     }
     const noticeParts = [];
-    if (extra.asked || (!slackLinked && prefs.slack === "connect")) {
-      noticeParts.push("Slack connects for the whole workspace in Setup → Tools. Your choice is saved, so Home will remind you.");
+    const slackResult = String(extra.slack || "");
+    if (slackResult === "connected" && slackLinked) noticeParts.push("Slack is connected.");
+    else if (slackResult) noticeParts.push(slackWelcomeNotice(slackResult));
+    else if (!slackLinked && (extra.asked || prefs.slack === "connect")) {
+      noticeParts.push(ctx.slackInstall
+        ? "Allow Slack in the other tab. This page updates when you come back."
+        : "Slack connects for the whole workspace in Setup → Tools. Your choice is saved, so Home will remind you.");
     }
     if (conflictOwner) {
       noticeParts.push("This Slack workspace is already linked to another Sederunt workspace.");
@@ -244,7 +267,7 @@ async function renderStep(ctx, session, active, step, extra = {}) {
         channel: slackLinked
           ? (slackTeamName || await slackChannelLabel(ctx, ctx.slackChannel || (doors.slack ? "" : "sederunt")))
           : "",
-        asked: !slackLinked && prefs.slack === "connect",
+        asked: !slackLinked && (prefs.slack === "connect" || extra.asked === true),
       },
     });
     return;

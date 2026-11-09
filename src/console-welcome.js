@@ -171,28 +171,34 @@ function calendarStep(state) {
 function chatStep(state) {
   const chat = state.chat || {};
   const slack = chat.slack === true;
+  const waiting = !slack && state.slackInstall === true && chat.asked === true;
   const status = slack
     ? `<span class="ob-status ok" id="slack-status">${check()}Connected</span>`
-    : `<span class="ob-status" id="slack-status">${chat.asked ? "Finish in Setup" : "Not connected"}</span>`;
+    : `<span class="ob-status" id="slack-status">${waiting ? "Allow in the other tab" : chat.asked ? "Finish in Setup" : "Not connected"}</span>`;
   const soon = [
     ["teams", "Microsoft Teams"],
     ["gchat", "Google Chat"],
     ["discord", "Discord"],
     ["email", "Email digest"],
   ];
+  const hint = slack
+    ? `<p class="ob-hint">Add @Sederunt to a channel in Slack when you want it there.</p>`
+    : "";
   return {
-    title: "Connect Slack",
-    sub: "This adds the Sederunt bot to your workspace. Invite it into each channel you want it to keep.",
+    title: slack ? "Slack is connected" : "Connect Slack",
+    sub: slack
+      ? "Continue. You can add the bot to a channel later."
+      : "One allow adds the Sederunt bot to your Slack workspace.",
     body: `<input type="hidden" name="action" value="chat">
       <ul class="ob-list" id="chat-options">
         <li class="ob-row${slack ? " on" : ""}" id="chat-slack">
           <span class="ob-logo">${brandLogo("slack-icon", 20)}</span>
-          <span class="ob-row-main"><span class="ob-row-title">Slack</span><span class="ob-row-meta">${slack ? "Bot connected" : "Keeps a channel it is invited to, and answers when mentioned"}</span></span>
+          <span class="ob-row-main"><span class="ob-row-title">Slack</span><span class="ob-row-meta">${slack ? "Bot connected" : "Allow once, then you are done on this page"}</span></span>
           ${status}
         </li>
       </ul>
       <p class="ob-soon-line" id="chat-soon"><span class="ob-soon">Coming soon</span> ${soon.map(([id, label]) => `<span id="chat-${id}">${label}</span>`).join(", ")}</p>
-      <p class="ob-hint">After Allow, invite @Sederunt into a channel. Mention it there to give that channel a job. With no job, it keeps messages and answers when mentioned.</p>`,
+      ${hint}`,
     left: `${backLink("/console/welcome?step=calendar")}${slack ? "" : `<button class="ob-link" type="submit" name="choice" value="later" id="ob-skip" formnovalidate>Not now</button>`}`,
     right: slack
       ? `<button class="ob-primary" type="submit" name="choice" value="continue" id="ob-continue">Continue</button>`
@@ -316,6 +322,26 @@ function linkIcon() {
 
 const WELCOME_SCRIPT = `
 (function () {
+  var slackConnect = document.getElementById("slack-connect");
+  var slackStatus = document.getElementById("slack-status");
+  var slackWait = "sederunt-slack-wait";
+  if (slackConnect) {
+    slackConnect.addEventListener("click", function () {
+      try { sessionStorage.setItem(slackWait, "1"); } catch (error) {}
+    });
+  }
+  var slackDone = slackStatus && slackStatus.textContent.indexOf("Connected") !== -1;
+  if (slackDone) {
+    try { sessionStorage.removeItem(slackWait); } catch (error) {}
+  } else if (slackStatus) {
+    try {
+      if (sessionStorage.getItem(slackWait) === "1") {
+        document.addEventListener("visibilitychange", function () {
+          if (document.visibilityState === "visible") location.reload();
+        });
+      }
+    } catch (error) {}
+  }
   document.querySelectorAll("[data-copy]").forEach(function (button) {
     button.addEventListener("click", function () {
       var input = document.getElementById(button.getAttribute("data-copy"));
