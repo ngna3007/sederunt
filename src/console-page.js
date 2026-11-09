@@ -5370,6 +5370,16 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (consoleSpaces && consoleSpaces.oauth) openDialog("space-dialog");
     else openDialog("workspace-dialog");
   });
+  var spaceForm = document.getElementById("space-dialog-form");
+  if (spaceForm) {
+    spaceForm.addEventListener("submit", function (event) {
+      var button = document.getElementById("space-submit");
+      if (!button) return;
+      if (button.getAttribute("aria-busy") === "true") { event.preventDefault(); return; }
+      button.setAttribute("aria-busy", "true");
+      button.textContent = "Creating…";
+    });
+  }
   document.getElementById("workspace-menu").addEventListener("keydown", function (event) {
     if (!consoleSpaces || !consoleSpaces.oauth) return;
     var move = event.key === "ArrowDown" || event.key === "ArrowRight" || event.key === "ArrowUp" || event.key === "ArrowLeft" || event.key === "Home" || event.key === "End";

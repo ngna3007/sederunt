@@ -119,6 +119,7 @@ export function identityMessage(error) {
   if (code === "forbidden" || /row-level security|permission denied|insufficient_privilege/i.test(message)) {
     return "You don't have permission to do that.";
   }
+  if (code === "duplicate_workspace") return "You already have a workspace with this name.";
   if (code === "conflict" || /already has an open invite|duplicate key/i.test(message)) {
     return "That email already has an open invite.";
   }

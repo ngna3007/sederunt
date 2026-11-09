@@ -151,6 +151,14 @@ function one(value) {
   return Array.isArray(value) ? String(value[value.length - 1] || "") : String(value || "");
 }
 
+async function workspaceNameTaken(identity, accessToken, name, exceptId = "") {
+  const rows = typeof identity.myTenants === "function" ? await identity.myTenants(accessToken) : [];
+  const wanted = String(name || "").trim().toLowerCase();
+  return (Array.isArray(rows) ? rows : []).find((row) => row?.id !== exceptId
+    && row?.kind !== "personal"
+    && String(row?.name || "").trim().toLowerCase() === wanted) || null;
+}
+
 function slackWelcomeNotice(result) {
   return {
     partial: "Slack did not grant all required permissions. Connect again and approve the requested scopes.",
@@ -419,6 +427,11 @@ async function renameWorkspace(ctx, session, active, body) {
     return;
   }
   if (named.name !== active.name) {
+    const taken = await workspaceNameTaken(identity, session.accessToken, named.name, active.id);
+    if (taken) {
+      await renderWorkspaceStep(ctx, session, { status: 400, name: named.name, error: "You already have a workspace with this name.", renaming: active });
+      return;
+    }
     if (typeof identity.renameTenant !== "function") {
       await renderWorkspaceStep(ctx, session, { status: 400, name: named.name, error: "This workspace could not be renamed.", renaming: active });
       return;
@@ -459,6 +472,12 @@ async function createWorkspace(ctx, session, body) {
     return;
   }
   try {
+    const taken = await workspaceNameTaken(identity, session.accessToken, named.name);
+    if (taken) {
+      const error = new Error("You already have a workspace with this name.");
+      error.code = "duplicate_workspace";
+      throw error;
+    }
     const tenantId = await identity.createTenant(session.accessToken, "company", named.name);
     try {
       await identity.updateUser(session.accessToken, { sederunt_onboarded: true });
