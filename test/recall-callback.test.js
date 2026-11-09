@@ -42,7 +42,8 @@ test("a signed callback is accepted and a bad signature leaves the typed path wo
     const meeting = await get(port, "/meeting");
     assert.equal(meeting.status, 200);
     assert.match(meeting.raw, /Sederunt/);
-    assert.match(meeting.raw, /Quiet until addressed/);
+    assert.doesNotMatch(meeting.raw, /Quiet until addressed/);
+    assert.doesNotMatch(meeting.raw, /Say this name/);
     const typed = await post(port, "/api/typed", JSON.stringify({
       text: "what was decided",
       memberId: "rowan",

@@ -11,7 +11,7 @@ test("setup guest fields render the effective default, not blank", () => {
 test("setup guest fields render a saved guest and escape it", () => {
   const html = renderConsolePage({ hearing: { name: "Adam", triggers: ["Hey Adam", "<b>x</b>"] } });
   assert.match(html, /id="hearing-name"[^>]*value="Adam"/);
-  assert.match(html, /placeholder="keep this">Hey Adam\n&lt;b&gt;x&lt;\/b&gt;<\/textarea>/);
+  assert.match(html, /placeholder="A sentence that wakes the bot">Hey Adam\n&lt;b&gt;x&lt;\/b&gt;<\/textarea>/);
 });
 
 test("setup Slack is not connected from env readiness alone", () => {

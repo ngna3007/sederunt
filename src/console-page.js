@@ -366,13 +366,13 @@ ${slack}
         <div class="hearing-grid">
         <div class="hearing-field">
           <label for="hearing-name">Name</label>
-          <p>Shown on the guest's camera.</p>
+          <p>People say this name.</p>
           <input id="hearing-name" name="hearing-name" maxlength="40" value="${escapeHtml(hearing.name)}" placeholder="Maple" autocomplete="off">
         </div>
         <div class="hearing-field">
           <label for="hearing-triggers">Triggers</label>
           <p>One word or sentence on each line.</p>
-          <textarea id="hearing-triggers" name="hearing-triggers" rows="4" placeholder="keep this">${escapeHtml(hearing.triggers.join("\n"))}</textarea>
+          <textarea id="hearing-triggers" name="hearing-triggers" rows="4" placeholder="A sentence that wakes the bot">${escapeHtml(hearing.triggers.length ? hearing.triggers.join("\n") : hearing.name)}</textarea>
         </div>
         </div>
         <p class="section-next"><button id="hearing-save" class="primary" type="button">Save the guest</button></p>
@@ -1639,7 +1639,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var heard = hearing && typeof hearing === "object" ? hearing : null;
     var nextName = heard && heard.name ? String(heard.name) : (name && name.value ? name.value : "");
     if (name && document.activeElement !== name && nextName) name.value = nextName;
-    if (triggers && document.activeElement !== triggers && heard) triggers.value = (heard.triggers || []).join("\\n");
+    if (triggers && document.activeElement !== triggers && heard) {
+      var lines = Array.isArray(heard.triggers) ? heard.triggers : [];
+      triggers.value = lines.length ? lines.join("\\n") : nextName;
+    }
   }
 
   function member() {
