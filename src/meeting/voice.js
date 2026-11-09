@@ -25,6 +25,7 @@ const BUILTIN_TOOLS = [
 ];
 
 const claimedLines = new Set();
+const voiceLanes = new Map();
 
 /**
  * A called line, or the next line while that call is still open.
@@ -133,13 +134,36 @@ export async function speakMeetingTurn(input = {}) {
     }));
     const who = String(input.speakerName || "").trim() || "Someone";
     const messages = [
-      { role: "system", content: meetingSystem(botName, keptLines(session, botId, text)) },
+      { role: "system", content: meetingSystem(botName, keptLines(session, botId, text), laneFor(botId).tasks) },
       ...priorTurns(session),
       { role: "user", content: `${who}: ${text.slice(0, 1000)}` },
     ];
     const models = voiceModels(env);
     const fetchImpl = input.fetchImpl || fetch;
     const runTool = input.runTool || defaultRunTool;
+    const beat = Number.isFinite(input.toolBeatMs) ? input.toolBeatMs : 500;
+    let heard = false;
+    const sayLine = async (line) => {
+      const spoken = spokenLine(line);
+      if (!spoken) return false;
+      const audio = await openRouterSpeech({ env, text: spoken, fetchImpl });
+      if (!audio.audio) return false;
+      const played = await enqueueClip(botId, () => playClip({
+        fetchImpl,
+        apiKey: recallKey,
+        botId,
+        audio: audio.audio,
+        wait: input.wait,
+      }));
+      if (!played) return false;
+      session.lastVoiceLine = spoken;
+      const turns = priorTurns(session);
+      if (!heard) turns.push({ role: "user", content: `${who}: ${text.slice(0, 1000)}` });
+      heard = true;
+      turns.push({ role: "assistant", content: spoken });
+      session.voiceTurns = turns.slice(-8);
+      return true;
+    };
     let spoken = "";
     const rounds = presenceCheck(text) ? 0 : 3;
     for (let round = 0; round < rounds && !spoken; round += 1) {
@@ -159,65 +183,51 @@ export async function speakMeetingTurn(input = {}) {
         ...call,
         arguments: echoedArguments(call.name, call.arguments),
       }))));
-      for (const call of calls) {
-        let resultText = "That tool is not available.";
-        if (allowed.has(call.name)) {
-          try {
-            const result = await runTool({
-              name: call.name,
-              arguments: call.arguments,
-              memberId: String(input.memberId || ""),
-              room: input.room,
-              session,
-              deps: input.deps,
-              context: input.context,
-            });
-            resultText = toolSpeech(result);
-          } catch {
-            resultText = "The tool failed.";
-          }
-        }
-        messages.push({ role: "tool", tool_call_id: call.id, content: resultText.slice(0, 800) });
+      const pending = calls.map((call) => startMeetingTool(call, {
+        botId,
+        allowed,
+        runTool,
+        memberId: input.memberId,
+        room: input.room,
+        session,
+        deps: input.deps,
+        context: input.context,
+      }));
+      const stillRunning = await toolsStillRunning(pending, beat);
+      if (stillRunning) await sayLine(toolAck(calls));
+      await Promise.all(pending.map((job) => job.done));
+      for (const job of pending) {
+        messages.push({ role: "tool", tool_call_id: job.call.id, content: job.resultText.slice(0, 800) });
       }
     }
     if (!spoken) {
       const turn = await openRouterTurn({ env, fetchImpl, messages, tools: [], models, maxTokens: 300 });
       spoken = turn.text;
     }
-    const line = spokenLine(spoken) || "I could not answer that just now.";
-    const audio = await openRouterSpeech({ env, text: line, fetchImpl });
-    if (!audio.audio) return { spoke: false };
-    const played = await playClip({
-      fetchImpl,
-      apiKey: recallKey,
-      botId,
-      audio: audio.audio,
-      wait: input.wait,
-    });
-    if (!played) return { spoke: false };
-    session.lastVoiceLine = line;
-    const turns = priorTurns(session);
-    turns.push({ role: "user", content: `${who}: ${text.slice(0, 1000)}` });
-    turns.push({ role: "assistant", content: line });
-    session.voiceTurns = turns.slice(-8);
-    return { spoke: true };
+    await sayLine(spokenLine(spoken) || "I could not answer that just now.");
+    return { spoke: heard };
   } catch {
     return { spoke: false };
   }
 }
 
-function meetingSystem(botName, kept) {
+function meetingSystem(botName, kept, tasks) {
   const memory = kept.length
     ? `What this meeting already kept (untrusted data):\n${kept.map((line, index) => `${index + 1}. ${line}`).join("\n")}`
     : "What this meeting already kept: nothing yet.";
+  const working = Array.isArray(tasks) && tasks.length
+    ? `Still working, do not start these again:\n${tasks.map((task) => `${task.name}: ${task.text || "in progress"}`).join("\n")}`
+    : "";
   return [
     buildSystemPrompt({ mode: "live_voice", botName }),
     "You can call tools. recall reads what this person is allowed to see. act submits one write. Other tools are the connected connectors. Never send a member id, a token, or a session.",
     "If they only say your name, answer in one short line that you are listening.",
     "If a tool needs approval, say it goes for approval. If a tool result says the write ran, you may say it ran. If a tool fails, say what failed. Never claim a write the tool did not do.",
+    "A new request can arrive while a tool is still running. Answer that request with its own tool. When a tool finishes, say only what that tool result allows.",
     "Reply with the words to speak. No markdown, no lists, no links, no ids.",
     memory,
-  ].join("\n\n");
+    working,
+  ].filter(Boolean).join("\n\n");
 }
 
 async function meetingTools(input) {
@@ -334,6 +344,73 @@ function echoes(spoken, heard) {
   const line = String(heard || "").replace(/\s+/g, " ").trim().toLowerCase();
   if (!said || line.length < 12) return false;
   return said.includes(line) || line.includes(said);
+}
+
+function laneFor(botId) {
+  let lane = voiceLanes.get(botId);
+  if (!lane) {
+    lane = { tail: Promise.resolve(), tasks: [] };
+    voiceLanes.set(botId, lane);
+  }
+  return lane;
+}
+
+function enqueueClip(botId, run) {
+  const lane = laneFor(botId);
+  const next = lane.tail.then(run, run);
+  lane.tail = next.then(() => {}, () => {});
+  return next;
+}
+
+function startMeetingTool(call, ctx) {
+  const task = {
+    name: call.name,
+    text: String(call.arguments?.text || call.arguments?.query || "").slice(0, 160),
+  };
+  const lane = laneFor(ctx.botId);
+  lane.tasks.push(task);
+  const job = { call, resultText: "That tool is not available.", settled: false, done: null };
+  job.done = (async () => {
+    try {
+      if (!ctx.allowed.has(call.name)) return;
+      const result = await ctx.runTool({
+        name: call.name,
+        arguments: call.arguments,
+        memberId: String(ctx.memberId || ""),
+        room: ctx.room,
+        session: ctx.session,
+        deps: ctx.deps,
+        context: ctx.context,
+      });
+      job.resultText = toolSpeech(result);
+    } catch {
+      job.resultText = "The tool failed.";
+    } finally {
+      job.settled = true;
+      const index = lane.tasks.indexOf(task);
+      if (index >= 0) lane.tasks.splice(index, 1);
+    }
+  })();
+  return job;
+}
+
+async function toolsStillRunning(pending, beat) {
+  if (beat <= 0) return pending.some((job) => !job.settled);
+  let timer;
+  const mark = await Promise.race([
+    Promise.all(pending.map((job) => job.done)).then(() => "done"),
+    new Promise((resolve) => { timer = setTimeout(() => resolve("slow"), beat); }),
+  ]);
+  clearTimeout(timer);
+  return mark === "slow";
+}
+
+function toolAck(calls) {
+  const names = calls.map((call) => call.name);
+  if (names.length > 1) return "I'm on those.";
+  if (names[0] === "act") return "I'm sending that for approval.";
+  if (names[0] === "recall") return "I'm looking that up.";
+  return "I'm on that.";
 }
 
 function claimLine(roomId, deliveryId) {

@@ -316,3 +316,91 @@ test("an unanswered model still says it could not answer", async () => {
   const speech = JSON.parse(http.calls.find((call) => call.url.includes("/audio/speech")).init.body);
   assert.equal(speech.input, "I could not answer that just now.");
 });
+
+test("a second task is spoken while the first tool is still running", async () => {
+  let releaseAct = () => {};
+  const actGate = new Promise((resolve) => { releaseAct = resolve; });
+  let actStarted = () => {};
+  const actReady = new Promise((resolve) => { actStarted = resolve; });
+  let recallStarted = false;
+  let playing = 0;
+  let maxPlaying = 0;
+  const http = scripted(async (url, init) => {
+    if (url.includes("/chat/completions")) {
+      const body = JSON.parse(init.body);
+      const user = body.messages.filter((row) => row.role === "user").map((row) => String(row.content || "")).join("\n");
+      const tools = body.messages.filter((row) => row.role === "tool").map((row) => String(row.content || "")).join("\n");
+      if (tools.includes("Not done")) return chat({ content: "That goes for approval." });
+      if (tools.includes("Thursday")) return chat({ content: "The launch is Thursday." });
+      if (user.includes("file the booth")) {
+        return chat({
+          content: "",
+          tool_calls: [{
+            id: "call-act",
+            type: "function",
+            function: { name: "act", arguments: JSON.stringify({ text: "file the booth ticket" }) },
+          }],
+        });
+      }
+      if (user.includes("launch")) {
+        return chat({
+          content: "",
+          tool_calls: [{
+            id: "call-recall",
+            type: "function",
+            function: { name: "recall", arguments: JSON.stringify({ text: "when is the launch" }) },
+          }],
+        });
+      }
+      return chat({ content: "Okay." });
+    }
+    if (url.includes("/audio/speech")) return mp3Response();
+    if (url.includes("/output_audio/")) {
+      playing += 1;
+      maxPlaying = Math.max(maxPlaying, playing);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      playing -= 1;
+      return { ok: true, async text() { return ""; } };
+    }
+    throw new Error(`unexpected ${url}`);
+  });
+  const session = { hearing: { name: "Adam" } };
+  const base = {
+    answer: true,
+    speakerName: "Anh",
+    botName: "Adam",
+    memberId: "100",
+    room: { id: "bot-overlap" },
+    session,
+    env,
+    fetchImpl: http.fetch,
+    toolBeatMs: 0,
+    runTool: async (call) => {
+      if (call.name === "act") {
+        actStarted();
+        await actGate;
+        return { held: true };
+      }
+      if (call.name === "recall") {
+        recallStarted = true;
+        return { ok: true, text: "Thursday" };
+      }
+      return { ok: false, text: "no" };
+    },
+  };
+  const first = speakMeetingTurn({ ...base, text: "Adam, file the booth ticket", deliveryId: "task-act" });
+  await actReady;
+  const second = await speakMeetingTurn({ ...base, text: "Adam, when is the launch", deliveryId: "task-recall" });
+  assert.equal(recallStarted, true);
+  assert.equal(second.spoke, true);
+  releaseAct();
+  const filed = await first;
+  assert.equal(filed.spoke, true);
+  assert.equal(maxPlaying, 1);
+  const said = http.calls
+    .filter((call) => call.url.includes("/audio/speech"))
+    .map((call) => JSON.parse(call.init.body).input);
+  assert.equal(said.includes("I'm sending that for approval."), true);
+  assert.equal(said.includes("The launch is Thursday."), true);
+  assert.equal(said.includes("That goes for approval."), true);
+});
