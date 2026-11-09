@@ -422,6 +422,35 @@ test("a failed memory read is not an empty workspace", async () => {
   }
 });
 
+test("a slow memory index does not hold the home board", async () => {
+  const memory = { index() { return new Promise(() => {}); } };
+  const app = createApp({
+    deps: {
+      memory,
+      tatum: quietTatum(),
+      calendar: {
+        async listUpcoming() {
+          return [{ id: "soon", title: "Launch review", start: "2026-11-09T12:00:00.000Z", end: "2026-11-09T13:00:00.000Z" }];
+        },
+      },
+    },
+    env: cleanEnv(),
+    companyLoaded: true,
+  });
+  const port = await listen(app);
+  try {
+    const started = Date.now();
+    const body = JSON.parse((await get(port, "/api/console?member=mina")).raw);
+    const elapsed = Date.now() - started;
+    assert.equal(body.reading, true);
+    assert.equal(body.shell, true);
+    assert.equal(body.meetings[0].title, "Launch review");
+    assert.equal(elapsed < 1000, true, `board shell took ${elapsed}ms`);
+  } finally {
+    await close(app);
+  }
+});
+
 test("an empty account says no decision is stored yet", async () => {
   const memory = mockAccount({ accountId: "company-empty", delegates: ["delegate-empty"] });
   const app = createApp({

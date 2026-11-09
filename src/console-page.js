@@ -2715,9 +2715,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
       workspaceKind = next.workspace;
     }
     paintChip();
-    showHomeSkeleton(next.reading === true);
+    var shell = next.reading === true && next.shell === true;
+    showHomeSkeleton(next.reading === true && !shell);
     document.body.classList.toggle("read-failed", next.read === "failed");
-    document.body.classList.toggle("is-reading", next.reading === true);
+    document.body.classList.toggle("is-reading", next.reading === true && !shell);
     if (next.reading) {
       if (!routed) {
         routed = true;
@@ -2729,7 +2730,16 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (onboard) onboard.hidden = true;
       if (home) home.hidden = false;
       lockNav(false);
-      if (!readingTimer) readingTimer = setTimeout(function () { readingTimer = null; load(); }, 1500);
+      if (shell) {
+        paintMeetings();
+        var empty = document.getElementById("room-empty");
+        var emptyLine = document.getElementById("room-empty-line");
+        var aside = document.getElementById("room-empty-aside");
+        if (empty) empty.hidden = false;
+        if (emptyLine) emptyLine.textContent = "Reading memory…";
+        if (aside) aside.textContent = "Rooms will show here.";
+      }
+      if (!readingTimer) readingTimer = setTimeout(function () { readingTimer = null; load(); }, shell ? 700 : 1500);
       return;
     }
     readingTries = 0;
@@ -8202,6 +8212,48 @@ if (sessionWhen && sessionWhen.dataset.at) {
   if (mcpRemoveConfirm) mcpRemoveConfirm.addEventListener("click", confirmMcpRemove);
 
   var inviteRows = [];
+  var inviteSheet = null;
+  var inviteSheetWait = null;
+  function applyInviteSheet(sheet) {
+    if (!sheet) return;
+    inviteSheet = sheet;
+    var dialog = document.getElementById("invite-dialog");
+    if (!dialog || dialog.hidden) return;
+    var sub = document.getElementById("invite-dialog-sub");
+    if (sub && sheet.workspaceName) sub.textContent = "Add people to " + sheet.workspaceName + ".";
+    var share = document.getElementById("invite-dialog-share");
+    var field = document.getElementById("invite-dialog-link");
+    if (sheet.link) {
+      if (share) share.hidden = false;
+      if (field) { field.value = sheet.link; field.placeholder = ""; }
+    } else if (share && field && !field.value) {
+      share.hidden = true;
+    }
+    if (sheet.domain) {
+      var domain = document.getElementById("invite-dialog-domain");
+      var copy = document.getElementById("invite-domain-copy");
+      var box = document.getElementById("invite-domain-join");
+      if (domain) domain.hidden = false;
+      if (copy) copy.textContent = "Anyone with an @" + sheet.domain + " email can join. They join as Members.";
+      if (box) box.checked = sheet.domainOn === true;
+    }
+  }
+  function prefetchInvite() {
+    if (!document.getElementById("invite-dialog")) return Promise.resolve(null);
+    if (inviteSheet) return Promise.resolve(inviteSheet);
+    if (inviteSheetWait) return inviteSheetWait;
+    inviteSheetWait = fetch("/api/console/invites", { headers: { accept: "application/json" } }).then(function (response) {
+      if (!response.ok) throw new Error("no");
+      return response.json();
+    }).then(function (sheet) {
+      inviteSheet = sheet || null;
+      return inviteSheet;
+    }).catch(function () {
+      inviteSheetWait = null;
+      return null;
+    });
+    return inviteSheetWait;
+  }
   function inviteError(message) {
     var node = document.getElementById("invite-dialog-error");
     if (!node) return;
@@ -8284,29 +8336,21 @@ if (sessionWhen && sessionWhen.dataset.at) {
     openDialog("invite-dialog");
     var email = document.getElementById("invite-email");
     if (email) email.focus();
-    fetch("/api/console/invites", { headers: { accept: "application/json" } }).then(function (response) {
-      if (!response.ok) throw new Error("no");
-      return response.json();
-    }).then(function (sheet) {
-      if (!sheet || dialog.hidden) return;
-      var sub = document.getElementById("invite-dialog-sub");
-      if (sub && sheet.workspaceName) sub.textContent = "Add people to " + sheet.workspaceName + ".";
-      if (sheet.link) {
-        var share = document.getElementById("invite-dialog-share");
-        var field = document.getElementById("invite-dialog-link");
-        if (share) share.hidden = false;
-        if (field) field.value = sheet.link;
+    if (inviteSheet) {
+      applyInviteSheet(inviteSheet);
+      return;
+    }
+    var share = document.getElementById("invite-dialog-share");
+    var field = document.getElementById("invite-dialog-link");
+    if (share) share.hidden = false;
+    if (field) { field.value = ""; field.placeholder = "Getting the link…"; }
+    prefetchInvite().then(function (sheet) {
+      if (dialog.hidden) return;
+      if (!sheet) {
+        inviteError("The invite link could not be loaded. You can still invite by email.");
+        return;
       }
-      if (sheet.domain) {
-        var domain = document.getElementById("invite-dialog-domain");
-        var copy = document.getElementById("invite-domain-copy");
-        var box = document.getElementById("invite-domain-join");
-        if (domain) domain.hidden = false;
-        if (copy) copy.textContent = "Anyone with an @" + sheet.domain + " email can join. They join as Members.";
-        if (box) box.checked = sheet.domainOn === true;
-      }
-    }).catch(function () {
-      inviteError("The invite link could not be loaded. You can still invite by email.");
+      applyInviteSheet(sheet);
     });
   }
   document.querySelectorAll("[data-invite]").forEach(function (button) {
@@ -8425,6 +8469,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     } catch (error) { /* keep the query */ }
   }
 
+  prefetchInvite();
   load();
   syncRail();
 

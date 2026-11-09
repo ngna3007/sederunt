@@ -1309,7 +1309,15 @@ export function createApp(options = {}) {
       }
       const companyId = resolved.companyId;
       const hearingTenant = await hearingTenantId(workspace, req);
-      const current = await prepareWorkspace(workspace, companyId, false, 2000, hearingTenant);
+      const personId = String(gate.session?.userId || "").trim();
+      const meetingsPromise = within(
+        calendarMeetings(workspace, { companyId, personId, req }),
+        BOARD_SIDE_WAIT_MS,
+        [],
+      );
+      const current = await prepareWorkspace(workspace, companyId, false, BOARD_INDEX_WAIT_MS, hearingTenant);
+      // A ready index can wait briefly for the calendar. A cold index must not.
+      const meetings = current.readReport ? await meetingsPromise : await within(meetingsPromise, 150, []);
       const workspaceKind = url.searchParams.get("workspace") || "";
       const memberId = consoleBoardMember(gate.session, env, workspaceKind, url.searchParams.get("member") || "");
       const stamped = workspace.botPreferences?.durable === true && current.hearing?.tenantId === hearingTenant
@@ -1320,7 +1328,7 @@ export function createApp(options = {}) {
         current,
         memberId,
         workspaceKind,
-        { req, companyId, hearing: stamped, hearingTenant },
+        { req, companyId, hearing: stamped, hearingTenant, meetings, meetingsKnown: true },
       )));
       return;
     }
@@ -2979,6 +2987,36 @@ async function currentBot(workspace, req) {
 }
 
 const BOARD_PROOF_WAIT_MS = 400;
+const BOARD_INDEX_WAIT_MS = 80;
+const BOARD_SIDE_WAIT_MS = 1200;
+
+/**
+ * @template T
+ * @param {Promise<T>} work
+ * @param {number} ms
+ * @param {T} fallback
+ */
+function within(work, ms, fallback) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(fallback);
+    }, ms);
+    Promise.resolve(work).then((value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    }, () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(fallback);
+    });
+  });
+}
 
 /**
  * Warm the proof cache at start when a real Tatum key is set, unless
@@ -3001,13 +3039,17 @@ async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0,
     ? ((typeof companyId === "string" && companyId.trim()) || "local")
     : (typeof hearingTenant === "string" ? hearingTenant.trim() : "");
   const applyHearing = async () => {
-    await assignEffectiveHearing(workspace, current, tenant);
+    await within(assignEffectiveHearing(workspace, current, tenant), BOARD_SIDE_WAIT_MS, null);
     if (workspace.deletions) {
       const deletionTenant = depsFor(workspace, companyId).deletionTenantId;
       let visible;
       try {
-        visible = await filterDeletedDecisions(workspace.deletions, deletionTenant, current.decisions);
-      } catch {
+        visible = await Promise.race([
+          filterDeletedDecisions(workspace.deletions, deletionTenant, current.decisions),
+          new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error("slow"), { timeout: true })), BOARD_SIDE_WAIT_MS)),
+        ]);
+      } catch (error) {
+        if (error?.timeout) return;
         const denied = new Error("The deletion record could not be read.");
         denied.status = 503;
         throw denied;
@@ -3016,8 +3058,17 @@ async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0,
       for (const decision of current.decisions) if (!allowed.has(decision)) decision.deleted = true;
       const hiddenSources = new Set(current.decisions.filter((row) => row.deleted).map((row) => row.sourceDeliveryId).filter(Boolean));
       let intents;
-      try { intents = await workspace.deletions.list(deletionTenant); }
-      catch { const error = new Error("The deletion record could not be read."); error.status = 503; throw error; }
+      try {
+        intents = await Promise.race([
+          workspace.deletions.list(deletionTenant),
+          new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error("slow"), { timeout: true })), BOARD_SIDE_WAIT_MS)),
+        ]);
+      } catch (error) {
+        if (error?.timeout) return;
+        const denied = new Error("The deletion record could not be read.");
+        denied.status = 503;
+        throw denied;
+      }
       current.actions = current.actions.filter((row) => !hiddenSources.has(row.deliveryId)
         && !intents.some((intent) => deletionMatches(intent, { tenantId: deletionTenant, roomId: row.roomId, sourceIds: [row.deliveryId].filter(Boolean), decisionIds: [row.id].filter(Boolean) })));
       current.activity = current.activity.filter((row) => !intents.some((intent) => deletionMatches(intent, {
@@ -3058,6 +3109,11 @@ async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0,
     pending,
     new Promise((resolve) => setTimeout(resolve, waitMs)),
   ]);
+  if (!current.readReport) {
+    // Home paints from the shell. Hearing waits until the index has rows.
+    pending.then(() => applyHearing(), () => {}).catch(() => {});
+    return current;
+  }
   await applyHearing();
   // A timed-out index can still absorb a legacy guest after this returns.
   // Re-apply so a durable row stays the one typed-path addressing sees.
@@ -3098,12 +3154,39 @@ async function consolePayload(workspace, current, memberId, kind = "company", op
   const open = kind === "personal" ? "personal" : "company";
   const req = options.req;
   const companyId = typeof options.companyId === "string" ? options.companyId : "";
+  if (workspace.companyLoaded && !current.readReport) {
+    // The memory index is still reading. Home can paint meetings and the
+    // checklist without it; the client asks again for rooms.
+    return {
+      companyLoaded: true,
+      reading: true,
+      shell: true,
+      workspace: open,
+      read: "reading",
+      message: "",
+      doors: doorReport(workspace.env, workspace.linearReady === true),
+      preferences: { linear: "ask", calendar: "ask", slack: "ask" },
+      slack: "not-set-up",
+      decisions: [],
+      rooms: [],
+      people: [],
+      waiting: [],
+      access: [],
+      counts: { kept: 0, waiting: 0, sent: 0, failed: 0 },
+      hearing: null,
+      meetings: Array.isArray(options.meetings) ? options.meetings : [],
+    };
+  }
   const hearing = options.hearing
-    || await effectiveHearing(workspace, options.hearingTenant || await hearingTenantId(workspace, req), current);
+    || await within(
+      effectiveHearing(workspace, options.hearingTenant || await hearingTenantId(workspace, req), current),
+      BOARD_SIDE_WAIT_MS,
+      null,
+    );
   const gate = req ? guardConsole(req, workspace.env) : { session: null };
   const personId = String(gate.session?.userId || "").trim();
   const doors = req
-    ? await doorsForRequest(workspace, { companyId, personId, req })
+    ? await within(doorsForRequest(workspace, { companyId, personId, req }), BOARD_SIDE_WAIT_MS, doorReport(workspace.env, workspace.linearReady === true))
     : doorReport(workspace.env, workspace.linearReady === true);
   const slack = doors.slack ? "ready" : "not-set-up";
   if (!workspace.companyLoaded) {
@@ -3124,28 +3207,9 @@ async function consolePayload(workspace, current, memberId, kind = "company", op
       hearing,
     };
   }
-  if (!current.readReport) {
-    return {
-      companyLoaded: true,
-      reading: true,
-      workspace: open,
-      read: "reading",
-      message: "",
-      doors,
-      preferences: { linear: "ask", calendar: "ask", slack: "ask" },
-      slack,
-      decisions: [],
-      rooms: [],
-      people: [],
-      waiting: [],
-      access: [],
-      counts: { kept: 0, waiting: 0, sent: 0, failed: 0 },
-      hearing,
-    };
-  }
   const report = current.readReport;
   const config = appConfig(workspace.env);
-  if (open !== "personal") await hydrateSlackChannels(current, workspace.deps);
+  if (open !== "personal") await within(hydrateSlackChannels(current, workspace.deps), 400, undefined);
   const principal = req && gate.session?.kind === "oauth" ? await consolePrincipal(workspace, req, companyId, open) : memberId;
   const board = open === "personal" ? personalBoard(current, principal) : companyBoard(current, principal, { timeZone: config.timeZone, slackChannel: config.slackChannel });
   if (!report.ok) {
@@ -3187,7 +3251,9 @@ async function consolePayload(workspace, current, memberId, kind = "company", op
     access: board.access,
     counts: board.counts,
     hearing,
-    meetings: await calendarMeetings(workspace, { companyId, personId, req }),
+    meetings: options.meetingsKnown
+      ? (Array.isArray(options.meetings) ? options.meetings : [])
+      : await within(calendarMeetings(workspace, { companyId, personId, req }), BOARD_SIDE_WAIT_MS, []),
     chain: chainReport(workspace.deps?.tatum),
   };
   return payload;

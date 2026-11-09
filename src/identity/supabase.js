@@ -23,6 +23,7 @@ export function createSupabaseIdentity(env, options = {}) {
   const userReads = new Map();
   const tenantReads = new Map();
   const statReads = new Map();
+  const linkReads = new Map();
 
   function tokenKey(accessToken) {
     return createHash("sha256").update(String(accessToken || "")).digest("base64url");
@@ -267,15 +268,29 @@ export function createSupabaseIdentity(env, options = {}) {
     },
 
     async workspaceJoinLink(accessToken, tenantId, reset = false) {
-      const token = await call("/rest/v1/rpc/workspace_join_link", {
+      const key = `${tokenKey(accessToken)}:${tenantId}`;
+      if (reset === true) linkReads.delete(key);
+      else {
+        const hit = linkReads.get(key);
+        if (hit?.value !== undefined && Date.now() - hit.at < 60_000) return hit.value;
+        if (hit?.pending) return hit.pending;
+      }
+      const pending = call("/rest/v1/rpc/workspace_join_link", {
         method: "POST",
         token: accessToken,
         profile: true,
         body: { p_tenant_id: tenantId, p_reset: reset === true },
+      }).then((token) => {
+        if (typeof token !== "string" || !token) throw new IdentityError("invalid_invite", "Invite link was not created.");
+        if (reset === true) statReads.delete(`${tokenKey(accessToken)}:${tenantId}`);
+        else linkReads.set(key, { at: Date.now(), value: token });
+        return token;
+      }, (error) => {
+        if (linkReads.get(key)?.pending === pending) linkReads.delete(key);
+        throw error;
       });
-      if (typeof token !== "string" || !token) throw new IdentityError("invalid_invite", "Invite link was not created.");
-      if (reset === true) statReads.delete(`${tokenKey(accessToken)}:${tenantId}`);
-      return token;
+      if (reset !== true) linkReads.set(key, { at: 0, pending });
+      return pending;
     },
 
     async acceptJoinLink(accessToken, token) {

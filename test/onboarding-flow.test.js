@@ -830,6 +830,8 @@ test("invite from Home stays in a dialog", async () => {
     assert.equal(people.status, 200);
     assert.match(people.raw, /<button[^>]*id="people-invite"[^>]*data-invite/);
     assert.match(people.raw, /function openInvite/);
+    assert.match(people.raw, /function prefetchInvite/);
+    assert.match(people.raw, /Getting the link/);
     assert.doesNotMatch(people.raw, /\/console\/welcome\?step=team(?:&amp;|&)mode=manage/);
     const sheet = await call(port, "GET", "/api/console/invites", { cookie: header(jar), headers: { accept: "application/json" } });
     assert.equal(sheet.status, 200, sheet.raw);
