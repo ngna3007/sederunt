@@ -153,7 +153,7 @@ function many(value) {
 }
 
 function sendWelcome(ctx, status, state, headers = {}) {
-  ctx.send(ctx.res, status, "text/html; charset=utf-8", renderWelcomePage({ fakeTools: fakeToolsOn(ctx.env), ...state }), headers);
+  ctx.send(ctx.res, status, "text/html; charset=utf-8", renderWelcomePage({ fakeTools: fakeToolsOn(ctx.env), slackInstall: ctx.slackInstall === true, ...state }), headers);
 }
 
 async function renderWorkspaceStep(ctx, session, extra) {

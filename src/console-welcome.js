@@ -14,7 +14,6 @@ import { sederuntMark, FAVICON_LINK } from "./sederunt-mark.js";
 export const WELCOME_STEPS = ["workspace", "calendar", "chat", "team"];
 
 export const CALENDAR_DOCS = "https://developers.google.com/workspace/calendar/api/guides/configure-mcp-server";
-export const SLACK_DOCS = "https://docs.slack.dev/ai/slack-mcp-server";
 
 /**
  * @param {{
@@ -199,7 +198,7 @@ function chatStep(state) {
     left: `${backLink("/console/welcome?step=calendar")}${slack ? "" : `<button class="ob-link" type="submit" name="choice" value="later" id="ob-skip" formnovalidate>Not now</button>`}`,
     right: slack
       ? `<button class="ob-primary" type="submit" name="choice" value="continue" id="ob-continue">Continue</button>`
-      : `<button class="ob-primary" type="submit" name="choice" value="connect" id="slack-connect" data-docs="${escapeAttr(state.fakeTools ? "" : SLACK_DOCS)}">Connect Slack</button>`,
+      : `<button class="ob-primary" type="submit" name="choice" value="connect" id="slack-connect"${state.slackInstall === true && state.fakeTools !== true ? ' formtarget="_blank"' : ""}>Connect Slack</button>`,
   };
 }
 
@@ -334,11 +333,6 @@ const WELCOME_SCRIPT = `
       }
       if (input) { input.select(); }
     });
-  });
-  document.querySelectorAll("[data-docs]").forEach(function (button) {
-    var docs = button.getAttribute("data-docs");
-    if (!docs) return;
-    button.addEventListener("click", function () { window.open(docs, "_blank", "noopener"); });
   });
   var name = document.getElementById("workspace-name");
   if (name) {

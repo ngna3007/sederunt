@@ -5329,17 +5329,21 @@ if (sessionWhen && sessionWhen.dataset.at) {
       }
       if (which === "slack" && ${JSON.stringify(slackInstall)}) {
         // Add to Slack for this workspace. Manage = an explicit change of Slack workspace.
+        var slackInstallUrl = ${JSON.stringify(SLACK_INSTALL_PATH)} + "?next=" + encodeURIComponent("/console/setup");
         if (button.id === "slack-manage") {
           if (!window.confirm("Link a different Slack workspace to this Sederunt workspace? The current Slack link is replaced after you approve in Slack.")) return;
-          location.href = ${JSON.stringify(SLACK_INSTALL_PATH)} + "?change=1&next=" + encodeURIComponent("/console/setup");
-          return;
+          slackInstallUrl = ${JSON.stringify(SLACK_INSTALL_PATH)} + "?change=1&next=" + encodeURIComponent("/console/setup");
         }
-        location.href = ${JSON.stringify(SLACK_INSTALL_PATH)} + "?next=" + encodeURIComponent("/console/setup");
+        window.open(slackInstallUrl, "_blank", "noopener");
+        text("connector-who", "Finish in the window that opened, then come back here. This page never asks for a key.");
+        return;
+      }
+      if (which === "slack") {
+        text("connector-who", "Slack install is not set up on this deployment.");
         return;
       }
       var url = "https://developers.google.com/workspace/calendar/api/guides/configure-mcp-server";
       if (which === "linear") url = "https://linear.app/docs/mcp";
-      if (which === "slack") url = "https://docs.slack.dev/ai/slack-mcp-server";
       window.open(url, "_blank", "noopener");
       text("connector-who", "Finish in the window that opened, then come back here. This page never asks for a key.");
     });

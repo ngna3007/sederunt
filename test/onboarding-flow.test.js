@@ -7,6 +7,7 @@ import { openSession } from "../src/console-auth.js";
 import { createIdentity } from "../src/identity/client.js";
 import { createApp, defaultDeps } from "../src/server.js";
 import { upcomingMeetings } from "../src/console-flow.js";
+import { renderWelcomePage } from "../src/console-welcome.js";
 
 const SECRET = "session-secret";
 const WIDTHS = [1920, 1097, 768, 390];
@@ -231,6 +232,8 @@ test("fake auth onboarding stays on localhost", async (t) => {
         assert.match(chat.raw, /Coming soon/);
         assert.match(chat.raw, /id="ob-skip"[^>]*>Not now</);
         assert.match(chat.raw, /href="\/console\/welcome\?step=calendar"[^>]*id="ob-back"/);
+        assert.doesNotMatch(chat.raw, /docs\.slack\.dev/);
+        assert.doesNotMatch(chat.raw, /id="slack-connect"[^>]*data-docs=/);
         const laterChat = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=chat&choice=later" });
         assert.equal(laterChat.location, "/console/welcome?step=team");
 
@@ -822,4 +825,13 @@ test("the fake calendar's seeded meetings come through with their start times", 
   assert.ok(sync, "tomorrow's seeded meeting is listed");
   assert.equal(sync.when, "Tomorrow");
   assert.match(sync.time, /^10:00\s?AM$/);
+});
+
+test("Connect Slack opens the install page in a new tab and does not open Slack docs", () => {
+  const install = renderWelcomePage({ step: "chat", slackInstall: true });
+  assert.match(install, /id="slack-connect"[^>]*formtarget="_blank"/);
+  assert.doesNotMatch(install, /docs\.slack\.dev/);
+  const plain = renderWelcomePage({ step: "chat" });
+  assert.doesNotMatch(plain, /id="slack-connect"[^>]*formtarget=/);
+  assert.doesNotMatch(plain, /docs\.slack\.dev/);
 });
