@@ -393,20 +393,21 @@ serial("setup and account keep their actions in the right cards", async (t) => {
   for (const width of WIDTHS) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto(`http://127.0.0.1:${opened.port}/console/setup`, { waitUntil: "networkidle" });
-    await page.waitForSelector("#overview:not([hidden]) .tool-ask", { timeout: 45000 });
+    await page.waitForSelector("#overview:not([hidden]) #bot-run", { timeout: 45000 });
     const setup = await page.evaluate(() => {
       const title = document.querySelector("#overview .page-title");
       const nav = document.getElementById("show-connectors");
-      const asks = [...document.querySelectorAll("#tools-card .tool-ask")].filter((node) => node.getClientRects().length);
       const connects = [...document.querySelectorAll("#tools-card .conn-connect")].filter((node) => node.getClientRects().length);
       const manages = [...document.querySelectorAll("#tools-card .conn-manage")].filter((node) => node.getClientRects().length);
       const rows = [...document.querySelectorAll("#tools-card .connectors > .conn")].filter((node) => node.getClientRects().length);
       const toolX = rows.map((row) => Math.round(row.querySelector('[data-col="tool"]').getBoundingClientRect().x));
       const actionX = rows.map((row) => Math.round(row.querySelector('[data-col="action"]').getBoundingClientRect().x));
       const headTool = Math.round(document.querySelector('#tools-card .status-head [data-col="tool"]').getBoundingClientRect().x);
-      const switchX = asks.map((row) => Math.round(row.querySelector(".conn-ask").getBoundingClientRect().x));
+      const run = document.getElementById("bot-run");
+      const runBox = run.getBoundingClientRect();
+      const card = document.getElementById("hearing-block");
       const doc = document.documentElement;
-      const clipped = [...document.querySelectorAll("#tools-card .conn, #tools-card .tool-ask")].filter((node) => {
+      const clipped = [...document.querySelectorAll("#tools-card .conn, #hearing-block .bot-run")].filter((node) => {
         const box = node.getBoundingClientRect();
         return box.right > window.innerWidth + 1 || box.left < -1;
       }).length;
@@ -414,13 +415,15 @@ serial("setup and account keep their actions in the right cards", async (t) => {
         title: title ? title.textContent.trim() : "",
         nav: nav ? nav.textContent.trim() : "",
         crumb: document.getElementById("crumb-current").textContent.trim(),
-        asks: asks.map((node) => node.textContent.replace(/\s+/g, " ").trim()),
+        toolAsks: document.querySelectorAll("#tools-card .tool-ask").length,
+        meetingBot: card.querySelector(".section-label").textContent.trim(),
+        runInBot: card.contains(run),
+        runVisible: runBox.width > 0 && runBox.height > 0,
         connects: connects.map((node) => node.textContent.trim()),
         manages: manages.length,
         toolX,
         actionX,
         headTool,
-        switchX,
         overflow: doc.scrollWidth > doc.clientWidth + 1,
         clipped,
       };
@@ -428,13 +431,15 @@ serial("setup and account keep their actions in the right cards", async (t) => {
     assert.equal(setup.title, "Setup", `title ${width}`);
     assert.equal(setup.nav, "Setup", `nav ${width}`);
     assert.equal(setup.crumb, "Setup");
-    assert.deepEqual(setup.asks, ["Run automatically for Calendar", "Run automatically for Linear", "Run automatically for Slack"]);
+    assert.equal(setup.toolAsks, 0);
+    assert.equal(setup.meetingBot, "Meeting bot");
+    assert.equal(setup.runInBot, true);
+    assert.equal(setup.runVisible, true, `run switch ${width}`);
     assert.deepEqual(setup.connects, ["Connect", "Connect", "Connect"]);
     assert.equal(setup.manages, 0, "Manage shows before a tool is connected");
     assert.equal(setup.headTool, setup.toolX[0]);
     assert.ok(setup.toolX.every((x) => Math.abs(x - setup.toolX[0]) <= 1), `tool x ${setup.toolX}`);
     assert.ok(setup.actionX.every((x) => Math.abs(x - setup.actionX[0]) <= 1), `action x ${setup.actionX}`);
-    assert.ok(setup.switchX.every((x) => Math.abs(x - setup.switchX[0]) <= 1), `switch x ${setup.switchX}`);
     assert.equal(setup.overflow, false, `setup ${width} overflows`);
     assert.equal(setup.clipped, 0, `setup ${width} clips`);
     await page.goto(`http://127.0.0.1:${opened.port}/console/account`, { waitUntil: "networkidle" });
@@ -507,14 +512,22 @@ serial("setup and account keep their actions in the right cards", async (t) => {
   assert.deepEqual(linked.manages, ["calendar", "linear", "slack"]);
   assert.equal(linked.connects, 0);
   assert.deepEqual(linked.states, ["Connected", "Connected", "Connected"]);
-  const saved = connected.page.waitForResponse((response) => response.url().includes("/api/typed") && response.request().method() === "POST");
-  await connected.page.locator("#slack-ask").click();
+  const posted = [];
+  const saved = connected.page.waitForResponse((response) => {
+    if (!response.url().includes("/api/typed") || response.request().method() !== "POST") return false;
+    posted.push(response.request().postData() || "");
+    return posted.length >= 3;
+  });
+  await connected.page.locator("#bot-run").click();
   const response = await saved;
   assert.equal(response.ok(), true);
-  await connected.page.waitForFunction(() => document.getElementById("slack-ask").checked === false);
+  assert.ok(posted.some((body) => body.includes("set calendar to ask")));
+  assert.ok(posted.some((body) => body.includes("set linear to ask")));
+  assert.ok(posted.some((body) => body.includes("set slack to ask")));
+  await connected.page.waitForFunction(() => document.getElementById("bot-run").checked === false);
   await connected.page.reload({ waitUntil: "networkidle" });
-  await connected.page.waitForSelector("#slack-ask");
-  assert.equal(await connected.page.locator("#slack-ask").isChecked(), false);
+  await connected.page.waitForSelector("#bot-run");
+  assert.equal(await connected.page.locator("#bot-run").isChecked(), false);
   assert.deepEqual(connected.errors, []);
 });
 

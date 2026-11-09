@@ -556,8 +556,8 @@ test("a failed hearing write leaves the previous guest and does not remember", a
     assert.ok(decisions.some((row) => row.decision.text.includes("offsite is in Lisbon")));
     assert.equal(decisions.some((row) => row.decision.text.includes("wrong guest")), false);
     const page = await call(port, "GET", "/console/setup", { cookie: ownerCookie });
-    const failAt = page.raw.indexOf("The guest was not saved.");
-    const toastAt = page.raw.indexOf("Saved. The meeting guest is ");
+    const failAt = page.raw.indexOf("The bot was not saved.");
+    const toastAt = page.raw.indexOf("Saved. The meeting bot is ");
     assert.ok(failAt > 0 && toastAt > failAt);
     assert.match(page.raw, /result\.ok === false/);
     assert.equal(hearingName(page.raw), "Quinn");
