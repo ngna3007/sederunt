@@ -304,7 +304,7 @@ ${slack}
       <span class="sk sk-row"></span>
     </div>
     <div id="overview" hidden>
-      <div class="page-head"><div><p class="page-title">Setup</p><p class="page-lede">Which tools Sederunt can use, and how the meeting bot listens.</p></div><div class="page-actions"></div></div>
+      <div class="page-head"><div><p class="page-title">Setup</p><p class="page-lede">Which tools Sederunt can use, and how the meeting guest listens.</p></div><div class="page-actions"></div></div>
       ${secretCard}
       ${membersCard}
       <p id="connector-split"></p>
@@ -315,6 +315,7 @@ ${slack}
       <div class="settings-card" id="tools-card">
       <p class="section-label">Tools</p>
       <p class="card-help">Connect a tool to let Sederunt act in it.</p>
+      <p id="ask-help" class="sr">On means a change runs as soon as it is asked.</p>
       <div class="connectors">
         <div class="explorer-head status-head">
           <span data-col="mark"></span>
@@ -326,12 +327,16 @@ ${slack}
           <div class="set-copy" data-col="tool">
             <strong>Calendar</strong>
             <p id="cal-conn" class="conn-state${calendarConnected ? "" : " off"}">${calendarConnected ? "Connected" : "Not connected"}</p>
-            <p id="cal-line" class="sr"></p>
+            <p id="cal-line" class="sr">Calendar runs automatically.</p>
           </div>
           <div class="conn-actions" data-col="action">
             <button type="button" class="conn-connect" id="cal-connect" data-connect="calendar"${calendarConnected ? " hidden" : ""}>Connect</button>
             <button type="button" class="secondary conn-manage" id="cal-manage" data-manage="calendar" aria-haspopup="dialog"${calendarConnected ? "" : " hidden"}>Manage</button>
           </div>
+        </div>
+        <div class="tool-ask${calendarConnected ? "" : " ask-quiet"}" id="cal-ask-row">
+          <div class="set-copy" data-col="tool"><span class="ask-name">Run automatically</span><span class="ask-tool"> for Calendar</span></div>
+          <div class="conn-ask" data-col="action"><label class="switch"><input id="cal-ask" type="checkbox" checked aria-label="Run automatically for Calendar" aria-describedby="ask-help"></label></div>
         </div>
         <div class="conn" id="lin-status-row">
           ${linearIcon}
@@ -339,12 +344,16 @@ ${slack}
             <strong>Linear</strong>
             ${linearNotice ? `<p class="conn-hint" role="status">${escapeHtml(linearNotice)}</p>` : ""}
             <p id="lin-conn" class="conn-state${linearConnected ? "" : " off"}">${linearConnected ? "Connected" : "Not connected"}</p>
-            <p id="lin-line" class="${linearConnected && linearWorkspace ? "conn-hint" : "sr"}">${linearConnected && linearWorkspace ? `Linear workspace: ${escapeHtml(linearWorkspace)}.` : ""}</p>
+            <p id="lin-line" class="${linearConnected && linearWorkspace ? "conn-hint" : "sr"}">${linearConnected && linearWorkspace ? `Linear workspace: ${escapeHtml(linearWorkspace)}.` : "Linear runs automatically."}</p>
           </div>
           <div class="conn-actions" data-col="action">
             <button type="button" class="conn-connect" id="lin-connect" data-connect="linear"${linearConnected ? " hidden" : ""}>Connect</button>
             <button type="button" class="secondary conn-manage" id="lin-manage" data-manage="linear" aria-haspopup="dialog"${linearConnected ? "" : " hidden"}>Manage</button>
           </div>
+        </div>
+        <div class="tool-ask${linearConnected ? "" : " ask-quiet"}" id="lin-ask-row">
+          <div class="set-copy" data-col="tool"><span class="ask-name">Run automatically</span><span class="ask-tool"> for Linear</span></div>
+          <div class="conn-ask" data-col="action"><label class="switch"><input id="lin-ask" type="checkbox" checked aria-label="Run automatically for Linear" aria-describedby="ask-help"></label></div>
         </div>
         <div class="conn" id="slack-status-row">
           ${channelIcon}
@@ -352,7 +361,7 @@ ${slack}
             <strong>Slack</strong>
             ${slackNotice ? `<p class="conn-hint" role="status">${escapeHtml(slackNotice)}</p>` : ""}
             <p id="slack-conn" class="conn-state${slackConnected ? "" : " off"}">${slackConnected ? "Connected" : "Not connected"}</p>
-            <p id="slack-line" class="${slackConnected ? "conn-hint" : "sr"}">${slackConnected && slackWorkspace ? `Slack workspace: ${escapeHtml(slackWorkspace)}. Add @Sederunt to a channel in Slack when you want it there.` : slackConnected ? "Slack is connected." : ""}</p>
+            <p id="slack-line" class="conn-hint">${slackConnected && slackWorkspace ? `Slack workspace: ${escapeHtml(slackWorkspace)}. Add @Sederunt to a channel in Slack when you want it there.` : "Slack runs automatically."}</p>
             <p id="slack-note" class="sr">Sederunt answers in a channel it has already joined.</p>
           </div>
           <div class="conn-actions" data-col="action">
@@ -360,19 +369,15 @@ ${slack}
             <button type="button" class="secondary conn-manage" id="slack-manage" data-manage="slack" aria-haspopup="dialog"${slackConnected ? "" : " hidden"}>Manage</button>
           </div>
         </div>
+        <div class="tool-ask${slackConnected ? "" : " ask-quiet"}" id="slack-ask-row">
+          <div class="set-copy" data-col="tool"><span class="ask-name">Run automatically</span><span class="ask-tool"> for Slack</span></div>
+          <div class="conn-ask" data-col="action"><label class="switch"><input id="slack-ask" type="checkbox" checked aria-label="Run automatically for Slack" aria-describedby="ask-help"></label></div>
+        </div>
       </div>
       </div>
       <div class="settings-card" id="hearing-block">
-        <p class="section-label">Meeting bot</p>
-        <p id="hearing-help">The bot uses this name in the meeting. A line is kept when someone says the name, or one of the trigger words or sentences.</p>
-        <div class="bot-run">
-          <div class="set-copy">
-            <p class="bot-run-name" id="bot-run-label">Run automatically</p>
-            <p id="bot-run-help">On means a change runs as soon as it is asked. Off means Sederunt asks first.</p>
-          </div>
-          <label class="switch"><input id="bot-run" type="checkbox" checked aria-labelledby="bot-run-label" aria-describedby="bot-run-help"></label>
-        </div>
-        <p id="bot-run-note" role="status"></p>
+        <p class="section-label">Meeting guest</p>
+        <p id="hearing-help">The guest uses this name in the meeting. A line is kept when someone says the name, or one of the trigger words or sentences.</p>
         <div class="hearing-grid">
         <div class="hearing-field">
           <label for="hearing-name">Name</label>
@@ -385,7 +390,7 @@ ${slack}
           <textarea id="hearing-triggers" name="hearing-triggers" rows="4" placeholder="A sentence that wakes the bot">${escapeHtml(hearing.triggers.length ? hearing.triggers.join("\n") : hearing.name)}</textarea>
         </div>
         </div>
-        <p class="section-next"><button id="hearing-save" class="primary" type="button">Save the bot</button></p>
+        <p class="section-next"><button id="hearing-save" class="primary" type="button">Save the guest</button></p>
         <p id="hearing-note"></p>
       </div>
       <p id="connector-who"></p>
@@ -1152,14 +1157,6 @@ if (sessionWhen && sessionWhen.dataset.at) {
     node.hidden = !value;
   }
 
-  function connectorLine(id, value) {
-    var node = document.getElementById(id);
-    if (!node) return;
-    node.textContent = value || "";
-    node.hidden = !value;
-    node.className = value ? "conn-hint" : "sr";
-  }
-
   function roomCount(rows) {
     var filed = rows.map(function (row) { return row.connectorId; }).filter(Boolean);
     var line = countLine(rows.length);
@@ -1236,6 +1233,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var manageId = id === "cal-conn" ? "cal-manage" : id === "lin-conn" ? "lin-manage" : id === "slack-conn" ? "slack-manage" : "";
     var manage = manageId ? document.getElementById(manageId) : null;
     if (manage) manage.hidden = !connected;
+    var askId = id === "cal-conn" ? "cal-ask-row" : id === "lin-conn" ? "lin-ask-row" : id === "slack-conn" ? "slack-ask-row" : "";
+    var askRow = askId ? document.getElementById(askId) : null;
+    if (askRow) askRow.classList.toggle("ask-quiet", !connected);
   }
 
   function roomTotal() {
@@ -2821,6 +2821,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (home) home.hidden = false;
     var doors = next.doors || {};
     var prefs = next.preferences || {};
+    var calendarMode = prefs.calendar === "do" ? "Do" : "Ask";
+    var linearMode = prefs.linear === "do" ? "Do" : "Ask";
+    var slackMode = prefs.slack === "do" ? "Do" : "Ask";
     paintConn("cal-conn", !!doors.calendar);
     paintConn("lin-conn", !!doors.linear);
     paintConn("slack-conn", next.slack === "ready");
@@ -2828,19 +2831,32 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (slackNote) slackNote.textContent = next.slack === "ready"
       ? "Sederunt answers in a channel it has already joined."
       : "Slack is not set up on this server yet. Calendar, rooms, and chat still work.";
-    showLine("cal-line", "");
-    connectorLine("lin-line", linearStatusLine(!!doors.linear));
-    connectorLine("slack-line", slackStatusLine(next.slack === "ready"));
+    text("cal-line", calendarMode === "Ask" ? "Calendar waits before a change." : "Calendar runs automatically.");
+    text("lin-line", linearStatusLine(!!doors.linear, linearMode === "Ask"));
+    text("slack-line", slackStatusLine(next.slack === "ready"));
     text("prefs", "");
-    var botRun = document.getElementById("bot-run");
-    if (botRun) {
-      botRun.checked = prefs.calendar !== "ask" && prefs.linear !== "ask" && prefs.slack !== "ask";
-      syncAskState(botRun);
-    }
+    var calAsk = document.getElementById("cal-ask");
+    var linAsk = document.getElementById("lin-ask");
+    var slackAsk = document.getElementById("slack-ask");
+    if (calAsk) calAsk.checked = calendarMode !== "Ask";
+    if (linAsk) linAsk.checked = linearMode !== "Ask";
+    if (slackAsk) slackAsk.checked = slackMode !== "Ask";
+    syncAskState(calAsk);
+    syncAskState(linAsk);
+    syncAskState(slackAsk);
+    syncToolManageAsk();
+    var calRow = document.getElementById("cal-ask-row");
+    var linRow = document.getElementById("lin-ask-row");
+    var slackRow = document.getElementById("slack-ask-row");
+    if (calRow) calRow.hidden = false;
+    if (linRow) linRow.hidden = false;
+    if (slackRow) slackRow.hidden = false;
     var kicker = document.querySelector(".ask-kicker");
+    var askHelp = document.getElementById("ask-help");
     var askBlock = document.getElementById("ask-block");
     if (askBlock) askBlock.hidden = false;
     if (kicker) kicker.hidden = false;
+    if (askHelp) askHelp.textContent = "On means a change runs as soon as it is asked.";
     var note = next.message || "";
     if (!note && !member() && !(next.rooms || []).length && !(next.decisions || []).length) note = "Sign-in is not set up.";
     text("read-note", note);
@@ -5094,40 +5110,29 @@ if (sessionWhen && sessionWhen.dataset.at) {
     return true;
   }
 
-  function saveBotRun(on) {
-    var box = document.getElementById("bot-run");
-    var note = document.getElementById("bot-run-note");
+  function saveToolAsk(tool, on) {
+    var boxId = tool === "calendar" ? "cal-ask" : tool === "linear" ? "lin-ask" : "slack-ask";
+    var line = tool === "calendar" ? "cal-line" : tool === "linear" ? "lin-line" : "slack-line";
+    var box = document.getElementById(boxId);
     var value = on ? "do" : "ask";
-    if (note) note.textContent = "Saving Run automatically.";
-    var tools = ["calendar", "linear", "slack"];
-    var pending = Promise.resolve();
-    var failed = null;
-    tools.forEach(function (tool) {
-      pending = pending.then(function () {
-        return fetch("/api/typed", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ text: "set " + tool + " to " + value })
-        }).then(function (response) { return response.json(); }).then(function (result) {
-          if (!wrote(result)) failed = result;
-        });
-      });
-    });
-    pending.then(function () { return load(); }).then(function () {
-      if (failed && failed.allow === "missing-member") {
-        if (note) note.textContent = "This server has no member configured.";
-        return;
+    text(line, "Saving Run automatically.");
+    fetch("/api/typed", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "set " + tool + " to " + value })
+    }).then(function (response) { return response.json(); }).then(function (result) {
+      return load().then(function () { return result; });
+    }).then(function (result) {
+      if (!wrote(result)) {
+        box.checked = !on;
+        text(line, result && result.allow === "missing-member" ? "This server has no member configured." : "Run automatically was not saved.");
+      } else {
+        text(line, tool === "slack" ? slackStatusLine(true) : tool === "linear" ? linearStatusLine(true, false) : "");
+        toast("Saved.");
       }
-      if (failed) {
-        if (note) note.textContent = "Run automatically was not saved.";
-        return;
-      }
-      if (note) note.textContent = "";
-      toast("Saved.");
     }).catch(function () {
-      if (box) box.checked = !on;
-      syncAskState(box);
-      if (note) note.textContent = "The account could not be read. Read the account again.";
+      box.checked = !on;
+      text(line, "The account could not be read. Read the account again.");
     });
   }
 
@@ -5372,15 +5377,31 @@ if (sessionWhen && sessionWhen.dataset.at) {
   var linearWorkspaceName = ${JSON.stringify(linearWorkspace)};
   var toolManageKind = "";
 
-  function linearStatusLine(ready) {
-    if (ready && linearWorkspaceName) return "Linear workspace: " + linearWorkspaceName + ".";
-    return "";
+  function linearStatusLine(ready, asking) {
+    if (!ready) return "Linear runs automatically.";
+    if (linearWorkspaceName) return "Linear workspace: " + linearWorkspaceName + ".";
+    return asking ? "Linear waits before a change." : "Linear runs automatically.";
   }
 
   function slackStatusLine(ready) {
-    if (!ready) return "";
+    if (!ready) return "Chat and rooms work without Slack. Connect it when a bot token is ready.";
     if (slackWorkspaceName) return "Slack workspace: " + slackWorkspaceName + ". Add @Sederunt to a channel in Slack when you want it there.";
-    return "Slack is connected.";
+    var box = document.getElementById("slack-ask");
+    return box && box.checked ? "Slack runs automatically." : "Slack waits before a change.";
+  }
+
+  function toolAskId(kind) {
+    if (kind === "linear") return "lin-ask";
+    if (kind === "slack") return "slack-ask";
+    return "cal-ask";
+  }
+
+  function syncToolManageAsk() {
+    var dialog = document.getElementById("tool-manage-dialog");
+    var modalAsk = document.getElementById("tool-manage-ask");
+    if (!dialog || dialog.hidden || !modalAsk || document.activeElement === modalAsk) return;
+    var source = document.getElementById(toolAskId(toolManageKind));
+    if (source) modalAsk.checked = source.checked;
   }
 
   function paintToolManage() {
@@ -5414,7 +5435,33 @@ if (sessionWhen && sessionWhen.dataset.at) {
       item.textContent = line;
       list.append(item);
     });
-    body.append(top, account, list);
+    var askRow = document.createElement("div");
+    askRow.className = "tool-manage-ask";
+    var askCopy = document.createElement("div");
+    var askName = document.createElement("p");
+    askName.className = "mcp-tool-name";
+    askName.textContent = "Run automatically";
+    var askHelp = document.createElement("p");
+    askHelp.className = "mcp-tool-desc";
+    askHelp.textContent = "On means a change runs as soon as it is asked. Off means Sederunt asks first.";
+    askCopy.append(askName, askHelp);
+    var askLabel = document.createElement("label");
+    askLabel.className = "switch";
+    var askInput = document.createElement("input");
+    askInput.type = "checkbox";
+    askInput.id = "tool-manage-ask";
+    var source = document.getElementById(toolAskId(kind));
+    askInput.checked = !!(source && source.checked);
+    askInput.setAttribute("aria-label", "Run automatically for " + name);
+    askInput.addEventListener("change", function () {
+      var box = document.getElementById(toolAskId(kind));
+      if (!box || box.checked === askInput.checked) return;
+      box.checked = askInput.checked;
+      box.dispatchEvent(new Event("change"));
+    });
+    askLabel.append(askInput);
+    askRow.append(askCopy, askLabel);
+    body.append(top, account, list, askRow);
     if (kind === "calendar") {
       var calendarActions = document.createElement("div");
       calendarActions.className = "wait-actions";
@@ -6447,7 +6494,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var name = document.getElementById("hearing-name").value;
     var triggers = document.getElementById("hearing-triggers").value;
     var note = document.getElementById("hearing-note");
-    if (note) note.textContent = "Saving the bot.";
+    if (note) note.textContent = "Saving the guest.";
     fetch("/api/hearing", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -6459,23 +6506,30 @@ if (sessionWhen && sessionWhen.dataset.at) {
     }).then(function (payload) {
       var result = payload.result || {};
       if (!payload.ok || result.ok === false || !result.hearing || !result.hearing.name) {
-        if (note) note.textContent = result.error || "The bot was not saved.";
+        if (note) note.textContent = result.error || "The guest was not saved.";
         return;
       }
       fillHearing(result.hearing);
       if (note) note.textContent = "";
-      toast("Saved. The meeting bot is " + result.hearing.name + ".");
+      toast("Saved. The meeting guest is " + result.hearing.name + ".");
     }).catch(function () {
-      if (note) note.textContent = "The bot was not saved.";
+      if (note) note.textContent = "The guest was not saved.";
     });
   });
   document.getElementById("ask-first").addEventListener("change", function () {
     saveAsk(document.getElementById("ask-first").checked);
   });
-  document.getElementById("bot-run").addEventListener("change", function () {
-    var box = document.getElementById("bot-run");
-    syncAskState(box);
-    saveBotRun(box.checked);
+  document.getElementById("cal-ask").addEventListener("change", function () {
+    syncAskState(document.getElementById("cal-ask"));
+    saveToolAsk("calendar", document.getElementById("cal-ask").checked);
+  });
+  document.getElementById("lin-ask").addEventListener("change", function () {
+    syncAskState(document.getElementById("lin-ask"));
+    saveToolAsk("linear", document.getElementById("lin-ask").checked);
+  });
+  document.getElementById("slack-ask").addEventListener("change", function () {
+    syncAskState(document.getElementById("slack-ask"));
+    saveToolAsk("slack", document.getElementById("slack-ask").checked);
   });
   document.getElementById("read-again").addEventListener("click", function () {
     readingTries = 0;
