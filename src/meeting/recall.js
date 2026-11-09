@@ -1,6 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { DEFAULT_BOT_NAME, normalizeBotName } from "../bot/identity.js";
 import { addressesHearing, normalizeHearing } from "../hearing.js";
+import { SILENT_MEETING_MP3 } from "./silent-clip.js";
 
 /**
  * Recall signs the raw body as id.timestamp.payload with the workspace secret.
@@ -45,6 +46,7 @@ export function recallBotUrl(id) {
  * Recall.ai in ap-northeast-1. Join posts one bot only when the
  * key, an https meeting url, and a public https origin are all present.
  * The camera stays off so Google Meet draws its own tile. The origin is the transcript webhook.
+ * A silent clip is set so a later spoken reply can play. The clip itself says nothing.
  * Localhost is refused before any request. The key is never put in the error.
  *
  * @param {NodeJS.ProcessEnv} [env]
@@ -81,6 +83,11 @@ export function createMeetingAdapter(env = process.env, options = {}) {
           body: JSON.stringify({
             meeting_url: meetingUrl,
             bot_name: botName,
+            automatic_audio_output: {
+              in_call_recording: {
+                data: { kind: "mp3", b64_data: SILENT_MEETING_MP3.toString("base64") },
+              },
+            },
             recording_config: {
               video_mixed_mp4: {},
               transcript: {

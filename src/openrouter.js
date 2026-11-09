@@ -293,3 +293,141 @@ export async function openRouterStream(input = {}) {
   }
   return { text: "", used: false, model: tried.at(-1) || models[0], error: lastError, tried };
 }
+
+const SPEECH_URL = "https://openrouter.ai/api/v1/audio/speech";
+const DEFAULT_TTS_MODEL = "openai/gpt-4o-mini-tts-2025-12-15";
+const DEFAULT_TTS_VOICE = "alloy";
+const TTS_FALLBACK = { model: "mistralai/voxtral-mini-tts-2603", voice: "en_paul_neutral" };
+
+function readToolCalls(message) {
+  const raw = message?.tool_calls;
+  if (!Array.isArray(raw)) return [];
+  const calls = [];
+  for (const call of raw) {
+    const name = call?.function?.name || call?.name;
+    if (typeof name !== "string" || !name.trim()) continue;
+    let args = call?.function?.arguments ?? call?.arguments ?? {};
+    if (typeof args === "string") {
+      try { args = JSON.parse(args); } catch { args = null; }
+    }
+    if (!args || typeof args !== "object" || Array.isArray(args)) args = {};
+    calls.push({
+      id: typeof call.id === "string" && call.id ? call.id : `call_${calls.length}`,
+      name: name.trim(),
+      arguments: args,
+    });
+    if (calls.length >= 3) break;
+  }
+  return calls;
+}
+
+/**
+ * One chat turn that may include tool calls. Tries each model. Never throws.
+ * An empty answer with no tool call is not a success, so the next model runs.
+ *
+ * @param {{
+ *   env?: NodeJS.ProcessEnv,
+ *   messages?: Array<Record<string, unknown>>,
+ *   tools?: Array<Record<string, unknown>>,
+ *   models?: string[],
+ *   fetchImpl?: typeof fetch,
+ *   maxTokens?: number,
+ * }} [input]
+ */
+export async function openRouterTurn(input = {}) {
+  const env = input.env ?? process.env;
+  const { key, models: configured, enabled } = openRouterConfig(env);
+  const models = Array.isArray(input.models) && input.models.length ? input.models : configured;
+  const modelName = models[0] || configured[0] || "";
+  if (!enabled) return { text: "", toolCalls: [], used: false, model: modelName, tried: [] };
+  const messages = Array.isArray(input.messages) ? input.messages : [];
+  if (!messages.length) return { text: "", toolCalls: [], used: false, model: modelName, tried: [] };
+  const fetchImpl = input.fetchImpl || fetch;
+  const tools = Array.isArray(input.tools) ? input.tools : [];
+  const tried = [];
+  for (const model of models) {
+    tried.push(model);
+    try {
+      const body = completionBody(model, messages, { maxTokens: input.maxTokens ?? 800 });
+      if (tools.length) {
+        body.tools = tools;
+        body.tool_choice = "auto";
+      }
+      const response = await fetchImpl(CHAT_URL, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${key}`,
+          "content-type": "application/json",
+          "HTTP-Referer": "https://sederunt.app",
+          "X-Title": "Sederunt",
+        },
+        body: JSON.stringify(body),
+      });
+      if (!response?.ok) {
+        dropBody(response);
+        continue;
+      }
+      const payload = typeof response.json === "function" ? await response.json() : null;
+      const message = payload?.choices?.[0]?.message;
+      const text = textFromContent(message?.content).trim();
+      const toolCalls = readToolCalls(message);
+      if (!text && !toolCalls.length) continue;
+      return { text, toolCalls, used: true, model, tried };
+    } catch {
+      continue;
+    }
+  }
+  return { text: "", toolCalls: [], used: false, model: tried.at(-1) || modelName, tried };
+}
+
+/**
+ * Mp3 bytes for one spoken line. The response is audio, not JSON.
+ * A pinned model is not replaced. Never throws, and the key is not returned.
+ *
+ * @param {{ env?: NodeJS.ProcessEnv, text?: string, fetchImpl?: typeof fetch }} [input]
+ * @returns {Promise<{ audio: Buffer | null, used: boolean, model: string }>}
+ */
+export async function openRouterSpeech(input = {}) {
+  const env = input.env ?? process.env;
+  const { key, enabled } = openRouterConfig(env);
+  const text = String(input.text ?? "").trim();
+  const pinnedModel = typeof env.OPENROUTER_TTS_MODEL === "string" ? env.OPENROUTER_TTS_MODEL.trim() : "";
+  const pinnedVoice = typeof env.OPENROUTER_TTS_VOICE === "string" ? env.OPENROUTER_TTS_VOICE.trim() : "";
+  const attempts = pinnedModel
+    ? [{ model: pinnedModel, voice: pinnedVoice || DEFAULT_TTS_VOICE }]
+    : [
+      { model: DEFAULT_TTS_MODEL, voice: pinnedVoice || DEFAULT_TTS_VOICE },
+      { model: TTS_FALLBACK.model, voice: pinnedVoice || TTS_FALLBACK.voice },
+    ];
+  if (!enabled || !text) return { audio: null, used: false, model: attempts[0].model };
+  const fetchImpl = input.fetchImpl || fetch;
+  for (const attempt of attempts) {
+    try {
+      const response = await fetchImpl(SPEECH_URL, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${key}`,
+          "content-type": "application/json",
+          "HTTP-Referer": "https://sederunt.app",
+          "X-Title": "Sederunt",
+        },
+        body: JSON.stringify({
+          model: attempt.model,
+          input: text,
+          voice: attempt.voice,
+          response_format: "mp3",
+        }),
+      });
+      if (!response?.ok) {
+        dropBody(response);
+        continue;
+      }
+      const bytes = typeof response.arrayBuffer === "function" ? Buffer.from(await response.arrayBuffer()) : null;
+      if (!bytes?.length || bytes[0] === 0x7b) continue;
+      return { audio: bytes, used: true, model: attempt.model };
+    } catch {
+      continue;
+    }
+  }
+  return { audio: null, used: false, model: attempts[0].model };
+}

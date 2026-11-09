@@ -212,6 +212,11 @@ test("join leaves the camera off and a failed join omits the key", async () => {
   assert.equal(body.meeting_url, "https://meet.google.com/abc-defg-hij");
   assert.equal(body.bot_name, "Adam");
   assert.equal(body.output_media, undefined);
+  assert.equal(body.automatic_audio_output.in_call_recording.data.kind, "mp3");
+  assert.equal(body.automatic_audio_output.in_call_recording.replay_on_participant_join, undefined);
+  const clip = Buffer.from(body.automatic_audio_output.in_call_recording.data.b64_data, "base64");
+  assert.equal(clip.subarray(0, 2).toString("hex"), "fff3");
+  assert.equal(clip.length > 100 && clip.length < 8000, true);
   sent.length = 0;
   await createMeetingAdapter(env, {
     async fetch(url, init) {
@@ -222,6 +227,7 @@ test("join leaves the camera off and a failed join omits the key", async () => {
   const renamed = JSON.parse(sent[0].init.body);
   assert.equal(renamed.bot_name, "Mai");
   assert.equal(renamed.output_media, undefined);
+  assert.equal(renamed.automatic_audio_output.in_call_recording.data.kind, "mp3");
   assert.deepEqual(body.recording_config, {
     video_mixed_mp4: {},
     transcript: {

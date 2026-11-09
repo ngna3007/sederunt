@@ -28,6 +28,7 @@ import { createLinearInstallationStore } from "./linear/installations.js";
 import { handleLinearOAuth, linearClientMetadata, tenantLinearClient } from "./linear/oauth.js";
 import { renderCameraPage } from "./meeting/camera.js";
 import { createMeetingAdapter, mediaFromBot, meetingDoorReady, meetingEnded, recallBotUrl, recallTranscriptDelivery, verifyRecallRequest } from "./meeting/recall.js";
+import { meetingLineShouldAnswer, speakMeetingTurn } from "./meeting/voice.js";
 import { createMeetingFollowups, parseFollowupValue } from "./meeting/followups.js";
 import { createSupabaseFollowupStore } from "./meeting/followup-store.js";
 import { acceptMeetingEnd, buildMeetingFollowupInput, followupInteractionFields, validateFollowupEdit } from "./meeting/live-followups.js";
@@ -1540,6 +1541,7 @@ export function createApp(options = {}) {
         headers: req.headers,
         payload: raw,
       });
+      let voiceWork = null;
       if (accepted) {
         try {
           const payload = JSON.parse(raw || "{}");
@@ -1567,7 +1569,33 @@ export function createApp(options = {}) {
                 }
               }
             }
-            await handleUtterance({ ...delivery, session: current }, depsFor(workspace, companyId));
+            const answerLine = meetingLineShouldAnswer(current, delivery);
+            const kept = await handleUtterance({ ...delivery, session: current }, depsFor(workspace, companyId));
+            const speakerName = typeof participant?.name === "string" ? participant.name : "";
+            voiceWork = speakMeetingTurn({
+              answer: answerLine && kept?.kind !== "duplicate",
+              text: delivery.text,
+              speakerName,
+              botName: current.hearing?.name || "",
+              memberId: delivery.memberId,
+              room: delivery.room,
+              session: current,
+              deliveryId: delivery.deliveryId,
+              env,
+              fetchImpl: workspace.fetchImpl,
+              deps: depsFor(workspace, companyId),
+              context: {
+                tenantId: companyId || "",
+                env,
+                personId: "",
+                googleGrants: workspace.googleGrants,
+                forms: workspace.forms,
+                calendarMcp: workspace.calendarMcp,
+                calendarSave: workspace.calendarSave,
+                fetch: workspace.fetchImpl,
+                origin: typeof env.SEDERUNT_PUBLIC_ORIGIN === "string" ? env.SEDERUNT_PUBLIC_ORIGIN : "",
+              },
+            }).catch(() => {});
             if (companyId && workspace.followups && workspace.followupStore) {
               const outcomes = await workspace.followupStore.list(companyId, { kind: "outcome", meetingId: delivery.room.id, limit: 1 });
               if (outcomes.length) await persistMeetingFollowups(workspace, companyId, delivery.room.id);
@@ -1597,7 +1625,20 @@ export function createApp(options = {}) {
           // A signed callback is still accepted when the transcript has no words.
         }
       }
+      let voiceDeferred = false;
+      if (voiceWork && env.VERCEL) {
+        try {
+          const { waitUntil } = await import("@vercel/functions");
+          if (typeof waitUntil === "function") {
+            waitUntil(voiceWork);
+            voiceDeferred = true;
+          }
+        } catch {
+          // Local Node has no request waitUntil. The reply still finishes below.
+        }
+      }
       send(res, accepted ? 204 : 401, "text/plain; charset=utf-8", accepted ? "" : "rejected");
+      if (voiceWork && !voiceDeferred) await voiceWork;
       if (accepted) scheduleRecovery();
       return;
     }

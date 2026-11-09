@@ -1,6 +1,7 @@
 {
   "functions": {
     "src/server.js": {
+      "maxDuration": 60,
       "includeFiles": "{public/**,src/**}"
     }
   },
