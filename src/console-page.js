@@ -2781,7 +2781,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
           var emptyLine = document.getElementById("room-empty-line");
           var aside = document.getElementById("room-empty-aside");
           if (empty) empty.hidden = false;
-          if (emptyLine) emptyLine.textContent = "Reading memory…";
+          if (emptyLine) emptyLine.textContent = "Loading...";
           if (aside) aside.textContent = "Rooms will show here.";
         }
       }

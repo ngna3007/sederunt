@@ -60,6 +60,8 @@ test("meeting words separate live, ended, channel, and silence", () => {
   assert.match(page, /changes did not go through/);
   assert.doesNotMatch(page, /No room yet\./);
   assert.match(page, /No rooms yet\./);
+  assert.match(page, /emptyLine\.textContent = "Loading\.\.\."/);
+  assert.doesNotMatch(page, /Reading memory/);
   assert.match(page, /Home could not be loaded/);
   assert.match(page, /Try again/);
   assert.doesNotMatch(page, /Couldn't load your workspace/);
