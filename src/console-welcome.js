@@ -330,6 +330,20 @@ const WELCOME_SCRIPT = `
       try { sessionStorage.setItem(slackWait, "1"); } catch (error) {}
     });
   }
+  var card = document.getElementById("ob-card");
+  if (card && card.tagName === "FORM") {
+    card.addEventListener("submit", function (event) {
+      var button = event.submitter;
+      if (!button) return;
+      if (card.classList.contains("is-continuing")) {
+        event.preventDefault();
+        return;
+      }
+      card.classList.add("is-continuing");
+      button.setAttribute("aria-busy", "true");
+      button.textContent = button.getAttribute("formtarget") === "_blank" ? "Opening Slack…" : "Continuing…";
+    });
+  }
   var slackDone = slackStatus && slackStatus.textContent.indexOf("Connected") !== -1;
   if (slackDone) {
     try { sessionStorage.removeItem(slackWait); } catch (error) {}

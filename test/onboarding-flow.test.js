@@ -229,6 +229,8 @@ test("fake auth onboarding stays on localhost", async (t) => {
         assert.match(chat.raw, /Step 3 of 4/);
         assert.match(chat.raw, /Connect Slack/);
         assert.match(chat.raw, /One allow adds the Sederunt bot/);
+        assert.match(chat.raw, /Continuing…/);
+        assert.match(chat.raw, /Opening Slack…/);
         assert.match(chat.raw, /sederunt-slack-wait/);
         assert.doesNotMatch(chat.raw, /Where should Sederunt post\?/);
         assert.doesNotMatch(chat.raw, /invite @Sederunt into a channel/);
@@ -578,6 +580,25 @@ test("welcome shows the Slack bot as connected without a post channel", async ()
   assert.match(blank.raw, /id="slack-status">[\s\S]*?Connected/);
   assert.match(blank.raw, /Bot connected/);
   assert.doesNotMatch(blank.raw, /#C0DEMO|Posts to #/);
+});
+
+test("a second workspace with the same name is refused", async () => {
+  await withServer({
+    SEDERUNT_AUTH_FAKE: "1",
+    SEDERUNT_SESSION_SECRET: SECRET,
+    SEDERUNT_MEMBER: "Mina",
+  }, async (port) => {
+    const jar = {};
+    await followProvider(port, jar, "google", "/console");
+    const created = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=create&name=Northline" });
+    assert.equal(created.status, 302);
+    absorb(jar, created.cookie);
+    const again = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=create&name=northline" });
+    assert.equal(again.status, 400);
+    assert.match(again.raw, /You already have a workspace with this name/);
+    const home = await call(port, "GET", "/console", { cookie: header(jar) });
+    assert.equal((home.raw.match(/role="menuitemradio"/g) || []).length, 1);
+  });
 });
 
 test("onboarding screens fit at desktop and phone widths", { timeout: 180000 }, async (t) => {

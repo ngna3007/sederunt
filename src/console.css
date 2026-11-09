@@ -5770,6 +5770,24 @@ body.ob-page {
 .ob-page .ob-primary { border: 1px solid transparent; background: var(--primary); color: var(--primary-foreground); }
 .ob-page .ob-primary:active { background: var(--primary-active); }
 .ob-page .ob-primary:hover { background: var(--primary-hover); }
+.ob-card.is-continuing { cursor: progress; }
+.ob-card.is-continuing .ob-body,
+.ob-card.is-continuing .ob-foot-left,
+.ob-card.is-continuing .ob-primary:not([aria-busy="true"]) { pointer-events: none; }
+.ob-page .ob-primary[aria-busy="true"] { cursor: progress; }
+.ob-page .ob-primary[aria-busy="true"]::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: ob-spin 0.7s linear infinite;
+}
+@keyframes ob-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .ob-page .ob-primary[aria-busy="true"]::before { animation: none; border-right-color: currentColor; }
+}
 .ob-page .ob-btn, .ob-page .ob-dark { border: 1px solid var(--border); background: var(--card); color: var(--foreground); }
 .ob-page .ob-btn:hover, .ob-page .ob-dark:hover { background: var(--muted); }
 .ob-page .ob-link { border: 1px solid transparent; background: transparent; color: var(--muted-foreground); padding: 0 8px; margin-left: -8px; }
