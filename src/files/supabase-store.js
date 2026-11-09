@@ -96,9 +96,10 @@ export function createSupabaseFileStore({ env = {}, fetch: fetchImpl = globalThi
     },
     async peekUpload(id) { return (await one("file_upload_staging", `file_id=eq.${uuid(id)}`))?.bytes || null; },
     async importActive(input) {
-      // Console metadata without a checksum cannot be promoted to trusted rows.
-      if (!input.sha256) return null;
-      return rpc("import", { p_file: { ...input, sha256: Buffer.from(input.sha256).toString("hex") } });
+      // Console metadata without a trusted checksum cannot be promoted to trusted rows.
+      const sha256 = checksumHex(input?.sha256);
+      if (!sha256) return null;
+      return rpc("import", { p_file: { ...input, sha256 } });
     },
     deleteFile: (userId, id, reason) => action(userId, "delete", id, { reason }),
     requestDelete: (userId, id, reason) => action(userId, "request", id, { reason }),
@@ -172,6 +173,11 @@ function uuid(value) {
 }
 function tenantMapping(input) { const { spaceId, folderId, ...rest } = input; return { ...rest, consoleSpaceId: spaceId, consoleFolderId: folderId }; }
 function tenantResult(row) { return row ? { ...row, spaceId: row.consoleSpaceId, folderId: row.consoleFolderId } : null; }
+function checksumHex(value) {
+  if (Buffer.isBuffer(value) && value.length === 32) return value.toString("hex");
+  if (typeof value === "string" && /^[a-f0-9]{64}$/i.test(value)) return value.toLowerCase();
+  return "";
+}
 function encode(input) {
   return Object.fromEntries(Object.entries(input).map(([key, value]) => [key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`), Buffer.isBuffer(value) ? `\\x${value.toString("hex")}` : value]));
 }

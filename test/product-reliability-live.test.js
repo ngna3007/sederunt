@@ -832,6 +832,23 @@ test("a checksum is kept only in its trusted form, and room attendance uses the 
   await assert.rejects(() => down.forRoom(tenant, "room-b"), /could not be checked/);
 });
 
+test("participant binding reports an identity conflict separately from an outage", async () => {
+  const secret = "database-secret-value";
+  const responses = [
+    { ok: false, json: async () => ({ message: "participant identity changed", detail: secret }) },
+    { ok: false, json: async () => ({ message: `timeout ${secret}` }) },
+    { ok: false, json: async () => { throw new Error(secret); } },
+  ];
+  const bindings = createParticipantBindings({
+    SUPABASE_URL: "https://fixture.supabase.co",
+    SUPABASE_SECRET_KEY: "service-key-for-fixture",
+  }, { fetchImpl: async () => responses.shift() });
+  const record = () => bindings.record({ tenantId: tenant, roomId: "room-a", memberId: "100", email: "mina@example.com" });
+  await assert.rejects(record, (error) => error.code === "participant-identity" && error.message === "Participant identity could not be checked." && !error.message.includes(secret));
+  await assert.rejects(record, (error) => error.code === "participant-unavailable" && error.message === "Participant identity could not be checked." && !error.message.includes(secret));
+  await assert.rejects(record, (error) => error.code === "participant-unavailable" && !error.message.includes(secret));
+});
+
 test("production boot rejects an unsafe configuration", async () => {
   const planted = "planted-secret-value-should-not-appear";
   const child = spawn(process.execPath, ["src/server.js"], {
@@ -1223,6 +1240,59 @@ test("meeting finalization records an empty Slack team as unverified and keeps a
   }
 });
 
+test("a participant outage asks Recall to retry and an identity conflict still keeps the words", async () => {
+  const remembered = [];
+  let mode = "unavailable";
+  const { app } = followupApp({
+    deps: {
+      memory: {
+        async remember(document) { remembered.push(document); return { blobId: "blob-1" }; },
+        async index() { return []; },
+        async recall() { return []; },
+      },
+      slack: { fetch: slackFetch([]) },
+      linear: { async createIssue() { return { identifier: "ROW-71", id: "issue-71" }; } },
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+    },
+    participantBindings: {
+      async record() {
+        if (mode === "ok") return;
+        const error = new Error("Participant identity could not be checked.");
+        error.code = mode === "identity" ? "participant-identity" : "participant-unavailable";
+        throw error;
+      },
+      async forUser() { return []; },
+      async forRoom() { return [{ memberId: "100", email: "mina@example.com" }]; },
+    },
+  });
+  await listen(app);
+  try {
+    const transcript = JSON.stringify({ event: "transcript.data", data: { bot: { id: "bot-live" }, data: {
+      participant: { id: 100, name: "Mina", email: "mina@example.com", email_verified: true },
+      words: [{ text: "Maple" }, { text: "the" }, { text: "booth" }, { text: "opens" }, { text: "at" }, { text: "nine." }],
+    } } });
+    const denied = await recall(app.address().port, transcript);
+    assert.equal(denied.status, 503);
+    assert.equal(denied.raw, "participant-pending");
+    assert.equal(denied.raw.includes("could not be checked"), false);
+    assert.equal(remembered.length, 0);
+    mode = "ok";
+    const kept = await recall(app.address().port, transcript);
+    assert.equal(kept.status, 204);
+    assert.ok(remembered.length >= 1);
+    const before = remembered.length;
+    mode = "identity";
+    const changed = await recall(app.address().port, JSON.stringify({ event: "transcript.data", data: { bot: { id: "bot-live" }, data: {
+      participant: { id: 100, name: "Mina", email: "mina@example.com", email_verified: true },
+      words: [{ text: "Maple" }, { text: "keep" }, { text: "the" }, { text: "second" }, { text: "sentence." }],
+    } } }));
+    assert.equal(changed.status, 204);
+    assert.ok(remembered.length > before);
+  } finally {
+    await close(app);
+  }
+});
+
 test("minutes and channel posts stay unsent without current recipient evidence", async () => {
   const posts = [];
   const { app, store } = followupApp({
@@ -1303,6 +1373,90 @@ test("recovery finds a pending tenant after older follow-ups but withholds unver
     assert.equal((await store.get(buried, "delivery:buried")).status, "not_reached");
     assert.equal(posts.some((row) => row.text === "Minutes for the later tenant"), false);
     assert.equal((await store.get(tenant, "outcome:history:0")).status, "done");
+  } finally {
+    await close(app);
+  }
+});
+
+test("recovery reaches a later tenant behind a page of exhausted failures", async () => {
+  const posts = [];
+  const exhausted = "22222222-2222-4222-8222-222222222222";
+  const future = "44444444-4444-4444-8444-444444444444";
+  const running = "55555555-5555-4555-8555-555555555555";
+  const newer = "66666666-6666-4666-8666-666666666666";
+  const { app, store } = followupApp({
+    posts,
+    participantBindings: {
+      async record() {},
+      async forUser() { return []; },
+      async forRoom() { return [{ memberId: "100", email: "mina@example.com" }]; },
+    },
+  });
+  for (let index = 0; index < 100; index += 1) {
+    await store.put({
+      id: `delivery:spent:${index}`, tenantId: exhausted, meetingId: `meet-spent-${index}`, kind: "delivery", status: "failed",
+      data: { teamId: "T1", requesterSlackId: "U_MINA", text: "spent", messageId: `m-spent-${index}`, attempts: 5 },
+    });
+  }
+  await store.put({
+    id: "delivery:running", tenantId: running, meetingId: "meet-running", kind: "delivery", status: "running",
+    data: { teamId: "T1", requesterSlackId: "U_MINA", text: "running", messageId: "m-running", attempts: 5, claimUntil: Date.now() - 1000 },
+  });
+  await store.put({
+    id: "delivery:future", tenantId: future, meetingId: "meet-future", kind: "delivery", status: "failed",
+    data: { teamId: "T1", requesterSlackId: "U_MINA", text: "later", messageId: "m-future", attempts: 1, nextAttemptAt: Date.now() + 60000 },
+  });
+  await store.put({
+    id: "delivery:newer", tenantId: newer, meetingId: "meet-newer", kind: "delivery", status: "pending",
+    data: { teamId: "T1", requesterSlackId: "U_MINA", text: "Minutes for the newer tenant", messageId: "m-newer", attempts: 0 },
+  });
+  await store.put({
+    id: "delivery:newer-again", tenantId: newer, meetingId: "meet-newer", kind: "delivery", status: "pending",
+    data: { teamId: "T1", requesterSlackId: "U_MINA", text: "Minutes for the newer tenant again", messageId: "m-newer-again", attempts: 0 },
+  });
+  for (let index = 0; index < 96; index += 1) {
+    await store.put({
+      id: `delivery:spent-tail:${index}`, tenantId: exhausted, meetingId: `meet-spent-tail-${index}`, kind: "delivery", status: "failed",
+      data: { teamId: "T1", requesterSlackId: "U_MINA", text: "spent", messageId: `m-spent-tail-${index}`, attempts: 5 },
+    });
+  }
+  await store.put({
+    id: "action:dirty-newer", tenantId: newer, meetingId: "meet-newer", kind: "action", status: "done",
+    data: { notificationsDirty: true, requesterSlackId: "U_MINA", requesterMemberId: "100", memberIds: ["100"], argumentVersion: 1, attempts: 0 },
+  });
+  await listen(app);
+  try {
+    const first = await post(app.address().port, "/api/recovery/drain", JSON.stringify({ limit: 1 }), {
+      authorization: "Bearer recovery-secret-value", "content-type": "application/json",
+    });
+    assert.equal(first.status, 200);
+    const opened = JSON.parse(first.raw);
+    assert.deepEqual(opened.followups.map((row) => row.tenantId), [running]);
+    assert.equal((await store.get(running, "delivery:running")).status, "outcome_unknown");
+    assert.equal((await store.get(future, "delivery:future")).status, "failed");
+    assert.equal((await store.get(newer, "delivery:newer")).status, "pending");
+    const drained = await post(app.address().port, "/api/recovery/drain", JSON.stringify({ limit: 10 }), {
+      authorization: "Bearer recovery-secret-value", "content-type": "application/json",
+    });
+    assert.equal(drained.status, 200);
+    const body = JSON.parse(drained.raw);
+    assert.equal(body.followups.some((row) => row.tenantId === newer && row.count >= 1), true);
+    assert.equal(body.followups.some((row) => row.tenantId === future), false);
+    assert.equal(body.followups.some((row) => row.tenantId === exhausted), false);
+    assert.equal((await store.get(newer, "delivery:newer")).status, "not_reached");
+    assert.equal((await store.get(exhausted, "delivery:spent:0")).data.attempts, 5);
+    assert.equal(posts.some((row) => row.text === "Minutes for the newer tenant"), false);
+    const dirtyOnly = "77777777-7777-4777-8777-777777777777";
+    await store.put({
+      id: "action:dirty-only", tenantId: dirtyOnly, meetingId: "meet-dirty", kind: "action", status: "done",
+      data: { notificationsDirty: true, requesterSlackId: "U_MINA", requesterMemberId: "100", memberIds: ["100"], argumentVersion: 1, attempts: 0 },
+    });
+    const capped = await post(app.address().port, "/api/recovery/drain", JSON.stringify({ limit: 1 }), {
+      authorization: "Bearer recovery-secret-value", "content-type": "application/json",
+    });
+    assert.equal(capped.status, 200);
+    assert.deepEqual(JSON.parse(capped.raw).followups.map((row) => row.tenantId), [newer]);
+    assert.equal((await store.get(future, "delivery:future")).status, "failed");
   } finally {
     await close(app);
   }

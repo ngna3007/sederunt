@@ -20,6 +20,8 @@ test("memory store CAS refuses stale updates and returns independent copies", as
   assert.deepEqual((await store.list("tenant", { kind: "outcome", meetingId: "later" })).map((row) => row.id), ["later"]);
   assert.deepEqual(await store.list("tenant", { meetingId: "missing" }), []);
   assert.deepEqual((await store.list("", { statuses: ["pending", "failed", "running"], limit: 100 })).map((row) => row.id), ["a", "pending-row", "elsewhere"]);
+  assert.deepEqual((await store.list("", { statuses: ["pending", "failed", "running"], offset: 0 })).map((row) => row.id), ["a", "pending-row", "elsewhere"]);
+  assert.deepEqual((await store.list("", { statuses: ["pending", "failed", "running"], offset: 1 })).map((row) => row.id), ["pending-row", "elsewhere"]);
   assert.deepEqual((await store.list("", { needsSync: true })).map((row) => row.id), ["later", "elsewhere"]);
   assert.deepEqual((await store.list("tenant", { kind: "delivery", statuses: ["pending"], limit: 1 })).map((row) => row.id), ["pending-row"]);
   await assert.rejects(store.put({ ...record, kind: "unknown" }), /Invalid/);
@@ -44,7 +46,10 @@ test("Supabase adapter sends scoped RPCs, handles CAS null and hides database fa
   assert.equal((await store.list("tenant")).length, 1);
   assert.equal((await store.list("tenant", { meetingId: "meeting", needsSync: true })).length, 1);
   assert.ok(calls.at(-1).url.includes("meeting_id=eq.meeting"));
+  assert.equal(calls.at(-1).url.includes("offset="), false);
   assert.ok(calls.at(-1).url.includes("data-%3E%3EnotificationsDirty=eq.true") || calls.at(-1).url.includes("notificationsDirty"));
+  assert.equal((await store.list("tenant", { offset: 25 })).length, 1);
+  assert.ok(calls.at(-1).url.includes("offset=25"));
   response = [];
   assert.equal(await store.get("tenant", "absent"), null);
   response = { id: null };

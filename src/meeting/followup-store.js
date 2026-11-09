@@ -28,15 +28,18 @@ export function createMemoryFollowupStore({ clock = Date.now } = {}) {
       records.set(key(record.tenantId, record.id), next);
       return copy(next);
     },
-    async list(tenantId, { kind, statuses, needsSync, meetingId, limit = 50 } = {}) {
+    async list(tenantId, { kind, statuses, needsSync, meetingId, limit = 50, offset = 0 } = {}) {
       const cap = Math.min(limit, 100);
+      const start = offset > 0 ? offset : 0;
       const rows = [];
+      let skipped = 0;
       for (const row of records.values()) {
         if (tenantId && row.tenantId !== tenantId) continue;
         if (kind && row.kind !== kind) continue;
         if (statuses && !statuses.includes(row.status)) continue;
         if (needsSync && row.data.notificationsDirty !== true) continue;
         if (meetingId && row.meetingId !== meetingId) continue;
+        if (skipped < start) { skipped += 1; continue; }
         rows.push(copy(row));
         if (rows.length >= cap) break;
       }
@@ -75,13 +78,14 @@ export function createSupabaseFollowupStore(env, { fetchImpl = globalThis.fetch 
       assertFollowupRecord({ ...record, status, data });
       return shape(await call("rpc/meeting_followup_change", { p_tenant: record.tenantId, p_id: record.id, p_revision: record.revision, p_status: status, p_data: data }));
     },
-    async list(tenantId, { kind, statuses, needsSync, meetingId, limit = 50 } = {}) {
+    async list(tenantId, { kind, statuses, needsSync, meetingId, limit = 50, offset = 0 } = {}) {
       const params = new URLSearchParams({ select: "*", order: "updated_at.asc,id.asc", limit: String(Math.min(100, limit)) });
       if (tenantId) params.set("tenant_id", `eq.${tenantId}`);
       if (kind) params.set("kind", `eq.${kind}`);
       if (needsSync) params.set("data->>notificationsDirty", "eq.true");
       if (statuses) params.set("status", `in.(${statuses.join(",")})`);
       if (meetingId) params.set("meeting_id", `eq.${meetingId}`);
+      if (offset > 0) params.set("offset", String(Math.min(10000, offset)));
       return (await call(`meeting_followups?${params}`)).map(shape);
     },
   };

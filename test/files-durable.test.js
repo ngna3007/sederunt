@@ -50,6 +50,23 @@ test("Console reconciliation refreshes after a minute and does not hide failures
   assert.equal(calls, 4);
 });
 
+test("a console checksum is stored as its original 64 hex characters", async () => {
+  const hex = "ab".repeat(32);
+  const calls = [];
+  const store = createSupabaseFileStore({ env, fetch: async (_url, options) => {
+    calls.push(JSON.parse(options.body));
+    return new Response("null");
+  } });
+  assert.equal(await store.importActive({ id: randomUUID(), sha256: hex.toUpperCase() }), null);
+  assert.equal(calls[0].p_file.sha256, hex);
+  assert.equal(calls[0].p_file.sha256.length, 64);
+  assert.equal(await store.importActive({ id: randomUUID(), sha256: Buffer.from(hex, "hex") }), null);
+  assert.equal(calls[1].p_file.sha256, hex);
+  const quiet = createSupabaseFileStore({ env, fetch: async () => { throw new Error("unexpected database request"); } });
+  assert.equal(await quiet.importActive({ id: randomUUID(), sha256: "not-a-checksum" }), null);
+  assert.equal(await quiet.importActive({ id: randomUUID(), sha256: Buffer.alloc(16) }), null);
+});
+
 test("durable Files accepts the existing server-only Supabase key name", async () => {
   const store = createSupabaseFileStore({ env: { SUPABASE_URL: env.SUPABASE_URL, SUPABASE_SECRET_KEY: "fixture-alias" }, fetch: async (_, options) => {
     assert.equal(options.headers.apikey, "fixture-alias");

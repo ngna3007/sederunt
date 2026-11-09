@@ -5,7 +5,14 @@ export function createParticipantBindings(env = {}, { fetchImpl = globalThis.fet
   async function call(name, body) {
     const response = await fetchImpl(`${base}/rest/v1/rpc/${name}`, { method: "POST", redirect: "error",
       signal: AbortSignal.timeout(10000), headers: { apikey: key, authorization: `Bearer ${key}`, "content-type": "application/json" }, body: JSON.stringify(body) });
-    if (!response.ok) throw new Error("Participant identity could not be checked.");
+    if (!response.ok) {
+      let message = "";
+      try { message = String((await response.json())?.message || ""); } catch { message = ""; }
+      const error = new Error("Participant identity could not be checked.");
+      // The database refuses to overwrite a verified mailbox. Every other failure can be retried.
+      error.code = message.includes("participant identity changed") ? "participant-identity" : "participant-unavailable";
+      throw error;
+    }
     return response.json();
   }
   const durable = base && key && env.SEDERUNT_AUTH_FAKE !== "1";

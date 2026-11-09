@@ -520,6 +520,13 @@ function fileFrom(file) {
   };
 }
 
+function followupStillDue(row, now) {
+  // Drain still reconciles a running claim after the retry ceiling. It never moves an exhausted failure.
+  if (row.status === "running") return true;
+  if ((row.data.attempts || 0) >= 5) return false;
+  return !(row.data.nextAttemptAt > now);
+}
+
 export function createApp(options = {}) {
   const session = options.session ?? createSession();
   const env = options.env ?? process.env;
@@ -640,10 +647,28 @@ export function createApp(options = {}) {
     });
     if (filesRuntime?.kick) await filesRuntime.kick();
     if (workspace.followups && workspace.followupStore) {
-      // Done history is oldest-first and capped at 100, so it must not choose the tenants.
-      const active = await workspace.followupStore.list("", { statuses: ["pending", "failed", "running"], limit: 100 });
-      const dirty = await workspace.followupStore.list("", { needsSync: true, limit: 100 });
-      const tenants = [...new Set([...active, ...dirty].map((row) => row.tenantId).filter(Boolean))].slice(0, limit);
+      // Drain leaves an exhausted failure where it is, so the oldest page must not hide a later tenant.
+      const now = Date.now();
+      const tenants = [];
+      let offset = 0;
+      while (tenants.length < limit && offset <= 2000) {
+        const active = await workspace.followupStore.list("", { statuses: ["pending", "failed", "running"], limit: 100, offset });
+        for (const row of active) {
+          if (!followupStillDue(row, now) || tenants.includes(row.tenantId)) continue;
+          tenants.push(row.tenantId);
+          if (tenants.length >= limit) break;
+        }
+        if (active.length < 100) break;
+        offset += 100;
+      }
+      if (tenants.length < limit) {
+        const dirty = await workspace.followupStore.list("", { needsSync: true, limit: 100 });
+        for (const row of dirty) {
+          if (tenants.includes(row.tenantId)) continue;
+          tenants.push(row.tenantId);
+          if (tenants.length >= limit) break;
+        }
+      }
       const followups = [];
       for (const tenantId of tenants) {
         const drained = await workspace.followups.drain({ tenantId, limit });
@@ -1471,7 +1496,15 @@ export function createApp(options = {}) {
             const participant = payload?.data?.data?.participant || payload?.data?.participant;
             // Display names and unverified mailbox claims never establish attendance identity.
             if (participant?.email_verified === true && typeof participant.email === "string" && delivery.memberId) {
-              await workspace.participantBindings.record({ tenantId: companyId, roomId: delivery.room.id, memberId: delivery.memberId, email: participant.email });
+              try {
+                await workspace.participantBindings.record({ tenantId: companyId, roomId: delivery.room.id, memberId: delivery.memberId, email: participant.email });
+              } catch (error) {
+                // A changed mailbox is permanent. An outage must be retried, so the words are not acknowledged yet.
+                if (error?.code !== "participant-identity") {
+                  send(res, 503, "text/plain; charset=utf-8", "participant-pending");
+                  return;
+                }
+              }
             }
             await handleUtterance({ ...delivery, session: current }, depsFor(workspace, companyId));
             if (companyId && workspace.followups && workspace.followupStore) {
