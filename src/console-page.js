@@ -65,9 +65,9 @@ export function renderConsolePage(state = {}) {
   const slack = state.slackReady
     ? ""
     : `<p id="slack-block"><span>No channel is in use.</span><span class="sr">The channel door is not set up.</span><span hidden>Set SLACK_SIGNING_SECRET, then restart.</span></p>`;
-  const joinReadyCopy = state.meeting ? "Meet is ready." : "Meeting join is unavailable from this page.";
-  const joinReadyClass = state.meeting ? "" : " off";
+  const joinUnavailable = "Joining meetings is not set up on this server yet. Setup shows what is missing.";
   const joinDisabled = state.meeting ? "" : " disabled";
+  const joinTrigger = hearing.triggers.length ? hearing.triggers.join("\n") : hearing.name;
   const glyph = (paths) =>
     `<span class="ic" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${paths}</svg></span>`;
   const closeIcon = glyph('<path d="M4.2 4.2 11.8 11.8M11.8 4.2 4.2 11.8"/>');
@@ -805,7 +805,11 @@ ${slack}
     </div>
     <form id="meet-form">
       <label id="meet-link-label"${state.meeting ? "" : " hidden"}>Meeting link <input id="meet-link" name="meet" placeholder="Paste a Zoom, Google Meet, Teams, or Webex link"></label>
-      <p id="join-ready" class="${joinReadyClass.trim()}">${joinReadyCopy}</p>
+      <label id="join-trigger-label">Trigger
+        <span class="join-trigger-hint">People say this to wake the bot.</span>
+        <textarea id="join-trigger" name="trigger" rows="2" placeholder="A sentence that wakes the bot">${escapeHtml(joinTrigger)}</textarea>
+      </label>
+      <p id="join-ready"${state.meeting ? " hidden" : ""}>${state.meeting ? "" : joinUnavailable}</p>
       <button id="join-submit" class="primary" type="submit"${joinDisabled}>Join with this link</button>
       <button id="meet-connectors" class="primary" type="button"${state.meeting ? " hidden" : ""}>Open Setup</button>
       <p id="join-hint" class="sr">Sederunt joins that meeting when Meet is ready. If Meet is not ready, the status line says so.</p>
@@ -1364,7 +1368,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var button = document.getElementById("join-submit");
     if (!node) return;
     var ready = !document.getElementById("meet-block");
-    node.textContent = ready ? "Joining is available." : "Joining meetings is not set up on this server yet. Setup shows what is missing.";
+    node.hidden = ready;
+    node.textContent = ready ? "" : "Joining meetings is not set up on this server yet. Setup shows what is missing.";
     node.className = ready ? "" : "off";
     var label = document.getElementById("meet-link-label");
     if (label) label.hidden = !ready;
@@ -1639,10 +1644,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var heard = hearing && typeof hearing === "object" ? hearing : null;
     var nextName = heard && heard.name ? String(heard.name) : (name && name.value ? name.value : "");
     if (name && document.activeElement !== name && nextName) name.value = nextName;
-    if (triggers && document.activeElement !== triggers && heard) {
-      var lines = Array.isArray(heard.triggers) ? heard.triggers : [];
-      triggers.value = lines.length ? lines.join("\\n") : nextName;
-    }
+    var lines = heard && Array.isArray(heard.triggers) ? heard.triggers : [];
+    var triggerText = lines.length ? lines.join("\\n") : nextName;
+    if (triggers && document.activeElement !== triggers && heard) triggers.value = triggerText;
+    var joinTrigger = document.getElementById("join-trigger");
+    if (joinTrigger && document.activeElement !== joinTrigger && heard) joinTrigger.value = triggerText;
   }
 
   function member() {
@@ -6978,8 +6984,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
       joinButton.disabled = true;
       joinButton.textContent = "Joining…";
     }
-    text("join-status", "Sederunt is joining that meeting…");
-    fetch("/api/join", {
+    text("join-status", "");
+    saveJoinTrigger().then(function () {
+      text("join-status", "Sederunt is joining that meeting…");
+      return fetch("/api/join", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ url: link })
@@ -6996,11 +7004,35 @@ if (sessionWhen && sessionWhen.dataset.at) {
         : "Meet is not ready, so Sederunt cannot join that meeting yet.");
     }).catch(function () {
       text("join-status", "Sederunt could not join that meeting.");
+    });
+    }).catch(function () {
+      text("join-status", "The trigger was not saved.");
     }).finally(function () {
       joinBusy = false;
       syncJoinReady();
     });
   });
+  function saveJoinTrigger() {
+    var box = document.getElementById("join-trigger");
+    var nameNode = document.getElementById("hearing-name");
+    var name = nameNode && nameNode.value ? nameNode.value.trim() : "";
+    if (!box || !name) return Promise.resolve();
+    var lines = state && state.hearing && Array.isArray(state.hearing.triggers) ? state.hearing.triggers : [];
+    var current = lines.length ? lines.join("\\n") : name;
+    if (box.value.trim() === current.trim()) return Promise.resolve();
+    return fetch("/api/hearing", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: name, triggers: box.value })
+    }).then(function (response) {
+      return response.json().then(function (result) {
+        if (!response.ok || !result || result.ok === false || !result.hearing) throw new Error("trigger");
+        if (!state) state = {};
+        state.hearing = result.hearing;
+        fillHearing(result.hearing);
+      });
+    });
+  }
   function reserveComposer() {
     var chat = document.getElementById("chat");
     var form = document.getElementById("chat-form");
