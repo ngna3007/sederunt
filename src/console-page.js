@@ -317,7 +317,7 @@ ${slack}
           </div>
           <div class="conn-actions" data-col="action">
             <button type="button" class="conn-connect" id="cal-connect" data-connect="calendar"${calendarConnected ? " hidden" : ""}>Connect</button>
-            <button type="button" class="secondary conn-manage" id="cal-manage" data-connect="calendar"${calendarConnected ? "" : " hidden"}>Manage</button>
+            <button type="button" class="secondary conn-manage" id="cal-manage" data-manage="calendar" aria-haspopup="dialog"${calendarConnected ? "" : " hidden"}>Manage</button>
           </div>
         </div>
         <div class="tool-ask${calendarConnected ? "" : " ask-quiet"}" id="cal-ask-row">
@@ -333,7 +333,7 @@ ${slack}
           </div>
           <div class="conn-actions" data-col="action">
             <button type="button" class="conn-connect" id="lin-connect" data-connect="linear"${linearConnected ? " hidden" : ""}>Connect</button>
-            <button type="button" class="secondary conn-manage" id="lin-manage" data-connect="linear"${linearConnected ? "" : " hidden"}>Manage</button>
+            <button type="button" class="secondary conn-manage" id="lin-manage" data-manage="linear" aria-haspopup="dialog"${linearConnected ? "" : " hidden"}>Manage</button>
           </div>
         </div>
         <div class="tool-ask${linearConnected ? "" : " ask-quiet"}" id="lin-ask-row">
@@ -351,7 +351,7 @@ ${slack}
           </div>
           <div class="conn-actions" data-col="action">
             <button type="button" class="conn-connect" id="slack-connect" data-connect="slack"${slackConnected ? " hidden" : ""}>Connect</button>
-            <button type="button" class="secondary conn-manage" id="slack-manage" data-connect="slack"${slackConnected ? "" : " hidden"}>Manage</button>
+            <button type="button" class="secondary conn-manage" id="slack-manage" data-manage="slack" aria-haspopup="dialog"${slackConnected ? "" : " hidden"}>Manage</button>
           </div>
         </div>
         <div class="tool-ask${slackConnected ? "" : " ask-quiet"}" id="slack-ask-row">
@@ -967,6 +967,16 @@ ${inviteDialog}
         <button type="submit" class="primary" id="mcp-save">Save</button>
       </div>
     </form>
+  </div>
+</div>
+<div id="tool-manage-dialog" class="dialog mcp-manage-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="tool-manage-title">
+  <div class="shade" data-close="tool-manage-dialog"></div>
+  <div class="panel">
+    <div class="panel-bar">
+      <h2 id="tool-manage-title">Tool</h2>
+      <button type="button" class="close" data-close="tool-manage-dialog" aria-label="Close">${closeIcon}</button>
+    </div>
+    <div id="tool-manage-body" class="panel-body"></div>
   </div>
 </div>
 <div id="mcp-manage-dialog" class="dialog mcp-manage-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="mcp-manage-title">
@@ -2808,9 +2818,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       : "Slack is not set up on this server yet. Calendar, rooms, and chat still work.";
     text("cal-line", calendarMode === "Ask" ? "Calendar waits before a change." : "Calendar runs automatically.");
     text("lin-line", linearMode === "Ask" ? "Linear waits before a change." : "Linear runs automatically.");
-    text("slack-line", next.slack === "ready"
-      ? (slackMode === "Ask" ? "Slack waits before a change." : "Slack runs automatically.")
-      : "Chat and rooms work without Slack. Connect it when a bot token is ready.");
+    text("slack-line", slackStatusLine(next.slack === "ready"));
     text("prefs", "");
     var calAsk = document.getElementById("cal-ask");
     var linAsk = document.getElementById("lin-ask");
@@ -2821,6 +2829,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     syncAskState(calAsk);
     syncAskState(linAsk);
     syncAskState(slackAsk);
+    syncToolManageAsk();
     var calRow = document.getElementById("cal-ask-row");
     var linRow = document.getElementById("lin-ask-row");
     var slackRow = document.getElementById("slack-ask-row");
@@ -3219,7 +3228,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function dialogOpen() {
-    var ids = ["proof-dialog", "event-dialog", "profile-dialog", "decision-dialog", "create-dialog", "workspace-dialog", "space-dialog", "invite-dialog", "mcp-dialog", "mcp-manage-dialog", "mcp-token-dialog", "mcp-remove-dialog", "file-proof-dialog", "file-delete-dialog"];
+    var ids = ["proof-dialog", "event-dialog", "profile-dialog", "decision-dialog", "create-dialog", "workspace-dialog", "space-dialog", "invite-dialog", "tool-manage-dialog", "mcp-dialog", "mcp-manage-dialog", "mcp-token-dialog", "mcp-remove-dialog", "file-proof-dialog", "file-delete-dialog"];
     for (var i = 0; i < ids.length; i += 1) {
       var node = document.getElementById(ids[i]);
       if (node && !node.hidden) return true;
@@ -5103,7 +5112,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         box.checked = !on;
         text(line, result && result.allow === "missing-member" ? "This server has no member configured." : "Run automatically was not saved.");
       } else {
-        text(line, "");
+        text(line, tool === "slack" ? slackStatusLine(true) : "");
         toast("Saved.");
       }
     }).catch(function () {
@@ -5349,6 +5358,133 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
   }
 
+  var slackWorkspaceName = ${JSON.stringify(slackWorkspace)};
+  var toolManageKind = "";
+
+  function slackStatusLine(ready) {
+    if (!ready) return "Chat and rooms work without Slack. Connect it when a bot token is ready.";
+    if (slackWorkspaceName) return "Slack workspace: " + slackWorkspaceName + ". Add @Sederunt to a channel in Slack when you want it there.";
+    var box = document.getElementById("slack-ask");
+    return box && box.checked ? "Slack runs automatically." : "Slack waits before a change.";
+  }
+
+  function toolAskId(kind) {
+    if (kind === "linear") return "lin-ask";
+    if (kind === "slack") return "slack-ask";
+    return "cal-ask";
+  }
+
+  function syncToolManageAsk() {
+    var dialog = document.getElementById("tool-manage-dialog");
+    var modalAsk = document.getElementById("tool-manage-ask");
+    if (!dialog || dialog.hidden || !modalAsk || document.activeElement === modalAsk) return;
+    var source = document.getElementById(toolAskId(toolManageKind));
+    if (source) modalAsk.checked = source.checked;
+  }
+
+  function paintToolManage() {
+    var title = document.getElementById("tool-manage-title");
+    var body = document.getElementById("tool-manage-body");
+    if (!title || !body) return;
+    var kind = toolManageKind;
+    var name = kind === "linear" ? "Linear" : kind === "slack" ? "Slack" : "Calendar";
+    title.textContent = name;
+    body.replaceChildren();
+    var top = document.createElement("div");
+    top.className = "mcp-manage-top";
+    var pill = document.createElement("p");
+    pill.className = "conn-state";
+    pill.textContent = "Connected";
+    top.append(pill);
+    var account = document.createElement("p");
+    account.className = "tool-manage-account";
+    if (kind === "slack") account.textContent = slackWorkspaceName ? "Slack workspace: " + slackWorkspaceName + "." : "Slack is connected for this workspace.";
+    else if (kind === "linear") account.textContent = "Linear is connected for this workspace.";
+    else account.textContent = "Google account for this workspace.";
+    var list = document.createElement("ul");
+    list.className = "tool-manage-does";
+    var lines = kind === "linear"
+      ? ["Looks up issues.", "Files or updates a ticket."]
+      : kind === "slack"
+        ? ["Answers in a channel after someone adds @Sederunt there."]
+        : ["Looks up events.", "Adds or changes an event."];
+    lines.forEach(function (line) {
+      var item = document.createElement("li");
+      item.textContent = line;
+      list.append(item);
+    });
+    var askRow = document.createElement("div");
+    askRow.className = "tool-manage-ask";
+    var askCopy = document.createElement("div");
+    var askName = document.createElement("p");
+    askName.className = "mcp-tool-name";
+    askName.textContent = "Run automatically";
+    var askHelp = document.createElement("p");
+    askHelp.className = "mcp-tool-desc";
+    askHelp.textContent = "On means a change runs as soon as it is asked. Off means Sederunt asks first.";
+    askCopy.append(askName, askHelp);
+    var askLabel = document.createElement("label");
+    askLabel.className = "switch";
+    var askInput = document.createElement("input");
+    askInput.type = "checkbox";
+    askInput.id = "tool-manage-ask";
+    var source = document.getElementById(toolAskId(kind));
+    askInput.checked = !!(source && source.checked);
+    askInput.setAttribute("aria-label", "Run automatically for " + name);
+    askInput.addEventListener("change", function () {
+      var box = document.getElementById(toolAskId(kind));
+      if (!box || box.checked === askInput.checked) return;
+      box.checked = askInput.checked;
+      box.dispatchEvent(new Event("change"));
+    });
+    askLabel.append(askInput);
+    askRow.append(askCopy, askLabel);
+    body.append(top, account, list, askRow);
+    if (kind === "calendar") {
+      var calendarActions = document.createElement("div");
+      calendarActions.className = "wait-actions";
+      var calendarButton = document.createElement("button");
+      calendarButton.type = "button";
+      calendarButton.className = "secondary";
+      calendarButton.textContent = "Use a different Google account";
+      calendarButton.addEventListener("click", function () {
+        location.href = ${JSON.stringify(CALENDAR_CONNECT_PATH)};
+      });
+      calendarActions.append(calendarButton);
+      var calendarNote = document.createElement("p");
+      calendarNote.className = "tool-manage-account";
+      calendarNote.textContent = "This opens Google. The current Calendar link is replaced after you approve.";
+      body.append(calendarActions, calendarNote);
+    }
+    if (kind === "slack" && ${JSON.stringify(slackInstall)}) {
+      var slackActions = document.createElement("div");
+      slackActions.className = "wait-actions";
+      var slackButton = document.createElement("button");
+      slackButton.type = "button";
+      slackButton.className = "secondary";
+      slackButton.textContent = "Use a different Slack workspace";
+      slackButton.addEventListener("click", function () {
+        window.open(${JSON.stringify(SLACK_INSTALL_PATH)} + "?change=1&next=" + encodeURIComponent("/console/setup"), "_blank", "noopener");
+      });
+      slackActions.append(slackButton);
+      var slackNote = document.createElement("p");
+      slackNote.className = "tool-manage-account";
+      slackNote.textContent = "The current Slack link is replaced after you approve in Slack.";
+      body.append(slackActions, slackNote);
+    }
+  }
+
+  function openToolManage(kind) {
+    toolManageKind = kind || "calendar";
+    paintToolManage();
+    openDialog("tool-manage-dialog");
+  }
+
+  document.querySelectorAll("[data-manage]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      openToolManage(button.getAttribute("data-manage"));
+    });
+  });
   document.querySelectorAll("[data-connect]").forEach(function (button) {
     button.addEventListener("click", function () {
       var which = button.getAttribute("data-connect");
@@ -5357,13 +5493,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         return;
       }
       if (which === "slack" && ${JSON.stringify(slackInstall)}) {
-        // Add to Slack for this workspace. Manage = an explicit change of Slack workspace.
-        var slackInstallUrl = ${JSON.stringify(SLACK_INSTALL_PATH)} + "?next=" + encodeURIComponent("/console/setup");
-        if (button.id === "slack-manage") {
-          if (!window.confirm("Link a different Slack workspace to this Sederunt workspace? The current Slack link is replaced after you approve in Slack.")) return;
-          slackInstallUrl = ${JSON.stringify(SLACK_INSTALL_PATH)} + "?change=1&next=" + encodeURIComponent("/console/setup");
-        }
-        window.open(slackInstallUrl, "_blank", "noopener");
+        window.open(${JSON.stringify(SLACK_INSTALL_PATH)} + "?next=" + encodeURIComponent("/console/setup"), "_blank", "noopener");
         text("connector-who", "Finish in the window that opened, then come back here. This page never asks for a key.");
         return;
       }
@@ -6253,6 +6383,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
       closeDialog("event-dialog");
       return;
     }
+    var toolManageDialog = document.getElementById("tool-manage-dialog");
+    if (toolManageDialog && !toolManageDialog.hidden) { closeDialog("tool-manage-dialog"); return; }
     var mcpDialog = document.getElementById("mcp-dialog");
     if (mcpDialog && !mcpDialog.hidden) { closeDialog("mcp-dialog"); return; }
     var mcpTokenDialog = document.getElementById("mcp-token-dialog");

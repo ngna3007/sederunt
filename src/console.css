@@ -5672,6 +5672,12 @@ button.row-edit {
 .mcp-manage-dialog .panel-body { overscroll-behavior: contain; }
 .mcp-manage-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .mcp-manage-dialog .mcp-url, .mcp-manage-dialog .meta { margin: 0; }
+.tool-manage-account { margin: 0; color: var(--muted-foreground); font-size: var(--text-sm); line-height: 1.45; }
+.tool-manage-does { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.tool-manage-does li { margin: 0; font-size: var(--text-sm); line-height: 1.45; }
+.tool-manage-ask { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.tool-manage-ask .mcp-tool-name, .tool-manage-ask .mcp-tool-desc { margin: 0; }
+#tool-manage-dialog .conn-state { margin: 0; }
 .mcp-manage-dialog .wait-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .mcp-tool-group { display: flex; flex-direction: column; gap: 10px; }
 .mcp-tool-group h3 { margin: 4px 0 0; }

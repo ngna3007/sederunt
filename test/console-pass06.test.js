@@ -499,7 +499,7 @@ serial("setup and account keep their actions in the right cards", async (t) => {
     const manages = [...document.querySelectorAll("#tools-card .conn-manage")].filter((node) => node.getClientRects().length);
     const connects = [...document.querySelectorAll("#tools-card .conn-connect")].filter((node) => node.getClientRects().length);
     return {
-      manages: manages.map((node) => node.getAttribute("data-connect")),
+      manages: manages.map((node) => node.getAttribute("data-manage")),
       connects: connects.length,
       states: [...document.querySelectorAll("#tools-card .conn-state")].map((node) => node.textContent.trim()),
     };

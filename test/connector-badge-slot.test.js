@@ -55,5 +55,10 @@ test("Setup tools SSR Connected when doors are on, and MCP presets stay hidden u
   assert.match(on, /id="slack-conn" class="conn-state">Connected/);
   assert.match(on, /id="cal-connect"[^>]*hidden/);
   assert.match(on, /id="cal-manage"(?! hidden)/);
+  assert.match(on, /id="cal-manage"[^>]*data-manage="calendar"/);
+  assert.match(on, /id="lin-manage"[^>]*data-manage="linear"/);
+  assert.match(on, /id="slack-manage"[^>]*data-manage="slack"/);
+  assert.doesNotMatch(on, /id="(?:cal|lin|slack)-manage"[^>]*data-connect/);
+  assert.match(on, /id="tool-manage-dialog"/);
   assert.match(on, /id="mcp-presets" hidden/);
 });
