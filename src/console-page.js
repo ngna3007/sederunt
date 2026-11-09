@@ -132,6 +132,7 @@ export function renderConsolePage(state = {}) {
     canOverride: state.canAdmin === true,
   });
   const botCard = renderBotSettings(state.bot || {});
+  const openHome = state.section === "home" && state.spaces?.activeKind !== "personal";
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -141,7 +142,7 @@ export function renderConsolePage(state = {}) {
 ${FAVICON_LINK}
 <link rel="stylesheet" href="/console.css">
 </head>
-<body class="is-reading"${state.calendarTimeZone ? ` data-calendar-zone="${escapeHtml(state.calendarTimeZone)}"` : ""}>
+<body${openHome ? "" : ` class="is-reading"`}${state.calendarTimeZone ? ` data-calendar-zone="${escapeHtml(state.calendarTimeZone)}"` : ""}>
 <a class="skip-link" href="#main">Skip to content</a>
 ${brandSprite()}
 <div class="nav-scrim" id="nav-scrim"></div>
@@ -218,7 +219,7 @@ ${meet}
       <p id="channel-kicker" class="setup-label" hidden>Channel</p>
 ${slack}
     </div>
-    <section id="onboard">
+    <section id="onboard"${openHome ? " hidden" : ""}>
       <div class="empty">
         <span class="empty-mark" aria-hidden="true"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V6.2A1.2 1.2 0 0 1 5.2 5h7.1A1.2 1.2 0 0 1 13.5 6.2V21"/><path d="M13.5 10.2h4.3A1.2 1.2 0 0 1 19 11.4V21"/><path d="M3 21h18"/><path d="M7.2 8.4h2.6M7.2 12h2.6M7.2 15.6h2.6"/></svg></span>
         <h2 class="sr">Onboard</h2>
@@ -237,7 +238,7 @@ ${slack}
         <div id="onboard-doors"></div>
       </div>
     </section>
-    <div id="home" hidden>
+    <div id="home"${openHome ? "" : " hidden"}>
       <div class="main">
     <div id="read-error" class="state-error empty-state" hidden>
       <p id="read-error-copy" class="empty-title">Home could not be loaded.</p>
@@ -249,12 +250,12 @@ ${slack}
     <p class="page-lede">Meetings, decisions, and follow-ups for this workspace.</p>
     </div>
     <div class="page-actions">
-      <button type="button" class="secondary" id="home-add-to-meeting">Add to a meeting</button>
+      <button type="button" class="secondary" id="home-add-to-meeting"${openHome ? " hidden" : ""}>Add to a meeting</button>
     </div>
     </div>
     <div class="home-tools">
     ${renderChecklist(state.checklist, closeIcon)}
-    <div id="home-empty" class="home-empty" hidden>
+    <div id="home-empty" class="home-empty"${openHome ? "" : " hidden"}>
       <span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.6h10.8v8.8H2.6z"/><path d="M2.6 6.6h10.8"/></svg></span>
       <p id="home-empty-line">Your meetings will show up here</p>
       <p id="home-empty-aside" class="empty-aside">Add Sederunt to your next meeting. It keeps the decisions and follow-ups, and lists them here.</p>
@@ -264,7 +265,7 @@ ${slack}
       </div>
     </div>
     ${calendarAsk}
-    <div id="home-stats">
+    <div id="home-stats"${openHome ? " hidden" : ""}>
       <div id="counts" class="counts"></div>
     </div>
     <section id="needs-attention" class="needs-attention" hidden>
@@ -435,7 +436,7 @@ ${slack}
         </div>
         <div id="meeting-list" class="meeting-list"></div>
       </section>
-      <div class="explorer">
+      <div class="explorer"${openHome ? " hidden" : ""}>
         <div class="explorer-head">
           ${ROOM_COLUMNS.map((label, index) => `<span data-col="${["room", "platform", "speakers", "status", "started", "action"][index]}">${escapeHtml(label)}</span>`).join("")}
         </div>
@@ -1236,8 +1237,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function emptyHomeNow() {
-    var pending = !state || state.reading === true;
-    return workspaceKind !== "personal" && !pending && roomTotal() === 0 && sectionName === "home";
+    if (workspaceKind === "personal" || sectionName !== "home") return false;
+    if (state && state.read === "failed") return false;
+    if (state && state.reading === true && state.shell !== true) return false;
+    return roomTotal() === 0;
   }
 
   function toolOn(name) {
@@ -1249,7 +1252,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
 
   function syncHomeChrome() {
     var personal = workspaceKind === "personal";
-    var pending = !state || state.reading === true;
+    var pending = !state || (state.reading === true && state.shell !== true);
     var emptyHome = emptyHomeNow();
     var homeEmpty = document.getElementById("home-empty");
     var blockedHome = !!(document.getElementById("meet-block") && document.getElementById("slack-block"));
@@ -2732,12 +2735,15 @@ if (sessionWhen && sessionWhen.dataset.at) {
       lockNav(false);
       if (shell) {
         paintMeetings();
-        var empty = document.getElementById("room-empty");
-        var emptyLine = document.getElementById("room-empty-line");
-        var aside = document.getElementById("room-empty-aside");
-        if (empty) empty.hidden = false;
-        if (emptyLine) emptyLine.textContent = "Reading memory…";
-        if (aside) aside.textContent = "Rooms will show here.";
+        syncHomeChrome();
+        if (sectionName === "rooms") {
+          var empty = document.getElementById("room-empty");
+          var emptyLine = document.getElementById("room-empty-line");
+          var aside = document.getElementById("room-empty-aside");
+          if (empty) empty.hidden = false;
+          if (emptyLine) emptyLine.textContent = "Reading memory…";
+          if (aside) aside.textContent = "Rooms will show here.";
+        }
       }
       if (!readingTimer) readingTimer = setTimeout(function () { readingTimer = null; load(); }, shell ? 700 : 1500);
       return;
@@ -7574,7 +7580,6 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var secretAt = document.getElementById("console-secret");
     if (secretAt && secretAt.scrollIntoView) secretAt.scrollIntoView({ block: "start" });
   }
-  if (!startRoom && (sectionName === "home" || sectionName === "rooms")) showHomeSkeleton(true);
   routed = true;
   reserveComposer();
   var mcpDemoUrl = "";

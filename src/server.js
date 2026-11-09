@@ -1161,15 +1161,22 @@ export function createApp(options = {}) {
         ? identity.workspaceStats(gate.session.accessToken, spaces.activeId).catch(() => null)
         : Promise.resolve(undefined);
       const [slackClaim, calendarOn, accountProfile, botView, hearing, stats] = await Promise.all([
-        pageSlack(workspace, env, spaces, connectedDoors),
+        within(pageSlack(workspace, env, spaces, connectedDoors), PAGE_DOOR_WAIT_MS, {
+          linked: connectedDoors?.slack === true,
+          teamName: "",
+        }),
         connectedDoors
-          ? calendarGranted(workspace, spaces?.activeId || "", personId)
+          ? within(calendarGranted(workspace, spaces?.activeId || "", personId), PAGE_DOOR_WAIT_MS, false)
           : Promise.resolve(false),
         oauth ? loadAccountProfile(identity, gate.session, spaces) : Promise.resolve(null),
         readBot(workspace.botPreferences, botTenant),
-        botTenant
-          ? assignEffectiveHearing(workspace, hearingSession, botTenant)
-          : effectiveHearing(workspace, botTenant, hearingSession),
+        within(
+          botTenant
+            ? assignEffectiveHearing(workspace, hearingSession, botTenant)
+            : effectiveHearing(workspace, botTenant, hearingSession),
+          PAGE_DOOR_WAIT_MS,
+          null,
+        ),
         Promise.all([knownStats, warmUser]).then(([rows]) => rows),
       ]);
       if (connectedDoors && workspace.tenantBind && env.SEDERUNT_TOOLS_FAKE !== "1") {
@@ -1225,6 +1232,7 @@ export function createApp(options = {}) {
         toolAsk,
         bot,
         hearing,
+        section: consoleSection(url.pathname),
       }));
       return;
     }
@@ -2989,6 +2997,21 @@ async function currentBot(workspace, req) {
 const BOARD_PROOF_WAIT_MS = 400;
 const BOARD_INDEX_WAIT_MS = 80;
 const BOARD_SIDE_WAIT_MS = 1200;
+const PAGE_DOOR_WAIT_MS = 400;
+
+function consoleSection(pathname) {
+  if (pathname === "/console" || pathname === "/console/") return "home";
+  if (pathname === "/console/rooms") return "rooms";
+  if (pathname === "/console/history") return "history";
+  if (pathname === "/console/decisions") return "record";
+  if (pathname === "/console/chat") return "chat";
+  if (pathname === "/console/people") return "people";
+  if (pathname === "/console/files") return "files";
+  if (pathname === "/console/account") return "account";
+  if (pathname === "/console/status" || pathname === "/console/setup") return "connectors";
+  if (pathname === "/console/connectors") return "mcp";
+  return "";
+}
 
 /**
  * @template T

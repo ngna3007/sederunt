@@ -7,6 +7,8 @@ import test from "node:test";
 import { mockAccount } from "../src/memory/mock-account.js";
 import { serveMcpStdio } from "../src/mcp-stdio.js";
 import { handleMcpRequest } from "../src/mcp.js";
+import { sealSession } from "../src/console-auth.js";
+import { renderConsolePage } from "../src/console-page.js";
 import { createApp } from "../src/server.js";
 import { createSession } from "../src/session.js";
 import { resolvePreference } from "../src/domain/preference.js";
@@ -446,6 +448,93 @@ test("a slow memory index does not hold the home board", async () => {
     assert.equal(body.shell, true);
     assert.equal(body.meetings[0].title, "Launch review");
     assert.equal(elapsed < 1000, true, `board shell took ${elapsed}ms`);
+  } finally {
+    await close(app);
+  }
+});
+
+test("an empty company home paints its card before Slack or memory", async () => {
+  const home = renderConsolePage({ section: "home" });
+  assert.match(home, /<div id="home">/);
+  assert.match(home, /<div id="home-empty" class="home-empty">/);
+  assert.match(home, /Your meetings will show up here/);
+  assert.match(home, /id="home-add-to-meeting" hidden>/);
+  assert.doesNotMatch(home, /<body class="is-reading"/);
+  assert.doesNotMatch(home, /sectionName === "home" \|\| sectionName === "rooms"\)\) showHomeSkeleton\(true\)/);
+  const personal = renderConsolePage({ section: "home", spaces: { oauth: true, activeKind: "personal" } });
+  assert.match(personal, /<div id="home-empty" class="home-empty" hidden>/);
+  const rooms = renderConsolePage({ section: "rooms" });
+  assert.match(rooms, /<div id="home" hidden>/);
+  assert.match(rooms, /<div id="home-empty" class="home-empty" hidden>/);
+
+  const env = cleanEnv({
+    SEDERUNT_AUTH_FAKE: "1",
+    SEDERUNT_SESSION_SECRET: "home-paint-secret",
+    SLACK_CLIENT_ID: "slack-client",
+    SLACK_CLIENT_SECRET: "slack-secret",
+    SLACK_SIGNING_SECRET: "slack-signing",
+    SLACK_BOT_TOKEN: "slack-bot",
+  });
+  const identity = {
+    async myTenants() {
+      return [{ id: "ten-northline", kind: "team", name: "Northline", role: "owner" }];
+    },
+    async profile() {
+      return { display_name: "Mina", email: "mina@example.com" };
+    },
+    async getUser() {
+      return { id: "person", app_metadata: { provider: "google" }, user_metadata: {} };
+    },
+    async workspaceStats() {
+      return { members: 1, openInvites: 0 };
+    },
+  };
+  const app = createApp({
+    env,
+    identity,
+    files: false,
+    deps: { memory: { index() { return new Promise(() => {}); } }, tatum: quietTatum() },
+    googleGrants: { async granted() { return new Promise(() => {}); } },
+    slackInstallations: { async tokenFor() { return new Promise(() => {}); } },
+    companyLoaded: true,
+  });
+  const port = await listen(app);
+  try {
+    const started = Date.now();
+    const cookie = `sederunt_session=${sealSession({
+      kind: "oauth",
+      memberId: "person",
+      userId: "person",
+      provider: "google",
+      accessToken: "home-paint-access",
+      refreshToken: "home-paint-refresh",
+      accessExp: Date.now() + 3600000,
+      tenantId: "ten-northline",
+    }, env.SEDERUNT_SESSION_SECRET)}`;
+    const body = await Promise.race([
+      new Promise((resolve, reject) => {
+        const req = request({
+          hostname: "127.0.0.1",
+          port,
+          path: "/console",
+          method: "GET",
+          headers: { cookie },
+        }, (res) => {
+          const chunks = [];
+          res.on("data", (chunk) => chunks.push(chunk));
+          res.on("end", () => resolve({ status: res.statusCode, raw: Buffer.concat(chunks).toString("utf8") }));
+        });
+        req.on("error", reject);
+        req.end();
+      }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("console document waited on Slack")), 1500)),
+    ]);
+    const elapsed = Date.now() - started;
+    assert.equal(body.status, 200);
+    assert.match(body.raw, /<div id="home-empty" class="home-empty">/);
+    assert.match(body.raw, /Your meetings will show up here/);
+    assert.doesNotMatch(body.raw, /<body class="is-reading"/);
+    assert.equal(elapsed < 1000, true, `console document took ${elapsed}ms`);
   } finally {
     await close(app);
   }
