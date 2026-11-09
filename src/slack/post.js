@@ -1,3 +1,5 @@
+import { slackFileBytes, slackChannelMembers } from "./reply.js";
+
 /**
  * Slack Web API for a retried post. `fetchImpl` is injected so a test can
  * stand in for the network. A non-OK HTTP status is a failure. The permalink
@@ -8,9 +10,31 @@
  */
 export function createSlackClient(env = {}, fetchImpl = globalThis.fetch) {
   const token = typeof env.SLACK_BOT_TOKEN === "string" ? env.SLACK_BOT_TOKEN.trim() : "";
+  async function slackCall(method, body) {
+    if (!token) throw new Error("Slack is not connected.");
+    const response = await fetchImpl(`https://slack.com/api/${method}`, { method: "POST", signal: AbortSignal.timeout(8000),
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+    if (!response.ok) throw new Error("Slack request failed.");
+    const result = await response.json();
+    if (result?.ok !== true) throw new Error("Slack request was refused.");
+    return result;
+  }
   return {
     fetch: fetchImpl,
-    async postMessage({ channel, text, thread, username } = {}) {
+    async downloadFile(file) { return slackFileBytes({ token, file, fetchImpl }); },
+    async members(channel) { return slackChannelMembers({ token, channel, fetchImpl }); },
+    async channelReady(channel) {
+      if (!token || !channel) return false;
+      try {
+        const response = await fetchImpl(`https://slack.com/api/conversations.info?${new URLSearchParams({ channel })}`, {
+          headers: { authorization: `Bearer ${token}` },
+        });
+        const body = response.ok ? await response.json() : null;
+        return body?.ok === true && body.channel?.id === channel && body.channel?.is_member === true
+          && body.channel?.is_archived === false;
+      } catch { return false; }
+    },
+    async postMessage({ channel, text, thread, thread_ts, username, blocks, client_msg_id } = {}) {
       if (!token || !channel || !text) {
         const error = new Error("unsupported");
         error.reason = "unsupported";
@@ -26,7 +50,9 @@ export function createSlackClient(env = {}, fetchImpl = globalThis.fetch) {
         body: JSON.stringify({
           channel,
           text,
-          thread_ts: thread || undefined,
+          thread_ts: thread_ts || thread || undefined,
+          ...(Array.isArray(blocks) ? { blocks } : {}),
+          ...(client_msg_id ? { client_msg_id } : {}),
           ...(speaker ? { username: speaker } : {}),
         }),
       });
@@ -40,6 +66,18 @@ export function createSlackClient(env = {}, fetchImpl = globalThis.fetch) {
         body.permalink = await messagePermalink(fetchImpl, token, body.channel, body.ts) || archiveUrl(body.channel, body.ts);
       }
       return body;
+    },
+    async openConversation({ users } = {}) {
+      return slackCall("conversations.open", { users });
+    },
+    async openModal({ triggerId, view } = {}) {
+      return slackCall("views.open", { trigger_id: triggerId, view });
+    },
+    async updateMessage({ channel, ts, text, blocks } = {}) {
+      return slackCall("chat.update", { channel, ts, text, blocks });
+    },
+    async messageHistory({ channel, oldest, latest, limit = 100 } = {}) {
+      return slackCall("conversations.history", { channel, oldest, latest, inclusive: true, limit: Math.min(limit, 100) });
     },
     async resolveChannel(name) {
       return resolveChannelName(fetchImpl, token, env, name);

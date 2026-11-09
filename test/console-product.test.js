@@ -131,7 +131,7 @@ function accountKeyField(raw) {
 
 test("the console is the workspace and the room page redirects", async () => {
   const memory = mockAccount({ accountId: "company-console", delegates: ["delegate-console"] });
-  const meeting = { calls: [], async join() { this.calls.push("join"); } };
+  const meeting = { calls: [], async join() { this.calls.push("join"); return { id: "fixture-bot" }; } };
   const app = createApp({
     deps: { memory, meeting, tatum: quietTatum() },
     env: cleanEnv(),
@@ -314,7 +314,7 @@ test("the shipped adapter keeps the decision document and a second process shows
     memwal: client,
     companyLoaded: true,
     tatum: quietTatum(),
-    meeting: { calls: [], async join() { this.calls.push("join"); } },
+    meeting: { calls: [], async join() { this.calls.push("join"); return { id: "fixture-bot" }; } },
     ...extra,
   });
   const first = open();
@@ -572,7 +572,7 @@ test("the alpha walk keeps one sentence and stdio recall matches the console", a
     await close(missing);
   }
 
-  const meeting = { calls: [], async join() { this.calls.push("join"); } };
+  const meeting = { calls: [], async join() { this.calls.push("join"); return { id: "fixture-bot" }; } };
   const memory = mockAccount({ accountId: "company-walk", delegates: ["delegate-walk"] });
   const deps = { memory, meeting, tatum: quietTatum() };
   const first = createApp({ deps, env: cleanEnv(), companyLoaded: true });
@@ -1258,7 +1258,7 @@ test("the shipped adapter reloads a room voice without keeping the command", asy
       memwal: client,
       companyLoaded: true,
       tatum: quietTatum(),
-      meeting: { calls: [], async join() { this.calls.push("join"); } },
+      meeting: { calls: [], async join() { this.calls.push("join"); return { id: "fixture-bot" }; } },
     });
     const first = open();
     const firstPort = await listen(first);
@@ -1399,7 +1399,7 @@ test("a named file stays in Console, the proof is read, and the epoch is not ren
       memory,
       tatum,
       console: files,
-      meeting: { calls: [], async join() { this.calls.push("join"); } },
+      meeting: { calls: [], async join() { this.calls.push("join"); return { id: "fixture-bot" }; } },
     },
     env: cleanEnv(),
     companyLoaded: true,
@@ -1453,7 +1453,7 @@ test("a named file stays in Console, the proof is read, and the epoch is not ren
       memory,
       tatum: disagreed,
       console: files,
-      meeting: { calls: [], async join() { this.calls.push("join"); } },
+      meeting: { calls: [], async join() { this.calls.push("join"); return { id: "fixture-bot" }; } },
     },
     env: cleanEnv(),
     companyLoaded: true,
@@ -1477,7 +1477,7 @@ test("a named file stays in Console, the proof is read, and the epoch is not ren
       memory,
       tatum: { async getObject() { throw new Error("Tatum read failed"); } },
       console: files,
-      meeting: { calls: [], async join() { this.calls.push("join"); } },
+      meeting: { calls: [], async join() { this.calls.push("join"); return { id: "fixture-bot" }; } },
     },
     env: cleanEnv(),
     companyLoaded: true,
@@ -1604,7 +1604,7 @@ test("the shipped adapter records the epoch and keeps the file name off the byte
           fileCalls.push("renew");
         },
       },
-      meeting: { calls: [], async join() { this.calls.push("join"); } },
+      meeting: { calls: [], async join() { this.calls.push("join"); return { id: "fixture-bot" }; } },
     });
     const first = open();
     const firstPort = await listen(first);
@@ -1652,7 +1652,7 @@ test("the shipped adapter records the epoch and keeps the file name off the byte
 
 test("an accepted meeting join keeps the waiting room after a new process and leaves the link out", async () => {
   const memory = mockAccount({ accountId: "company-join-room", delegates: ["delegate-join-room"] });
-  const meeting = { calls: [], async join() { this.calls.push("join"); } };
+  const meeting = { calls: [], async join() { this.calls.push("join"); return { id: "fixture-bot" }; } };
   const link = "https://meet.google.com/abc-defg-hij?token=room-query-token";
   const open = () => createApp({
     deps: { memory, meeting, tatum: quietTatum() },
@@ -1740,7 +1740,7 @@ test("an accepted meeting join keeps the waiting room after a new process and le
     await close(failed);
   }
 
-  const slackMeeting = { calls: [], async join() { this.calls.push("join"); } };
+  const slackMeeting = { calls: [], async join() { this.calls.push("join"); return { id: "fixture-bot" }; } };
   const slack = createApp({
     deps: { memory, meeting: slackMeeting, tatum: quietTatum() },
     env: liveWalkEnv(),
@@ -1776,7 +1776,7 @@ test("the shipped adapter keeps an opened meeting room and leaves the link out",
     COMPANY_MEMWAL_KEY: "delegate-join-sentinel",
     COMPANY_MEMWAL_ACCOUNT_ID: "account-join-sentinel",
   });
-  const meeting = { calls: [], async join() { this.calls.push("join"); } };
+  const meeting = { calls: [], async join() { this.calls.push("join"); return { id: "fixture-bot" }; } };
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => {
     throw new Error("adapter test must not call the network");
@@ -2045,7 +2045,7 @@ test("a missing member, an empty room, and a huddle store no outside ask", async
     deliveryId: "wide-confirm",
   }, { memory: named });
   assert.match(confirmed.body, /not-invited/);
-  assert.match(confirmed.body, /hall-keep/);
+  assert.doesNotMatch(confirmed.body, /hall-keep/);
   const speakers = open.accesses.map((row) => row.speaker);
   assert.deepEqual(speakers, ["sam", "nile"]);
   const accessDocs = (await named.index()).filter((doc) => doc.kind === "access");
@@ -2211,7 +2211,7 @@ test("a Slack challenge is echoed and the console confirm uses the configured me
   const port = await listen(app);
   try {
     const challengeBody = JSON.stringify({ type: "url_verification", challenge: "challenge-token" });
-    const timestamp = "1700000000";
+    const timestamp = String(Math.floor(Date.now() / 1000));
     const signature = `v0=${createHmac("sha256", secret).update(`v0:${timestamp}:${challengeBody}`).digest("hex")}`;
     const challenge = await post(port, "/api/slack", challengeBody, {
       "x-slack-request-timestamp": timestamp,
@@ -2251,7 +2251,7 @@ test("a Slack challenge is echoed and the console confirm uses the configured me
 
 function signed(event, secret) {
   const payload = JSON.stringify({ event });
-  const timestamp = "1700000000";
+  const timestamp = String(Math.floor(Date.now() / 1000));
   const signature = `v0=${createHmac("sha256", secret).update(`v0:${timestamp}:${payload}`).digest("hex")}`;
   return {
     payload,

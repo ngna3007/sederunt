@@ -1,4 +1,14 @@
+import { createActionClaims, createMemoryActionClaims, createLocalActionClaims } from "./domain/action-claims.js";
+import { createHash } from "node:crypto";
+import { lookupByEmail } from "./slack/match.js";
+import { createDeletionStore, createLocalDeletionStore, withDeletionOverlay, filterDeletedDecisions, deletionMatches } from "./memory/deletions.js";
+import { drainDeletions } from "./memory/deletion-worker.js";
+import { scopeAskStore } from "./ask/context.js";
+import { createParticipantBindings } from "./participant-bindings.js";
+import { consolePrincipal } from "./console-principal.js";
+import { canReadRecord, readPrincipalId, readableSession } from "./domain/read-access.js";
 import { createServer } from "node:http";
+import { readRequestBytes } from "./http-body.js";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
@@ -16,6 +26,10 @@ import { createLinearClient } from "./linear/mcp.js";
 import { loadLinearToken } from "./linear/token.js";
 import { renderCameraPage } from "./meeting/camera.js";
 import { createMeetingAdapter, mediaFromBot, meetingDoorReady, meetingEnded, recallBotUrl, recallTranscriptDelivery, verifyRecallRequest } from "./meeting/recall.js";
+import { createMeetingFollowups, parseFollowupValue } from "./meeting/followups.js";
+import { createSupabaseFollowupStore } from "./meeting/followup-store.js";
+import { acceptMeetingEnd, buildMeetingFollowupInput, followupInteractionFields, validateFollowupEdit } from "./meeting/live-followups.js";
+import { assertProductionConfig, isProduction } from "./production-config.js";
 import { createTatumReader } from "./tatum/get-object.js";
 import { resolveMcpSpace } from "./connectors/expose.js";
 import { stopDemoServer } from "./connectors/demo.js";
@@ -23,6 +37,9 @@ import { bindToolMember, handleMcpRequest, memberRefusal, mcpJsonRpc } from "./m
 import { renderConsolePage } from "./console-page.js";
 import { contentWords, decisionRoomIds, roomsMatching } from "./room-match.js";
 import { createSlackClient } from "./slack/post.js";
+import { createInstallationStore, slackOAuthConfigured } from "./slack/installations.js";
+import { handleSlackOAuth } from "./slack/oauth.js";
+import { installationFetch, slackConnection, slackEventTenant, tenantSlackClient } from "./slack/tenant-slack.js";
 import { renderSignInPage } from "./console-sign-in.js";
 import {
   CONSOLE_SESSION_MS,
@@ -50,6 +67,7 @@ import { renderLanding } from "./landing.js";
 import { handleFileRequest } from "./files/routes.js";
 import { createFileRuntime } from "./files/runtime.js";
 import { createFileStore } from "./files/store.js";
+import { createSupabaseFileStore } from "./files/supabase-store.js";
 import { createSessionFiles } from "./files/session.js";
 import { hideDeletedSlackMessages, ingestSlackFile } from "./files/slack.js";
 import { loadCompanyEnv, loadLocalEnv } from "./local-env.js";
@@ -63,6 +81,8 @@ import { slackBotUserIds, slackDelivery, slackEventHasFiles, verifySlackRequest 
 import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded, warmProofs } from "./typed-path.js";
 import { wireCalls } from "./tatum/client.js";
 import { createTenantBind, requiresDurableBind } from "./tenant-bind.js";
+import { createAdminStore } from "./admin-store.js";
+import { createAdminRoutes } from "./admin-route.js";
 import { slackClaimState } from "./slack/claim.js";
 
 const port = Number(process.env.PORT || 8787);
@@ -75,7 +95,9 @@ function memoryAdapter(env = process.env, client, tatum, tenantId = "") {
   const adapter = {
     tenantId: boundTenant,
     __bind(nextTenant) {
-      return memoryAdapter(env, client, tatum, nextTenant);
+      const rebound = memoryAdapter(env, client, tatum, nextTenant);
+      if (rebound) rebound.allowUnscoped = this.allowUnscoped === true;
+      return rebound;
     },
     async remember(input) {
       if (input.account === "personal") {
@@ -136,13 +158,13 @@ export function bindMemoryTenant(memory, tenantId, env = process.env, client, ta
       }
       return memory.remember({ ...input, tenantId: stamp });
     },
-    async index() {
+    index: typeof memory.index !== "function" ? undefined : async function () {
       const docs = await memory.index();
       if (!Array.isArray(docs)) return docs;
       const { tenantOwns } = await import("./memory/company.js");
       return docs.filter((doc) => tenantOwns(doc, bound, { allowUnscoped }));
     },
-    async recall(query) {
+    recall: typeof memory.recall !== "function" ? undefined : async function (query) {
       const docs = await memory.recall(query);
       if (!Array.isArray(docs)) return docs;
       const { tenantOwns } = await import("./memory/company.js");
@@ -355,12 +377,14 @@ async function doorsForRequest(workspace, { companyId = "", personId = "", req }
     if (!activeId) {
       doors.slack = false;
     } else {
-      const claim = await slackClaimState({
-        tenantBind: workspace.tenantBind,
-        slack: workspace.deps?.slack,
-        channelId: workspace.deps?.app?.slackChannel || "",
-        slackConfigured: doors.slack === true,
-      }, activeId);
+      const claim = slackOAuthConfigured(env)
+        ? await slackConnection(workspace, activeId)
+        : await slackClaimState({
+          tenantBind: workspace.tenantBind,
+          slack: workspace.deps?.slack,
+          channelId: workspace.deps?.app?.slackChannel || "",
+          slackConfigured: doors.slack === true,
+        }, activeId);
       doors.slack = claim.linked === true;
     }
   }
@@ -370,7 +394,7 @@ async function doorsForRequest(workspace, { companyId = "", personId = "", req }
 /** Door flags for the room. The values are booleans, and the secrets stay out. */
 export function doorReport(env = process.env, linearReady = false) {
   const meeting = meetingDoorReady(env);
-  const slack = Boolean(env.SLACK_SIGNING_SECRET && env.SLACK_BOT_TOKEN);
+  const slack = Boolean(env.SLACK_SIGNING_SECRET && (env.SLACK_BOT_TOKEN || slackOAuthConfigured(env)));
   const member = Boolean(String(env.SEDERUNT_MEMBER || "").trim());
   const consoleReady = Boolean(env.CONSOLE_API_KEY && env.CONSOLE_SERVICE_PRIVATE_KEY && env.CONSOLE_FOLDER_ID);
   const company = Boolean(env.COMPANY_MEMWAL_KEY && env.COMPANY_MEMWAL_ACCOUNT_ID);
@@ -432,10 +456,60 @@ export function deliveryFrom(source) {
     addressed: body.addressed === true ? true : undefined,
     decision,
     join: body.join,
+    ...followupIntentFrom(body),
+    ...rejectedFollowupFrom(body),
     checkpoint: Number.isInteger(body.checkpoint) ? body.checkpoint : undefined,
     knowableAtCheckpoint: Number.isInteger(body.knowableAtCheckpoint) ? body.knowableAtCheckpoint : undefined,
     file: fileFrom(body.file),
   };
+}
+
+function slackScopeId(value) {
+  return typeof value === "string" ? value : "";
+}
+
+function typedFollowupError(delivery) {
+  return delivery.intent === "followup-approve" || delivery.followup
+    ? "Follow-up approval stays on the signed Slack action."
+    : "";
+}
+
+function deletionFailedMessage(result) {
+  const outcome = result && result.outcome;
+  return outcome === "deletion-failed" ? "Deletion could not be saved. Retry this event." : "";
+}
+
+function replyDeletionFailed(result, replyHttp) {
+  const message = deletionFailedMessage(result);
+  return message
+    ? (replyHttp(503, "application/json; charset=utf-8", JSON.stringify({ error: message })), true)
+    : false;
+}
+
+function openedRoomIsPrivate(room) {
+  return room ? room.private === true : false;
+}
+
+function unavailableRoomMedia(error) {
+  const denied = new Error("Room media is unavailable.");
+  denied.status = 503;
+  denied.cause = error;
+  throw denied;
+}
+
+function rejectTypedFollowup(delivery, res) {
+  const error = typedFollowupError(delivery);
+  return error
+    ? (send(res, 403, "application/json; charset=utf-8", JSON.stringify({ error })), true)
+    : false;
+}
+
+function followupIntentFrom(body) {
+  return body.intent === "followup-approve" ? { intent: "followup-approve" } : {};
+}
+
+function rejectedFollowupFrom(body) {
+  return body.followup && typeof body.followup === "object" ? { followup: { rejected: true } } : {};
 }
 
 function fileFrom(file) {
@@ -444,6 +518,13 @@ function fileFrom(file) {
     name: file.name,
     bytes: typeof file.bytes === "string" ? file.bytes : undefined,
   };
+}
+
+function followupStillDue(row, now) {
+  // Drain still reconciles a running claim after the retry ceiling. It never moves an exhausted failure.
+  if (row.status === "running") return true;
+  if ((row.data.attempts || 0) >= 5) return false;
+  return !(row.data.nextAttemptAt > now);
 }
 
 export function createApp(options = {}) {
@@ -484,6 +565,7 @@ export function createApp(options = {}) {
     deps,
     memwalClient: options.memwal || null,
     tenantBind: options.tenantBind || createTenantBind(env, { fetchImpl: options.fetch || globalThis.fetch }),
+    slackInstallations: options.slackInstallations || createInstallationStore(env, { fetch: options.fetch }),
     companyLoaded: loadedCompany(options, deps, env, companies),
     linearReady: options.linearReady === true || (options.env ? false : linearReady()),
     recall: options.recall || null,
@@ -491,6 +573,7 @@ export function createApp(options = {}) {
     identity: null,
     ask: options.askStore || createAskStore(env),
     openrouterFetch: options.openrouterFetch || null,
+    participantBindings: options.participantBindings || createParticipantBindings(env, { fetchImpl: options.fetch || globalThis.fetch }),
   };
   if (proofWarmOn(env) && workspace.companyLoaded && deps.tatum) {
     // Read the company proofs once at start so the first room load is
@@ -529,10 +612,100 @@ export function createApp(options = {}) {
   const filesRuntime = options.files === false
     ? null
     : (options.files || (attachFiles(options, env) ? liveFiles(env, identity) : null));
+  const adminStore = options.adminStore || createAdminStore(env, { fetchImpl: options.fetch || globalThis.fetch });
+  workspace.adminStore = adminStore;
+  workspace.deletions = options.deletions || createDeletionStore(env);
+  workspace.actionClaims = options.actionClaims || createActionClaims(env, { fetchImpl: options.fetch || globalThis.fetch }) || (!identityConfigured(env) ? createMemoryActionClaims() : null);
+  const followupStore = Object.prototype.hasOwnProperty.call(options, "followupStore")
+    ? options.followupStore
+    : ((isDirectRun() || process.env.VERCEL) ? createSupabaseFollowupStore(env, { fetchImpl: options.fetch || globalThis.fetch }) : null);
+  workspace.followupStore = followupStore;
+  workspace.slackMatches = options.slackMatches || null;
+  workspace.followups = options.followups && typeof options.followups.enqueue === "function"
+    ? options.followups
+    : (followupStore ? liveFollowups(workspace, followupStore) : null);
+  const handleAdmin = createAdminRoutes({ env, ask: workspace.ask, store: adminStore, async invalidate(userId, tenantIds) {
+    for (const id of tenantIds) { workspace.sessions.delete(id); workspace.loads.delete(id); }
+    filesRuntime?.invalidate?.(userId);
+    await workspace.tenantBind.releaseTenants(tenantIds);
+  } });
+  const recover = async (limit = 10) => {
+    const result = {};
+    if (workspace.deletions) result.deletions = await drainDeletions({ store: workspace.deletions, limit,
+      async resolveDecisions(intent) {
+        const companyId = intent.tenantId === "00000000-0000-4000-8000-000000000001" ? "" : intent.tenantId;
+        const memory = depsFor(workspace, companyId, true).memory;
+        if (typeof memory?.index !== "function") throw new Error("Memory cleanup is unavailable.");
+        const rows = await memory.index();
+        return rows.filter((row) => row.decision).map((row) => row.decision);
+      },
+      async writeTombstone({ intent, decision }) {
+        const companyId = intent.tenantId === "00000000-0000-4000-8000-000000000001" ? "" : intent.tenantId;
+        const result = await handleUtterance({ intent: "delete-cleanup", deletionIntent: intent, deletionDecision: decision, session: sessionFor(workspace, companyId) }, depsFor(workspace, companyId, true));
+        return result.ok ? result.receipt : null;
+      },
+    });
+    if (filesRuntime?.kick) await filesRuntime.kick();
+    if (workspace.followups && workspace.followupStore) {
+      // Drain leaves an exhausted failure where it is, so the oldest page must not hide a later tenant.
+      const now = Date.now();
+      const tenants = [];
+      let offset = 0;
+      while (tenants.length < limit && offset <= 2000) {
+        const active = await workspace.followupStore.list("", { statuses: ["pending", "failed", "running"], limit: 100, offset });
+        for (const row of active) {
+          if (!followupStillDue(row, now) || tenants.includes(row.tenantId)) continue;
+          tenants.push(row.tenantId);
+          if (tenants.length >= limit) break;
+        }
+        if (active.length < 100) break;
+        offset += 100;
+      }
+      if (tenants.length < limit) {
+        const dirty = await workspace.followupStore.list("", { needsSync: true, limit: 100 });
+        for (const row of dirty) {
+          if (tenants.includes(row.tenantId)) continue;
+          tenants.push(row.tenantId);
+          if (tenants.length >= limit) break;
+        }
+      }
+      const followups = [];
+      for (const tenantId of tenants) {
+        const drained = await workspace.followups.drain({ tenantId, limit });
+        followups.push({ tenantId, count: drained.filter(Boolean).length });
+      }
+      result.followups = followups;
+    }
+    return result;
+  };
+  let recovering = false;
+  function scheduleRecovery() {
+    if (options.autoRecovery === false || recovering) return;
+    recovering = true;
+    const work = recover(10).catch(() => {}).finally(() => { recovering = false; });
+    if (env.VERCEL) import("@vercel/functions").then(({ waitUntil }) => waitUntil(work)).catch(() => {});
+  }
   const server = createServer(async (req, res) => {
   try {
-    if (identity) rememberRefreshCookie(res, await refreshOAuthSession(req, identity, env));
     const url = new URL(req.url || "/", `http://127.0.0.1:${port}`);
+    if ((req.method === "POST" || req.method === "GET") && url.pathname === "/api/recovery/drain") {
+      const secret = req.method === "GET" ? env.CRON_SECRET : env.SEDERUNT_RECOVERY_SECRET;
+      const authorization = headerValue(req.headers.authorization);
+      if (!secret || !passphraseMatches(authorization, `Bearer ${secret}`)) {
+        send(res, 401, "application/json", JSON.stringify({ error: "Unauthorized." }));
+        return;
+      }
+      const body = req.method === "GET" ? {} : await readJson(req);
+      const limit = body.limit ?? 10;
+      if (!Number.isInteger(limit) || limit < 1 || limit > 10) {
+        send(res, 400, "application/json", JSON.stringify({ error: "Limit must be between 1 and 10." }));
+        return;
+      }
+      send(res, 200, "application/json", JSON.stringify(await recover(limit)));
+      return;
+    }
+    if (await handleAdmin(req, res, url, { send, redirect })) return;
+    if (identity) rememberRefreshCookie(res, await refreshOAuthSession(req, identity, env));
     if (filesRuntime && await handleFileRequest(req, res, url, filesRuntime, { send })) return;
     if (await handleNodeForms(req, res, { forms: workspace.forms, env, url })) return;
     if (req.method === "GET" && url.pathname.startsWith("/media/")) {
@@ -565,10 +738,6 @@ export function createApp(options = {}) {
       send(res, 200, "text/javascript; charset=utf-8", await readFile(new URL("./hold.js", import.meta.url), "utf8"));
       return;
     }
-    if (req.method === "GET" && url.pathname === "/prototype/hero") {
-      send(res, 200, "text/html; charset=utf-8", await readFile(resolve("prototype/hero-drafts.html"), "utf8"));
-      return;
-    }
     if (req.method === "GET" && url.pathname === "/") {
       send(res, 200, "text/html; charset=utf-8", renderLanding());
       return;
@@ -588,6 +757,30 @@ export function createApp(options = {}) {
     }
     if (url.pathname === "/console/auth" || url.pathname.startsWith("/console/auth/")) {
       await handleAuthRoute({ req, res, url, env, identity, send, redirect, googleGrants: workspace.googleGrants, calendarSave: workspace.calendarSave, fetchImpl: options.fetch || globalThis.fetch });
+      return;
+    }
+    if (await handleSlackOAuth(req, res, url, {
+      env,
+      installations: workspace.slackInstallations,
+      fetchImpl: options.slackOAuthFetch || options.fetch || globalThis.fetch,
+      activeTenant: async (request) => {
+        const gate = guardConsole(request, env);
+        if (!identity || gate.session?.kind !== "oauth") return { unauthorized: true };
+        const view = await loadSpaceView(identity, gate.session);
+        return { userId: String(gate.session.userId || ""), tenantId: view?.activeId || "", role: view?.activeRole || "" };
+      },
+      roleIn: async (request, tenantId) => {
+        const gate = guardConsole(request, env);
+        if (!identity || gate.session?.kind !== "oauth") return "";
+        try {
+          const tenants = await identity.myTenants(gate.session.accessToken);
+          const hit = (tenants || []).find((item) => item?.id === tenantId);
+          return hit?.role || "";
+        } catch {
+          return "";
+        }
+      },
+    })) {
       return;
     }
     if (req.method === "GET" && url.pathname === "/console/sign-in") {
@@ -614,6 +807,10 @@ export function createApp(options = {}) {
       return;
     }
     if (req.method === "POST" && url.pathname === "/console/sign-in") {
+      if (identity) {
+        send(res, 403, "text/html; charset=utf-8", renderSignInPage({ oauth: true, configured: false, providers: { google: true, github: false }, notice: "Continue with Google to sign in." }));
+        return;
+      }
       const body = await readPosted(req);
       const next = safeConsoleNext(typeof body.next === "string" ? body.next : "/console");
       const secret = consoleSecret(env);
@@ -702,7 +899,16 @@ export function createApp(options = {}) {
         return;
       }
       const id = decodeURIComponent(url.pathname.slice("/console/rooms/".length, -"/media".length));
-      const body = await roomMedia(workspace, id);
+      const resolved = await resolveCompanyId(workspace, req, url.searchParams.get("company") || "");
+      if (resolved.denied || resolved.unauthorized) { sendCompanyDenied(res, send, resolved); return; }
+      const current = await prepareWorkspace(workspace, resolved.companyId);
+      const principal = await consolePrincipal(workspace, req, resolved.companyId);
+      const roomDecisions = (current.decisions || []).filter((row) => row.roomId === id && !row.deleted);
+      if (!roomDecisions.length || !roomDecisions.every((row) => canReadRecord(principal, row))) {
+        send(res, 404, "application/json; charset=utf-8", JSON.stringify({ error: "That room is not available." }));
+        return;
+      }
+      const body = await roomMedia({ ...workspace, session: current }, id);
       const secret = typeof env.RECALL_API_KEY === "string" ? env.RECALL_API_KEY : "";
       const raw = secret.length >= 12 ? JSON.stringify(body).split(secret).join("") : JSON.stringify(body);
       send(res, 200, "application/json; charset=utf-8", raw);
@@ -827,6 +1033,8 @@ export function createApp(options = {}) {
         doors,
         slack: workspace.deps.slack,
         slackChannel: workspace.deps.app?.slackChannel || "",
+        slackInstall: slackOAuthConfigured(env),
+        slackConnection: (tenantId) => slackConnection(workspace, tenantId),
         googleGrants: workspace.googleGrants,
         tenantId: companyId,
         personId,
@@ -943,14 +1151,25 @@ export function createApp(options = {}) {
         if (!spaces?.activeId) {
           connectedDoors.slack = false;
         } else {
-          const claim = await slackClaimState({
-            tenantBind: workspace.tenantBind,
-            slack: workspace.deps.slack,
-            channelId: workspace.deps.app?.slackChannel || "",
-            slackConfigured: connectedDoors.slack === true,
-          }, spaces.activeId);
+          const claim = slackOAuthConfigured(env)
+            ? await slackConnection(workspace, spaces.activeId)
+            : await slackClaimState({
+              tenantBind: workspace.tenantBind,
+              slack: workspace.deps.slack,
+              channelId: workspace.deps.app?.slackChannel || "",
+              slackConfigured: connectedDoors.slack === true,
+            }, spaces.activeId);
           connectedDoors.slack = claim.linked === true;
         }
+      }
+      // Calendar is the current person's Google grant on the active tenant, not deployment tokens.
+      if (connectedDoors) {
+        const personSpace = await resolvePersonTenantId(workspace, req, "");
+        const granted = await doorsForRequest(workspace, {
+          companyId: personSpace.tenantId || spaces?.activeId || "",
+          personId: String(gate.session?.userId || "").trim(),
+        });
+        connectedDoors.calendar = granted.calendar === true;
       }
       const accountProfile = oauth ? await loadAccountProfile(identity, gate.session, spaces) : null;
       const toolAsk = oauth ? await loadToolAsk(identity, gate.session, connectedDoors || {}, env) : null;
@@ -982,10 +1201,17 @@ export function createApp(options = {}) {
             : !env.RECALL_WEBHOOK_SECRET
               ? "Set RECALL_WEBHOOK_SECRET to the Recall workspace verification secret, then restart."
               : "Check that SEDERUNT_PUBLIC_ORIGIN is a public https address, then restart.",
-        calendarConnected: doors.calendar === true,
+        calendarConnected: (connectedDoors || doors).calendar === true,
         linearConnected: doors.linear === true,
         slackConnected: (connectedDoors || doors).slack === true,
-        slackReady: Boolean(env.SLACK_SIGNING_SECRET && env.SLACK_BOT_TOKEN),
+        slackReady: slackOAuthConfigured(env) && spaces?.activeId
+          ? Boolean(env.SLACK_SIGNING_SECRET && await tenantSlackClient(workspace, spaces.activeId).channelReady(await tenantSlackClient(workspace, spaces.activeId).defaultChannel()))
+          : Boolean(env.SLACK_SIGNING_SECRET && env.SLACK_BOT_TOKEN),
+        slackInstall: slackOAuthConfigured(env) && Boolean(identity),
+        slackResult: url.searchParams.get("slack") || "",
+        slackWorkspace: slackOAuthConfigured(env) && spaces?.activeId && (connectedDoors || doors).slack === true
+          ? (await slackConnection(workspace, spaces.activeId)).teamName || ""
+          : "",
         signedIn: Boolean(gate.session),
         signInOff: !consoleSecret(env) && !identity,
         accountMember: gate.session?.kind === "oauth" ? "" : (gate.session?.memberId || String(env.SEDERUNT_MEMBER || "").trim()),
@@ -1132,7 +1358,7 @@ export function createApp(options = {}) {
         return;
       }
       const current = await prepareWorkspace(workspace, resolved.companyId);
-      send(res, 200, "application/json; charset=utf-8", JSON.stringify(roomLedger(current, roomId)));
+      send(res, 200, "application/json; charset=utf-8", JSON.stringify(roomLedger(current, roomId, await consolePrincipal(workspace, req, resolved.companyId))));
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/join") {
@@ -1258,15 +1484,6 @@ export function createApp(options = {}) {
           const payload = JSON.parse(raw || "{}");
           const delivery = recallTranscriptDelivery(payload);
           if (delivery) {
-            const configured = typeof env.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
-            if (configured) {
-              const people = [...new Set([...(delivery.participants ?? []), configured].filter(Boolean))];
-              delivery.participants = people;
-              delivery.room.memberIds = people;
-              // Tab-share and some streams arrive with words but no speaker.
-              // Typed fills this in; without it, storeDecision refuses as missing-member.
-              if (!delivery.memberId) delivery.memberId = configured;
-            }
             const botId = typeof delivery.room?.id === "string" ? delivery.room.id : "";
             const companyId = await resolveBoundTenant(workspace, { botId });
             // Race: join bound after Recall fires — ask provider to retry; never ingest unbound.
@@ -1276,7 +1493,24 @@ export function createApp(options = {}) {
             }
             // Unbound production memory fails closed (empty tenant + no allowUnscoped).
             const current = await prepareWorkspace(workspace, companyId);
+            const participant = payload?.data?.data?.participant || payload?.data?.participant;
+            // Display names and unverified mailbox claims never establish attendance identity.
+            if (participant?.email_verified === true && typeof participant.email === "string" && delivery.memberId) {
+              try {
+                await workspace.participantBindings.record({ tenantId: companyId, roomId: delivery.room.id, memberId: delivery.memberId, email: participant.email });
+              } catch (error) {
+                // A changed mailbox is permanent. An outage must be retried, so the words are not acknowledged yet.
+                if (error?.code !== "participant-identity") {
+                  send(res, 503, "text/plain; charset=utf-8", "participant-pending");
+                  return;
+                }
+              }
+            }
             await handleUtterance({ ...delivery, session: current }, depsFor(workspace, companyId));
+            if (companyId && workspace.followups && workspace.followupStore) {
+              const outcomes = await workspace.followupStore.list(companyId, { kind: "outcome", meetingId: delivery.room.id, limit: 1 });
+              if (outcomes.length) await persistMeetingFollowups(workspace, companyId, delivery.room.id);
+            }
           }
           const ended = meetingEnded(payload);
           if (ended?.roomId) {
@@ -1285,20 +1519,107 @@ export function createApp(options = {}) {
               send(res, 503, "text/plain; charset=utf-8", "bind-pending");
               return;
             }
+            if (companyId && !workspace.followups) { const error = new Error("Finalization unavailable"); error.code = "followup-persist"; throw error; }
+            if (companyId && workspace.followups) await persistMeetingFollowups(workspace, companyId, ended.roomId);
             const current = await prepareWorkspace(workspace, companyId);
-            await endMeeting(current, depsFor(workspace, companyId), ended.roomId);
+            try {
+              await endMeeting(current, depsFor(workspace, companyId), ended.roomId);
+            } catch {
+              // The finalization job is already saved. Memory minutes can be retried.
+            }
           }
-        } catch {
+        } catch (error) {
+          if (error?.code === "followup-persist") {
+            send(res, 503, "text/plain; charset=utf-8", "finalization-pending");
+            return;
+          }
           // A signed callback is still accepted when the transcript has no words.
         }
       }
       send(res, accepted ? 204 : 401, "text/plain; charset=utf-8", accepted ? "" : "rejected");
+      if (accepted) scheduleRecovery();
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/slack/interactivity") {
+      const raw = await readBody(req);
+      if (!env.SLACK_SIGNING_SECRET) {
+        send(res, 503, "text/plain; charset=utf-8", "Slack is not set up.");
+        return;
+      }
+      const accepted = verifySlackRequest({
+        secret: env.SLACK_SIGNING_SECRET,
+        timestamp: headerValue(req.headers["x-slack-request-timestamp"]),
+        signature: headerValue(req.headers["x-slack-signature"]),
+        payload: raw,
+      });
+      if (!accepted) {
+        send(res, 401, "text/plain; charset=utf-8", "rejected");
+        return;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(new URLSearchParams(raw).get("payload") || "");
+      } catch {
+        send(res, 400, "text/plain; charset=utf-8", "Invalid request.");
+        return;
+      }
+      const teamId = String(payload?.team?.id || payload?.team_id || "");
+      const slackRoute = await slackEventTenant(workspace, { teamId });
+      if (!workspace.followups || !workspace.followupStore || !slackRoute.tenantId || (slackRoute.teamId && slackRoute.teamId !== teamId)) {
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify({ ok: false, error: "forbidden_or_stale" }));
+        return;
+      }
+      const hinted = parseFollowupValue(payload?.actions?.[0]?.value || payload?.view?.private_metadata || "");
+      const stored = hinted ? await workspace.followupStore.get(slackRoute.tenantId, hinted.id) : null;
+      const fields = followupInteractionFields(payload, stored?.data);
+      if (!fields || fields.teamId !== teamId) {
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify({ ok: false, error: "invalid" }));
+        return;
+      }
+      const result = await workspace.followups.interact({ tenantId: slackRoute.tenantId, ...fields, deferExecution: fields.verb === "approve" });
+      if (result?.modal) {
+        try {
+          await Promise.race([
+            tenantSlackClient(workspace, slackRoute.tenantId).openModal({ triggerId: payload.trigger_id, view: result.modal }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("Modal timed out")), 2000)),
+          ]);
+        } catch {
+          await workspace.followups.interact({ tenantId: slackRoute.tenantId, ...fields, verb: "cancel" }).catch(() => {});
+          send(res, 503, "application/json; charset=utf-8", JSON.stringify({ ok: false, error: "modal-failed" }));
+          return;
+        }
+      }
+      if (payload.type === "view_submission" && result?.error === "invalid_edit") {
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify({ response_action: "errors", errors: { change: "Enter a valid change before saving." } }));
+        return;
+      }
+      send(res, 200, "application/json; charset=utf-8", JSON.stringify({
+        ok: result?.ok === true,
+        error: result?.error || "",
+        ran: result?.ran === true,
+        status: result?.status || "",
+      }));
+      if (result?.ok) scheduleRecovery();
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/typed") {
+      const gate = guardConsole(req, env);
+      if (gate.required && !gate.session) { sendCompanyDenied(res, send, { unauthorized: true }); return; }
       const delivery = await readRequest(req);
+      if (rejectTypedFollowup(delivery, res)) return;
       const configured = typeof env.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
-      if (!delivery.memberId && configured) delivery.memberId = configured;
+      const caller = guardConsole(req, env).session;
+      if (caller?.kind === "oauth") {
+        const own = String(caller.userId || caller.memberId || "");
+        if ((delivery.memberId && delivery.memberId !== own) || delivery.room?.id || delivery.participants?.length || delivery.intent === "delete") {
+          send(res, 403, "application/json; charset=utf-8", JSON.stringify({ error: "Use the meeting or channel for a room request." }));
+          return;
+        }
+        delivery.memberId = own;
+      } else if (caller) {
+        if ((delivery.memberId && delivery.memberId !== caller.memberId) || delivery.room?.id || delivery.participants?.length) { sendCompanyDenied(res, send, {}); return; }
+        delivery.memberId = caller.memberId;
+      } else if (!delivery.memberId && configured) delivery.memberId = configured;
       const resolved = await resolveCompanyId(workspace, req, typeof delivery.company === "string" ? delivery.company : "");
       if (resolved.denied || resolved.unauthorized) {
         sendCompanyDenied(res, send, resolved);
@@ -1321,7 +1642,7 @@ export function createApp(options = {}) {
       }
       const companyId = resolved.companyId;
       const current = await prepareWorkspace(workspace, companyId);
-      const memberId = consoleBoardMember(null, env, "company", typeof body.memberId === "string" ? body.memberId : "");
+      const memberId = await consolePrincipal(workspace, req, companyId);
       const visible = companyBoard(current, memberId);
       const row = (visible.decisions ?? []).find((item) => item.id === id) || null;
       if (!row) {
@@ -1388,7 +1709,44 @@ export function createApp(options = {}) {
         ? parsed.team_id.trim()
         : (typeof event.team === "string" ? event.team.trim() : "");
       const slackChannel = typeof event.channel === "string" ? event.channel.trim() : "";
-      const companyId = await resolveBoundTenant(workspace, { teamId: slackTeam, channelId: slackChannel });
+      // Only matching bot/app lifecycle events can remove the observed generation.
+      if (slackOAuthConfigured(env) && slackTeam && (event.type === "app_uninstalled" || event.type === "tokens_revoked")) {
+        let removed = 0;
+        try {
+          const install = await workspace.slackInstallations.byTeam(slackTeam);
+          const appId = String(parsed.api_app_id || "");
+          const eventTime = Number(parsed.event_time) * 1000;
+          const botRevoked = event.type === "tokens_revoked" && Array.isArray(event.tokens?.bot)
+            && event.tokens.bot.includes(install?.botUserId);
+          if (install && appId && install.appId === appId && Number.isFinite(eventTime) && eventTime > 0
+            && (event.type === "app_uninstalled" || botRevoked)) {
+            removed = await workspace.slackInstallations.revoke({ teamId: slackTeam, appId,
+              generation: install.generation, eventTime, botUserId: botRevoked ? install.botUserId : null });
+          }
+        } catch {
+          send(res, 503, "application/json; charset=utf-8", JSON.stringify({ slack: "retry" }));
+          return;
+        }
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify({ slack: removed ? "uninstalled" : "ignored" }));
+        return;
+      }
+      const legacyCompanyId = await resolveBoundTenant(workspace, { teamId: slackTeam, channelId: slackChannel });
+      // The team's own installation picks the tenant and the token; a team with
+      // no installation or claim is not ingested anywhere when OAuth is on.
+      const slackRoute = await slackEventTenant(workspace, { teamId: slackTeam, legacyTenantId: legacyCompanyId });
+      if (slackOAuthConfigured(env) && !slackRoute.tenantId) {
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify({ slack: "not-linked" }));
+        return;
+      }
+      const companyId = slackRoute.tenantId || legacyCompanyId;
+      const slackToken = slackRoute.token || "";
+      const deps = { ...workspace.deps, slack: { ...workspace.deps.slack,
+        fetch: installationFetch(workspace, companyId, slackRoute, workspace.deps.slack?.fetch || globalThis.fetch) } };
+      const slackEnv = {
+        ...env,
+        SLACK_BOT_TOKEN: slackToken,
+        SLACK_BOT_USER_ID: slackRoute.botUserId || (slackRoute.source === "install" ? "" : env.SLACK_BOT_USER_ID),
+      };
       const subtype = typeof event.subtype === "string" ? event.subtype : "";
       const changedFiles = subtype === "message_changed" && slackEventHasFiles(event);
       const noise = subtype
@@ -1413,16 +1771,16 @@ export function createApp(options = {}) {
       // Tests pass options.deps and read the response body; production acks first.
       // Only early-ack asks (DMs / @mentions). Channel keeps must finish the Kept
       // post before the response ends - waitUntil alone was freezing mid-keep.
-      const canLiveAck = parsed.type === "event_callback" && Boolean(env.SLACK_BOT_TOKEN) && options.deps == null;
-      const peek = slackDelivery(event, { botUserIds: slackBotUserIds(parsed, env) });
+      const canLiveAck = parsed.type === "event_callback" && Boolean(slackToken) && options.deps == null;
+      const peek = slackDelivery(event, { botUserIds: slackBotUserIds(parsed, slackEnv) });
       const liveAck = canLiveAck && peek.ask === true;
       const slackWork = (async () => {
       const current = await prepareWorkspace(workspace, companyId);
       const botName = (await currentBot(workspace, req)).name;
       try {
-        const delivery = slackDelivery(event, { botUserIds: slackBotUserIds(parsed, env) });
+        const delivery = slackDelivery(event, { botUserIds: slackBotUserIds(parsed, slackEnv) });
         if (filesRuntime && delivery.intent === "delete") {
-          try { hideDeletedSlackMessages(filesRuntime, delivery.forgetIds); } catch { /* the event still acks */ }
+          await hideDeletedSlackMessages(filesRuntime, delivery.forgetIds, { externalWorkspaceId: slackScopeId(parsed.team_id), externalChannelId: slackScopeId(delivery.room?.id) });
         }
         // A DM, or a channel @mention, recalls. Other channel lines are stored.
         const question = delivery.ask === true;
@@ -1433,21 +1791,12 @@ export function createApp(options = {}) {
         let downloadFailed = false;
         if (!question && delivery.intent !== "delete" && !huddle) {
           const channel = delivery.room?.askChannel || "";
-          const people = await slackPeople(env, deps, channel);
-          // conversations.members sometimes returns empty (rate limit / scope blip).
-          // Falling back to the speaker keeps the channel file instead of going silent.
-          // A non-empty list can still omit the poster (partial page / Connect id);
-          // always union the speaker so invite does not refuse a real keep.
-          const memberIds = people.length
-            ? [...people]
-            : (delivery.memberId ? [delivery.memberId] : []);
-          if (delivery.memberId && !memberIds.includes(delivery.memberId)) {
-            memberIds.push(delivery.memberId);
-          }
+          const people = await slackPeople(slackEnv, deps, channel, options.deps?.slack);
+          const memberIds = people;
           if (!memberIds.length) {
-            if (env.SLACK_BOT_TOKEN && channel) {
+            if (slackToken && channel) {
               await postSlackReply({
-                token: env.SLACK_BOT_TOKEN,
+                token: slackToken,
                 fetchImpl: deps.slack?.fetch,
                 channel,
                 text: "I could not see who is in this channel, so nothing was kept.",
@@ -1460,6 +1809,10 @@ export function createApp(options = {}) {
             }));
             return;
           }
+          if (!memberIds.includes(delivery.memberId)) {
+            replyHttp(200, "application/json; charset=utf-8", JSON.stringify({ body: "not-invited" }));
+            return;
+          }
           delivery.participants = memberIds;
           delivery.room.memberIds = memberIds;
           incoming = Array.isArray(delivery.files) && delivery.files.length
@@ -1467,7 +1820,7 @@ export function createApp(options = {}) {
             : (delivery.file ? [delivery.file] : []);
           const downloaded = await Promise.all(incoming.map(async (item) => {
             try {
-              return await withinMs(slackBytes(env, deps, item), 12_000);
+              return await withinMs(slackBytes(slackEnv, deps, item), 12_000);
             } catch {
               return null;
             }
@@ -1481,6 +1834,7 @@ export function createApp(options = {}) {
             if (filesRuntime) {
               try {
                 await withinMs(ingestSlackFile(filesRuntime, {
+                  externalWorkspaceId: slackScopeId(parsed.team_id),
                   externalChannelId: channel,
                   slackUserId: delivery.memberId,
                   slackName: delivery.memberId,
@@ -1522,6 +1876,7 @@ export function createApp(options = {}) {
         const keptFile = keptNames.length > 0;
         const storedNew = current.decisions.length > keptBefore || keptFile;
         const explicitKeep = isExplicitKeep(delivery.text, incoming.length);
+        if (replyDeletionFailed(result, replyHttp)) return;
         const repeat = result?.allow === "duplicate-delivery" || result?.outcome === "duplicate-delivery" || result?.outcome === "duplicate";
         const allowed = result?.allow !== "not-invited" && result?.allow !== "missing-member";
         if (typeof deps.log === "function") {
@@ -1542,7 +1897,7 @@ export function createApp(options = {}) {
             roomId: delivery.room?.id || "",
           });
         }
-        if (!question && !repeat && allowed && env.SLACK_BOT_TOKEN) {
+        if (!question && !repeat && allowed && slackToken) {
           const channel = delivery.room?.askChannel || (typeof event.channel === "string" ? event.channel : "");
           let notice = "";
           if (keptFile) notice = keptNotice(keptNames);
@@ -1553,7 +1908,7 @@ export function createApp(options = {}) {
             const wonKeep = await claimSlackAsk(env, keepClaim, deps.slack?.fetch || deps.fetch, "keep");
             if (wonKeep) {
               await postSlackReply({
-                token: env.SLACK_BOT_TOKEN,
+                token: slackToken,
                 fetchImpl: deps.slack?.fetch,
                 channel,
                 text: notice,
@@ -1569,7 +1924,7 @@ export function createApp(options = {}) {
             fetchImpl: deps.slack?.fetch || deps.fetch,
             botName,
             maxMemories: 20,
-            token: env.SLACK_BOT_TOKEN,
+            token: slackToken,
             channel,
             excludeTs: typeof event.ts === "string" ? event.ts : "",
             memberId: delivery.memberId,
@@ -1595,7 +1950,7 @@ export function createApp(options = {}) {
           }
           answer.text = prepareSlackCaption(answer.text, answer.file);
           const hint = named?.name ? named : answer.fileMeta;
-          const bytes = answer.file ? await storedFileBytes(current, answer.file, deps, env, hint) : null;
+          const bytes = answer.file ? await storedFileBytes(current, answer.file, depsFor(workspace, companyId), slackEnv, hint) : null;
           const reply = {
             channel,
             text: answer.text,
@@ -1617,9 +1972,9 @@ export function createApp(options = {}) {
             }));
             return;
           }
-          if (env.SLACK_BOT_TOKEN) {
+          if (slackToken) {
             await postSlackReply({
-              token: env.SLACK_BOT_TOKEN,
+              token: slackToken,
               fetchImpl: deps.slack?.fetch,
               channel: reply.channel,
               text: reply.text,
@@ -1638,10 +1993,10 @@ export function createApp(options = {}) {
         }));
       } catch {
         const channel = typeof event?.channel === "string" ? event.channel : "";
-        if (env.SLACK_BOT_TOKEN && channel) {
+        if (slackToken && channel) {
           try {
             await postSlackReply({
-              token: env.SLACK_BOT_TOKEN,
+              token: slackToken,
               fetchImpl: deps.slack?.fetch,
               channel,
               text: "I could not keep that message.",
@@ -1672,36 +2027,53 @@ export function createApp(options = {}) {
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/download") {
+      const gate = guardConsole(req, env);
+      if (gate.required && !gate.session) { sendCompanyDenied(res, send, { unauthorized: true }); return; }
+      if (!activitySameOrigin(req)) { sendCompanyDenied(res, send, {}); return; }
       const body = await readJson(req);
-      const saved = await downloadFile({
-        ...deliveryFrom(body),
-        name: typeof body.name === "string" ? body.name : "",
-        session,
-      }, deps);
-      send(res, 200, "application/json; charset=utf-8", JSON.stringify({
-        name: saved.name,
-        bytes: saved.bytes == null ? null : String(saved.bytes),
-        allow: saved.allow,
-      }));
+      const resolved = await resolveCompanyId(workspace, req, typeof body.company === "string" ? body.company : "");
+      if (resolved.denied || resolved.unauthorized) { sendCompanyDenied(res, send, resolved); return; }
+      const current = await prepareWorkspace(workspace, resolved.companyId);
+      const principal = await consolePrincipal(workspace, req, resolved.companyId);
+      const memberId = readPrincipalId(principal);
+      const visible = readableSession(current, principal);
+      visible.decisions = visible.decisions.map((row) => ({ ...row, inviteMemberIds: [memberId] }));
+      const saved = await downloadFile({ memberId, name: typeof body.name === "string" ? body.name : "", session: visible }, depsFor(workspace, resolved.companyId));
+      send(res, 200, "application/json; charset=utf-8", JSON.stringify({ name: saved.name, bytes: saved.bytes == null ? null : String(saved.bytes), allow: saved.allow }));
       return;
     }
     if (req.method === "GET" && url.pathname.startsWith("/object/")) {
+      const gate = guardConsole(req, env);
+      if (gate.required && !gate.session) { sendCompanyDenied(res, send, { unauthorized: true }); return; }
       const id = decodeURIComponent(url.pathname.slice("/object/".length));
-      if (!id || id.includes("/") || id.includes("..")) {
-        send(res, 404, "text/plain; charset=utf-8", "Not found");
-        return;
+      if (!id || id.includes("/") || id.includes("..")) { send(res, 404, "text/plain; charset=utf-8", "Not found"); return; }
+      const resolved = await resolveCompanyId(workspace, req, url.searchParams.get("company") || "");
+      if (resolved.denied || resolved.unauthorized) { sendCompanyDenied(res, send, resolved); return; }
+      const current = await prepareWorkspace(workspace, resolved.companyId);
+      const principal = await consolePrincipal(workspace, req, resolved.companyId);
+      if (!current.decisions.some((row) => row.objectId === id && canReadRecord(principal, row))) {
+        send(res, 404, "text/plain; charset=utf-8", "Not found"); return;
       }
       try {
-        const object = await deps.tatum.getObject(id);
+        const object = await depsFor(workspace, resolved.companyId).tatum.getObject(id);
         const lines = [];
         if (typeof object?.text === "string" && object.text.trim()) lines.push(redact(object.text));
         if (object?.checkpoint != null) lines.push(`checkpoint ${object.checkpoint}`);
         if (Number.isSafeInteger(object?.version)) lines.push(`version ${object.version}`);
         send(res, 200, "text/plain; charset=utf-8", lines.join("\n") || "unknown");
-      } catch {
-        send(res, 200, "text/plain; charset=utf-8", "unknown");
-      }
+      } catch { send(res, 200, "text/plain; charset=utf-8", "unknown"); }
       return;
+    }
+    if ((url.pathname === "/mcp" || url.pathname === "/api/mcp") && req.method === "POST") {
+      const gate = guardConsole(req, env);
+      if (gate.required && !gate.session) {
+        sendCompanyDenied(res, send, { unauthorized: true });
+        return;
+      }
+      if (!activitySameOrigin(req)) {
+        send(res, 403, "text/plain; charset=utf-8", "That request was refused.");
+        return;
+      }
     }
     if (url.pathname === "/mcp") {
       if (req.method !== "POST") {
@@ -1722,9 +2094,16 @@ export function createApp(options = {}) {
         return;
       }
       const args = message?.params?.arguments ?? {};
-      const companyId = typeof args.company === "string" ? args.company : "";
+      const resolved = await resolveCompanyId(workspace, req, typeof args.company === "string" ? args.company : "");
+      if (resolved.denied || resolved.unauthorized) {
+        sendCompanyDenied(res, send, resolved);
+        return;
+      }
+      const companyId = resolved.companyId;
       const current = await prepareWorkspace(workspace, companyId);
-      const bound = bindToolMember(message, env.SEDERUNT_MEMBER);
+      const caller = guardConsole(req, env).session;
+      const memberId = caller?.userId || caller?.memberId || env.SEDERUNT_MEMBER;
+      const bound = bindToolMember(message, memberId);
       if (bound.refusal) {
         const refusal = memberRefusal(bound.refusal);
         const outcome = {
@@ -1740,6 +2119,15 @@ export function createApp(options = {}) {
         };
         send(res, outcome.status, "application/json; charset=utf-8", JSON.stringify(outcome.body));
         return;
+      }
+      if (bound.message?.method === "tools/call" && !String(bound.message.params?.name || "").includes("__")) {
+        const supplied = bound.message.params.arguments;
+        if (caller?.kind === "oauth" && (supplied.room || supplied.participants || supplied.door || supplied.followup || supplied.intent || supplied.readPrincipal)) {
+          sendCompanyDenied(res, send, {});
+          return;
+        }
+        bound.message.params.arguments = { ...deliveryFrom(supplied), workspace: supplied.workspace,
+          readPrincipal: await consolePrincipal(workspace, req, companyId, supplied.workspace) };
       }
       const outcome = await mcpJsonRpc(bound.message, current, depsFor(workspace, companyId), await mcpCallContext(req));
       if (outcome.status === 202) {
@@ -1764,19 +2152,31 @@ export function createApp(options = {}) {
       const message = await readJson(req);
       const name = message?.name ?? message?.params?.name;
       const args = message?.arguments ?? message?.params?.arguments ?? {};
-      const companyId = typeof args.company === "string" ? args.company : "";
+      const resolved = await resolveCompanyId(workspace, req, typeof args.company === "string" ? args.company : "");
+      if (resolved.denied || resolved.unauthorized) {
+        sendCompanyDenied(res, send, resolved);
+        return;
+      }
+      const companyId = resolved.companyId;
       const current = await prepareWorkspace(workspace, companyId);
-      const bound = bindToolMember({ method: "tools/call", params: { arguments: args } }, env.SEDERUNT_MEMBER);
+      const caller = guardConsole(req, env).session;
+      const memberId = caller?.userId || caller?.memberId || env.SEDERUNT_MEMBER;
+      const bound = bindToolMember({ method: "tools/call", params: { arguments: args } }, memberId);
       if (bound.refusal) {
         send(res, 200, "application/json; charset=utf-8", JSON.stringify(memberRefusal(bound.refusal)));
         return;
       }
       const custom = typeof name === "string" && name.includes("__");
+      if (!custom && caller?.kind === "oauth" && (args.room || args.participants || args.door || args.followup || args.intent || args.readPrincipal)) {
+        sendCompanyDenied(res, send, {});
+        return;
+      }
       const result = await handleMcpRequest({
         name,
         arguments: custom
-          ? { ...args, session: current }
-          : { ...deliveryFrom(bound.message.params.arguments), session: current },
+          ? { ...bound.message.params.arguments, session: current }
+          : { ...deliveryFrom(bound.message.params.arguments), workspace: args.workspace,
+            readPrincipal: await consolePrincipal(workspace, req, companyId, args.workspace), session: current },
         _meta: message?._meta || message?.params?._meta,
       }, depsFor(workspace, companyId), await mcpCallContext(req));
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(result));
@@ -1784,8 +2184,10 @@ export function createApp(options = {}) {
     }
     send(res, 404, "text/plain; charset=utf-8", "Not found");
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Request failed";
-    send(res, 500, "text/plain; charset=utf-8", redact(message));
+    if (res.headersSent) { res.end(); return; }
+    const status = error.status === 413 ? 413 : error.status === 503 ? 503 : error.status === 400 || error instanceof URIError || error instanceof SyntaxError ? 400 : 500;
+    const message = status === 413 ? "Request body is too large." : status === 400 ? "Invalid request." : "Request failed.";
+    send(res, status, "text/plain; charset=utf-8", message);
   }
   });
   const closeServer = server.close.bind(server);
@@ -1800,6 +2202,10 @@ export function createApp(options = {}) {
   };
   /** The start-up proof warm, when it runs. Resolves to its report or null. */
   server.proofWarm = workspace.warm || null;
+  server.recover = recover;
+  const recoveryTimer = options.autoRecovery !== false && !env.VERCEL && (workspace.followups || workspace.deletions) ? setInterval(scheduleRecovery, 30000) : null;
+  recoveryTimer?.unref();
+  server.on("close", () => { if (recoveryTimer) clearInterval(recoveryTimer); });
   return server;
 }
 
@@ -1841,7 +2247,8 @@ function saveCalendarEnv(env) {
  */
 function liveFiles(env, identity) {
   if (env.FILES_DEMO === "1") return createFileRuntime({ env, demo: true });
-  const store = createFileStore();
+  const store = env.SUPABASE_URL && (env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SECRET_KEY)
+    ? createSupabaseFileStore({ env }) : createFileStore();
   let session = null;
   const background = !process.env.VERCEL;
   const runtime = createFileRuntime({
@@ -1852,6 +2259,7 @@ function liveFiles(env, identity) {
     viewer: (req) => session.viewer(req),
   });
   session = createSessionFiles({ env, identity, store, storage: runtime.storage });
+  runtime.invalidate = (userId) => session.invalidate(userId);
   if (background && runtime.storage) runtime.startWorker(30_000);
   return runtime;
 }
@@ -1874,11 +2282,30 @@ function isDirectRun() {
   return import.meta.url === pathToFileURL(resolve(entry)).href;
 }
 
+function assertDirectProduction(env) {
+  if (isProduction(env)) assertProductionConfig(env);
+}
+
 let publicServer;
 if (isDirectRun() || process.env.VERCEL) {
   loadLocalEnv();
   loadCompanyEnv();
+  assertDirectProduction(process.env);
+  let deletions = createDeletionStore(process.env);
+  if (!deletions && !process.env.VERCEL && process.env.NODE_ENV !== "production") {
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(resolve(".local"), { recursive: true });
+    deletions = await createLocalDeletionStore(resolve(".local/memory-deletions.sqlite"));
+  }
+  let actionClaims = createActionClaims(process.env);
+  if (!actionClaims && !process.env.VERCEL && process.env.NODE_ENV !== "production") {
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(resolve(".local"), { recursive: true });
+    actionClaims = await createLocalActionClaims(resolve(".local/action-claims.sqlite"));
+  }
   publicServer = createApp({
+    deletions,
+    actionClaims,
     liveLinear: true,
     calendar: createCalendarAdapter(process.env, { save: saveCalendarEnv }),
     calendarSave: saveCalendarEnv,
@@ -1948,11 +2375,32 @@ async function handleAsk(workspace, req, res, url) {
     json(401, { error: "Sign in." });
     return;
   }
-  const store = workspace.ask;
   const user = askUser(gate, env);
   const limit = askLimit(env);
   const live = openRouterConfig(env).enabled;
   try {
+    const body = req.method === "POST" && url.pathname === "/api/ask" ? await readJson(req) : {};
+    const requestedScope = body.workspace ?? url.searchParams.get("workspace") ?? "company";
+    if (requestedScope !== "personal" && requestedScope !== "company") {
+      json(400, { error: "Choose a personal or company workspace." });
+      return;
+    }
+    const scope = requestedScope;
+    const requestedCompany = body.company ?? url.searchParams.get("company") ?? "";
+    const resolved = await resolveCompanyId(workspace, req, typeof requestedCompany === "string" ? requestedCompany : "");
+    if (resolved.denied || resolved.unauthorized || (identityConfigured(env) && scope === "company" && !resolved.companyId)) {
+      json(resolved.unauthorized ? 401 : 403, { error: resolved.unauthorized ? "Sign in again." : "That workspace is not available." });
+      return;
+    }
+    const companyId = scope === "personal" ? "" : resolved.companyId;
+    const tenantId = scope === "personal" ? `personal:${user}` : companyId || "local";
+    const deletionVersion = workspace.deletions ? async () => {
+      const deletionTenant = depsFor(workspace, companyId).deletionTenantId;
+      const rows = await workspace.deletions.list(deletionTenant);
+      return createHash("sha256").update(JSON.stringify(rows.map((row) => row.id).sort())).digest("hex");
+    } : undefined;
+    if (deletionVersion) await deletionVersion();
+    const store = scopeAskStore(workspace.ask, { user, tenantId, workspace: scope }, { deletionVersion });
     if (req.method === "GET" && url.pathname === "/api/ask") {
       const { quota, ids } = await store.overview(user, limit);
       const asks = [];
@@ -1970,7 +2418,6 @@ async function handleAsk(workspace, req, res, url) {
         json(403, { error: "Ask from the console." });
         return;
       }
-      const body = await readJson(req);
       const question = typeof body.text === "string" ? body.text.trim() : "";
       if (!question) {
         json(400, { error: "Type a question first." });
@@ -1989,7 +2436,7 @@ async function handleAsk(workspace, req, res, url) {
       try {
         id = await store.create(user, question);
       } catch (error) {
-        await store.refund(user).catch(() => {});
+        await store.refund(user, claimed.quotaKey).catch(() => {});
         throw error;
       }
       // Reserve a slot on the way in, then give it back unless the answer is real text.
@@ -2008,20 +2455,11 @@ async function handleAsk(workspace, req, res, url) {
           }
           if (askId === id && !refunded && !askSpendsQuota(next.source, next.status || status)) {
             refunded = true;
-            await store.refund(user).catch(() => {});
+            await store.refund(user, claimed.quotaKey).catch(() => {});
           }
           return store.finish(askId, next);
         },
       };
-      const resolved = await resolveCompanyId(workspace, req, typeof body.company === "string" ? body.company : "");
-      if (resolved.denied || resolved.unauthorized) {
-        json(resolved.unauthorized ? 401 : 403, resolved.unauthorized
-          ? { error: "Sign in again.", reason: "missing" }
-          : { error: "That workspace is not available.", reason: "forbidden" });
-        return;
-      }
-      const companyId = resolved.companyId;
-      const scope = body.workspace === "personal" ? "personal" : "company";
       const work = (async () => {
         const previous = [];
         const priorIds = (await store.list(user).catch(() => [])).filter((prior) => prior !== id).slice(0, 3).reverse();
@@ -2031,8 +2469,9 @@ async function handleAsk(workspace, req, res, url) {
           }
         }
         const current = await prepareWorkspace(workspace, companyId);
-        const memberId = consoleBoardMember(gate.session, env, scope, "");
-        const visible = (scope === "personal" ? personalBoard(current, memberId) : companyBoard(current, memberId)).decisions || [];
+        const principal = await consolePrincipal(workspace, req, companyId, scope);
+        const memberId = readPrincipalId(principal);
+        const visible = (scope === "personal" ? personalBoard(current, principal) : companyBoard(current, principal)).decisions || [];
         const doorDeps = depsFor(workspace, companyId);
         const bot = await currentBot(workspace, req).catch(() => null);
         return runAsk({
@@ -2046,9 +2485,10 @@ async function handleAsk(workspace, req, res, url) {
           fetchImpl: workspace.openrouterFetch || undefined,
           botName: bot?.name || "",
           // withMemWal ask path: MemWal.recall(query) before generate.
-          recall: doorDeps.memory?.recall ? async (query) => doorDeps.memory.recall(query) : undefined,
+          recall: doorDeps.memory?.recall ? async (query) => (await doorDeps.memory.recall(query)).filter((hit) => canReadRecord(principal, hit.decision))
+            .map((hit) => ({ ...hit, decision: { ...hit.decision, inviteMemberIds: [memberId] } })) : undefined,
           // The signed-in board member, not a client-supplied id and not only SEDERUNT_MEMBER.
-          retrieval: () => chatReply(workspace, { text: question, workspace: scope, company: companyId }, memberId),
+          retrieval: () => chatReply(workspace, { text: question, workspace: scope, company: companyId }, principal),
         });
       })().catch(() => askStore.finish(id, { status: "error" }).catch(() => {}));
       if (env.VERCEL) {
@@ -2084,6 +2524,7 @@ async function handleAsk(workspace, req, res, url) {
       let beat = Date.now();
       while (!closed) {
         const [{ meta, chunks }] = await store.reads([id], from);
+        if (!meta || !await store.meta(id)) { write("done", { status: "stopped", count: from }); break; }
         const status = settledStatus(meta);
         for (const text of chunks) {
           write("chunk", { i: from, t: text });
@@ -2134,7 +2575,7 @@ async function chatReply(workspace, body, trustedMember = "", req = null) {
     };
   }
   const companyId = resolved.companyId;
-  const current = await prepareWorkspace(workspace, companyId);
+  let current = await prepareWorkspace(workspace, companyId);
   const text = typeof body.text === "string" ? body.text.trim() : "";
   const requested = typeof body.workspace === "string" ? body.workspace : "";
   const scope = requested === "personal" || requested === "company" ? requested : "";
@@ -2154,8 +2595,10 @@ async function chatReply(workspace, body, trustedMember = "", req = null) {
       stored: false,
     };
   }
-  const trusted = typeof trustedMember === "string" ? trustedMember.trim() : "";
+  const principal = req ? await consolePrincipal(workspace, req, companyId, scope) : trustedMember;
+  const trusted = readPrincipalId(principal);
   const bound = trusted ? { ok: true, memberId: trusted } : bindMember(env, body.memberId);
+  current = readableSession(current, trusted ? principal : bound.memberId);
   if (!bound.ok) {
     return {
       body: memberRefusal(bound.reason).body,
@@ -2185,6 +2628,7 @@ async function chatReply(workspace, body, trustedMember = "", req = null) {
         intent: "recall",
         door: "mcp",
         memberId: bound.memberId,
+        readPrincipal: principal || bound.memberId,
         workspace: scope,
         room: { id },
         session: current,
@@ -2209,6 +2653,7 @@ async function chatReply(workspace, body, trustedMember = "", req = null) {
     intent: "recall",
     door: "mcp",
     memberId: bound.memberId,
+        readPrincipal: principal || bound.memberId,
     workspace: scope,
     room: namedRoom ? { id: namedRoom } : undefined,
     session: current,
@@ -2278,11 +2723,116 @@ function sessionFor(workspace, companyId) {
   return workspace.sessions.get(id);
 }
 
-function depsFor(workspace, companyId) {
+function liveFollowups(workspace, store) {
+  return createMeetingFollowups({
+    store,
+    handleUtterance: (input) => {
+      const tenantId = input.followup.tenantId;
+      return handleUtterance({ ...input, session: sessionFor(workspace, tenantId) }, {
+        ...depsFor(workspace, tenantId),
+        followups: workspace.followups,
+        calendarFor: async (memberId) => {
+          const bindings = await workspace.participantBindings.forRoom(tenantId, input.followup.meetingId);
+          const personId = bindings.find((row) => row.memberId === memberId)?.userId || "";
+          if (!personId) return null;
+          const opened = await calendarForRequest(workspace, { companyId: tenantId, personId });
+          return opened.personGrant ? opened.adapter : null;
+        },
+      });
+    },
+    slackFor: async (tenantId) => {
+      const connection = await slackConnection(workspace, tenantId);
+      if (!connection.linked || !connection.teamId) return null;
+      return { ...tenantSlackClient(workspace, tenantId), teamId: connection.teamId };
+    },
+    authorize: async ({ record, actorSlackId }) => record?.data?.requesterSlackId === actorSlackId
+      && await followupDeliveryAllowed(workspace, store, { ...record, data: { ...record.data, sourceIds: [record.data.sourceId] } }),
+    authorizeDelivery: async ({ record }) => followupDeliveryAllowed(workspace, store, record),
+    validateEdit: async (data, edit) => validateFollowupEdit(data, edit),
+  });
+}
+
+async function matchedSlackUser(workspace, tenantId, connection, email) {
+  if (!connection?.linked || !connection.teamId || !email) return "";
+  if (workspace.slackMatches?.get) {
+    const row = await workspace.slackMatches.get({ tenantId, workspaceId: connection.teamId, email });
+    if (row) return row.slackUserId || "";
+  } else if (workspace.env.SUPABASE_URL && (workspace.env.SUPABASE_SECRET_KEY || workspace.env.SUPABASE_SERVICE_ROLE_KEY)) {
+    const key = workspace.env.SUPABASE_SECRET_KEY || workspace.env.SUPABASE_SERVICE_ROLE_KEY;
+    const query = new URLSearchParams({ select: "slack_user_id,source", tenant_id: `eq.${tenantId}`, external_workspace_id: `eq.${connection.teamId}`, email: `eq.${email.toLowerCase()}`, limit: "1" });
+    const response = await workspace.fetchImpl(`${workspace.env.SUPABASE_URL.replace(/\/$/, "")}/rest/v1/slack_user_matches?${query}`, {
+      headers: { apikey: key, authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(5000), redirect: "error",
+    });
+    if (!response.ok) throw new Error("Slack matching is unavailable.");
+    const [row] = await response.json();
+    if (row?.source === "override") return row.slack_user_id || "";
+  }
+  const fetched = await lookupByEmail({ email, token: connection.token, retries: 0,
+    fetchImpl: (url, init) => installationFetch(workspace, tenantId, connection, workspace.fetchImpl)(url, { ...init, signal: AbortSignal.timeout(5000) }) });
+  if (!fetched.ok) throw new Error("Slack matching is unavailable.");
+  return fetched.slackUserId || "";
+}
+
+async function followupDeliveryAllowed(workspace, store, record) {
+  const data = record.data;
+  const outcomes = await store.list(record.tenantId, { kind: "outcome", meetingId: record.meetingId, limit: 100 });
+  const evidence = outcomes.find((row) => row.data?.input)?.data?.input;
+  if (!evidence?.memberIds?.length) return false;
+  const bindings = await workspace.participantBindings.forRoom(record.tenantId, record.meetingId);
+  const person = (evidence.meeting?.people || []).find((row) => row.slackUserId === data.requesterSlackId);
+  const binding = person && bindings.find((row) => row.memberId === person.memberId && row.email?.toLowerCase() === person.email?.toLowerCase());
+  if (!binding) return false;
+  const connection = await slackConnection(workspace, record.tenantId);
+  if (!connection.linked || connection.teamId !== data.teamId || await matchedSlackUser(workspace, record.tenantId, connection, binding.email) !== data.requesterSlackId) return false;
+  const current = await prepareWorkspace(workspace, record.tenantId);
+  const allowed = new Set([...current.decisions.filter((row) => row.roomId === record.meetingId && canReadRecord(person.memberId, row)).map((row) => row.id),
+    ...current.actions.filter((row) => row.roomId === record.meetingId && canReadRecord(person.memberId, row)).map((row) => `action:${row.deliveryId || row.id}`)]);
+  const sourceIds = data.sourceIds || evidence.sources.map((row) => row.id);
+  return sourceIds.every((id) => allowed.has(id));
+}
+
+async function persistMeetingFollowups(workspace, companyId, roomId) {
+  try {
+    const current = await prepareWorkspace(workspace, companyId);
+    const bindings = await workspace.participantBindings.forRoom(companyId, roomId);
+    const connection = await slackConnection(workspace, companyId);
+    const matched = [];
+    for (const row of bindings) matched.push({ ...row, slackUserId: await matchedSlackUser(workspace, companyId, connection, row.email) });
+    const room = current.rooms.find((item) => item.id === roomId);
+    const built = buildMeetingFollowupInput({
+      tenantId: companyId,
+      meetingId: roomId,
+      teamId: connection.teamId || "",
+      botName: current.hearing.name,
+      decisions: current.decisions,
+      actions: current.actions,
+      bindings: matched,
+      preferences: current.preferences,
+      bindingChannelId: "",
+      channelRecipients: [],
+      meeting: { privateOneToOne: openedRoomIsPrivate(room) },
+    });
+    await acceptMeetingEnd(workspace.followups, workspace.followupStore, built);
+  } catch (error) {
+    if (error?.code === "followup-persist") throw error;
+    const denied = new Error("Meeting finalization could not be saved.");
+    denied.code = "followup-persist";
+    throw denied;
+  }
+}
+
+function depsFor(workspace, companyId, unfiltered = false) {
   const id = companyKey(workspace, companyId);
   const tenantId = id === "company" ? "" : id;
+  const deletionTenantId = tenantId || "00000000-0000-4000-8000-000000000001";
+  const deletionDeps = { deletions: workspace.deletions, deletionTenantId, actionClaims: workspace.actionClaims,
+    actionClaimTenantId: tenantId || "00000000-0000-4000-8000-000000000001", requireActionClaims: identityConfigured(workspace.env) };
+  const filtered = (memory) => memory && workspace.deletions && !unfiltered ? withDeletionOverlay(memory, workspace.deletions, deletionTenantId) : memory;
+  const slackScoped = slackOAuthConfigured(workspace.env || {})
+    ? { slack: tenantSlackClient(workspace, tenantId), app: { ...(workspace.deps.app || {}), slackChannel: "" } }
+    : {};
   if (workspace.companies) {
-    return { ...workspace.deps, memory: workspace.companies[id], tenantId };
+    return { ...workspace.deps, ...slackScoped, ...deletionDeps, memory: filtered(workspace.companies[id]), tenantId };
   }
   const memory = bindMemoryTenant(
     workspace.deps.memory,
@@ -2291,7 +2841,7 @@ function depsFor(workspace, companyId) {
     workspace.memwalClient,
     workspace.deps.tatum,
   );
-  return { ...workspace.deps, memory, tenantId };
+  return { ...workspace.deps, ...slackScoped, ...deletionDeps, memory: filtered(memory), tenantId };
 }
 
 /**
@@ -2390,7 +2940,7 @@ async function resolveBoundTenant(workspace, { botId = "", teamId = "", channelI
   const bot = String(botId || "").trim();
   if (bot) {
     const fromBot = await bind.resolve("bot", bot);
-    if (fromBot) return fromBot;
+    if (fromBot) return await workspace.adminStore?.tenantRetired(fromBot) ? "" : fromBot;
   }
   const team = String(teamId || "").trim();
   const channel = String(channelId || "").trim();
@@ -2401,12 +2951,12 @@ async function resolveBoundTenant(workspace, { botId = "", teamId = "", channelI
     if (fromChannel) {
       if (fromTeam && fromTeam !== fromChannel) return "";
       if (!fromTeam) return ""; // channel without authoritative team ownership
-      return fromChannel;
+      return await workspace.adminStore?.tenantRetired(fromChannel) ? "" : fromChannel;
     }
   }
   if (team) {
     const fromTeam = await bind.resolve("slack", team);
-    if (fromTeam) return fromTeam;
+    if (fromTeam) return await workspace.adminStore?.tenantRetired(fromTeam) ? "" : fromTeam;
   }
   return "";
 }
@@ -2446,7 +2996,31 @@ async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0,
   const tenant = hearingTenant === undefined
     ? ((typeof companyId === "string" && companyId.trim()) || "local")
     : (typeof hearingTenant === "string" ? hearingTenant.trim() : "");
-  const applyHearing = () => assignEffectiveHearing(workspace, current, tenant);
+  const applyHearing = async () => {
+    await assignEffectiveHearing(workspace, current, tenant);
+    if (workspace.deletions) {
+      const deletionTenant = depsFor(workspace, companyId).deletionTenantId;
+      let visible;
+      try {
+        visible = await filterDeletedDecisions(workspace.deletions, deletionTenant, current.decisions);
+      } catch {
+        const denied = new Error("The deletion record could not be read.");
+        denied.status = 503;
+        throw denied;
+      }
+      const allowed = new Set(visible);
+      for (const decision of current.decisions) if (!allowed.has(decision)) decision.deleted = true;
+      const hiddenSources = new Set(current.decisions.filter((row) => row.deleted).map((row) => row.sourceDeliveryId).filter(Boolean));
+      let intents;
+      try { intents = await workspace.deletions.list(deletionTenant); }
+      catch { const error = new Error("The deletion record could not be read."); error.status = 503; throw error; }
+      current.actions = current.actions.filter((row) => !hiddenSources.has(row.deliveryId)
+        && !intents.some((intent) => deletionMatches(intent, { tenantId: deletionTenant, roomId: row.roomId, sourceIds: [row.deliveryId].filter(Boolean), decisionIds: [row.id].filter(Boolean) })));
+      current.activity = current.activity.filter((row) => !intents.some((intent) => deletionMatches(intent, {
+        tenantId: deletionTenant, roomId: row.origin?.roomId, sourceIds: [row.origin?.sourceDeliveryId].filter(Boolean), decisionIds: [],
+      })));
+    }
+  };
   if (!workspace.companyLoaded) {
     current.readReport = { ok: true, empty: true, blocked: true };
     await applyHearing();
@@ -2505,16 +3079,14 @@ async function hearingTenantId(workspace, req) {
 }
 
 /**
- * Who the company board is read as. An OAuth user id is not a meeting
- * participant, so a company board uses SEDERUNT_MEMBER when it is set.
- * A personal board stays on the signed-in user. A passphrase session keeps
- * its own member id, and an unsigned read can still ask with ?member=.
+ * Member web reads use the signed-in identity. Verified provider aliases are
+ * resolved separately by consolePrincipal, scoped to the current tenant.
  */
 export function consoleBoardMember(session, env, workspace, requested = "") {
   const configured = typeof env?.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
   const asked = String(requested || "").trim();
   const signed = session ? (String(session.memberId || "").trim() || configured) : (asked || configured);
-  if (session?.kind === "oauth" && workspace !== "personal" && configured) return configured;
+  if (session?.kind === "oauth") return String(session.userId || session.memberId || "").trim();
   return signed;
 }
 
@@ -2569,7 +3141,8 @@ async function consolePayload(workspace, current, memberId, kind = "company", op
   const report = current.readReport;
   const config = appConfig(workspace.env);
   if (open !== "personal") await hydrateSlackChannels(current, workspace.deps);
-  const board = open === "personal" ? personalBoard(current, memberId) : companyBoard(current, memberId, { timeZone: config.timeZone, slackChannel: config.slackChannel });
+  const principal = req && gate.session?.kind === "oauth" ? await consolePrincipal(workspace, req, companyId, open) : memberId;
+  const board = open === "personal" ? personalBoard(current, principal) : companyBoard(current, principal, { timeZone: config.timeZone, slackChannel: config.slackChannel });
   if (!report.ok) {
     return {
       companyLoaded: true,
@@ -2695,13 +3268,8 @@ async function roomMedia(workspace, id) {
     segments: [],
     events: [],
   };
-  let current = workspace.session || { rooms: [] };
-  try {
-    current = await prepareWorkspace(workspace, "", false, 2000);
-  } catch {
-    current = workspace.session || { rooms: [] };
-  }
-  const room = (current.rooms || []).find((item) => item.id === id);
+  const current = await prepareWorkspace(workspace, "", false, 2000).catch(unavailableRoomMedia);
+  const room = current.rooms.find((item) => item.id === id);
   const platform = typeof room?.platform === "string" ? room.platform : "";
   if (/slack/i.test(platform)) {
     const raw = String(room?.channel || room?.name || "").trim();
@@ -2754,7 +3322,11 @@ async function loadRoomMedia(workspace, id, current, empty) {
   return body;
 }
 
-async function slackPeople(env, deps, channel) {
+async function slackPeople(env, deps, channel, injected) {
+  if (typeof injected?.members === "function") {
+    const people = await injected.members(channel);
+    return Array.isArray(people) ? people.map(String).filter(Boolean) : [];
+  }
   if (env.SLACK_BOT_TOKEN) {
     return slackChannelMembers({ token: env.SLACK_BOT_TOKEN, channel, fetchImpl: deps.slack?.fetch });
   }
@@ -2839,6 +3411,7 @@ function isExplicitKeep(text, fileCount) {
 }
 
 async function slackBytes(env, deps, file) {
+  if (deps.slack?.tenantScoped === true) return deps.slack.downloadFile(file);
   if (env.SLACK_BOT_TOKEN) return slackFileBytes({ token: env.SLACK_BOT_TOKEN, file, fetchImpl: deps.slack?.fetch });
   if (typeof deps.slack?.downloadFile === "function") return deps.slack.downloadFile(file);
   return null;
@@ -2974,9 +3547,7 @@ async function sendClip(req, res, pathname) {
 }
 
 async function readBody(req) {
-  const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
-  return Buffer.concat(chunks).toString("utf8");
+  return (await readRequestBytes(req)).toString("utf8");
 }
 
 async function readJson(req) {

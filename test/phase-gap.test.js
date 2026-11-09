@@ -132,9 +132,9 @@ test("a forced calendar failure stays recorded and a later success stores the ev
     { calendar },
   );
   assert.equal(failed.status, "recorded");
-  assert.match(failed.body, /The edit did not happen/);
+  assert.match(failed.body, /result is uncertain/);
   assert.equal(failed.issueId, null);
-  assert.equal(session.actions.at(-1).state, "available");
+  assert.equal(session.actions.at(-1).state, "outcome_unknown");
   fail = false;
   const moved = await handleUtterance(
     utterance(session, "Move the review to Friday", { deliveryId: "cal-ok" }),

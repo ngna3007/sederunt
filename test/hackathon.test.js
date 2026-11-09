@@ -5,6 +5,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { mkdtemp } from "node:fs/promises";
 import { renderConsolePage } from "../src/console-page.js";
 import { encodeBlobContent } from "../src/memory/blob.js";
@@ -214,7 +215,7 @@ test("ending a meeting writes the room outcome and skips a decision that already
     deleted: false,
   });
   session.actions.push({ id: "action-9", roomId: "booth", statement: "Order the banner.", memberId: "rowan" });
-  session.learned = [{ kind: "team-preference", text: "Post minutes to #sederunt-demo." }];
+  session.learned = [{ kind: "team-preference", text: "Post minutes to #sederunt-demo.", roomId: "booth", sourceDecisionId: "decision-9", inviteMemberIds: ["mina", "rowan"] }];
   const memory = countingMemory();
   const written = await endMeeting(session, { memory }, "booth");
   assert.equal(written.some((row) => row.kind === "minutes"), true);
@@ -318,7 +319,7 @@ function countingMemory() {
 }
 
 async function walk(root) {
-  const dir = root.pathname ?? root;
+  const dir = root instanceof URL ? fileURLToPath(root) : root;
   const found = [];
   const entries = await readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
@@ -332,7 +333,7 @@ async function walk(root) {
 function runNode(args, env) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, args, {
-      cwd: new URL("..", import.meta.url).pathname,
+      cwd: fileURLToPath(new URL("..", import.meta.url)),
       env: { PATH: process.env.PATH || "", HOME: process.env.HOME || "", ...env },
     });
     let out = "";

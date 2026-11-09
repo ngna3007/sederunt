@@ -81,9 +81,10 @@ test("local env fills meeting, calendar, console, and slack files and does not o
     if (name === "slack.env") return "SLACK_BOT_TOKEN=present\n";
     if (name === "tatum.env") return "TATUM_API_KEY=present\n";
     if (name === "openrouter.env") return "OPENROUTER_API_KEY=present\nOPENROUTER_MODEL=google/gemma-4-31b-it:free\n";
+    if (name === "admin.env") return "SEDERUNT_ADMIN_USERNAME=fixture-admin\n";
     throw new Error(`unexpected file ${name}`);
   });
-  assert.deepEqual(seen, ["recall.env", "calendar-oauth.env", "public.env", "console.env", "slack.env", "tatum.env", "openrouter.env"]);
+  assert.deepEqual(seen, ["recall.env", "calendar-oauth.env", "public.env", "console.env", "slack.env", "tatum.env", "openrouter.env", "admin.env"]);
   assert.equal(env.RECALL_API_KEY, "already");
   assert.equal(env.SEDERUNT_PUBLIC_ORIGIN, "https://sederunt.example");
   assert.equal(env.CALENDAR_MCP_TOKEN, "present");
@@ -91,6 +92,7 @@ test("local env fills meeting, calendar, console, and slack files and does not o
   assert.equal(env.SLACK_BOT_TOKEN, "present");
   assert.equal(env.TATUM_API_KEY, "present");
   assert.equal(env.OPENROUTER_API_KEY, "present");
+  assert.equal(env.SEDERUNT_ADMIN_USERNAME, "fixture-admin");
   assert.equal(env.OPENROUTER_MODEL, "google/gemma-4-31b-it:free");
   assert.equal(env.COMPANY_MEMWAL_KEY, undefined);
   assert.equal(env.PERSONAL_MEMWAL_KEY, undefined);
@@ -169,7 +171,7 @@ test("a join route reports failure without the error text and keeps no sentence"
     assert.equal(joined.body.join, "not-configured");
     assert.deepEqual(calls, []);
     assert.equal(joined.raw.includes("secret-value"), false);
-    const ledger = JSON.parse((await get(blocked.address().port, "/api/room?room=desk")).raw);
+    const ledger = JSON.parse((await get(blocked.address().port, "/api/room?room=desk&member=mina")).raw);
     assert.deepEqual(ledger.decisions, []);
   } finally {
     await new Promise((resolve, reject) => blocked.close((error) => (error ? reject(error) : resolve())));
@@ -250,7 +252,7 @@ test("a missing Linear token records the file and does not throw the token error
   }, deps);
   assert.deepEqual(deps.linear.calls, ["create"]);
   assert.equal(filed.status, "recorded");
-  assert.match(filed.body, /The edit did not happen/);
+  assert.match(filed.body, /result is uncertain/);
   assert.equal(JSON.stringify(filed).includes("secret-token"), false);
 });
 
@@ -301,7 +303,7 @@ test("a question and a repeated sentence are not kept", async () => {
     participants: ["mina"],
     session,
   }, { memory: null });
-  const ledger = roomLedger(session, "desk");
+  const ledger = roomLedger(session, "desk", "rowan");
   assert.equal(ledger.decisions.length, 1);
   assert.equal(ledger.decisions[0].speaker, "rowan");
   assert.equal(ledger.decisions[0].status, "current");
@@ -357,7 +359,7 @@ test("the room keeps a clash and a replacement for the person in the room", asyn
     assert.equal(joined.status, 200);
     assert.deepEqual(joined.body, { join: "not-configured" });
     assert.equal(joined.raw.includes("secret"), false);
-    const before = JSON.parse((await get(port, "/api/room?room=desk")).raw);
+    const before = JSON.parse((await get(port, "/api/room?room=desk&member=mina")).raw);
     assert.deepEqual(before.decisions, []);
     assert.deepEqual(before.preferences, { linear: "do", calendar: "do" });
 
@@ -413,7 +415,7 @@ test("the room keeps a clash and a replacement for the person in the room", asyn
     assert.equal(kept.body.visible.find((row) => row.text.includes("Madrid")).status, "current");
     assert.match(kept.body.body, /replaced/);
 
-    const ledger = JSON.parse((await get(port, "/api/room?room=desk")).raw);
+    const ledger = JSON.parse((await get(port, "/api/room?room=desk&member=mina")).raw);
     assert.equal(ledger.decisions.length, 3);
     assert.equal(ledger.decisions.find((row) => row.text.includes("Lisbon")).status, "replaced");
     assert.equal(ledger.decisions.find((row) => row.text.includes("Lisbon")).speaker, "mina");

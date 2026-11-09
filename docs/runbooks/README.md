@@ -17,4 +17,6 @@ incident.
 
 ## Live demo / QA
 
-- [live-demo-plan.md](./live-demo-plan.md) — end-to-end browser kịch bản for QA and hackathon demos (console → meeting → Slack privacy/files → Ask AI / Files).
+- [new-user-live-demo.md](./new-user-live-demo.md) — screen-by-screen procedure for a continuous first-time-user recording (onboarding → meeting → Ask AI → Slack → Files).
+- [admin-demo-recovery.md](./admin-demo-recovery.md) — locate an account, reset AI quota, or restart onboarding with the same Google login; includes deletion scope and deployment setup.
+- [live-demo-plan.md](./live-demo-plan.md) — older Northline QA story and test prompts; use the click-by-click procedure above for a fresh recording.

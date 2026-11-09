@@ -10,3 +10,26 @@ move/**/build/
 .vercel
 .env*
 !.env.example
+
+# Local tools and generation projects
+.agents/
+.claude/
+.grok/
+.playwright-mcp/
+playwright-report/
+test-results/
+coverage/
+clips/
+research/
+prototype/
+qa/
+openspec/
+skills-lock.json
+# Archived visual review artifacts
+/docs/screenshots/
+/docs/pr-screens/*
+!/docs/pr-screens/admin-*.png
+!/docs/pr-screens/onboarding-*.png
+/docs/archive/
+/docs/HANDOFF.md
+/docs/files-console-proof.json

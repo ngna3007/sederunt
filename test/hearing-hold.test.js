@@ -289,29 +289,20 @@ test("channel please-keep still stores without a meeting address", async () => {
   );
 });
 
-test("speaker omitted from channel members still keeps", async () => {
+test("speaker absent from an explicit participant snapshot cannot store a channel note", async () => {
   const session = createSession();
-  const text = "Northline decision (pack-catchup) — please keep: the new HCMC office is District 7, Building B, floors 8 and 9, move-in December 2.";
-  const kept = await handleUtterance({
-    text,
-    memberId: "rowan",
-    door: "channel",
-    intent: "keep",
-    deliveryId: "slack-catchup-d7-omit-speaker",
-    // Members list is non-empty but missing the poster — previously refused.
+  let writes = 0;
+  const result = await handleUtterance({
+    text: "Please keep: the new office is District 7.",
+    memberId: "rowan", door: "channel", intent: "keep",
+    deliveryId: "slack-absent-speaker",
     participants: ["other", "bot"],
     room: { id: "C-ops", kind: "channel", source: "slack", botPresent: true, memberIds: ["other", "bot"] },
     session,
-  }, {
-    async remember() { return { ok: true }; },
-  });
-  assert.notEqual(kept.kind, "silence");
-  assert.ok(!["no-room","missing-member","not-invited","memory-remember-failed"].includes(kept.outcome), kept.outcome);
-  const texts = (session.decisions || []).map((d) => d.text);
-  assert.ok(
-    texts.some((row) => /district 7/i.test(row)),
-    `expected channel keep with omitted speaker, got ${JSON.stringify(texts)}`,
-  );
+  }, { async remember() { writes++; return { ok: true }; } });
+  assert.equal(result.outcome, "not-invited");
+  assert.equal(writes, 0);
+  assert.deepEqual(session.decisions, []);
 });
 
 test("memory failure releases deliveryId for retry", async () => {

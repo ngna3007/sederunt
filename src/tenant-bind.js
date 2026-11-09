@@ -241,6 +241,51 @@ export function createTenantBind(env = process.env, options = {}) {
     memory,
     backend,
     requiresDurable: backend !== "memory",
+    async releaseTenants(tenantIds) {
+      const owners = new Set(tenantIds);
+      if (!owners.size) return 0;
+      let released = 0;
+      let client = null;
+      async function command(parts) {
+        if (backend === "rest") {
+          const config = restConfig(env);
+          const response = await fetchImpl(`${config.url}/pipeline`, {
+            method: "POST", signal: AbortSignal.timeout(10000),
+            headers: { authorization: `Bearer ${config.token}`, "content-type": "application/json" },
+            body: JSON.stringify([parts.map(String)]),
+          });
+          if (!response.ok) throw new Error("Connection bindings could not be released.");
+          const rows = await response.json();
+          if (rows[0]?.error) throw new Error("Connection bindings could not be released.");
+          return rows[0]?.result;
+        }
+        return client.sendCommand(parts.map(String));
+      }
+      try {
+        if (backend === "redis") {
+          const { createClient } = await import("redis");
+          client = createClient({ url: String(env.REDIS_URL || env.KV_URL).trim(), socket: { connectTimeout: 5000, reconnectStrategy: false } });
+          client.on("error", () => {});
+          await client.connect();
+        }
+        if (backend !== "memory") {
+          let cursor = "0";
+          do {
+            const result = await command(["SCAN", cursor, "MATCH", `${PREFIX}:*`, "COUNT", "100"]);
+            cursor = String(result[0]);
+            for (const key of result[1]) {
+              const owner = await command(["GET", key]);
+              if (!owners.has(owner)) continue;
+              released += Number(await command(["EVAL", "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end", "1", key, owner]));
+            }
+          } while (cursor !== "0");
+        }
+        for (const [key, owner] of memory) {
+          if (owners.has(owner)) { memory.delete(key); if (backend === "memory") released++; }
+        }
+        return released;
+      } finally { if (client?.isOpen) await client.quit(); }
+    },
     /**
      * @param {"bot" | "slack"} kind
      * @param {string} id
@@ -344,6 +389,7 @@ export function createTenantBind(env = process.env, options = {}) {
             memory.set(key, remote);
             return remote;
           }
+          memory.delete(key);
         } catch {
           if (backend !== "memory" || injected) {
             return memory.get(key) || "";

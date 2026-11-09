@@ -66,7 +66,7 @@ function post(port, path, body, headers = {}) {
 
 function signed(event, slackSecret) {
   const payload = JSON.stringify({ event });
-  const timestamp = "1700000000";
+  const timestamp = String(Math.floor(Date.now() / 1000));
   const signature = `v0=${createHmac("sha256", slackSecret).update(`v0:${timestamp}:${payload}`).digest("hex")}`;
   return {
     payload,

@@ -39,7 +39,7 @@ function liveApp({ users, rows = [], background = true } = {}) {
     identity: {},
     guard: (req) => {
       const who = users[String(req.headers["x-test-user"] || "")];
-      return { required: true, session: who ? { kind: "oauth", ...who.session } : null };
+      return { required: true, session: who ? { kind: "oauth", provider: "google", ...who.session } : null };
     },
     spaceView: async (_identity, s) => Object.values(users).find((who) => who.session.userId === s.userId).space,
   });
@@ -102,7 +102,8 @@ test("signed links open once per person and file, and stop after 15 minutes", ()
 });
 
 test("a workspace member uploads in the background, then lists, downloads by link and deletes", async () => {
-  const server = await liveApp({ users: USERS });
+  const users = structuredClone(USERS);
+  const server = await liveApp({ users });
   try {
     const empty = await call(server.port, "GET", "/api/files", { user: "mina" });
     assert.equal(empty.status, 200);
@@ -139,10 +140,18 @@ test("a workspace member uploads in the background, then lists, downloads by lin
     const link = await call(server.port, "POST", `/api/files/${file.id}/link`, { user: "rowan" });
     assert.equal(link.status, 200);
     assert.match(link.body.url, /^\/api\/files\/[^/]+\/download\?token=/);
-    const opened = await call(server.port, "GET", link.body.url);
+    const anonymous = await call(server.port, "GET", link.body.url);
+    assert.equal(anonymous.status, 401);
+    const other = await call(server.port, "GET", link.body.url, { user: "mina" });
+    assert.equal(other.status, 404);
+    const opened = await call(server.port, "GET", link.body.url, { user: "rowan" });
     assert.equal(opened.status, 200);
     assert.equal(opened.raw.toString("utf8"), "floor plan");
     assert.match(String(opened.headers["content-disposition"]), /filename\*=UTF-8''floor%20plan%20%C3%A9\.txt/);
+    users.rowan.space.activeId = OTHER;
+    const revoked = await call(server.port, "GET", link.body.url, { user: "rowan" });
+    assert.equal(revoked.status, 404, "a signed link cannot reuse membership from the previous workspace");
+    users.rowan.space.activeId = TENANT;
     const bad = await call(server.port, "GET", `/api/files/${file.id}/download?token=nope`);
     assert.equal(bad.status, 410);
 
@@ -151,7 +160,7 @@ test("a workspace member uploads in the background, then lists, downloads by lin
     await server.runtime.kick();
     assert.equal(server.store.getFile(file.id).status, "deleted");
     assert.equal(server.storage.calls.some((item) => item.op === "remove"), true);
-    const after = await call(server.port, "GET", link.body.url);
+    const after = await call(server.port, "GET", link.body.url, { user: "rowan" });
     assert.equal(after.status, 404, "a link stops working once the file is deleted");
   } finally {
     await server.close();
@@ -188,7 +197,7 @@ test("a failed upload shows to its owner only, who can remove it", async () => {
 test("after a restart the list comes back from Console metadata, with the Walrus details", async () => {
   const id = "11111111-2222-4333-a444-555555555555";
   const channelId = workspaceChannelId(TENANT);
-  const meta = fileMetadata({ id, tenantId: TENANT, channelId, ownerUserId: "u-mina", ownerName: "Mina Tran", mimeType: "text/plain", sizeBytes: 10 });
+  const meta = fileMetadata({ id, tenantId: TENANT, channelId, ownerUserId: "u-mina", ownerName: "Mina Tran", mimeType: "text/plain", sizeBytes: 10, sha256: "ab".repeat(32) });
   const record = {
     id: "console-1",
     bucket_id: "folder-1",
@@ -215,6 +224,14 @@ test("after a restart the list comes back from Console metadata, with the Walrus
     assert.equal(file.proof.objectId, "0xobj");
     const outsider = await call(server.port, "GET", "/api/files", { user: "zed" });
     assert.equal(outsider.body.files.length, 0);
+    const untrusted = importedFile({ ...record, metadata: { ...meta, sha256: "" } }, { folderId: "folder-1" });
+    const dropped = await liveApp({ users: USERS, rows: [untrusted] });
+    try {
+      const hidden = await call(dropped.port, "GET", "/api/files", { user: "rowan" });
+      assert.equal(hidden.body.files.some((item) => item.id === id), false);
+    } finally {
+      await dropped.close();
+    }
   } finally {
     await server.close();
   }
@@ -230,6 +247,12 @@ test("the Files page has an upload button, a delete confirm and the Walrus badge
   assert.match(html, /Show technical details/);
   assert.match(html, /Uploading…/);
   assert.match(html, /Couldn't upload/);
+  assert.match(html, /Deleting…/);
+  assert.match(html, /Deleting hides a file here while cleanup is pending\. It does not remove a copy already stored on Walrus\./);
+  assert.match(html, /Files could not be loaded\./);
+  assert.match(html, /Try again/);
+  assert.match(html, /for everyone in the workspace\? This cannot be undone\./);
+  assert.match(html, /fileButton\("Remove", "secondary", function \(\) \{ discardFailedFile/);
 });
 
 test("foreground delete finishes inside the request (Vercel shape)", async () => {

@@ -15,7 +15,7 @@ const CHANNEL = "00000000-0000-4000-a000-00000000c001";
 
 function signed(event) {
   const payload = JSON.stringify({ type: "event_callback", event });
-  const timestamp = "1700000000";
+  const timestamp = String(Math.floor(Date.now() / 1000));
   const signature = `v0=${createHmac("sha256", secret).update(`v0:${timestamp}:${payload}`).digest("hex")}`;
   return { payload, headers: { "x-slack-request-timestamp": timestamp, "x-slack-signature": signature } };
 }
@@ -58,6 +58,11 @@ test("a bound Slack file is stored, and deleting the message hides it", async ()
       slack: {
         async members() { return ["U1"]; },
         async downloadFile() { return { name: "plan.txt", bytes: "PLAN" }; },
+      },
+      memory: {
+        async remember() { return { blobId: null }; },
+        async index() { return []; },
+        async recall() { return []; },
       },
     },
   });

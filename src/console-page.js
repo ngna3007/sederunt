@@ -1,5 +1,7 @@
 import { priorAsksForThread } from "./ask/thread.js";
 import { normalizeHearing } from "./hearing.js";
+import { CALENDAR_CONNECT_PATH } from "./connectors/calendar-preset.js";
+import { SLACK_INSTALL_PATH } from "./slack/oauth.js";
 import { brandLogo, brandSprite } from "./brand-logos.js";
 import { formatLastTested } from "./console/local-time.js";
 import { renderBotSettings } from "./console/bot-settings.js";
@@ -31,6 +33,20 @@ export function renderConsolePage(state = {}) {
   const calendarConnected = state.calendarConnected === true;
   const linearConnected = state.linearConnected === true;
   const slackConnected = state.slackConnected === true;
+  const slackInstall = state.slackInstall === true;
+  const slackWorkspace = String(state.slackWorkspace || "").trim();
+  const slackNotice = ({
+    connected: "Slack is installed for this workspace.",
+    partial: "Slack did not grant all required permissions. Reconnect and approve the requested scopes.",
+    failed: "Slack could not be connected. Your previous saved connection was not changed. Try again.",
+    forbidden: "Only a workspace owner or admin can connect or change Slack.",
+    conflict: "That Slack workspace is already connected to another Sederunt workspace.",
+    "different-team": "This workspace already has a different Slack connection. Use Change Slack workspace to replace it.",
+    stale: "The Slack connection changed while setup was open. Reload and try again.",
+    expired: "This Slack setup link expired or was already used. Start again.",
+    declined: "Slack setup was cancelled. Your saved connection was not changed.",
+    unsupported: "Choose an individual Slack workspace. Organization-wide installations are not supported.",
+  })[String(state.slackResult || "")] || "";
   const hearingIn = state.hearing && typeof state.hearing === "object" ? state.hearing : null;
   // Effective guest (saved or default), never blank fields that look unset.
   const hearing = normalizeHearing(hearingIn);
@@ -327,8 +343,9 @@ ${slack}
           ${channelIcon}
           <div class="set-copy" data-col="tool">
             <strong>Slack</strong>
+            ${slackNotice ? `<p class="conn-hint" role="status">${escapeHtml(slackNotice)}</p>` : ""}
             <p id="slack-conn" class="conn-state${slackConnected ? "" : " off"}">${slackConnected ? "Connected" : "Not connected"}</p>
-            <p id="slack-line" class="conn-hint">Slack runs automatically.</p>
+            <p id="slack-line" class="conn-hint">${slackConnected && slackWorkspace ? `Slack workspace: ${escapeHtml(slackWorkspace)}${slackInstall && state.slackReady !== true ? ". Channel not ready: invite the app to the selected channel, check it is not archived, then reload." : ""}` : "Slack runs automatically."}</p>
             <p id="slack-note" class="sr">Sederunt answers in a channel it has already joined.</p>
           </div>
           <div class="conn-actions" data-col="action">
@@ -537,7 +554,7 @@ ${slack}
       <a class="secondary" href="/console"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10 3.5 5.5 8 10 12.5"/></svg>Back to Home</a>
     </section>
     <section id="files" hidden>
-      <div class="page-head" id="files-head"><div><p class="page-title">Files</p><p class="page-lede"><span>Files in the channels you can see.</span> <span>Kept with this workspace.</span></p></div><div class="page-actions" id="files-actions" hidden><label class="sr" for="files-channel">Channel</label><select id="files-channel" hidden></select><input id="files-input" type="file" hidden><button type="button" class="primary" id="files-upload">Upload file</button></div></div>
+      <div class="page-head" id="files-head"><div><p class="page-title">Files</p><p class="page-lede"><span>Files in the channels you can see.</span> <span>Kept with this workspace.</span> <span>Deleting hides a file here while cleanup is pending. It does not remove a copy already stored on Walrus.</span></p></div><div class="page-actions" id="files-actions" hidden><label class="sr" for="files-channel">Channel</label><select id="files-channel" hidden></select><input id="files-input" type="file" hidden><button type="button" class="primary" id="files-upload">Upload file</button></div></div>
       <div id="files-unanswered" hidden></div>
       <div id="files-requests" hidden></div>
       <div id="channel-files-empty" class="empty-state" hidden>
@@ -546,7 +563,7 @@ ${slack}
         <p id="channel-files-empty-copy">Files from your channels show up here.</p>
       </div>
       <div id="files-list"></div>
-      <p id="files-error" class="meta" hidden></p>
+      <div id="files-error" class="meta" hidden></div>
     </section>
     <section id="people" hidden>
       <div class="page-head"><div><p class="page-title">People</p><p class="page-lede">Names heard in a room.</p></div></div>
@@ -4918,7 +4935,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function loadRoomMedia() {
     var room = roomOf(fileRoom);
     var channel = room && /slack/i.test(room.platform || "");
-    if (!fileRoom || channel) {
+    if (!fileRoom || !room || channel) {
       roomMediaState = channel ? { state: "channel", title: roomName(room) } : { state: "none" };
       paintPlayer(roomMediaState);
       paintArtifacts(roomMediaState);
@@ -4929,7 +4946,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (mediaFlight === fileRoom || (roomMediaState && roomMediaState.forRoom === fileRoom)) return;
     var asked = fileRoom;
     mediaFlight = asked;
-    fetch("/console/rooms/" + encodeURIComponent(asked) + "/media").then(function (response) {
+    fetch("/console/rooms/" + encodeURIComponent(asked) + "/media" + consoleQuery()).then(function (response) {
       if (!response.ok) throw new Error("media");
       return response.json();
     }).then(function (media) {
@@ -4959,10 +4976,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
       renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
       loadSpeakerLanes().then(function () { paintTimeline(); });
     }).catch(function () {
-      roomMediaState = { state: "none" };
+      roomMediaState = { state: "novideo", forRoom: asked, duration: 0, lines: [], segments: [], events: [], videoUrl: "", transcriptUrl: "" };
       paintPlayer(roomMediaState);
       paintArtifacts(roomMediaState);
       renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
+      paintTimeline();
     }).finally(function () {
       if (mediaFlight === asked) mediaFlight = "";
     });
@@ -5096,7 +5114,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (failed) box.checked = !on;
       if (failed && failed.allow === "missing-member") text("room-edit-note", "This server has no member configured.");
       else if (failed) text("room-edit-note", "Run automatically was not saved.");
-      else text("room-edit-note", on ? "This room runs a change as soon as it is asked." : "This room does not run a change.");
+      else text("room-edit-note", on ? "This room runs a change as soon as it is asked." : "This room asks before making a change.");
     }).catch(function () {
       box.checked = !on;
       text("room-edit-note", "The account could not be read. Read the account again.");
@@ -5251,6 +5269,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (!home.hidden) showSection("home");
     paintChip();
     if (!changed) return;
+    resetAskContext();
     document.getElementById("chat-text").value = "";
     document.querySelectorAll("#chat-log .chat-turn").forEach(function (node) { node.remove(); });
     var emptyChat = document.getElementById("chat-empty");
@@ -5269,7 +5288,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function armSlow() {
     if (slowTimer) return;
     slowTimer = setTimeout(function () {
-      // Keep the skeleton path only — never surface the error/Retry chrome for a slow read.
+      // Keep the skeleton visible while a slow read is pending.
       var label = document.getElementById("loading-label");
       if (label) label.textContent = "Still working…";
       var quiet = document.querySelector("#loading .sr");
@@ -5304,6 +5323,20 @@ if (sessionWhen && sessionWhen.dataset.at) {
   document.querySelectorAll("[data-connect]").forEach(function (button) {
     button.addEventListener("click", function () {
       var which = button.getAttribute("data-connect");
+      if (which === "calendar") {
+        location.href = ${JSON.stringify(CALENDAR_CONNECT_PATH)};
+        return;
+      }
+      if (which === "slack" && ${JSON.stringify(slackInstall)}) {
+        // Add to Slack for this workspace. Manage = an explicit change of Slack workspace.
+        if (button.id === "slack-manage") {
+          if (!window.confirm("Link a different Slack workspace to this Sederunt workspace? The current Slack link is replaced after you approve in Slack.")) return;
+          location.href = ${JSON.stringify(SLACK_INSTALL_PATH)} + "?change=1&next=" + encodeURIComponent("/console/setup");
+          return;
+        }
+        location.href = ${JSON.stringify(SLACK_INSTALL_PATH)} + "?next=" + encodeURIComponent("/console/setup");
+        return;
+      }
       var url = "https://developers.google.com/workspace/calendar/api/guides/configure-mcp-server";
       if (which === "linear") url = "https://linear.app/docs/mcp";
       if (which === "slack") url = "https://docs.slack.dev/ai/slack-mcp-server";
@@ -6449,6 +6482,15 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   var askState = { limit: ${askDaily}, remaining: null, live: false, loaded: false, resetAt: "", streams: {} };
+  function resetAskContext() {
+    Object.keys(askState.streams).forEach(function (id) { askState.streams[id].close(); });
+    askState.streams = {};
+    askState.loaded = false;
+    askLive = null;
+    askBusy = false;
+    askCancel = false;
+    setAskSending(false);
+  }
   function askResetLabel() {
     return "They come back at midnight.";
   }
@@ -6501,10 +6543,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
     paintAskQuota();
   }
   function refreshAskQuota() {
-    fetch("/api/ask", { headers: { accept: "application/json" } }).then(function (response) {
+    var context = consoleQuery();
+    fetch("/api/ask" + context, { headers: { accept: "application/json" } }).then(function (response) {
       return response.ok ? response.json() : null;
     }).then(function (data) {
-      if (data) takeAskQuota(data);
+      if (context === consoleQuery() && data) takeAskQuota(data);
     }).catch(function () {});
   }
   function setAskSending(on) {
@@ -6532,10 +6575,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function loadAsks() {
     // Render and resume only. A reload must not POST the question again.
     // priorAsksForThread leaves friendly failures and protocol-only turns out of the thread.
-    fetch("/api/ask", { headers: { accept: "application/json" } }).then(function (response) {
+    var context = consoleQuery();
+    fetch("/api/ask" + context, { headers: { accept: "application/json" } }).then(function (response) {
       return response.ok ? response.json() : null;
     }).then(function (data) {
-      if (!data) return;
+      if (!data || context !== consoleQuery()) return;
       takeAskQuota(data);
       if (askState.loaded) return;
       askState.loaded = true;
@@ -6612,7 +6656,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (typeof EventSource !== "function") return false;
     var got = from || 0;
     var span = turn.querySelector(".chat-body > span");
-    var source = new EventSource("/api/ask/" + encodeURIComponent(id) + "/stream?from=" + got);
+    var source = new EventSource("/api/ask/" + encodeURIComponent(id) + "/stream" + consoleQuery() + "&from=" + got);
     askState.streams[id] = source;
     askLive = { id: id, turn: turn, source: source };
     setAskSending(true);
@@ -6803,13 +6847,15 @@ if (sessionWhen && sessionWhen.dataset.at) {
     setAskSending(true);
     input.value = "";
     growChat();
+    var submittedContext = consoleQuery();
     fetch("/api/ask", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: askedNow, workspace: workspaceKind })
+      body: JSON.stringify({ text: askedNow, workspace: workspaceKind, company: consoleSpaces && consoleSpaces.activeKind !== "personal" ? consoleSpaces.activeId : "" })
     }).then(function (response) {
       return response.json().then(function (body) { return { status: response.status, body: body || {} }; });
     }).then(function (reply) {
+      if (submittedContext !== consoleQuery()) return;
       var span = turn.querySelector(".chat-body > span");
       if (askCancel) {
         askCancel = false;
@@ -6942,7 +6988,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(head)) head = "";
       // If label was already a when-string, prefer spokenAt once.
       if (head && when && head === when) head = "";
-      if (/^(today|yesterday|tomorrow)\b/i.test(head) && when) head = "";
+      if (/^(today|yesterday|tomorrow)\\b/i.test(head) && when) head = "";
       if (head && when) return head + " · " + when;
       return head || when || "";
     }
@@ -8135,10 +8181,16 @@ if (sessionWhen && sessionWhen.dataset.at) {
       .then(function (body) { paintFiles(body || {}); })
       .then(scheduleFilesPoll)
       .catch(function () {
-        if (error) {
-          error.hidden = false;
-          error.textContent = "Files could not be loaded.";
-        }
+        if (!error) return;
+        error.hidden = false;
+        error.replaceChildren();
+        var note = document.createElement("span");
+        note.textContent = "Files could not be loaded. ";
+        var retry = document.createElement("button");
+        retry.type = "button";
+        retry.textContent = "Try again";
+        retry.addEventListener("click", function () { loadFiles(); });
+        error.append(note, retry);
       });
   }
 

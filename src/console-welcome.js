@@ -165,7 +165,7 @@ function calendarStep(state) {
     left: `${backLink("/console/welcome?step=workspace")}${connected ? "" : `<button class="ob-link" type="submit" name="choice" value="later" id="ob-skip" formnovalidate>Not now</button>`}`,
     right: connected
       ? `<button class="ob-primary" type="submit" name="choice" value="continue" id="ob-continue">Continue</button>`
-      : `<button class="ob-primary" type="submit" name="choice" value="connect" id="calendar-connect" data-docs="${escapeAttr(state.fakeTools ? "" : CALENDAR_DOCS)}">Connect Google Calendar</button>`,
+      : `<button class="ob-primary" type="submit" name="choice" value="connect" id="calendar-connect">Connect Google Calendar</button>`,
   };
 }
 

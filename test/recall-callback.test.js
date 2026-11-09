@@ -3,6 +3,7 @@ import { createHmac } from "node:crypto";
 import { once } from "node:events";
 import { request } from "node:http";
 import test from "node:test";
+import { CONSOLE_COOKIE, sealSession } from "../src/console-auth.js";
 import { createApp } from "../src/server.js";
 import { createMeetingAdapter, recallTranscriptDelivery, verifyRecallRequest } from "../src/meeting/recall.js";
 
@@ -56,12 +57,13 @@ test("a signed callback is accepted and a bad signature leaves the typed path wo
   }
 });
 
-test("the configured member can read a meeting sentence spoken under a Recall id", async () => {
+test("a configured member receives no attendance grant from another Recall speaker", async () => {
+  const saved = [];
   const app = createApp({
     companyLoaded: true,
-    env: { RECALL_WEBHOOK_SECRET: secret, SEDERUNT_MEMBER: "U_MINA" },
+    env: { RECALL_WEBHOOK_SECRET: secret, SEDERUNT_MEMBER: "U_MINA", SEDERUNT_SESSION_SECRET: "recall-local-fixture" },
     deps: {
-      memory: { async remember() { return { blobId: null }; }, async index() { return []; }, async recall() { return []; } },
+      memory: { async remember(row) { saved.push(row); return { blobId: null }; }, async index() { return []; }, async recall() { return []; } },
       tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
     },
   });
@@ -88,9 +90,12 @@ test("the configured member can read a meeting sentence spoken under a Recall id
       "webhook-signature": `v1,${sign(secret, id, timestamp, payload)}`,
     });
     assert.equal(accepted.status, 204);
+    const recorded = saved.filter((row) => row.decision);
+    assert.equal(recorded.length, 1);
+    assert.deepEqual(recorded[0].decision.inviteMemberIds, ["100"]);
     const mine = await get(port, "/api/console?member=U_MINA");
     const other = await get(port, "/api/console?member=U_OTHER");
-    assert.match(mine.raw, /booth opens at nine/);
+    assert.equal(mine.raw.includes("booth opens at nine"), false);
     assert.equal(other.raw.includes("booth opens at nine"), false);
   } finally {
     await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
@@ -107,7 +112,7 @@ test("a transcript lands on the opened meeting room without a typed name", async
       SEDERUNT_PUBLIC_ORIGIN: "https://camera.example",
       SLACK_SIGNING_SECRET: "slack-signing",
       SLACK_BOT_TOKEN: "slack-bot",
-      SEDERUNT_MEMBER: "U_MINA",
+      SEDERUNT_MEMBER: "100",
       CONSOLE_API_KEY: "console-key",
       CONSOLE_SERVICE_PRIVATE_KEY: "console-service",
       CONSOLE_FOLDER_ID: "folder",
@@ -291,7 +296,7 @@ test("streaming chunks that share a transcript.id still keep separately", () => 
 test("two spoken keeps that share a transcript.id both land", async () => {
   const app = createApp({
     companyLoaded: true,
-    env: { RECALL_WEBHOOK_SECRET: secret, SEDERUNT_MEMBER: "U_MINA" },
+    env: { RECALL_WEBHOOK_SECRET: secret, SEDERUNT_MEMBER: "100" },
     deps: {
       memory: { async remember() { return { blobId: null }; }, async index() { return []; }, async recall() { return []; } },
       tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
@@ -318,7 +323,7 @@ test("two spoken keeps that share a transcript.id both land", async () => {
   try {
     assert.equal((await deliver(["Hey", "Maple", "the", "office", "is", "District", "7."])).status, 204);
     assert.equal((await deliver(["Hey", "Maple", "the", "unlock", "is", "cedar-92."])).status, 204);
-    const board = JSON.parse((await get(port, "/api/console?member=U_MINA")).raw);
+    const board = JSON.parse((await get(port, "/api/console?member=100")).raw);
     const texts = (board.decisions ?? []).map((row) => row.text).join("\n");
     assert.match(texts, /District 7/);
     assert.match(texts, /cedar-92/);
@@ -327,12 +332,13 @@ test("two spoken keeps that share a transcript.id both land", async () => {
   }
 });
 
-test("a transcript with no speaker still keeps for the configured member", async () => {
+test("a transcript with no speaker cannot borrow the configured member identity", async () => {
+  let writes = 0;
   const app = createApp({
     companyLoaded: true,
     env: { RECALL_WEBHOOK_SECRET: secret, SEDERUNT_MEMBER: "U_MINA" },
     deps: {
-      memory: { async remember() { return { blobId: null }; }, async index() { return []; }, async recall() { return []; } },
+      memory: { async remember() { writes++; return { blobId: null }; }, async index() { return []; }, async recall() { return []; } },
       tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
     },
   });
@@ -356,9 +362,10 @@ test("a transcript with no speaker still keeps for the configured member", async
       "webhook-signature": `v1,${sign(secret, "msg-tab", "1731705121", payload)}`,
     });
     assert.equal(accepted.status, 204);
+    assert.equal(writes, 0);
     const mine = await get(port, "/api/console?member=U_MINA");
     const other = await get(port, "/api/console?member=U_OTHER");
-    assert.match(mine.raw, /move-in is December 2nd/);
+    assert.equal(mine.raw.includes("move-in is December 2nd"), false);
     assert.equal(other.raw.includes("December 2nd"), false);
   } finally {
     await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
@@ -419,9 +426,9 @@ function post(port, path, body, headers) {
   });
 }
 
-function get(port, path) {
+function get(port, path, cookie = "") {
   return new Promise((resolve, reject) => {
-    const req = request({ hostname: "127.0.0.1", port, path, method: "GET" }, (res) => {
+    const req = request({ hostname: "127.0.0.1", port, path, method: "GET", headers: cookie ? { cookie } : {} }, (res) => {
       const chunks = [];
       res.on("data", (chunk) => chunks.push(chunk));
       res.on("end", () => resolve({ status: res.statusCode, raw: Buffer.concat(chunks).toString("utf8") }));
@@ -430,3 +437,45 @@ function get(port, path) {
     req.end();
   });
 }
+
+
+test("verified Google attendance binds a Recall speaker only in its meeting, even when numeric IDs repeat", async () => {
+  const tenantId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const sessionSecret = "recall-oauth-fixture-secret";
+  const cookies = (userId, email) => `${CONSOLE_COOKIE}=${encodeURIComponent(sealSession({
+    kind: "oauth", provider: "google", userId, memberId: userId, email,
+    accessToken: `access-${userId}`, refreshToken: `refresh-${userId}`,
+    accessExp: Date.now() + 3600000, exp: Date.now() + 3600000,
+    tenantId, onboarded: true,
+  }, sessionSecret))}`;
+  const writes = [];
+  const app = createApp({ companyLoaded: true,
+    env: { SEDERUNT_AUTH_FAKE: "1", SEDERUNT_SESSION_SECRET: sessionSecret, RECALL_WEBHOOK_SECRET: secret, SEDERUNT_MEMBER: "U_SHARED" },
+    tenantBind: { async resolve() { return tenantId; } },
+    identity: { async myTenants() { return [{ id: tenantId, kind: "company", name: "Fixture", role: "owner" }]; }, async getUser() { return { app_metadata: { provider: "google" } }; }, async profile() { return null; } },
+    deps: { memory: { allowUnscoped: false, async remember(row) { writes.push(row); return { blobId: null }; }, async index() { return []; }, async recall() { return []; } }, tatum: { async getObject() { throw new Error("unavailable"); } } },
+  });
+  app.listen(0, "127.0.0.1"); await once(app, "listening");
+  const port = app.address().port;
+  const deliver = async (botId, email, verified, text, id) => {
+    const payload = JSON.stringify({ event: "transcript.data", data: { bot: { id: botId }, transcript: { id }, data: { participant: { id: 100, name: "Same display name", email, email_verified: verified }, words: text.split(" ").map((text) => ({ text })) } } });
+    return post(port, "/api/recall", payload, { "webhook-id": id, "webhook-timestamp": "1731705121", "webhook-signature": `v1,${sign(secret, id, "1731705121", payload)}` });
+  };
+  try {
+    assert.equal((await deliver("meeting-a", "mina@example.test", true, "Hey Maple the office is Lisbon.", "verified-a")).status, 204);
+    assert.equal((await deliver("meeting-b", "other@example.test", true, "Hey Maple the office is Hanoi.", "verified-b")).status, 204);
+    assert.equal((await deliver("meeting-c", "mina@example.test", false, "Hey Maple the office is London.", "unverified-c")).status, 204);
+    assert.equal(writes.filter((row) => row.decision).length, 3);
+    const mina = await get(port, "/api/console?member=100", cookies("google-mina", "mina@example.test"));
+    assert.equal(mina.status, 200);
+    assert.match(mina.raw, /Lisbon/);
+    assert.equal(mina.raw.includes("Hanoi"), false);
+    assert.equal(mina.raw.includes("London"), false);
+    const other = await get(port, "/api/console", cookies("google-other", "other@example.test"));
+    assert.match(other.raw, /Hanoi/);
+    assert.equal(other.raw.includes("Lisbon"), false);
+    const owner = await get(port, "/api/console?member=100", cookies("nonattendee-owner", "owner@example.test"));
+    assert.equal(owner.raw.includes("Lisbon"), false);
+    assert.equal(owner.raw.includes("Hanoi"), false);
+  } finally { await new Promise((resolve, reject) => app.close((error) => error ? reject(error) : resolve())); }
+});

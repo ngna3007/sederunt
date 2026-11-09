@@ -12,7 +12,7 @@ const ANNOUNCEMENT = "Live demo announcement demo-note.txt — please keep.";
 
 function signed(event) {
   const payload = JSON.stringify({ event });
-  const timestamp = "1700000000";
+  const timestamp = String(Math.floor(Date.now() / 1000));
   const signature = `v0=${createHmac("sha256", secret).update(`v0:${timestamp}:${payload}`).digest("hex")}`;
   return { payload, headers: { "x-slack-request-timestamp": timestamp, "x-slack-signature": signature } };
 }
@@ -256,9 +256,11 @@ test("a DM answer posts only once when the Slack client and bot token are both s
   }
 });
 
-test("a channel file is kept when conversations.members returns empty", async () => {
+test("a channel file is not fetched or kept when channel membership is unavailable", async () => {
   const api = slackApi();
+  let downloads = 0;
   const fetch = async (url, init = {}) => {
+    if (String(url).includes("/download/")) downloads++;
     if (String(url).includes("/conversations.members")) {
       return { ok: true, status: 200, async json() { return { ok: false, error: "ratelimited" }; } };
     }
@@ -297,8 +299,9 @@ test("a channel file is kept when conversations.members returns empty", async ()
     const reply = await post(port, message.payload, message.headers);
     assert.equal(reply.status, 200, reply.raw);
     const body = JSON.parse(reply.raw);
-    assert.equal(body.decisions, 1);
-    assert.deepEqual(api.texts.map((item) => item.text), ["Kept demo-note.txt."]);
+    assert.equal(body.decisions, 0);
+    assert.deepEqual(api.texts.map((item) => item.text), ["I could not see who is in this channel, so nothing was kept."]);
+    assert.equal(downloads, 0);
   } finally {
     await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
   }

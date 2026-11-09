@@ -67,17 +67,17 @@ export function createConsoleFiles(options = {}) {
    * is the key for download, finish, and delete. A mapping with no readable
    * credential does not fall back to the shared account.
    */
-  function keysForFolder(folderId) {
-    const mapping = store?.findConsoleTenantByFolder?.(folderId) || null;
-    const credential = store?.findConsoleCredentialByFolder?.(folderId)
-      || (mapping?.credentialId ? store?.findConsoleCredential?.(mapping.credentialId) : null)
+  async function keysForFolder(folderId) {
+    const mapping = await store?.findConsoleTenantByFolder?.(folderId) || null;
+    const credential = await store?.findConsoleCredentialByFolder?.(folderId)
+      || (mapping?.credentialId ? await store?.findConsoleCredential?.(mapping.credentialId) : null)
       || null;
     if (mapping && !credential) throw credentialUnreadable();
     if (!credential) return { apiKey, serviceKey };
     return openCredential(credential);
   }
 
-  function keysFrom(folder) {
+  async function keysFrom(folder) {
     if (folder?.apiKey && folder?.serviceKey) {
       return { apiKey: folder.apiKey, serviceKey: folder.serviceKey };
     }
@@ -103,7 +103,7 @@ export function createConsoleFiles(options = {}) {
       };
     }
     const name = filesFolderName(env);
-    const saved = store?.findConsoleFolder?.(space, name);
+    const saved = await store?.findConsoleFolder?.(space, name);
     if (saved?.folderId) {
       return {
         spaceId: space,
@@ -119,7 +119,7 @@ export function createConsoleFiles(options = {}) {
       };
     }
     const opened = await ensureFolder(space, name);
-    store?.saveConsoleFolder?.({
+    await store?.saveConsoleFolder?.({
       spaceId: space,
       name,
       folderId: opened.folderId,
@@ -141,8 +141,8 @@ export function createConsoleFiles(options = {}) {
 
   async function isolatedFolder(mapping, { tenantId, channelId } = {}) {
     const credential = mapping.credentialId
-      ? store?.findConsoleCredential?.(mapping.credentialId)
-      : store?.findConsoleCredentialByFolder?.(mapping.folderId);
+      ? await store?.findConsoleCredential?.(mapping.credentialId)
+      : await store?.findConsoleCredentialByFolder?.(mapping.folderId);
     if (!credential) throw credentialUnreadable();
     const opened = openCredential(credential);
     const sealPolicyId = mapping.sealPolicyId || await loadPolicy(mapping.folderId, opened.apiKey);
@@ -177,7 +177,7 @@ export function createConsoleFiles(options = {}) {
   }
 
   async function resolveFolderForTenant(input = {}) {
-    const mapping = input.tenantId ? store?.findConsoleTenant?.(input.tenantId) : null;
+    const mapping = input.tenantId ? await store?.findConsoleTenant?.(input.tenantId) : null;
     if (mapping) return isolatedFolder(mapping, input);
     return sharedFolder(input);
   }
@@ -230,7 +230,7 @@ export function createConsoleFiles(options = {}) {
       return out;
     },
     async put({ name, plain, metadata, tags, folder, onAccepted }) {
-      const keys = keysFrom(folder);
+      const keys = await keysFrom(folder);
       const policyId = folder.sealPolicyId || await loadPolicy(folder.folderId, keys.apiKey);
       const bytes = plain instanceof Uint8Array ? plain : Buffer.from(plain);
       const ciphertext = options.encrypt
@@ -250,12 +250,12 @@ export function createConsoleFiles(options = {}) {
       return { spaceId: folder.spaceId, folderId: folder.folderId, fileId, state: "active", ...proof };
     },
     async finish({ folderId, fileId, tags }) {
-      const keys = keysForFolder(folderId);
+      const keys = await keysForFolder(folderId);
       await finishUpload({ folderId, fileId, tags, apiKey: keys.apiKey });
       return { state: "active" };
     },
     async download({ folderId, fileId, policyId }) {
-      const keys = keysForFolder(folderId);
+      const keys = await keysForFolder(folderId);
       const policy = policyId || await loadPolicy(folderId, keys.apiKey);
       const ciphertext = await downloadCiphertext(fetchImpl, keys.apiKey, folderId, fileId, wait);
       const plain = options.decrypt
@@ -264,7 +264,7 @@ export function createConsoleFiles(options = {}) {
       return Buffer.from(plain);
     },
     async remove({ folderId, fileId }) {
-      const keys = keysForFolder(folderId);
+      const keys = await keysForFolder(folderId);
       await deleteConsoleFile(fetchImpl, keys.apiKey, folderId, fileId, wait);
       const record = await readConsoleFile(fetchImpl, keys.apiKey, folderId, fileId, wait);
       if (!record || metadataReady(record) === "deleted") return { deleted: true };
@@ -318,6 +318,7 @@ export function importedFile(record, folder) {
     consoleFileId: String(record.id || ""),
     walrusBlobId: proof.blobId || null,
     suiObjectId: proof.objectId || null,
+    sha256: typeof meta.sha256 === "string" ? meta.sha256 : "",
     createdAt: record.created_at || null,
   };
 }

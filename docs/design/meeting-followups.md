@@ -100,3 +100,76 @@ The unit tests use a fake Slack client, a fake model, and fake connectors. They 
 - `src/bot/preferences.js`, `src/bot/persona.js`
 - `src/meeting/actions.js`, `src/meeting/minutes.js`
 - `supabase/migrations/20261104102057_slack_matches_and_bot_preferences.sql`
+
+## Durable runtime contract (2026-11-09)
+
+`src/meeting/followups.js` coordinates runtime jobs. Apply
+`20261109130000_meeting_followups.sql` before enabling the server integration.
+The service-role store uses tenant-scoped insert-once records and revision
+compare-and-swap. Browser roles cannot read or mutate the queue. The memory
+store is for tests and must not be selected in production.
+
+The meeting-end adapter supplies trusted `tenantId`, `meetingId`, `teamId`,
+verified `memberIds`, and attributed `sources`. Each source has an immutable
+`id`, `text`, `memberId`, optional `slackUserId`, `inviteMemberIds`, and a trusted
+`action` containing `kind`, `tool`, `args`, `where`, `explicit`, and any
+`existingActionId` or completed `connectorId`. Model proposals select only
+`sourceId`; model-supplied requester, tool, and arguments are ignored. Completed
+sources are excluded. Supported pairs are `assign_task/create_issue`,
+`create_form/create_form`, and `edit_calendar/update_event`.
+
+`enqueue(input)` saves an outcome; `drain({tenantId,limit})` materializes and
+claims bounded batches. Duplicate meeting-end events do not create another
+checklist or minutes message. Revised minutes update the original message.
+Verified minutes must summarize only the supplied source evidence. A channel
+is eligible only when the caller verified every channel recipient may read
+every source (`channelAuthorized`). Private 1:1 minutes always use DMs. DM
+recipients must be verified attendees permitted by every source. No email is
+sent. The injected `authorizeDelivery({record})` must recheck current access
+before sending or updating; absence or rejection closes delivery as not reached.
+
+Slack interactivity must verify the signature over the raw request body before
+calling `interact`. Input contains trusted tenant/workspace IDs, authenticated
+`actorSlackId`, actual `channelId`, original checklist `threadTs`, versioned
+button `value`, and `verb`. All must match stored state. `authorize({record,
+actorSlackId})` checks current invitation and membership. A modal submit uses
+its versioned metadata only to look up the record; channel and thread come
+from persistence. `validateEdit(data,edit)` returns `{ok,args,summary}` only
+after required tool fields and connector authority are checked. Saving bumps
+the argument version and requires another approval. Closed messages lose their
+buttons. Results are queued in the same DM thread and rebuilt after restart.
+
+Approval calls `handleUtterance` with intent `followup-approve`. The domain must
+call `authorizeExecution(input)` before allowing a write. It verifies the
+persisted immutable claim, lease, requester, source, arguments and version,
+rechecks current authorization, and consumes the permit once with CAS. The
+domain then applies its allow gate. Explicit paused actions reuse their
+existing ID. AI-inferred actions require the requester's approval. An unset
+explicit tool preference remains Run automatically, by product decision.
+`runApprovedAction` is a low-level adapter for the gated domain only; legacy
+`handleActionPayload` fails closed.
+
+A connector receipt is mandatory for `done`. A known pre-submission failure
+may be approved again. A timeout, exception after submission, missing receipt,
+or expired running lease becomes `outcome_unknown`; neither connector writes
+nor uncertain Slack sends retry automatically. Operators must inspect the
+external service and reconcile the stored receipt before creating a replacement.
+Successful receipts persist before result delivery, so notification failure
+cannot cause a connector replay. Outcome-only materialization can retry with
+bounded backoff; it has no external side effect itself.
+
+Real PostgreSQL tests exercise concurrent claims in separate sessions,
+restart-visible receipts, role restrictions, identity conflicts, and tenant
+cascade deletion. Coordinator tests exercise forged evidence, actor/workspace/
+DM/thread/version mismatches, single-use permits, edited approvals, unknown
+results, duplicate events, closed checklists, and amended minutes. Real Slack
+and connector end-to-end validation still requires a configured workspace.
+
+Run one bounded recovery batch with
+`node scripts/drain-meeting-followups.mjs`. Configure
+`SEDERUNT_RECOVERY_ORIGIN` and `SEDERUNT_RECOVERY_SECRET` in the operator's
+shell. The script calls `POST /api/recovery/drain`, sends a maximum limit of
+10, does not accept a tenant override, refuses remote plain HTTP, and never
+prints the secret or response body. The server endpoint authenticates the
+secret and owns tenant selection. A completed batch does not mean every job
+is delivered; inspect remaining states and reconcile unknown outcomes.

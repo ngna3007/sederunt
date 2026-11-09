@@ -1,6 +1,6 @@
 # Auth setup
 
-Console sign-in uses Supabase Auth when `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` are set. A workspace passphrase (`SEDERUNT_CONSOLE_SECRET`) still works on its own, and stays available as a secondary "Use a passphrase" form when both are set. With neither configured, the console stays open.
+Member web sign-in uses Google through Supabase Auth when `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` are set. GitHub and workspace-passphrase sign-in are not member web entry paths. The separate `/admin` operator login is unaffected. Signed Slack requests and configured local MCP identities do not require a separate web login.
 
 ## Configure
 
@@ -12,19 +12,19 @@ Start the process with the env file:
 node --env-file=.env src/server.js
 ```
 
-`SEDERUNT_SESSION_SECRET` seals the OAuth cookie (access token and refresh token). If it is unset, the process uses `SEDERUNT_CONSOLE_SECRET`, then a random key that does not survive a restart.
+Set `SEDERUNT_SESSION_SECRET` to a strong server-only secret shared by application instances. It signs the OAuth cookie (access token and refresh token). The local development fallback is a passphrase secret, then a random per-process key; neither is a production configuration.
 
 In the Supabase dashboard:
 
 1. Authentication → URL configuration. Add redirect URL `<origin>/console/auth/callback`, for example `http://127.0.0.1:8787/console/auth/callback` or the public `https` origin.
-2. Authentication → Providers. Enable Google and GitHub. Set each provider's client id and secret there. The app always shows both buttons. A provider that is off returns to the sign-in page with a notice instead of a Supabase error.
+2. Authentication → Providers. Enable Google and set its client id and secret there. Disable GitHub and other unused providers. Sederunt offers only Continue with Google; direct GitHub authorization requests are rejected.
 3. Set `SEDERUNT_PUBLIC_ORIGIN` to that same origin when the process sits behind a proxy, so the OAuth `redirect_to` matches the allowed URL.
 
-Google and GitHub are separate accounts. The first sign-in creates a personal tenant and a profile.
+The first Google sign-in creates a personal tenant and a profile. Basic sign-in does not request Calendar or Forms feature scopes; those are requested when the person connects the feature. Existing sessions without verified Google provider provenance must sign in again. A Gmail address or a linked Google identity alone is not accepted as proof of a Google sign-in.
 
 ## Fake mode
 
-`SEDERUNT_AUTH_FAKE=1` uses an in-process identity backend and makes no network calls. Google signs in as Ada Lovelace. GitHub starts off. It overrides a configured Supabase URL, which keeps tests from calling out. Unset it for a real project.
+`SEDERUNT_AUTH_FAKE=1` uses an in-process identity backend and makes no network calls. Google signs in as Ada Lovelace. It overrides a configured Supabase URL, which keeps tests from calling out. Unset it for a real project.
 
 Try the first-run flow locally:
 
@@ -32,7 +32,7 @@ Try the first-run flow locally:
 SEDERUNT_AUTH_FAKE=1 node src/server.js
 ```
 
-Open http://127.0.0.1:8787/console and continue with Google. GitHub stays off unless `SEDERUNT_AUTH_FAKE_GITHUB=1`.
+Open http://127.0.0.1:8787/console and continue with Google. GitHub remains unavailable even if the fake backend fixture has it enabled. Fake mode and an open local console are development-only.
 
 ## Fake calendar
 
@@ -40,7 +40,7 @@ Open http://127.0.0.1:8787/console and continue with Google. GitHub stays off un
 
 Fake auth turns this on by itself. `SEDERUNT_AUTH_FAKE=1` implies a fake calendar unless `SEDERUNT_CALENDAR_FAKE=0`.
 
-`SEDERUNT_CALENDAR_FAKE_CONNECTED=0` still lists those meetings, but the console treats Calendar as not connected. Home then shows the Calendar tool ask when the account is allowed to ask.
+`SEDERUNT_CALENDAR_FAKE_CONNECTED=0` treats Calendar as not connected. Home shows the Calendar connection prompt rather than editable upcoming meetings.
 
 ```sh
 SEDERUNT_AUTH_FAKE=1 SEDERUNT_CALENDAR_FAKE_CONNECTED=0 node src/server.js

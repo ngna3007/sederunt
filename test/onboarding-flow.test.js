@@ -10,7 +10,6 @@ import { upcomingMeetings } from "../src/console-flow.js";
 
 const SECRET = "session-secret";
 const WIDTHS = [1920, 1097, 768, 390];
-const GITHUB_NOTICE = /GitHub sign-in isn't turned on yet\. Use Google or ask your admin\./;
 
 function listen(app) {
   app.listen(0, "127.0.0.1");
@@ -87,7 +86,18 @@ async function followProvider(port, jar, provider, next) {
 }
 
 async function withServer(env, fn) {
-  const identity = createIdentity(env);
+  const identity = createIdentity({ ...env, SEDERUNT_AUTH_FAKE_GITHUB: "1" });
+  // Use the fake's second account slot behind Google consent to test two
+  // distinct people without enabling another member sign-in provider.
+  let secondGoogleAccount = false;
+  const issue = identity.issueConsentCode.bind(identity);
+  const getUser = identity.getUser.bind(identity);
+  identity.useSecondGoogleAccount = () => { secondGoogleAccount = true; };
+  identity.issueConsentCode = (input) => issue({ ...input, provider: secondGoogleAccount && input.provider === "google" ? "github" : input.provider });
+  identity.getUser = async (token) => {
+    const user = await getUser(token);
+    return { ...user, app_metadata: { ...user.app_metadata, provider: "google", providers: ["google"] } };
+  };
   const app = createApp({ companyLoaded: true, env, identity });
   const port = await listen(app);
   try {
@@ -134,9 +144,11 @@ test("fake auth onboarding stays on localhost", async (t) => {
         assert.doesNotMatch(sign.raw, />G</);
         assert.doesNotMatch(sign.raw, />Gh</);
         const github = await call(port, "GET", "/console/auth/github");
-        assert.equal(github.status, 200);
+        assert.equal(github.status, 404);
         assert.equal(github.location, "");
-        assert.match(github.raw, GITHUB_NOTICE);
+        assert.doesNotMatch(sign.raw, /id="auth-github"|Continue with GitHub/);
+        const directFakeGithub = await call(port, "GET", "/console/auth/fake/github");
+        assert.equal(directFakeGithub.status, 404);
 
         const jar = {};
         const done = await followProvider(port, jar, "google", "/console");
@@ -201,14 +213,13 @@ test("fake auth onboarding stays on localhost", async (t) => {
         assert.match(calendar.raw, /id="calendar-google"/);
         assert.match(calendar.raw, /id="calendar-outlook"[\s\S]*Coming soon/);
         assert.match(calendar.raw, /id="calendar-status">Not connected/);
-        assert.match(calendar.raw, /id="calendar-connect"[^>]*data-docs="https:/);
+        // Calendar Connect submits to the real Google consent; no docs tab.
+        assert.doesNotMatch(calendar.raw, /id="calendar-connect"[^>]*data-docs=/);
         assert.match(calendar.raw, /href="\/console\/welcome\?step=workspace"[^>]*id="ob-back"/);
         assert.doesNotMatch(calendar.raw, /id="auto-join"/);
         const askedCalendar = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=calendar&choice=connect" });
         assert.equal(askedCalendar.status, 302);
-        assert.equal(askedCalendar.location, "/console/welcome?step=calendar&asked=1");
-        const asked = await call(port, "GET", askedCalendar.location, { cookie: header(jar) });
-        assert.match(asked.raw, /Finish in Setup/);
+        assert.equal(askedCalendar.location, "/console/auth/google?intent=calendar&next=%2Fconsole%2Fwelcome%3Fstep%3Dcalendar");
         const laterCalendar = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=calendar&choice=later" });
         assert.equal(laterCalendar.location, "/console/welcome?step=chat");
 
@@ -335,12 +346,14 @@ test("fake auth onboarding stays on localhost", async (t) => {
         assert.equal(anon.status, 302);
         assert.match(anon.location, /^\/console\/sign-in\?next=/);
         const graceJar = {};
-        await followProvider(port, graceJar, "github", `/console/join/${link}`);
+        identity.useSecondGoogleAccount();
+        await followProvider(port, graceJar, "google", `/console/join/${link}`);
         const joined = await call(port, "POST", `/console/join/${link}`, { cookie: header(graceJar) });
         assert.equal(joined.status, 302);
         assert.equal(joined.location, "/console");
         absorb(graceJar, joined.cookie);
         const grace = sessionOf(graceJar);
+        assert.equal(grace.provider, "google");
         assert.equal(grace.tenantId, team.id);
         const graceHome = await call(port, "GET", "/console/account", { cookie: header(graceJar) });
         assert.equal(graceHome.status, 200);
@@ -386,7 +399,8 @@ test("fake auth onboarding stays on localhost", async (t) => {
         assert.equal(sessionOf(jar).tenantId, first.id);
 
         const graceJar = {};
-        await followProvider(port, graceJar, "github", `/console/invite/${token}`);
+        identity.useSecondGoogleAccount();
+        await followProvider(port, graceJar, "google", `/console/invite/${token}`);
         const invite = await call(port, "GET", `/console/invite/${token}`, { cookie: header(graceJar) });
         assert.equal(invite.status, 200);
         assert.match(invite.raw, /id="accept-invite"/);
@@ -394,6 +408,7 @@ test("fake auth onboarding stays on localhost", async (t) => {
         assert.equal(accepted.status, 302);
         absorb(graceJar, accepted.cookie);
         const grace = sessionOf(graceJar);
+        assert.equal(grace.provider, "google");
         assert.equal(grace.tenantId, first.id);
         const page = await call(port, "GET", "/console", { cookie: header(graceJar) });
         assert.equal(page.status, 200);
@@ -641,7 +656,7 @@ test("onboarding screens fit at desktop and phone widths", { timeout: 180000 }, 
     assert.deepEqual(report.outside, [], `${label} sits outside ${JSON.stringify(report.outside)}`);
   }
 
-  const signSelectors = [".auth-card h1", "#auth-google span", "#auth-github span", ".auth-mark"];
+  const signSelectors = [".auth-card h1", "#auth-google span", ".auth-mark"];
   const stepSelectors = ["#ob-title", ".ob-sub", ".ob-count", ".ob-row-title", ".ob-row-meta", ".ob-soon", "#ob-continue", "#ob-skip", "#workspace-name", "#ob-bot-name", "#ob-bot-hint"];
   const teamSelectors = [...stepSelectors, "#invite-email", "#invite-role", "#invite-add", "#invite-send", ".ob-person-email", "#invite-link", "#copy-invite-link"];
   const homeSelectors = ["#checklist-title", "#checklist-count", ".check-title", ".check-go", "#checklist-dismiss"];
@@ -668,14 +683,14 @@ test("onboarding screens fit at desktop and phone widths", { timeout: 180000 }, 
     await page.waitForSelector("#auth-google");
     const heights = await page.evaluate(() => ({
       google: document.getElementById("auth-google").getBoundingClientRect().height,
-      github: document.getElementById("auth-github").getBoundingClientRect().height,
+      github: document.getElementById("auth-github"),
       marks: document.querySelectorAll("svg.auth-logo").length,
       letters: document.querySelectorAll(".auth-letter").length,
     }));
     const min = width <= 768 ? 44 : 40;
     assert.ok(heights.google >= min, `Google button is ${heights.google}px at ${width}`);
-    assert.ok(heights.github >= min, `GitHub button is ${heights.github}px at ${width}`);
-    assert.equal(heights.marks, 2);
+    assert.equal(heights.github, null);
+    assert.equal(heights.marks, 1);
     assert.equal(heights.letters, 0);
     await fit(`sign-in ${width}`, signSelectors);
   }

@@ -122,7 +122,7 @@ test("the room list does not wait for Recall", async () => {
   const app = createApp({
     companyLoaded: true,
     session,
-    env: { RECALL_API_KEY: KEY },
+    env: { RECALL_API_KEY: KEY, SEDERUNT_MEMBER: "mina" },
     deps: { memory: { async index() { return []; }, async recall() { return []; } } },
     recall: { async readBot() { started += 1; await new Promise(() => {}); } },
   });
@@ -162,7 +162,7 @@ test("the room list does not call Recall and room media stores the start", async
   const app = createApp({
     companyLoaded: true,
     session,
-    env: { RECALL_API_KEY: KEY },
+    env: { RECALL_API_KEY: KEY, SEDERUNT_MEMBER: "mina" },
     deps: {
       memory: {
         async index() { return []; },
@@ -195,7 +195,10 @@ test("the room list does not call Recall and room media stores the start", async
 });
 
 test("room media requires the console session and does not return the recall key", async () => {
+  const session = (await import("../src/session.js")).createSession();
+  session.decisions.push({ id: "d1", roomId: "11111111-1111-1111-1111-111111111111", text: "Kept.", account: "company", inviteMemberIds: ["Mina"] });
   const app = createApp({
+    session,
     companyLoaded: true,
     env: { SEDERUNT_MEMBER: "Mina", SEDERUNT_CONSOLE_SECRET: SECRET, RECALL_API_KEY: KEY },
     deps: {

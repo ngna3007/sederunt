@@ -6,6 +6,12 @@ import { fileNamespace } from "./memory.js";
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 
+function trustedSha256(value) {
+  if (Buffer.isBuffer(value) && value.length === 32) return value.toString("hex");
+  if (typeof value === "string" && /^[a-f0-9]{64}$/i.test(value)) return value.toLowerCase();
+  return "";
+}
+
 /**
  * In-memory stand-in for the files tables and their RPCs.
  * Visibility matches the RLS policies: current channel membership, plus the
@@ -133,6 +139,7 @@ export function createFileStore({ clock = () => new Date() } = {}) {
         membership.channelIds = membership.channelIds.filter((id) => id !== channelId);
       }
     },
+    removeMember(userId) { members.delete(userId); },
     bindExternal({ provider, externalChannelId, channelId }) {
       bindings.set(`${provider}:${externalChannelId}`, channelId);
     },
@@ -372,6 +379,8 @@ export function createFileStore({ clock = () => new Date() } = {}) {
      * Idempotent by id. No job is queued because the bytes are already stored.
      */
     importActive(input) {
+      const sha256 = trustedSha256(input?.sha256);
+      if (!sha256) return null;
       const existing = files.get(input.id);
       if (existing) return copyFile(existing);
       const row = {
@@ -385,7 +394,7 @@ export function createFileStore({ clock = () => new Date() } = {}) {
         name: input.name,
         mimeType: input.mimeType || "application/octet-stream",
         sizeBytes: input.sizeBytes || 0,
-        sha256: null,
+        sha256,
         slackFileId: input.slackFileId || null,
         consoleSpaceId: input.consoleSpaceId || null,
         consoleFolderId: input.consoleFolderId,

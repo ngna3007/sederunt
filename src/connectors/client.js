@@ -6,6 +6,7 @@ import { isGoogleCalendarPreset } from "./builtin-calendar.js";
 import { isBuiltinGoogleForms } from "./builtin-forms.js";
 import { connectorError, connectorMessage, readableUpstreamMessage } from "./errors.js";
 import { guardConnectorUrl } from "./url-guard.js";
+import { pinnedFetch } from "./pinned-fetch.js";
 
 const DEFAULT_TIMEOUT_MS = 10000;
 const MAX_PAGES = 64;
@@ -414,21 +415,25 @@ async function withTimeout(timeoutMs, run) {
 }
 
 function guardedFetch(input, timeoutSignal) {
-  const base = input?.fetch || globalThis.fetch;
+  const environment = input?.env || process.env;
+  const production = environment.NODE_ENV === "production" || environment.VERCEL_ENV === "production";
+  const injected = !production && input?.fetch;
+  const base = injected || ((resource, init) => pinnedFetch(resource, init, guardOptions(input)));
   return async (resource, init = {}) => {
     let current = resource instanceof URL ? new URL(resource.href) : new URL(String(resource?.url || resource));
     let method = init.method || "GET";
     let body = init.body;
     for (let hop = 0; hop <= MAX_HOPS; hop += 1) {
-      await guardConnectorUrl(current.href, guardOptions(input));
+      if (injected) await guardConnectorUrl(current.href, guardOptions(input));
       const signals = [timeoutSignal, init.signal].filter(Boolean);
       const signal = signals.length > 1 && typeof AbortSignal.any === "function" ? AbortSignal.any(signals) : signals[0];
       const response = await base(current, { ...init, method, body, redirect: "manual", signal });
       const location = response.status >= 300 && response.status < 400 ? response.headers.get("location") : "";
       if (!location) return response;
+      await response.body?.cancel().catch(() => {});
       if (hop === MAX_HOPS) throw connectorError("blocked-url");
-      await response.arrayBuffer().catch(() => {});
       const next = new URL(location, current);
+      if (next.origin !== current.origin) throw connectorError("blocked-url");
       if (response.status !== 307 && response.status !== 308) {
         method = "GET";
         body = undefined;

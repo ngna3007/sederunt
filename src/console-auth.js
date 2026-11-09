@@ -151,7 +151,10 @@ export function readCookie(header, name) {
     const trimmed = part.trim();
     const eq = trimmed.indexOf("=");
     if (eq <= 0) continue;
-    if (trimmed.slice(0, eq) === name) return decodeURIComponent(trimmed.slice(eq + 1));
+    if (trimmed.slice(0, eq) === name) {
+      try { return decodeURIComponent(trimmed.slice(eq + 1)); }
+      catch { return ""; }
+    }
   }
   return "";
 }

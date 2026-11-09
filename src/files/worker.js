@@ -10,26 +10,35 @@ import { backoffDelayMs } from "./store.js";
  */
 export async function runFileWorker(runtime, { limit = 8 } = {}) {
   const { store } = runtime;
-  store.failStuckUploads(UPLOAD_STUCK_MS);
+  await store.failStuckUploads(UPLOAD_STUCK_MS);
   const ran = [];
   for (let i = 0; i < limit; i += 1) {
-    const job = store.claimJob();
+    const job = await store.claimJob();
     if (!job) break;
+    let renewing = Promise.resolve();
+    const heartbeat = store.renewJob ? setInterval(() => {
+      renewing = renewing.then(() => store.renewJob(job)).catch(() => false);
+    }, 60_000) : null;
+    heartbeat?.unref?.();
     try {
       const outcome = await runJob(runtime, job);
-      const finished = outcome?.skipped ? store.skipJob(job.id, outcome.reason) : store.finishJob(job.id);
+      const finished = outcome?.skipped ? await store.skipJob(job.id, outcome.reason, job.claimToken) : await store.finishJob(job.id, job.claimToken);
       ran.push(finished);
     } catch (error) {
       const delay = backoffDelayMs(job.attempts);
-      ran.push(store.failJob(job.id, error, delay));
+      ran.push(await store.failJob(job.id, error, delay, job.claimToken));
+    } finally {
+      if (heartbeat) clearInterval(heartbeat);
+      await renewing;
     }
   }
   return ran;
 }
 
 async function runJob(runtime, job) {
-  const file = runtime.store.getFile(job.fileId);
+  const file = await runtime.store.getFile(job.fileId);
   if (!file) return null;
+  runtime = { ...runtime, job };
   if (job.kind === "upload") return uploadJob(runtime, file);
   if (job.kind === "delete_blob") return deleteBlobJob(runtime, file);
   if (job.kind === "delete_memory") return deleteMemoryJob(runtime, file);
@@ -40,7 +49,7 @@ async function runJob(runtime, job) {
 async function uploadJob(runtime, file) {
   // A delete can land before this queued upload runs. Leave that row alone.
   if (file.status !== "uploading") return null;
-  const bytes = file.consoleFileId ? null : runtime.store.peekUpload(file.id);
+  const bytes = file.consoleFileId ? null : await runtime.store.peekUpload(file.id);
   if (!file.consoleFileId && !bytes) throw new Error("Upload bytes are gone; the file will be marked failed once it is stuck");
   if (!runtime.storage) throw new Error("Storage is paused, try later");
   await placeStoredFile(runtime, file, bytes || Buffer.alloc(0));
@@ -50,7 +59,7 @@ async function uploadJob(runtime, file) {
 async function deleteBlobJob(runtime, file) {
   if (file.status === "deleted") return null;
   if (!file.consoleFileId) {
-    runtime.store.markDeleted(file.id);
+    await markDeleted(runtime, file.id);
     return null;
   }
   if (!runtime.storage?.remove) throw new Error("Storage is paused, try later");
@@ -59,25 +68,32 @@ async function deleteBlobJob(runtime, file) {
     fileId: file.consoleFileId,
   });
   if (!outcome?.deleted) throw new Error("Console delete is still in progress");
-  runtime.store.markDeleted(file.id);
+  await markDeleted(runtime, file.id);
   return null;
 }
 
 async function deleteMemoryJob(runtime, file) {
-  const links = runtime.store.linksFor(file.id);
+  const links = await runtime.store.linksFor(file.id);
   const outcome = await runtime.memory.forgetFile({ fileId: file.id, links });
   if (outcome.skipped) {
     if (!links.length) {
-      runtime.store.addLink({
+      await runtime.store.addLink({
         fileId: file.id,
         memoryBlobId: "unconfigured",
         namespace: outcome.namespace || fileNamespace(file.id),
         status: "skipped",
       });
     }
-    runtime.store.setLinksStatus(file.id, "skipped", outcome.reason);
+    await setLinksStatus(runtime, file.id, "skipped", outcome.reason);
     return outcome;
   }
-  runtime.store.setLinksStatus(file.id, "deleted", null);
+  await setLinksStatus(runtime, file.id, "deleted", null);
   return null;
+}
+
+async function markDeleted(runtime, id) {
+  return runtime.store.durable ? runtime.store.workerMutation(runtime.job, "deleted") : runtime.store.markDeleted(id);
+}
+async function setLinksStatus(runtime, id, status, reason) {
+  return runtime.store.durable ? runtime.store.workerMutation(runtime.job, "links", { status, reason }) : runtime.store.setLinksStatus(id, status, reason);
 }

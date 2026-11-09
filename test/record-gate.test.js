@@ -7,6 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { connectorCalls, ledgerDirectory, ledgerMemory } from "../src/memory/ledger.js";
 import { createSession } from "../src/session.js";
+import { sealSession } from "../src/console-auth.js";
 import { createApp, defaultDeps } from "../src/server.js";
 import { downloadFile, handleUtterance } from "../src/typed-path.js";
 
@@ -27,8 +28,10 @@ function room(overrides = {}) {
   };
 }
 
-function listen(deps) {
-  const server = createApp({ deps, env: { SEDERUNT_MEMBER: "rowan" } });
+const TEST_SECRET = "record-gate-secret";
+const testCookie = (member) => `sederunt_session=${sealSession({ memberId: member }, TEST_SECRET)}`;
+function listen(deps, secure = false, session) {
+  const server = createApp({ deps, session, companyLoaded: true, env: { SEDERUNT_MEMBER: "rowan", ...(secure ? { SEDERUNT_CONSOLE_SECRET: TEST_SECRET } : {}) } });
   server.listen(0, "127.0.0.1");
   return once(server, "listening").then(() => ({
     port: server.address().port,
@@ -40,7 +43,7 @@ function listen(deps) {
   }));
 }
 
-function post(port, path, body) {
+function post(port, path, body, member = "") {
   const payload = JSON.stringify(body);
   return new Promise((resolve, reject) => {
     const req = request(
@@ -52,6 +55,7 @@ function post(port, path, body) {
         headers: {
           "content-type": "application/json",
           "content-length": Buffer.byteLength(payload),
+          ...(member ? { cookie: testCookie(member) } : {}),
         },
       },
       (res) => {
@@ -68,9 +72,9 @@ function post(port, path, body) {
   });
 }
 
-function get(port, path) {
+function get(port, path, member = "") {
   return new Promise((resolve, reject) => {
-    const req = request({ hostname: "127.0.0.1", port, path, method: "GET" }, (res) => {
+    const req = request({ hostname: "127.0.0.1", port, path, method: "GET", headers: member ? { cookie: testCookie(member) } : {} }, (res) => {
       const chunks = [];
       res.on("data", (chunk) => chunks.push(chunk));
       res.on("end", () => {
@@ -284,29 +288,13 @@ test("recall names the console file and a separate download returns its bytes", 
   assert.equal(outsider.bytes, null);
   assert.equal(downloads, 1);
 
-  const app = await listen(deps);
+  const app = await listen(deps, true, session);
   try {
-    const throughDoor = await post(app.port, "/api/typed", {
-      text: "The notes are notes.pdf",
-      memberId: "rowan",
-      room: room(),
-      file: { name: "notes.pdf", bytes },
-      deliveryId: "notes-http",
-    });
-    assert.match(throughDoor.body.body, /notes\.pdf/);
-    assert.doesNotMatch(throughDoor.raw, /FILEBYTES/);
-    const recalledHttp = await post(app.port, "/api/typed", {
-      text: "what was decided",
-      memberId: "rowan",
-      room: room(),
-    });
-    assert.match(recalledHttp.body.body, /notes\.pdf/);
-    assert.doesNotMatch(recalledHttp.raw, /FILEBYTES/);
     const overHttp = await post(app.port, "/api/download", {
       memberId: "rowan",
       room: room(),
       name: "notes.pdf",
-    });
+    }, "rowan");
     assert.equal(overHttp.status, 200);
     assert.equal(overHttp.body.bytes, bytes);
     assert.doesNotMatch(overHttp.raw, /The notes are/);
@@ -314,7 +302,7 @@ test("recall names the console file and a separate download returns its bytes", 
       memberId: "sam",
       room: room(),
       name: "notes.pdf",
-    });
+    }, "sam");
     assert.equal(hidden.body.bytes, null);
     assert.doesNotMatch(hidden.raw, /FILEBYTES/);
     assert.doesNotMatch(hidden.raw, /The notes are/);
@@ -330,7 +318,7 @@ test("the local object link opens on the object text and a failed read stays unk
     async getObject(id) {
       opens.push(id);
       if (id === "blob-9" || id === "obj-88") {
-        return { text: "The offsite is in Porto", checkpoint: 88, objectId: "obj-88" };
+        return { text: "The offsite is in Porto", checkpoint: 88, objectId: "obj-88", proof: { status: "verified", objectId: "obj-88" } };
       }
       throw new Error("missing object");
     },
@@ -340,24 +328,18 @@ test("the local object link opens on the object text and a failed read stays unk
       return { blobId: "blob-9" };
     },
   };
-  const app = await listen({ memory, tatum });
+  const session = createSession();
+  await handleUtterance({ session, text: "The offsite is in Lisbon", memberId: "rowan", room: room(), deliveryId: "object-store" }, { memory, tatum });
+  const recalled = await handleUtterance({ session, text: "what was decided", memberId: "rowan", room: room() }, { memory, tatum });
+  assert.equal(recalled.status, "current");
+  assert.match(recalled.body, /Porto/);
+  assert.doesNotMatch(recalled.body, /Lisbon/);
+  assert.equal(recalled.objectLink, "/object/obj-88");
+  const app = await listen({ memory, tatum }, true, session);
   try {
-    await post(app.port, "/api/typed", {
-      text: "The offsite is in Lisbon",
-      memberId: "rowan",
-      room: room(),
-      deliveryId: "object-store",
-    });
-    const recalled = await post(app.port, "/api/typed", {
-      text: "what was decided",
-      memberId: "rowan",
-      room: room(),
-    });
-    assert.equal(recalled.body.status, "current");
-    assert.match(recalled.body.body, /Porto/);
-    assert.doesNotMatch(recalled.body.body, /Lisbon/);
-    assert.equal(recalled.body.objectLink, "/object/obj-88");
-    const opened = await get(app.port, recalled.body.objectLink);
+    const opened = await get(app.port, recalled.objectLink, "rowan");
+    assert.equal((await get(app.port, recalled.objectLink)).status, 401);
+    assert.equal((await get(app.port, recalled.objectLink, "sam")).status, 404);
     assert.equal(opened.status, 200);
     assert.match(opened.raw, /Porto/);
     assert.match(opened.raw, /checkpoint 88/);

@@ -1,5 +1,7 @@
 # Live demo / QA kịch bản — Northline
 
+For a first-time-user recording, use the current [click-by-click runbook](./new-user-live-demo.md). It puts Ask AI immediately after the meeting and includes the tenant-specific Slack install path. This older script retains historical build and demo values.
+
 Canonical end-to-end script for manual QA and hackathon demos. Drive it as a
 **real Northline ops week**, not a test channel. Prefer a deploy built from `dev`.
 
