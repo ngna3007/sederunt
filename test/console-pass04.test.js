@@ -444,7 +444,7 @@ test("home and rooms columns line up, and the pass 04 fixes hold in the browser"
   });
   assert.ok(rooms.rows.length >= 2);
   assert.ok(rooms.rows.every((row) => row.status !== "Failed"), JSON.stringify(rooms.rows));
-  assert.ok(rooms.rows.some((row) => row.status === "Ended"));
+  assert.ok(rooms.rows.some((row) => row.status === "Done"));
   assert.ok(rooms.rows.some((row) => row.status === "No recording"));
   assert.ok(rooms.rows.some((row) => row.status === "Channel"));
   assert.ok(rooms.rows.some((row) => row.chip === "1 failed action"));

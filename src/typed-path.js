@@ -17,6 +17,7 @@ import { addressesHearing, isRememberThisKeep, normalizeHearing, splitAddressedK
 import { learnedKey, memoriesFor, parseLearnedUtterance, shapeAnswer } from "./memory/learn.js";
 import { draftMinutes, rememberMeetingOutcome } from "./memory/outcome.js";
 import { looksLikeOpenQuestion, parseUtterance } from "./parse.js";
+import { meetingCallRank } from "./meeting/recall.js";
 import { publicProof } from "./tatum/proof.js";
 
 const KEY_NAMES = [
@@ -1574,6 +1575,7 @@ async function openMeetingRoom(session, deps, opened) {
     kind: "meeting",
     platform,
     botPresent: true,
+    call: "joining_call",
   };
   if (startedAt) room.startedAt = startedAt;
   session.rooms.push(room);
@@ -1582,7 +1584,7 @@ async function openMeetingRoom(session, deps, opened) {
     kind: "room",
     text: `${room.id} meeting`,
     idempotencyKey: room.id,
-    room: { id: room.id, kind: "meeting", platform, ...(startedAt ? { startedAt } : {}) },
+    room: { id: room.id, kind: "meeting", platform, call: "joining_call", ...(startedAt ? { startedAt } : {}) },
   });
   return finish(session, {
     status: "recorded",
@@ -2282,13 +2284,17 @@ function absorbPreference(session, pref) {
 function copyOpenedRoom(doc) {
   const room = doc?.room;
   if (!room || typeof room.id !== "string" || !room.id) return null;
-  if (room.kind !== "meeting" || !MEETING_PLATFORMS.has(room.platform)) return null;
+  if (room.kind !== "meeting") return null;
+  const platform = MEETING_PLATFORMS.has(room.platform) ? room.platform : "";
+  const call = meetingCallRank(room.call) ? room.call : "";
+  if (!platform && !call) return null;
   const startedAt = typeof room.startedAt === "string" ? room.startedAt : "";
   return {
     id: room.id,
     kind: "meeting",
-    platform: room.platform,
+    platform,
     botPresent: true,
+    ...(call ? { call } : {}),
     ...(startedAt ? { startedAt } : {}),
   };
 }
@@ -2299,10 +2305,51 @@ function absorbOpenedRoom(session, room) {
   session.rooms ??= [];
   const existing = session.rooms.find((item) => item.id === room.id);
   if (existing) {
+    if (!existing.platform && room.platform) existing.platform = room.platform;
     if (!existing.startedAt && typeof room.startedAt === "string" && room.startedAt) existing.startedAt = room.startedAt;
+    if (meetingCallRank(room.call) > meetingCallRank(existing.call)) existing.call = room.call;
     return;
   }
   session.rooms.push(room);
+}
+
+/**
+ * Remember a later Recall phase for a meeting the bot already opened.
+ * An earlier phase does not replace a later one.
+ *
+ * @param {ReturnType<import("./session.js").createSession>} session
+ * @param {{ memory?: { remember?: Function }, tenantId?: string }} deps
+ * @param {string} roomId
+ * @param {string} code
+ */
+export async function noteMeetingCall(session, deps, roomId, code) {
+  const id = typeof roomId === "string" ? roomId.trim() : "";
+  if (!id || !meetingCallRank(code)) return false;
+  const current = ensureSession(session);
+  current.rooms ??= [];
+  let room = current.rooms.find((item) => item.id === id);
+  if (room && meetingCallRank(room.call) >= meetingCallRank(code)) return false;
+  if (!room) {
+    room = { id, kind: "meeting", platform: "", botPresent: true, call: code };
+    current.rooms.push(room);
+  } else {
+    room.call = code;
+  }
+  const platform = MEETING_PLATFORMS.has(room.platform) ? room.platform : "";
+  await remember(deps, {
+    account: "company",
+    kind: "room",
+    text: `${id} meeting ${code}`,
+    idempotencyKey: `${id}:call:${code}`,
+    room: {
+      id,
+      kind: "meeting",
+      ...(platform ? { platform } : {}),
+      call: code,
+      ...(typeof room.startedAt === "string" && room.startedAt ? { startedAt: room.startedAt } : {}),
+    },
+  });
+  return true;
 }
 
 function copyAccess(doc) {
@@ -3051,6 +3098,7 @@ export function companyBoard(session, memberId, options = {}) {
     if (typeof opened.name === "string" && opened.name) room.name = opened.name;
     if (typeof opened.channel === "string" && opened.channel) room.channel = opened.channel;
     if (typeof opened.startedAt === "string" && opened.startedAt) room.startedAt = opened.startedAt;
+    if (meetingCallRank(opened.call)) room.call = opened.call;
     if (typeof opened.calendarEventId === "string" && opened.calendarEventId.trim()) {
       room.calendarEventId = opened.calendarEventId.trim();
     }

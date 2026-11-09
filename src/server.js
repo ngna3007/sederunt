@@ -6,7 +6,7 @@ import { drainDeletions } from "./memory/deletion-worker.js";
 import { scopeAskStore } from "./ask/context.js";
 import { createParticipantBindings } from "./participant-bindings.js";
 import { consolePrincipal } from "./console-principal.js";
-import { canReadRecord, readPrincipalId, readableSession } from "./domain/read-access.js";
+import { canReadOpenedMeeting, canReadRecord, readPrincipalId, readableSession } from "./domain/read-access.js";
 import { createServer } from "node:http";
 import { readRequestBytes } from "./http-body.js";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
@@ -27,7 +27,7 @@ import { loadLinearToken } from "./linear/token.js";
 import { createLinearInstallationStore } from "./linear/installations.js";
 import { handleLinearOAuth, linearClientMetadata, tenantLinearClient } from "./linear/oauth.js";
 import { renderCameraPage } from "./meeting/camera.js";
-import { createMeetingAdapter, mediaFromBot, meetingDoorReady, meetingEnded, recallBotUrl, recallTranscriptDelivery, verifyRecallRequest } from "./meeting/recall.js";
+import { createMeetingAdapter, mediaFromBot, meetingCallUpdate, meetingDoorReady, meetingEnded, recallBotUrl, recallTranscriptDelivery, transcriptLines, verifyRecallRequest } from "./meeting/recall.js";
 import { meetingLineShouldAnswer, speakMeetingTurn } from "./meeting/voice.js";
 import { createMeetingFollowups, parseFollowupValue } from "./meeting/followups.js";
 import { createSupabaseFollowupStore } from "./meeting/followup-store.js";
@@ -81,7 +81,7 @@ import { ASK_UNAVAILABLE, askSpendsQuota, humanAskText, runAsk } from "./ask/run
 import { openRouterConfig } from "./openrouter.js";
 import { answerSlackQuestion, claimSlackAsk, findReplyFile, invitedFileRows, postSlackReply, prepareSlackCaption, slackChannelMembers, slackFileBytes } from "./slack/reply.js";
 import { slackBotUserIds, slackDelivery, slackEventHasFiles, verifySlackRequest } from "./slack/sign.js";
-import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded, warmProofs } from "./typed-path.js";
+import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, noteMeetingCall, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded, warmProofs } from "./typed-path.js";
 import { wireCalls } from "./tatum/client.js";
 import { createTenantBind, requiresDurableBind } from "./tenant-bind.js";
 import { createAdminStore } from "./admin-store.js";
@@ -940,11 +940,17 @@ export function createApp(options = {}) {
       const current = await prepareWorkspace(workspace, resolved.companyId);
       const principal = await consolePrincipal(workspace, req, resolved.companyId);
       const roomDecisions = (current.decisions || []).filter((row) => row.roomId === id && !row.deleted);
-      if (!roomDecisions.length || !roomDecisions.every((row) => canReadRecord(principal, row))) {
+      const opened = (current.rooms || []).find((item) => item.id === id);
+      if (roomDecisions.length) {
+        if (!roomDecisions.every((row) => canReadRecord(principal, row))) {
+          send(res, 404, "application/json; charset=utf-8", JSON.stringify({ error: "That room is not available." }));
+          return;
+        }
+      } else if (!canReadOpenedMeeting(principal, opened)) {
         send(res, 404, "application/json; charset=utf-8", JSON.stringify({ error: "That room is not available." }));
         return;
       }
-      const body = await roomMedia({ ...workspace, session: current }, id);
+      const body = await roomMedia({ ...workspace, session: current, mediaTenantId: resolved.companyId }, id);
       const secret = typeof env.RECALL_API_KEY === "string" ? env.RECALL_API_KEY : "";
       const raw = secret.length >= 12 ? JSON.stringify(body).split(secret).join("") : JSON.stringify(body);
       send(res, 200, "application/json; charset=utf-8", raw);
@@ -1572,6 +1578,9 @@ export function createApp(options = {}) {
             const answerLine = meetingLineShouldAnswer(current, delivery);
             const kept = await handleUtterance({ ...delivery, session: current }, depsFor(workspace, companyId));
             const speakerName = typeof participant?.name === "string" ? participant.name : "";
+            if (delivery.room?.id) {
+              await noteMeetingCall(current, depsFor(workspace, companyId), delivery.room.id, "in_call_recording").catch(() => {});
+            }
             voiceWork = speakMeetingTurn({
               answer: answerLine && kept?.kind !== "duplicate",
               text: delivery.text,
@@ -1601,6 +1610,16 @@ export function createApp(options = {}) {
               if (outcomes.length) await persistMeetingFollowups(workspace, companyId, delivery.room.id);
             }
           }
+          const progress = meetingCallUpdate(payload);
+          if (progress?.roomId && progress.call !== "done" && progress.call !== "call_ended") {
+            const progressCompany = await resolveBoundTenant(workspace, { botId: progress.roomId });
+            if (!progressCompany && identityConfigured(env) && requiresDurableBind(env)) {
+              send(res, 503, "text/plain; charset=utf-8", "bind-pending");
+              return;
+            }
+            const progressSession = await prepareWorkspace(workspace, progressCompany);
+            await noteMeetingCall(progressSession, depsFor(workspace, progressCompany), progress.roomId, progress.call).catch(() => {});
+          }
           const ended = meetingEnded(payload);
           if (ended?.roomId) {
             const companyId = await resolveBoundTenant(workspace, { botId: ended.roomId });
@@ -1611,6 +1630,8 @@ export function createApp(options = {}) {
             if (companyId && !workspace.followups) { const error = new Error("Finalization unavailable"); error.code = "followup-persist"; throw error; }
             if (companyId && workspace.followups) await persistMeetingFollowups(workspace, companyId, ended.roomId);
             const current = await prepareWorkspace(workspace, companyId);
+            const endedCall = progress?.roomId === ended.roomId && progress.call ? progress.call : "done";
+            await noteMeetingCall(current, depsFor(workspace, companyId), ended.roomId, endedCall).catch(() => {});
             try {
               await endMeeting(current, depsFor(workspace, companyId), ended.roomId);
             } catch {
@@ -3497,6 +3518,24 @@ async function roomMedia(workspace, id) {
   }
 }
 
+async function recallSpokenLines(workspace, url) {
+  if (typeof url !== "string" || !url.startsWith("https://")) return [];
+  const fetchImpl = workspace.fetchImpl || globalThis.fetch;
+  try {
+    const response = await fetchImpl(url, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(4000),
+      redirect: "error",
+    });
+    if (!response.ok) return [];
+    const text = await response.text();
+    if (!text || text.length > 1_500_000) return [];
+    return transcriptLines(JSON.parse(text));
+  } catch {
+    return [];
+  }
+}
+
 async function loadRoomMedia(workspace, id, current, empty) {
   let bot = null;
   const reader = workspace.recall?.readBot || workspace.deps?.recall?.readBot;
@@ -3516,6 +3555,15 @@ async function loadRoomMedia(workspace, id, current, empty) {
     bot = null;
   }
   const body = mediaFromBot(bot);
+  if (!Array.isArray(body.lines) || body.lines.length === 0) {
+    if (body.transcriptUrl && body.state !== "expired") {
+      body.lines = await recallSpokenLines(workspace, body.transcriptUrl);
+    }
+  }
+  if (body.call) {
+    const tenant = typeof workspace.mediaTenantId === "string" ? workspace.mediaTenantId : "";
+    await noteMeetingCall(current, depsFor(workspace, tenant), id, body.call).catch(() => {});
+  }
   if (body.startedAt) await persistRecordingStart(workspace, current, id, body.startedAt);
   const room = (current.rooms || []).find((item) => item.id === id);
   if (body.title) {

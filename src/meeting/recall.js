@@ -172,6 +172,125 @@ export function meetingEnded(payload) {
   return { roomId: botId.trim() };
 }
 
+/** Recall bot phases, earliest to latest. A later phase does not move backward. */
+export const MEETING_CALLS = Object.freeze([
+  "joining_call",
+  "in_waiting_room",
+  "in_call_not_recording",
+  "in_call_recording",
+  "fatal",
+  "call_ended",
+  "done",
+]);
+
+export function meetingCallRank(code) {
+  const rank = MEETING_CALLS.indexOf(code);
+  return rank < 0 ? 0 : rank + 1;
+}
+
+/**
+ * The latest known Recall phase for one bot.
+ * A finished recording with no status list is done.
+ * A recording still processing after the call is call_ended.
+ *
+ * @param {unknown} bot
+ */
+export function meetingCallCode(bot) {
+  if (!bot || typeof bot !== "object") return "";
+  const changes = Array.isArray(bot.status_changes) ? bot.status_changes : [];
+  let code = "";
+  for (let index = changes.length - 1; index >= 0; index -= 1) {
+    const next = changes[index] && typeof changes[index].code === "string" ? changes[index].code : "";
+    if (meetingCallRank(next)) {
+      code = next;
+      break;
+    }
+  }
+  if (!code) {
+    const direct = typeof bot.status === "string"
+      ? bot.status
+      : (bot.status && typeof bot.status.code === "string" ? bot.status.code : "");
+    if (meetingCallRank(direct)) code = direct;
+  }
+  const recordings = Array.isArray(bot.recordings) ? bot.recordings : [];
+  const recording = recordings[0] && typeof recordings[0] === "object" ? recordings[0] : null;
+  const recorded = statusCode(recording);
+  // A finished file means the call is over, even if the last live phase is still listed.
+  if (recorded === "done" && code !== "fatal") return "done";
+  if (!code && recorded === "processing") return "call_ended";
+  return code;
+}
+
+/**
+ * A signed Recall bot event that names a phase.
+ * `bot.done` with no status word is done.
+ *
+ * @param {unknown} payload
+ */
+export function meetingCallUpdate(payload) {
+  const root = payload && typeof payload === "object" ? payload : {};
+  const event = typeof root.event === "string" ? root.event : "";
+  const data = root.data && typeof root.data === "object" ? root.data : {};
+  const raw = typeof data.status === "string" ? data.status : (data.status && typeof data.status.code === "string" ? data.status.code : "");
+  const fromEvent = event.startsWith("bot.") ? event.slice(4) : "";
+  const code = meetingCallRank(raw) ? raw : (meetingCallRank(fromEvent) ? fromEvent : "");
+  if (!code && event !== "bot.done") return null;
+  const botId = data.bot?.id || data.bot_id || root.bot?.id || "";
+  if (typeof botId !== "string" || !botId.trim()) return null;
+  return { roomId: botId.trim(), call: code || "done" };
+}
+
+/**
+ * Spoken lines from a Recall transcript download.
+ * Each line is one participant turn: speaker, text, and seconds from the start.
+ *
+ * @param {unknown} payload
+ */
+export function transcriptLines(payload) {
+  const rows = Array.isArray(payload)
+    ? payload
+    : (payload && typeof payload === "object" && (payload.utterances || payload.transcript || payload.lines)) || [];
+  if (!Array.isArray(rows)) return [];
+  const lines = [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const participant = row.participant && typeof row.participant === "object" ? row.participant : {};
+    const speaker = typeof participant.name === "string" && participant.name.trim()
+      ? participant.name.trim()
+      : (typeof row.speaker === "string" && row.speaker.trim() ? row.speaker.trim() : "Speaker");
+    const words = Array.isArray(row.words) ? row.words : [];
+    let text = "";
+    let start = NaN;
+    let end = NaN;
+    if (words.length) {
+      text = words.map((word) => (typeof word?.text === "string" ? word.text : "")).filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+      start = relativeStamp(words[0]?.start_timestamp ?? words[0]?.start);
+      const last = words[words.length - 1];
+      end = relativeStamp(last?.end_timestamp ?? last?.end ?? last?.start_timestamp ?? last?.start);
+    } else if (typeof row.text === "string") {
+      text = row.text.replace(/\s+/g, " ").trim();
+      start = relativeStamp(row.start);
+      end = relativeStamp(row.end);
+    }
+    if (!text) continue;
+    const began = Number.isFinite(start) ? start : 0;
+    lines.push({
+      speaker: speaker.slice(0, 80),
+      text: text.slice(0, 2000),
+      start: began,
+      end: Number.isFinite(end) && end >= began ? end : began + 0.4,
+    });
+    if (lines.length >= 400) break;
+  }
+  return lines;
+}
+
+function relativeStamp(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (value && typeof value === "object" && typeof value.relative === "number" && Number.isFinite(value.relative)) return value.relative;
+  return NaN;
+}
+
 export function recallTranscriptDelivery(payload) {
   const root = payload && typeof payload === "object" ? payload : {};
   const data = root.data && typeof root.data === "object" ? root.data : root;
@@ -258,6 +377,8 @@ export function mediaFromBot(bot, now = Date.now()) {
     lines: [],
     segments: [],
     events: [],
+    call: "",
+    endedNote: "",
   };
   if (!bot || typeof bot !== "object") return blank;
   const root = /** @type {Record<string, unknown>} */ (bot);
@@ -287,6 +408,8 @@ export function mediaFromBot(bot, now = Date.now()) {
     lines: Array.isArray(root.lines) ? root.lines : [],
     segments: Array.isArray(root.segments) ? root.segments : [],
     events: Array.isArray(root.events) ? root.events : [],
+    call: meetingCallCode(root),
+    endedNote: callEndedNote(root),
   };
   if (mediaExpired(recording, shortcuts, root, now)) return { ...blank, ...urls, state: "expired", videoUrl: "" };
   const code = statusCode(recording) || statusCode(shortcuts.video_mixed);
@@ -297,6 +420,18 @@ export function mediaFromBot(bot, now = Date.now()) {
   if (!urls.videoUrl && code && code !== "done") return { ...blank, ...urls, state: "processing" };
   if (!urls.videoUrl && !urls.transcriptUrl && !urls.timelineUrl && !urls.participantsUrl) return { ...blank, ...urls, state: "none" };
   return { ...blank, ...urls, state: urls.videoUrl ? "ready" : "novideo" };
+}
+
+function callEndedNote(bot) {
+  const changes = Array.isArray(bot.status_changes) ? bot.status_changes : [];
+  for (let index = changes.length - 1; index >= 0; index -= 1) {
+    const row = changes[index];
+    if (!row || typeof row !== "object") continue;
+    if (row.code === "call_ended" && row.sub_code === "timeout_exceeded_everyone_left") {
+      return "Everyone left, so the guest left.";
+    }
+  }
+  return "";
 }
 
 function shortcutData(node) {

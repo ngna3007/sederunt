@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import test from "node:test";
 import { sealSession } from "../src/console-auth.js";
-import { mediaFromBot } from "../src/meeting/recall.js";
+import { mediaFromBot, transcriptLines } from "../src/meeting/recall.js";
 import { createApp } from "../src/server.js";
 import { rankDecisions } from "../src/console-page.js";
 
@@ -94,6 +94,7 @@ test("bot media keeps the download urls and names processing, expiry, and a miss
   assert.equal(ready.timelineUrl, "https://example.test/timeline.json");
   assert.equal(ready.title, "Booth planning");
   assert.equal(ready.duration, 184);
+  assert.equal(ready.call, "done");
   const processing = mediaFromBot(botPayload({
     recordings: [{ status: { code: "processing" }, media_shortcuts: {} }],
   }));
@@ -102,6 +103,111 @@ test("bot media keeps the download urls and names processing, expiry, and a miss
   assert.equal(expired.state, "expired");
   assert.equal(expired.videoUrl, "");
   assert.equal(mediaFromBot({ id: "bot", recordings: [], status_changes: [{ code: "done" }] }).state, "none");
+});
+
+test("a finished Meet is Done and keeps Recall's video", () => {
+  const media = mediaFromBot({
+    id: "efb230d9-e9db-41b0-846a-27f6b445be58",
+    meeting_url: { meeting_id: "qag-mnzm-gzv", platform: "google_meet" },
+    join_at: "2026-11-09T15:40:49.635519Z",
+    status_changes: [
+      { code: "joining_call" },
+      { code: "in_waiting_room" },
+      { code: "in_call_not_recording" },
+      { code: "in_call_recording" },
+      { code: "call_ended", sub_code: "timeout_exceeded_everyone_left" },
+      { code: "done" },
+    ],
+    recordings: [{
+      started_at: "2026-11-09T15:40:54.000Z",
+      completed_at: "2026-11-09T15:41:37.000Z",
+      status: { code: "done" },
+      media_shortcuts: {
+        video_mixed: { data: { download_url: "https://example.test/mixed.mp4" } },
+        transcript: { data: { download_url: "https://example.test/transcript.json" } },
+      },
+    }],
+  }, Date.parse("2026-11-10T00:00:00.000Z"));
+  assert.equal(media.call, "done");
+  assert.equal(media.state, "ready");
+  assert.equal(media.videoUrl, "https://example.test/mixed.mp4");
+  assert.equal(media.duration, 43);
+  assert.equal(media.endedNote, "Everyone left, so the guest left.");
+  const stillLive = mediaFromBot({
+    status_changes: [{ code: "in_call_recording" }],
+    recordings: [{ status: { code: "processing" }, media_shortcuts: {} }],
+  });
+  assert.equal(stillLive.call, "in_call_recording");
+  assert.equal(stillLive.state, "processing");
+  const fileReady = mediaFromBot({
+    status_changes: [{ code: "in_call_recording" }],
+    recordings: [{
+      started_at: "2026-11-09T15:40:54.000Z",
+      completed_at: "2026-11-09T15:41:37.000Z",
+      status: { code: "done" },
+      media_shortcuts: { video_mixed: { data: { download_url: "https://example.test/mixed.mp4" } } },
+    }],
+  });
+  assert.equal(fileReady.call, "done");
+  assert.equal(fileReady.state, "ready");
+});
+
+test("a Recall transcript becomes spoken lines with times", () => {
+  const lines = transcriptLines([
+    {
+      participant: { id: 100, name: "Anh Nguyễn" },
+      words: [
+        { text: "hey", start_timestamp: { relative: 4.0 }, end_timestamp: { relative: 4.2 } },
+        { text: "hey", start_timestamp: { relative: 4.3 }, end_timestamp: { relative: 4.5 } },
+        { text: "adam", start_timestamp: { relative: 4.6 }, end_timestamp: { relative: 4.9 } },
+      ],
+    },
+  ]);
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].speaker, "Anh Nguyễn");
+  assert.equal(lines[0].text, "hey hey adam");
+  assert.equal(lines[0].start, 4);
+  assert.equal(lines[0].end, 4.9);
+});
+
+test("an opened meeting with no decision still plays the Recall recording", async () => {
+  const session = (await import("../src/session.js")).createSession();
+  const id = "11111111-1111-1111-1111-111111111111";
+  session.rooms.push({ id, kind: "meeting", platform: "Google Meet", botPresent: true, call: "done" });
+  session.readReport = { ok: true, empty: false };
+  const app = createApp({
+    companyLoaded: true,
+    session,
+    env: { RECALL_API_KEY: KEY, SEDERUNT_MEMBER: "mina" },
+    deps: { memory: { async index() { return []; }, async recall() { return []; }, async remember() { return { blobId: null }; } } },
+    recall: { async readBot() { return botPayload(); } },
+    fetch: async (url) => {
+      if (String(url) === "https://example.test/transcript.json") {
+        return new Response(JSON.stringify([
+          { participant: { name: "Anh Nguyễn" }, words: [{ text: "hey", start_timestamp: { relative: 1 }, end_timestamp: { relative: 1.4 } }, { text: "adam", start_timestamp: { relative: 1.5 }, end_timestamp: { relative: 1.8 } }] },
+        ]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response("no", { status: 404 });
+    },
+  });
+  const port = await listen(app);
+  try {
+    const board = await fetch(`http://127.0.0.1:${port}/api/console?member=mina`);
+    const listed = await board.json();
+    assert.equal(listed.rooms.some((room) => room.id === id), true);
+    assert.equal(listed.rooms.find((room) => room.id === id).call, "done");
+    const media = await fetch(`http://127.0.0.1:${port}/console/rooms/${id}/media?member=mina`);
+    assert.equal(media.status, 200);
+    const body = await media.json();
+    assert.equal(body.videoUrl, "https://example.test/mixed.mp4");
+    assert.equal(body.call, "done");
+    assert.equal(body.lines[0].text, "hey adam");
+    assert.equal(body.lines[0].speaker, "Anh Nguyễn");
+    const hidden = await fetch(`http://127.0.0.1:${port}/console/rooms/22222222-2222-4222-8222-222222222222/media?member=mina`);
+    assert.equal(hidden.status, 404);
+  } finally {
+    app.close();
+  }
 });
 
 test("the room list does not wait for Recall", async () => {

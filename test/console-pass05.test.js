@@ -13,12 +13,12 @@ const SECRET = "pass05-secret";
 test("meeting words separate live, ended, channel, and silence", () => {
   const page = readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
   const word = page.slice(page.indexOf("function meetingWord"), page.indexOf("function failedActions"));
-  assert.match(word, /word: "Live"/);
+  assert.match(word, /word: "In call"/);
   assert.match(word, /word: "Channel"/);
-  assert.match(word, /word: "Ended"/);
+  assert.match(word, /word: "Done"/);
   assert.match(word, /word: "No recording"/);
   assert.match(word, /decisionsFor\(room\.id\)/);
-  assert.doesNotMatch(word, /Failed|Done/);
+  assert.doesNotMatch(word, /Failed/);
   assert.match(page, /countText \+ \" · \"|person\.count === 1 \? \"1 decision\"/);
   const css = readFileSync(new URL("../src/console.css", import.meta.url), "utf8");
   const block = css.slice(css.lastIndexOf("Fix pass 05"));
@@ -448,12 +448,12 @@ test("list columns share a gap and history rows stay compact", async (t) => {
     chip: row.querySelector(".fail-chip")?.textContent || "",
   })));
   const byTitle = Object.fromEntries(status.map((row) => [row.title, row]));
-  assert.equal(byTitle["Booth planning"].status, "Ended");
+  assert.equal(byTitle["Booth planning"].status, "Done");
   assert.equal(byTitle["#ops"].status, "Channel");
   assert.equal(byTitle["Quiet room"].status, "No recording");
-  assert.equal(byTitle["Infra sync"].status, "Ended");
+  assert.equal(byTitle["Infra sync"].status, "Done");
   assert.equal(byTitle["Booth planning"].chip, "1 failed action");
-  assert.ok(status.every((row) => row.status !== "Failed" && row.status !== "Done"));
+  assert.ok(status.every((row) => row.status !== "Failed"));
 
   for (const width of [1920, 1097, 1024, 768, 640, 390]) {
     await page.setViewportSize({ width, height: 900 });

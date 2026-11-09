@@ -340,12 +340,16 @@ test("two spoken keeps that share a transcript.id both land", async () => {
 });
 
 test("a transcript with no speaker cannot borrow the configured member identity", async () => {
-  let writes = 0;
+  const remembered = [];
   const app = createApp({
     companyLoaded: true,
     env: { RECALL_WEBHOOK_SECRET: secret, SEDERUNT_MEMBER: "U_MINA" },
     deps: {
-      memory: { async remember() { writes++; return { blobId: null }; }, async index() { return []; }, async recall() { return []; } },
+      memory: {
+        async remember(input) { remembered.push(input); return { blobId: null }; },
+        async index() { return []; },
+        async recall() { return []; },
+      },
       tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
     },
   });
@@ -369,7 +373,11 @@ test("a transcript with no speaker cannot borrow the configured member identity"
       "webhook-signature": `v1,${sign(secret, "msg-tab", "1731705121", payload)}`,
     });
     assert.equal(accepted.status, 204);
-    assert.equal(writes, 0);
+    assert.equal(remembered.length, 1);
+    assert.equal(remembered[0].kind, "room");
+    assert.equal(remembered[0].room.call, "in_call_recording");
+    assert.equal(JSON.stringify(remembered).includes("U_MINA"), false);
+    assert.equal(JSON.stringify(remembered).includes("December"), false);
     const mine = await get(port, "/api/console?member=U_MINA");
     const other = await get(port, "/api/console?member=U_OTHER");
     assert.equal(mine.raw.includes("move-in is December 2nd"), false);

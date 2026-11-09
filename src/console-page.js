@@ -2071,6 +2071,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       explorer.classList.toggle("no-wait", !anyWait);
     }
     syncHomeChrome();
+    refreshMeetingProgress();
     var foot = document.getElementById("room-foot");
     var count = document.getElementById("room-count");
     var prev = document.getElementById("room-prev");
@@ -3465,12 +3466,23 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
   }
 
+  function callWord(code) {
+    if (code === "joining_call") return { word: "Joining", badge: "badge live" };
+    if (code === "in_waiting_room") return { word: "Waiting", badge: "badge live" };
+    if (code === "in_call_not_recording" || code === "in_call_recording") return { word: "In call", badge: "badge live" };
+    if (code === "call_ended" || code === "done") return { word: "Done", badge: "badge ok" };
+    if (code === "fatal") return { word: "Stopped", badge: "badge" };
+    return null;
+  }
+
   function meetingWord(room) {
     if (!room) return { word: "No recording", badge: "badge" };
-    if (room.live === true) return { word: "Live", badge: "badge live" };
     if (room.channel || /slack/i.test(String(room.platform || ""))) return { word: "Channel", badge: "badge" };
+    var fromCall = callWord(room.call);
+    if (fromCall) return fromCall;
+    if (room.live === true) return { word: "In call", badge: "badge live" };
     var heard = room.id ? decisionsFor(room.id).length > 0 : false;
-    if (heard || room.startedAt || room.recordingStart) return { word: "Ended", badge: "badge" };
+    if (heard || room.startedAt || room.recordingStart) return { word: "Done", badge: "badge" };
     return { word: "No recording", badge: "badge" };
   }
 
@@ -4037,7 +4049,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       document.getElementById("file-overview-people").append(face(who));
     });
     renderFacts(room, named, leadRows);
-    renderTranscript(leadRows);
+    renderTranscript(transcriptSource(leadRows));
     var raw = JSON.stringify({
       id: fileRoom,
       platform: (room && room.platform) || "",
@@ -4050,40 +4062,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     text("file-raw-side", raw);
     applyRoomTabs();
     loadRoomMedia();
-    clear("file-heard");
-    var present = document.getElementById("file-present");
-    if (!people.length) {
-      text("file-heard", "No one is recorded yet.");
-      if (present) present.hidden = false;
-    } else {
-      text("file-heard", "");
-      people.forEach(function (person) {
-        var item = document.createElement("span");
-        item.className = "person";
-        item.append(face(personLabel(person) || person));
-        var name = document.createElement("span");
-        name.textContent = personLabel(person) || person;
-        item.append(name);
-        document.getElementById("file-heard").append(item);
-      });
-      if (present) present.hidden = true;
-    }
-    var participants = document.getElementById("participants");
-    if (participants) {
-      participants.replaceChildren();
-      var heading = document.createElement("h3");
-      heading.textContent = "Participants · " + people.length;
-      participants.append(heading);
-      people.forEach(function (person) {
-        var chip = document.createElement("span");
-        chip.className = "person";
-        chip.append(face(personLabel(person) || person));
-        var label = document.createElement("span");
-        label.textContent = personLabel(person) || person;
-        chip.append(label);
-        participants.append(chip);
-      });
-    }
+    paintPresent(roomMediaState && roomMediaState.forRoom === fileRoom ? roomMediaState : null);
     var ask = document.getElementById("ask-first");
     ask.disabled = !fileRoom;
     if (room) ask.checked = room.ask !== true;
@@ -4470,11 +4449,28 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (hasRows) return "No matching lines.";
     var media = roomMediaState;
     var word = meetingWord(roomOf(fileRoom)).word;
-    if (media && (media.state === "processing" || word === "Live")) return "No transcript yet.";
-    if (media && (media.state === "ready" || media.state === "novideo") && word !== "Ended" && word !== "No recording" && word !== "Channel") return "No transcript yet.";
+    if (media && (media.state === "processing" || word === "In call" || word === "Joining" || word === "Waiting")) return "No transcript yet.";
+    if (media && (media.state === "ready" || media.state === "novideo") && word !== "Done" && word !== "Stopped" && word !== "No recording" && word !== "Channel") return "No transcript yet.";
     if (!media) return "No transcript yet.";
-    if (media.state === "none" || media.state === "channel" || media.state === "expired" || word === "Ended" || word === "No recording" || word === "Channel") return "Nothing was recorded.";
+    if (media.state === "none" || media.state === "channel" || media.state === "expired" || word === "Done" || word === "Stopped" || word === "No recording" || word === "Channel") return "Nothing was recorded.";
     return "No transcript yet.";
+  }
+
+  function transcriptSource(fallback) {
+    var lines = (roomMediaState && roomMediaState.lines) || [];
+    var spoken = [];
+    lines.forEach(function (line) {
+      if (!line || !line.text) return;
+      spoken.push({
+        speaker: line.speaker || "Speaker",
+        text: line.text,
+        start: typeof line.start === "number" ? line.start : 0,
+        end: typeof line.end === "number" ? line.end : 0
+      });
+    });
+    if (spoken.length) return spoken;
+    if (fallback) return fallback;
+    return fileRoom ? decisionsFor(fileRoom) : [];
   }
 
   function renderTranscript(rows) {
@@ -4491,14 +4487,16 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var row = document.createElement("button");
       row.type = "button";
       row.className = "utter";
+      var clocked = typeof decision.start === "number";
       var stamps = (rows || []).map(function (item) { return Date.parse(item.spokenAt || ""); }).filter(function (value) { return !isNaN(value); });
       var origin = roomMediaState && roomMediaState.startedAt ? Date.parse(roomMediaState.startedAt) : (stamps.length ? Math.min.apply(null, stamps) : NaN);
       var spoken = Date.parse(decision.spokenAt || "");
-      var start = !isNaN(origin) && !isNaN(spoken) ? Math.max(0, (spoken - origin) / 1000) : shown;
+      var start = clocked ? decision.start : (!isNaN(origin) && !isNaN(spoken) ? Math.max(0, (spoken - origin) / 1000) : shown);
       var limit = mediaDuration();
-      var past = limit > 0 && start > limit + 0.05;
+      var past = !clocked && limit > 0 && start > limit + 0.05;
+      var endAt = clocked && typeof decision.end === "number" && decision.end > start ? decision.end : start + 4;
       row.setAttribute("data-start", past ? "" : String(start));
-      row.setAttribute("data-end", past ? "" : String(start + 4));
+      row.setAttribute("data-end", past ? "" : String(endAt));
       var head = document.createElement("span");
       head.className = "utter-head";
       var name = document.createElement("span");
@@ -4712,18 +4710,72 @@ if (sessionWhen && sessionWhen.dataset.at) {
     return max || 60;
   }
 
+  function presentNames(media) {
+    var names = fileRoom ? peopleFor(fileRoom) : [];
+    var lines = media && media.lines;
+    if (!lines || !lines.length) return names;
+    lines.forEach(function (line) {
+      var who = line && line.speaker;
+      if (who && names.indexOf(who) === -1) names.push(who);
+    });
+    return names;
+  }
+
+  function paintPresent(media) {
+    var people = presentNames(media);
+    clear("file-heard");
+    var present = document.getElementById("file-present");
+    if (!people.length) {
+      text("file-heard", "No one is recorded yet.");
+      if (present) present.hidden = false;
+    } else {
+      text("file-heard", "");
+      people.forEach(function (person) {
+        var item = document.createElement("span");
+        item.className = "person";
+        item.append(face(personLabel(person) || person));
+        var label = document.createElement("span");
+        label.textContent = personLabel(person) || person;
+        item.append(label);
+        var heard = document.getElementById("file-heard");
+        if (heard) heard.append(item);
+      });
+      if (present) present.hidden = true;
+    }
+    var participants = document.getElementById("participants");
+    if (!participants) return;
+    participants.replaceChildren();
+    var heading = document.createElement("h3");
+    heading.textContent = "Participants · " + people.length;
+    participants.append(heading);
+    people.forEach(function (person) {
+      var chip = document.createElement("span");
+      chip.className = "person";
+      chip.append(face(personLabel(person) || person));
+      var chipLabel = document.createElement("span");
+      chipLabel.textContent = personLabel(person) || person;
+      chip.append(chipLabel);
+      participants.append(chip);
+    });
+  }
+
   function paintPlayer(media) {
     var video = document.getElementById("player-video");
     var fallback = document.getElementById("player-fallback");
     var note = document.getElementById("player-note");
     var name = document.getElementById("player-name");
-    var people = fileRoom ? peopleFor(fileRoom) : [];
+    var people = presentNames(media);
     var named = media && (media.state === "ready" || media.state === "novideo");
-    if (name) name.textContent = named && people.length ? (personLabel(people[0]) || people[0]) : "No recording for this room";
+    if (name) {
+      if (named && people.length) name.textContent = personLabel(people[0]) || people[0];
+      else if (media && media.videoUrl && media.state === "ready") name.textContent = (media.title && !looksLikeRawRoomId(media.title)) ? media.title : "Recording";
+      else name.textContent = "No recording for this room";
+    }
     var copy = "";
     if (media && media.state === "processing") copy = "Recording is still processing.";
     else if (media && media.state === "expired") copy = "Recording expired";
     else if (media && media.state === "channel") copy = "Slack channels aren't recorded";
+    else if (media && media.endedNote && (media.state === "ready" || media.state === "novideo")) copy = media.endedNote;
     else if (media && (media.state === "ready" || media.state === "novideo")) copy = "";
     if (note) note.textContent = copy;
     if (video && media && media.videoUrl && media.state === "ready") {
@@ -4981,6 +5033,69 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   var mediaFlight = "";
+  var progressAt = {};
+
+  function paintRoomProgress(room) {
+    if (!room || !room.id) return;
+    var card = document.querySelector('#room-list a.room[data-room="' + room.id + '"]');
+    var tone = meetingWord(room);
+    if (card) {
+      var badge = card.querySelector(".status-cell .badge");
+      if (badge) {
+        badge.className = tone.badge;
+        badge.textContent = tone.word;
+      }
+      var strong = card.querySelector("strong");
+      if (strong && room.name && (strong.textContent === room.platform || strong.textContent === "Room" || looksLikeRawRoomId(strong.textContent))) {
+        strong.textContent = room.name;
+        strong.title = room.name;
+      }
+    }
+    if (fileRoom === room.id) {
+      var statusBadge = document.getElementById("file-status-badge");
+      if (statusBadge && !document.body.classList.contains("room-missing")) {
+        statusBadge.className = tone.badge;
+        statusBadge.textContent = tone.word;
+      }
+    }
+  }
+
+  function meetingNeedsProgress(room) {
+    if (!room || !room.id) return false;
+    if (room.channel || /slack/i.test(String(room.platform || ""))) return false;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(room.id)) return false;
+    if (room.call === "done" || room.call === "call_ended" || room.call === "fatal") return false;
+    if (!room.call && (room.startedAt || room.recordingStart || decisionsFor(room.id).length)) return false;
+    var seen = progressAt[room.id] || 0;
+    var wait = room.call ? 15000 : 60000;
+    return Date.now() - seen >= wait;
+  }
+
+  function refreshMeetingProgress() {
+    var rooms = (state && state.rooms) || [];
+    rooms.forEach(function (room) {
+      if (!meetingNeedsProgress(room)) return;
+      progressAt[room.id] = Date.now();
+      var asked = room.id;
+      fetch("/console/rooms/" + encodeURIComponent(asked) + "/media" + consoleQuery()).then(function (response) {
+        if (!response.ok) return null;
+        return response.json();
+      }).then(function (media) {
+        if (!media) return;
+        var live = roomOf(asked);
+        if (!live) return;
+        if (media.call) live.call = media.call;
+        if (media.startedAt && !live.startedAt) live.startedAt = media.startedAt;
+        if (media.title && !live.name) live.name = media.title;
+        paintRoomProgress(live);
+        if (fileRoom === asked) {
+          paintPlayer(media);
+          paintArtifacts(media);
+          renderTranscript(transcriptSource());
+        }
+      }).catch(function () {});
+    });
+  }
 
   function loadRoomMedia() {
     var room = roomOf(fileRoom);
@@ -4989,11 +5104,20 @@ if (sessionWhen && sessionWhen.dataset.at) {
       roomMediaState = channel ? { state: "channel", title: roomName(room) } : { state: "none" };
       paintPlayer(roomMediaState);
       paintArtifacts(roomMediaState);
-      renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
+      renderTranscript(transcriptSource());
       paintTimeline();
       return;
     }
-    if (mediaFlight === fileRoom || (roomMediaState && roomMediaState.forRoom === fileRoom)) return;
+    if (roomMediaState && roomMediaState.forRoom === fileRoom && roomMediaState.state && roomMediaState.state !== "processing") {
+      paintPlayer(roomMediaState);
+      paintArtifacts(roomMediaState);
+      paintFactsMedia(roomMediaState);
+      paintPresent(roomMediaState);
+      renderTranscript(transcriptSource());
+      loadSpeakerLanes().then(function () { paintTimeline(); });
+      return;
+    }
+    if (mediaFlight === fileRoom) return;
     var asked = fileRoom;
     mediaFlight = asked;
     fetch("/console/rooms/" + encodeURIComponent(asked) + "/media" + consoleQuery()).then(function (response) {
@@ -5008,9 +5132,17 @@ if (sessionWhen && sessionWhen.dataset.at) {
         text("file-title", media.title);
         if (sectionName === "file") setViewTitle(media.title);
       }
+      var listed = roomOf(asked);
+      if (listed) {
+        if (media.call) listed.call = media.call;
+        if (media.startedAt && !listed.startedAt) listed.startedAt = media.startedAt;
+        if (media.title && !listed.name) listed.name = media.title;
+        paintRoomProgress(listed);
+      }
       paintPlayer(media);
       paintArtifacts(media);
       paintFactsMedia(media);
+      paintPresent(media);
       if (media.startedAt) {
         var roomLive = roomOf(fileRoom);
         if (roomLive) {
@@ -5023,13 +5155,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
         if (startedRow) startedRow.hidden = !stamp || stamp === blankMark();
         renderFacts(roomLive || room || {}, { when: media.startedAt }, fileRoom ? decisionsFor(fileRoom) : []);
       }
-      renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
+      renderTranscript(transcriptSource());
       loadSpeakerLanes().then(function () { paintTimeline(); });
     }).catch(function () {
-      roomMediaState = { state: "novideo", forRoom: asked, duration: 0, lines: [], segments: [], events: [], videoUrl: "", transcriptUrl: "" };
+      roomMediaState = { state: "novideo", forRoom: asked, duration: 0, lines: [], segments: [], events: [], videoUrl: "", transcriptUrl: "", call: "" };
       paintPlayer(roomMediaState);
       paintArtifacts(roomMediaState);
-      renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
+      renderTranscript(transcriptSource());
       paintTimeline();
     }).finally(function () {
       if (mediaFlight === asked) mediaFlight = "";
@@ -5041,10 +5173,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (box) box.replaceChildren();
     var statusBadge = document.getElementById("file-status-badge");
     if (statusBadge && media && media.state && !document.body.classList.contains("room-missing")) {
-      var mediaWord = media.state === "processing"
-        ? { word: "Live", badge: "badge live" }
+      var fromCall = callWord(media.call);
+      var mediaWord = fromCall
+        ? fromCall
+        : media.state === "processing"
+        ? { word: "In call", badge: "badge live" }
         : (media.state === "ready" || media.state === "novideo" || media.state === "expired")
-          ? { word: "Ended", badge: "badge" }
+          ? { word: "Done", badge: "badge ok" }
           : media.state === "channel"
             ? { word: "Channel", badge: "badge" }
             : meetingWord(roomOf(fileRoom));
@@ -7574,7 +7709,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   var transcriptSearch = document.getElementById("transcript-search");
   if (transcriptSearch) transcriptSearch.addEventListener("input", function () {
     transcriptQuery = transcriptSearch.value || "";
-    renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
+    renderTranscript(transcriptSource());
   });
   var chatBox = document.getElementById("chat-text");
   function growChat() {

@@ -5,10 +5,20 @@ import { createApp, consoleBoardMember } from "../src/server.js";
 import { sealSession } from "../src/console-auth.js";
 import { createSession } from "../src/session.js";
 import { canReadRecord } from "../src/domain/read-access.js";
-import { handleUtterance, roomLedger } from "../src/typed-path.js";
+import { companyBoard, handleUtterance, roomLedger } from "../src/typed-path.js";
 import { createParticipantBindings } from "../src/participant-bindings.js";
 
 const decision = (extra = {}) => ({ id: "d1", roomId: "room-1", text: "Launch on Monday", account: "company", kind: "decision", inviteMemberIds: ["alice"], ...extra });
+
+test("a signed-in member sees a joined meeting before any decision is kept", () => {
+  const session = createSession();
+  session.rooms.push({ id: "bot-1", kind: "meeting", platform: "Google Meet", botPresent: true, call: "in_call_recording" });
+  session.rooms.push({ id: "private", kind: "meeting", platform: "Zoom", botPresent: true, memberIds: ["other"] });
+  const board = companyBoard(session, { memberId: "google-user", identities: [] });
+  const joined = board.rooms.find((room) => room.id === "bot-1");
+  assert.equal(joined?.call, "in_call_recording");
+  assert.equal(board.rooms.some((room) => room.id === "private"), false);
+});
 
 test("meeting aliases are scoped to a room and cannot open personal or deleted records", () => {
   const principal = { memberId: "google-user", identities: [{ memberId: "alice", roomId: "room-1" }] };
