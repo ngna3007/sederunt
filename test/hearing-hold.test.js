@@ -71,6 +71,8 @@ test("addressesHearing still requires Maple, Adam, or a trigger", () => {
   assert.equal(addressesHearing("Remember this: cedar92", null), false);
   assert.equal(addressesHearing("Maple remember cedar92", null), true);
   assert.equal(addressesHearing("Adam remember this: District 7", null), true);
+  assert.equal(addressesHearing("hey adam can you hear me", null), true);
+  assert.equal(addressesHearing("hey ad am can you hear me", null), true);
 });
 
 test("stripHearing drops address-only Adam and keeps the District 7 sentence", () => {

@@ -12,7 +12,7 @@ import { sederuntMark, FAVICON_LINK } from "./sederunt-mark.js";
 export { rankDecisions } from "./room-match.js";
 
 /** Header cells, one per row cell, including the empty action column. */
-export const ROOM_COLUMNS = ["Room", "Platform", "Speakers", "Status", "Started", ""];
+export const ROOM_COLUMNS = ["Room", "Platform", "Speakers", "Status", "Started", "Length", ""];
 export const PEOPLE_COLUMNS = ["Name", "Rooms", "Decisions", "Last heard", ""];
 export const DECISION_COLUMNS = ["Decision", "Room", "Status", ""];
 
@@ -453,7 +453,7 @@ ${slack}
       </section>
       <div class="explorer"${openHome ? " hidden" : ""}>
         <div class="explorer-head">
-          ${ROOM_COLUMNS.map((label, index) => `<span data-col="${["room", "platform", "speakers", "status", "started", "action"][index]}">${escapeHtml(label)}</span>`).join("")}
+          ${ROOM_COLUMNS.map((label, index) => `<span data-col="${["room", "platform", "speakers", "status", "started", "length", "action"][index]}">${escapeHtml(label)}</span>`).join("")}
         </div>
         <div id="room-empty" class="empty-state" hidden><span class="empty-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.6h10.8v8.8H2.6z"/><path d="M2.6 6.6h10.8"/></svg></span><p class="empty-title" id="room-empty-line">No rooms yet.</p><p id="room-empty-aside">Bring Sederunt into a meeting or a channel.</p><button type="button" id="clear-filters" hidden>Clear filters</button></div>
         <div id="room-list"></div>
@@ -1085,7 +1085,7 @@ ${inviteDialog}
   </div>
 </div>
 <script type="module">
-import { formatActivitySentence, formatConsoleWhen, groupActivity, relativeTime, selectActivity, undoPrompt, zoneShortName } from "/console/activity.js";
+import { formatActivitySentence, formatConsoleWhen, groupActivity, recordingLength, relativeTime, selectActivity, undoPrompt, zoneShortName } from "/console/activity.js";
 import { wireBotCard } from "/console/bot-card.js";
 import { rankDecisions } from "/console/room-match.js";
 wireBotCard();
@@ -1837,12 +1837,16 @@ if (sessionWhen && sessionWhen.dataset.at) {
     when.className = "when";
     when.dataset.col = "started";
     when.textContent = spec.whenText || "";
+    var length = document.createElement("span");
+    length.className = "length";
+    length.dataset.col = "length";
+    length.textContent = spec.lengthText || "";
     var view = document.createElement("span");
     view.className = "row-view";
     view.dataset.col = "action";
     view.setAttribute("aria-label", "View");
     view.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>';
-    card.append(roomCol, where, heard, status, when, view);
+    card.append(roomCol, where, heard, status, when, length, view);
     card.addEventListener("click", function (event) {
       if (event.target && event.target.closest && event.target.closest("button")) return;
       if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
@@ -1991,6 +1995,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         meta: ident.meta,
         where: room.platform || "",
         whenText: ident.when ? (relativeWhen(ident.when) || "") : "",
+        lengthText: recordingLength(room.duration),
         countLine: rows.length ? roomCount(rows) : "",
         people: peopleFor(room.id),
         waitingCount: waitingFor(room.id).length,
@@ -5050,6 +5055,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
         strong.textContent = room.name;
         strong.title = room.name;
       }
+      var started = card.querySelector('[data-col="started"]');
+      var stamp = (room.startedAt || room.recordingStart) ? (relativeWhen(room.startedAt || room.recordingStart) || "") : "";
+      if (started && stamp) started.textContent = stamp;
+      var length = card.querySelector('[data-col="length"]');
+      var lengthText = recordingLength(room.duration);
+      if (length && lengthText) length.textContent = lengthText;
     }
     if (fileRoom === room.id) {
       var statusBadge = document.getElementById("file-status-badge");
@@ -5064,10 +5075,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (!room || !room.id) return false;
     if (room.channel || /slack/i.test(String(room.platform || ""))) return false;
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(room.id)) return false;
-    if (room.call === "done" || room.call === "call_ended" || room.call === "fatal") return false;
-    if (!room.call && (room.startedAt || room.recordingStart || decisionsFor(room.id).length)) return false;
+    var terminal = room.call === "done" || room.call === "call_ended" || room.call === "fatal";
+    var settled = !room.call && (room.startedAt || room.recordingStart || decisionsFor(room.id).length);
+    var missingSpan = !room.spanKnown && (!(room.startedAt || room.recordingStart) || !(room.duration > 0));
+    if ((terminal || settled) && !missingSpan) return false;
     var seen = progressAt[room.id] || 0;
-    var wait = room.call ? 15000 : 60000;
+    var wait = room.call && !terminal ? 15000 : 60000;
     return Date.now() - seen >= wait;
   }
 
@@ -5086,6 +5099,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
         if (!live) return;
         if (media.call) live.call = media.call;
         if (media.startedAt && !live.startedAt) live.startedAt = media.startedAt;
+        if (media.duration > 0) live.duration = media.duration;
+        else if (media.state === "ready" || media.state === "novideo" || media.state === "expired" || media.state === "none") live.spanKnown = true;
         if (media.title && !live.name) live.name = media.title;
         paintRoomProgress(live);
         if (fileRoom === asked) {
@@ -5136,6 +5151,8 @@ if (sessionWhen && sessionWhen.dataset.at) {
       if (listed) {
         if (media.call) listed.call = media.call;
         if (media.startedAt && !listed.startedAt) listed.startedAt = media.startedAt;
+        if (media.duration > 0) listed.duration = media.duration;
+        else if (media.state === "ready" || media.state === "novideo" || media.state === "expired" || media.state === "none") listed.spanKnown = true;
         if (media.title && !listed.name) listed.name = media.title;
         paintRoomProgress(listed);
       }

@@ -13,11 +13,19 @@ import {
   renderActivity,
   selectActivity,
 } from "../src/activity.js";
-import { formatConsoleWhen } from "../src/activity-feed.js";
+import { formatConsoleWhen, recordingLength } from "../src/activity-feed.js";
 import { createSession } from "../src/session.js";
 import { companyBoard } from "../src/typed-path.js";
 
 const NOW = Date.parse("2026-11-03T10:00:00.000Z");
+
+test("a recording length is hours, minutes, and seconds", () => {
+  assert.equal(recordingLength(30), "00:00:30");
+  assert.equal(recordingLength(75), "00:01:15");
+  assert.equal(recordingLength(372), "00:06:12");
+  assert.equal(recordingLength(0), "");
+  assert.equal(recordingLength(null), "");
+});
 
 function ago(ms) {
   return new Date(NOW - ms).toISOString();

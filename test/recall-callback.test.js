@@ -494,3 +494,82 @@ test("verified Google attendance binds a Recall speaker only in its meeting, eve
     assert.equal(owner.raw.includes("Hanoi"), false);
   } finally { await new Promise((resolve, reject) => app.close((error) => error ? reject(error) : resolve())); }
 });
+
+test("hey adam can you hear me is spoken before the keep finishes", async () => {
+  let rememberPending = false;
+  let releaseRemember = () => {};
+  const gate = new Promise((resolve) => { releaseRemember = resolve; });
+  let spokeWhilePending = false;
+  let played;
+  const playedGate = new Promise((resolve) => { played = resolve; });
+  const app = createApp({
+    companyLoaded: true,
+    env: {
+      RECALL_WEBHOOK_SECRET: secret,
+      RECALL_API_KEY: "recall-test-key",
+      OPENROUTER_API_KEY: "sk-test-voice",
+      OPENROUTER_VOICE_MODEL: "voice-model",
+      SEDERUNT_MEMBER: "100",
+    },
+    deps: {
+      memory: {
+        async remember() {
+          rememberPending = true;
+          await gate;
+          rememberPending = false;
+          return { blobId: null };
+        },
+        async index() { return []; },
+        async recall() { return []; },
+      },
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+    },
+    fetch: async (url) => {
+      const href = String(url);
+      if (href.includes("/output_audio/")) {
+        spokeWhilePending = rememberPending;
+        played();
+        return { ok: true, async text() { return ""; }, async json() { return {}; } };
+      }
+      if (href.includes("/audio/speech")) {
+        return { ok: true, async arrayBuffer() { return Uint8Array.from([0xff, 0xfb, 0x10, 0x00]); }, async text() { return ""; } };
+      }
+      if (href.includes("/chat/completions")) {
+        return { ok: true, async json() { return { choices: [{ message: { content: "Yes, I can hear you." } }] }; }, async text() { return ""; } };
+      }
+      return { ok: false, async text() { return ""; }, async json() { return {}; } };
+    },
+  });
+  app.listen(0, "127.0.0.1");
+  await once(app, "listening");
+  const port = app.address().port;
+  const payload = JSON.stringify({
+    event: "transcript.data",
+    data: {
+      bot: { id: "11111111-1111-4111-8111-111111111111" },
+      transcript: { id: "tr-hear" },
+      data: {
+        participant: { id: 100, name: "Anh Nguyễn" },
+        words: ["hey", "adam", "can", "you", "hear", "me"].map((text) => ({ text })),
+      },
+    },
+  });
+  try {
+    const pending = post(port, "/api/recall", payload, {
+      "webhook-id": "msg-hear",
+      "webhook-timestamp": "1731705121",
+      "webhook-signature": `v1,${sign(secret, "msg-hear", "1731705121", payload)}`,
+    });
+    const hit = await Promise.race([
+      playedGate.then(() => "played"),
+      new Promise((resolve) => setTimeout(() => resolve("timeout"), 3000)),
+    ]);
+    assert.equal(hit, "played");
+    assert.equal(spokeWhilePending, true);
+    releaseRemember();
+    assert.equal((await pending).status, 204);
+  } finally {
+    releaseRemember();
+    await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
+  }
+});

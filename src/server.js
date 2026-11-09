@@ -1503,6 +1503,7 @@ export function createApp(options = {}) {
             } else {
               status = "sent";
             }
+            if (status === "sent" && !startedAt) startedAt = new Date().toISOString();
           } catch (error) {
             const message = error instanceof Error ? error.message : "";
             status = message === "Meeting join is not configured" ? "not-configured" : "failed";
@@ -1576,35 +1577,43 @@ export function createApp(options = {}) {
               }
             }
             const answerLine = meetingLineShouldAnswer(current, delivery);
-            const kept = await handleUtterance({ ...delivery, session: current }, depsFor(workspace, companyId));
+            const seenDelivery = Boolean(
+              delivery.deliveryId
+              && current.deliveries instanceof Set
+              && current.deliveries.has(delivery.deliveryId),
+            );
             const speakerName = typeof participant?.name === "string" ? participant.name : "";
+            // Speak before the keep. A short call ends if the reply waits on memory.
+            if (answerLine && !seenDelivery) {
+              voiceWork = speakMeetingTurn({
+                answer: true,
+                text: delivery.text,
+                speakerName,
+                botName: current.hearing?.name || "",
+                memberId: delivery.memberId,
+                room: delivery.room,
+                session: current,
+                deliveryId: delivery.deliveryId,
+                env,
+                fetchImpl: workspace.fetchImpl,
+                deps: depsFor(workspace, companyId),
+                context: {
+                  tenantId: companyId || "",
+                  env,
+                  personId: "",
+                  googleGrants: workspace.googleGrants,
+                  forms: workspace.forms,
+                  calendarMcp: workspace.calendarMcp,
+                  calendarSave: workspace.calendarSave,
+                  fetch: workspace.fetchImpl,
+                  origin: typeof env.SEDERUNT_PUBLIC_ORIGIN === "string" ? env.SEDERUNT_PUBLIC_ORIGIN : "",
+                },
+              }).catch(() => {});
+            }
+            await handleUtterance({ ...delivery, session: current }, depsFor(workspace, companyId));
             if (delivery.room?.id) {
               await noteMeetingCall(current, depsFor(workspace, companyId), delivery.room.id, "in_call_recording").catch(() => {});
             }
-            voiceWork = speakMeetingTurn({
-              answer: answerLine && kept?.kind !== "duplicate",
-              text: delivery.text,
-              speakerName,
-              botName: current.hearing?.name || "",
-              memberId: delivery.memberId,
-              room: delivery.room,
-              session: current,
-              deliveryId: delivery.deliveryId,
-              env,
-              fetchImpl: workspace.fetchImpl,
-              deps: depsFor(workspace, companyId),
-              context: {
-                tenantId: companyId || "",
-                env,
-                personId: "",
-                googleGrants: workspace.googleGrants,
-                forms: workspace.forms,
-                calendarMcp: workspace.calendarMcp,
-                calendarSave: workspace.calendarSave,
-                fetch: workspace.fetchImpl,
-                origin: typeof env.SEDERUNT_PUBLIC_ORIGIN === "string" ? env.SEDERUNT_PUBLIC_ORIGIN : "",
-              },
-            }).catch(() => {});
             if (companyId && workspace.followups && workspace.followupStore) {
               const outcomes = await workspace.followupStore.list(companyId, { kind: "outcome", meetingId: delivery.room.id, limit: 1 });
               if (outcomes.length) await persistMeetingFollowups(workspace, companyId, delivery.room.id);
@@ -3459,24 +3468,36 @@ function bindMember(env, supplied) {
   return { ok: true, memberId: bound.message.params.arguments.memberId };
 }
 
-async function persistRecordingStart(workspace, current, id, startedAt) {
-  if (!startedAt) return;
+async function persistRecordingSpan(workspace, current, id, startedAt, duration) {
+  const seconds = Number.isFinite(duration) && duration > 0 ? Math.round(duration) : 0;
   const room = (current?.rooms || []).find((item) => item.id === id);
   if (!room || /slack/i.test(room.platform || "")) return;
-  if (typeof room.startedAt === "string" && room.startedAt) return;
-  room.startedAt = startedAt;
+  const nextStart = typeof startedAt === "string" && startedAt ? startedAt : "";
+  const hadStart = typeof room.startedAt === "string" && Boolean(room.startedAt);
+  const hadLength = Number.isFinite(room.duration) && room.duration > 0;
+  if (!hadStart && nextStart) room.startedAt = nextStart;
+  if (!hadLength && seconds) room.duration = seconds;
+  if ((hadStart || !nextStart) && (hadLength || !seconds)) return;
   const memory = workspace.deps?.memory;
   if (typeof memory?.remember !== "function") return;
+  const platform = typeof room.platform === "string" ? room.platform : "";
   try {
     await memory.remember({
       account: "company",
       kind: "room",
       text: `${room.id} meeting`,
-      idempotencyKey: `${room.id}:started`,
-      room: { id: room.id, kind: "meeting", platform: room.platform || "", startedAt },
+      idempotencyKey: `${room.id}:span`,
+      room: {
+        id: room.id,
+        kind: "meeting",
+        ...(platform ? { platform } : {}),
+        ...(room.call ? { call: room.call } : {}),
+        ...(room.startedAt ? { startedAt: room.startedAt } : {}),
+        ...(room.duration > 0 ? { duration: room.duration } : {}),
+      },
     });
   } catch {
-    // The start is already on the room for this process.
+    // The span is already on the room for this process.
   }
 }
 
@@ -3564,7 +3585,9 @@ async function loadRoomMedia(workspace, id, current, empty) {
     const tenant = typeof workspace.mediaTenantId === "string" ? workspace.mediaTenantId : "";
     await noteMeetingCall(current, depsFor(workspace, tenant), id, body.call).catch(() => {});
   }
-  if (body.startedAt) await persistRecordingStart(workspace, current, id, body.startedAt);
+  if (body.startedAt || body.duration > 0) {
+    await persistRecordingSpan(workspace, current, id, body.startedAt, body.duration);
+  }
   const room = (current.rooms || []).find((item) => item.id === id);
   if (body.title) {
     current.roomNames ??= {};

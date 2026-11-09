@@ -203,6 +203,11 @@ test("an opened meeting with no decision still plays the Recall recording", asyn
     assert.equal(body.call, "done");
     assert.equal(body.lines[0].text, "hey adam");
     assert.equal(body.lines[0].speaker, "Anh Nguyễn");
+    assert.equal(body.duration, 184);
+    const again = await fetch(`http://127.0.0.1:${port}/api/console?member=mina`);
+    const saved = (await again.json()).rooms.find((room) => room.id === id);
+    assert.equal(saved.startedAt, "2026-11-02T10:29:18.000Z");
+    assert.equal(saved.duration, 184);
     const hidden = await fetch(`http://127.0.0.1:${port}/console/rooms/22222222-2222-4222-8222-222222222222/media?member=mina`);
     assert.equal(hidden.status, 404);
   } finally {

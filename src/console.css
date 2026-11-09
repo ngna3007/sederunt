@@ -4343,7 +4343,7 @@ button.room:focus-visible {
 
 :root {
   --list-gap: 16px;
-  --cols-rooms: minmax(0, 1fr) max-content 72px max-content max-content 32px;
+  --cols-rooms: minmax(0, 1fr) max-content 72px max-content max-content max-content 32px;
   --cols-decisions: minmax(0, 1.6fr) minmax(10rem, 14rem) max-content 32px;
   --cols-people: minmax(8rem, 1.1fr) minmax(0, 1.6fr) 8.5rem 9rem 32px;
   --cols-history: 24px minmax(0, 1fr) 9rem 12rem 6.5rem;
@@ -4404,10 +4404,12 @@ body.is-reading #rooms .explorer { display: none !important; }
   min-width: 0;
   overflow: visible;
 }
-#rooms .when {
+#rooms .when,
+#rooms .length {
   overflow: visible;
   text-overflow: clip;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 #record-table.record-board {
@@ -4569,6 +4571,7 @@ body.is-reading #rooms .explorer { display: none !important; }
   #rooms a.room > .where,
   #rooms button.room > .where,
   #rooms .when,
+  #rooms .length,
   #rooms .avatar-stack,
   #rooms .status-cell,
   #record-list .row-view,
@@ -4611,8 +4614,8 @@ body.is-reading #rooms .explorer { display: none !important; }
   #rooms #room-list > a.room,
   #rooms #room-list > button.room:not(.decision-row) {
     display: grid !important;
-    grid-template-columns: minmax(0, 1fr) max-content !important;
-    grid-template-areas: "title status" "speakers started" !important;
+    grid-template-columns: minmax(0, 1fr) max-content max-content !important;
+    grid-template-areas: "title status status" "speakers length started" !important;
     height: auto !important;
     min-height: 0 !important;
     max-height: none !important;
@@ -4640,6 +4643,12 @@ body.is-reading #rooms .explorer { display: none !important; }
     justify-self: end;
     width: max-content;
     max-width: 100%;
+  }
+  #rooms a.room > .length,
+  #rooms button.room > .length {
+    grid-area: length;
+    justify-self: end;
+    white-space: nowrap;
   }
   #rooms a.room > .when,
   #rooms button.room > .when {

@@ -141,7 +141,8 @@ export async function speakMeetingTurn(input = {}) {
     const fetchImpl = input.fetchImpl || fetch;
     const runTool = input.runTool || defaultRunTool;
     let spoken = "";
-    for (let round = 0; round < 3 && !spoken; round += 1) {
+    const rounds = presenceCheck(text) ? 0 : 3;
+    for (let round = 0; round < rounds && !spoken; round += 1) {
       const turn = await openRouterTurn({ env, fetchImpl, messages, tools, models, maxTokens: 700 });
       if (!turn.used) break;
       if (!turn.toolCalls.length) {
@@ -186,7 +187,13 @@ export async function speakMeetingTurn(input = {}) {
     const line = spokenLine(spoken) || "I could not answer that just now.";
     const audio = await openRouterSpeech({ env, text: line, fetchImpl });
     if (!audio.audio) return { spoke: false };
-    const played = await playClip({ fetchImpl, apiKey: recallKey, botId, audio: audio.audio });
+    const played = await playClip({
+      fetchImpl,
+      apiKey: recallKey,
+      botId,
+      audio: audio.audio,
+      wait: input.wait,
+    });
     if (!played) return { spoke: false };
     session.lastVoiceLine = line;
     const turns = priorTurns(session);
@@ -339,22 +346,34 @@ function claimLine(roomId, deliveryId) {
   return true;
 }
 
-async function playClip({ fetchImpl, apiKey, botId, audio }) {
+function presenceCheck(text) {
+  const bare = String(text || "").toLowerCase().replace(/[^a-z\s]/g, " ").replace(/\s+/g, " ").trim();
+  if (!bare || bare.length > 80) return false;
+  return /\b(can you hear me|do you hear me|are you there|you there)\b/.test(bare)
+    || /^(hey |hi |hello )?(adam|maple)$/.test(bare);
+}
+
+async function playClip({ fetchImpl, apiKey, botId, audio, wait }) {
   if (!audio?.length || audio.length > 700000) return false;
-  let response;
-  try {
-    response = await fetchImpl(`https://ap-northeast-1.recall.ai/api/v1/bot/${encodeURIComponent(botId)}/output_audio/`, {
-      method: "POST",
-      headers: {
-        authorization: `Token ${apiKey}`,
-        "content-type": "application/json",
-        accept: "application/json",
-      },
-      body: JSON.stringify({ kind: "mp3", b64_data: Buffer.from(audio).toString("base64") }),
-    });
-  } catch {
-    return false;
+  const pause = typeof wait === "function" ? wait : (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    let response;
+    try {
+      response = await fetchImpl(`https://ap-northeast-1.recall.ai/api/v1/bot/${encodeURIComponent(botId)}/output_audio/`, {
+        method: "POST",
+        headers: {
+          authorization: `Token ${apiKey}`,
+          "content-type": "application/json",
+          accept: "application/json",
+        },
+        body: JSON.stringify({ kind: "mp3", b64_data: Buffer.from(audio).toString("base64") }),
+      });
+    } catch {
+      response = null;
+    }
+    if (typeof response?.text === "function") await response.text().catch(() => {});
+    if (response?.ok) return true;
+    if (attempt < 3) await pause(800);
   }
-  if (typeof response?.text === "function") await response.text().catch(() => {});
-  return Boolean(response?.ok);
+  return false;
 }

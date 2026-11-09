@@ -158,7 +158,7 @@ test("a clash answer leads with one sentence and keeps room cite labels", () => 
 });
 
 test("list columns share a grid and cap avatar stacks", () => {
-  assert.deepEqual(ROOM_COLUMNS, ["Room", "Platform", "Speakers", "Status", "Started", ""]);
+  assert.deepEqual(ROOM_COLUMNS, ["Room", "Platform", "Speakers", "Status", "Started", "Length", ""]);
   const page = readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("../src/console.css", import.meta.url), "utf8");
   assert.match(page, /people\.slice\(0, 2\)/);

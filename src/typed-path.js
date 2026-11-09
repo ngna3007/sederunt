@@ -2289,6 +2289,7 @@ function copyOpenedRoom(doc) {
   const call = meetingCallRank(room.call) ? room.call : "";
   if (!platform && !call) return null;
   const startedAt = typeof room.startedAt === "string" ? room.startedAt : "";
+  const duration = Number.isFinite(room.duration) && room.duration > 0 ? Math.round(room.duration) : 0;
   return {
     id: room.id,
     kind: "meeting",
@@ -2296,6 +2297,7 @@ function copyOpenedRoom(doc) {
     botPresent: true,
     ...(call ? { call } : {}),
     ...(startedAt ? { startedAt } : {}),
+    ...(duration ? { duration } : {}),
   };
 }
 
@@ -2307,6 +2309,7 @@ function absorbOpenedRoom(session, room) {
   if (existing) {
     if (!existing.platform && room.platform) existing.platform = room.platform;
     if (!existing.startedAt && typeof room.startedAt === "string" && room.startedAt) existing.startedAt = room.startedAt;
+    if (room.duration > 0 && !(existing.duration > 0)) existing.duration = Math.round(room.duration);
     if (meetingCallRank(room.call) > meetingCallRank(existing.call)) existing.call = room.call;
     return;
   }
@@ -2347,6 +2350,7 @@ export async function noteMeetingCall(session, deps, roomId, code) {
       ...(platform ? { platform } : {}),
       call: code,
       ...(typeof room.startedAt === "string" && room.startedAt ? { startedAt: room.startedAt } : {}),
+      ...(room.duration > 0 ? { duration: Math.round(room.duration) } : {}),
     },
   });
   return true;
@@ -3098,6 +3102,7 @@ export function companyBoard(session, memberId, options = {}) {
     if (typeof opened.name === "string" && opened.name) room.name = opened.name;
     if (typeof opened.channel === "string" && opened.channel) room.channel = opened.channel;
     if (typeof opened.startedAt === "string" && opened.startedAt) room.startedAt = opened.startedAt;
+    if (Number.isFinite(opened.duration) && opened.duration > 0) room.duration = Math.round(opened.duration);
     if (meetingCallRank(opened.call)) room.call = opened.call;
     if (typeof opened.calendarEventId === "string" && opened.calendarEventId.trim()) {
       room.calendarEventId = opened.calendarEventId.trim();

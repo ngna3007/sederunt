@@ -235,8 +235,33 @@ test("the guest's own line, an echo, a missing key, and a failed clip stay quiet
     deliveryId: "voice-play-fail",
     env,
     fetchImpl: failedPlay.fetch,
+    wait: async () => {},
   });
   assert.deepEqual(played, { spoke: false });
+  assert.equal(failedPlay.calls.filter((call) => call.url.includes("/output_audio/")).length, 4);
+
+  let audioPosts = 0;
+  const retryPlay = scripted((url) => {
+    if (url.includes("/chat/completions")) return chat({ content: "Yes, I can hear you." });
+    if (url.includes("/audio/speech")) return mp3Response();
+    audioPosts += 1;
+    return { ok: audioPosts > 1, async text() { return "" } };
+  });
+  const retried = await speakMeetingTurn({
+    answer: true,
+    text: "hey adam can you hear me",
+    speakerName: "Anh",
+    botName: "Adam",
+    memberId: "100",
+    room: { id: "bot-6" },
+    session: {},
+    deliveryId: "voice-play-retry",
+    env,
+    fetchImpl: retryPlay.fetch,
+    wait: async () => {},
+  });
+  assert.equal(retried.spoke, true);
+  assert.equal(audioPosts, 2);
   assert.equal(spokenLine("See https://example.com/ticket and `the` **note**"), "See and the note");
 });
 
