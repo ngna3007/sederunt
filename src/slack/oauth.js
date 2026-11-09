@@ -29,9 +29,9 @@ export const SLACK_BOT_SCOPES = Object.freeze([
   "groups:history",
   "groups:read",
   "im:history",
-  // Channel picker on the consent screen: the channel Sederunt posts kept work to.
-  // Only channel_id/name are kept; the webhook URL in the response is discarded.
-  "incoming-webhook",
+  // No incoming-webhook scope. That scope is what makes Slack's Allow screen
+  // demand one "Channel for webhook". The bot posts with chat:write in any
+  // channel it has been invited to.
   "users:read",
   "users:read.email",
 ]);

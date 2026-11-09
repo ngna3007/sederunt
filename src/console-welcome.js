@@ -6,7 +6,7 @@ import { sederuntMark, FAVICON_LINK } from "./sederunt-mark.js";
  * First-run welcome: four short steps, then Home.
  *   1 Create your workspace (required)
  *   2 Connect your calendar
- *   3 Where should Sederunt post?
+ *   3 Connect Slack
  *   4 Invite your team
  * Steps 2-4 can be skipped. The team step is also the "Invite people" page.
  */
@@ -171,8 +171,6 @@ function calendarStep(state) {
 function chatStep(state) {
   const chat = state.chat || {};
   const slack = chat.slack === true;
-  const rawChannel = String(chat.channel || "").replace(/^#/, "");
-  const channel = /^[CDGW][A-Z0-9]{2,}$/.test(rawChannel) ? "" : rawChannel;
   const status = slack
     ? `<span class="ob-status ok" id="slack-status">${check()}Connected</span>`
     : `<span class="ob-status" id="slack-status">${chat.asked ? "Finish in Setup" : "Not connected"}</span>`;
@@ -183,18 +181,18 @@ function chatStep(state) {
     ["email", "Email digest"],
   ];
   return {
-    title: "Where should Sederunt post?",
-    sub: "Decisions and action items go to your team's chat after each meeting.",
+    title: "Connect Slack",
+    sub: "This adds the Sederunt bot to your workspace. Invite it into each channel you want it to keep.",
     body: `<input type="hidden" name="action" value="chat">
       <ul class="ob-list" id="chat-options">
         <li class="ob-row${slack ? " on" : ""}" id="chat-slack">
           <span class="ob-logo">${brandLogo("slack-icon", 20)}</span>
-          <span class="ob-row-main"><span class="ob-row-title">Slack</span><span class="ob-row-meta">${slack && channel ? `Posts to #${escapeText(channel)}` : "Recaps, decisions and action items"}</span></span>
+          <span class="ob-row-main"><span class="ob-row-title">Slack</span><span class="ob-row-meta">${slack ? "Bot connected" : "Keeps a channel it is invited to, and answers when mentioned"}</span></span>
           ${status}
         </li>
       </ul>
       <p class="ob-soon-line" id="chat-soon"><span class="ob-soon">Coming soon</span> ${soon.map(([id, label]) => `<span id="chat-${id}">${label}</span>`).join(", ")}</p>
-      <p class="ob-hint">You can change this any time in Setup.</p>`,
+      <p class="ob-hint">After Allow, invite @Sederunt into a channel. Mention it there to give that channel a job. With no job, it keeps messages and answers when mentioned.</p>`,
     left: `${backLink("/console/welcome?step=calendar")}${slack ? "" : `<button class="ob-link" type="submit" name="choice" value="later" id="ob-skip" formnovalidate>Not now</button>`}`,
     right: slack
       ? `<button class="ob-primary" type="submit" name="choice" value="continue" id="ob-continue">Continue</button>`

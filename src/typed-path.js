@@ -1234,13 +1234,8 @@ async function slackChannelFor(deps, raw) {
   const direct = slackChannelId(raw);
   if (direct) return direct;
   if (!slackName(raw)) {
-    const fixed = slackChannelId(deps.app?.slackChannel);
-    if (fixed) return fixed;
-    // Per-tenant Slack installation: the channel picked at install time.
-    if (typeof deps.slack?.defaultChannel === "function") {
-      try { return slackChannelId(await deps.slack.defaultChannel()); } catch { return ""; }
-    }
-    return "";
+    // A post with no channel stays unresolved. The install does not pick a home channel.
+    return slackChannelId(deps.app?.slackChannel);
   }
   if (typeof deps.slack?.resolveChannel !== "function") return "";
   try {

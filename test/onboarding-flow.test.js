@@ -227,7 +227,9 @@ test("fake auth onboarding stays on localhost", async (t) => {
         const chat = await call(port, "GET", "/console/welcome?step=chat", { cookie: header(jar) });
         assert.equal(chat.status, 200);
         assert.match(chat.raw, /Step 3 of 4/);
-        assert.match(chat.raw, /Where should Sederunt post\?/);
+        assert.match(chat.raw, /Connect Slack/);
+        assert.match(chat.raw, /invite @Sederunt into a channel/);
+        assert.doesNotMatch(chat.raw, /Where should Sederunt post\?/);
         for (const id of ["chat-slack", "chat-teams", "chat-gchat", "chat-discord", "chat-email"]) assert.match(chat.raw, new RegExp(`id="${id}"`));
         assert.match(chat.raw, /Coming soon/);
         assert.match(chat.raw, /id="ob-skip"[^>]*>Not now</);
@@ -523,7 +525,7 @@ async function browserPath(chromium) {
   }
 }
 
-test("welcome shows the slack channel name, not a channel id", async () => {
+test("welcome shows the Slack bot as connected without a post channel", async () => {
   async function chatPage(label) {
     const env = {
       SEDERUNT_AUTH_FAKE: "1",
@@ -562,12 +564,12 @@ test("welcome shows the slack channel name, not a channel id", async () => {
   const named = await chatPage("sederunt-demo");
   assert.equal(named.status, 200);
   assert.match(named.raw, /id="slack-status">[\s\S]*?Connected/);
-  assert.match(named.raw, /Posts to #sederunt-demo/);
-  assert.doesNotMatch(named.raw, /#C0DEMO/);
+  assert.match(named.raw, /Bot connected/);
+  assert.doesNotMatch(named.raw, /Posts to #|Where should Sederunt post|#C0DEMO|#sederunt-demo/);
   const blank = await chatPage("");
   assert.equal(blank.status, 200);
   assert.match(blank.raw, /id="slack-status">[\s\S]*?Connected/);
-  assert.match(blank.raw, /Recaps, decisions and action items/);
+  assert.match(blank.raw, /Bot connected/);
   assert.doesNotMatch(blank.raw, /#C0DEMO|Posts to #/);
 });
 

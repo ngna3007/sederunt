@@ -1205,7 +1205,7 @@ export function createApp(options = {}) {
         linearConnected: doors.linear === true,
         slackConnected: (connectedDoors || doors).slack === true,
         slackReady: slackOAuthConfigured(env) && spaces?.activeId
-          ? Boolean(env.SLACK_SIGNING_SECRET && await tenantSlackClient(workspace, spaces.activeId).channelReady(await tenantSlackClient(workspace, spaces.activeId).defaultChannel()))
+          ? Boolean(env.SLACK_SIGNING_SECRET && (connectedDoors || doors).slack === true)
           : Boolean(env.SLACK_SIGNING_SECRET && env.SLACK_BOT_TOKEN),
         slackInstall: slackOAuthConfigured(env) && Boolean(identity),
         slackResult: url.searchParams.get("slack") || "",
