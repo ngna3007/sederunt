@@ -237,13 +237,13 @@ ${slack}
       <div class="empty">
         <span class="empty-mark" aria-hidden="true"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V6.2A1.2 1.2 0 0 1 5.2 5h7.1A1.2 1.2 0 0 1 13.5 6.2V21"/><path d="M13.5 10.2h4.3A1.2 1.2 0 0 1 19 11.4V21"/><path d="M3 21h18"/><path d="M7.2 8.4h2.6M7.2 12h2.6M7.2 15.6h2.6"/></svg></span>
         <h2 class="sr">Onboard</h2>
-        <h2 id="onboard-heading">Reading the account.</h2>
+        <h2 id="onboard-heading">Loading...</h2>
         <div id="onboard-skeleton" class="skeletons" hidden>
           <span class="sk sk-h"></span>
           <span class="sk sk-l"></span>
           <span class="sk sk-b"></span>
         </div>
-        <p id="onboard-reading">Reading the account.</p>
+        <p id="onboard-reading">Loading...</p>
         <p id="onboard-missing" hidden>The company account is not loaded. Add the delegate outside this page, then restart.</p>
         <p id="onboard-ready" hidden>A room appears when a meeting or a channel is in use.</p>
         <p id="onboard-next" hidden>Meeting and Channel were not turned on when Sederunt started.</p>
@@ -292,12 +292,12 @@ ${slack}
     </div>
     <p id="status"></p>
     <div id="loading" class="skeletons table-skel" aria-busy="true" hidden>
-      <p id="loading-label">Reading the account.</p>
+      <p id="loading-label">Loading...</p>
       <span class="sk sk-tile"></span>
       <span class="sk sk-tile"></span>
       <span class="sk sk-tile"></span>
       <span class="sk sk-tile"></span>
-      <span class="sr">Reading the account.</span>
+      <span class="sr">Loading...</span>
       <span class="sk sk-row"></span>
       <span class="sk sk-row"></span>
       <span class="sk sk-row"></span>
