@@ -102,6 +102,31 @@ test("an unverified read is not kept, and fresh reads again after a verified one
   assert.equal(calls, 3);
 });
 
+test("several memories are verified in one batch and a missing one stays unknown", async () => {
+  const session = sessionWith("blob-1", "blob-2", "blob-3");
+  const batches = [];
+  const tatum = {
+    async getObject() {
+      throw new Error("a single read was used");
+    },
+    async getObjects(requests) {
+      batches.push(requests.map((request) => request.hints.blobId));
+      return requests.map((request) => (
+        request.hints.blobId === "blob-2"
+          ? { ok: false, error: new Error("Tatum read failed") }
+          : { ok: true, object: VERIFIED(request.hints.blobId) }
+      ));
+    },
+  };
+  const report = await warmProofs(session, tatum);
+  assert.equal(report.verified, 2);
+  assert.equal(report.failed, 1);
+  assert.deepEqual(batches, [["blob-1", "blob-2", "blob-3"]]);
+  const board = await readProofs(session, companyBoard(session, "mina"), tatum, { timeoutMs: 20 });
+  assert.deepEqual(board.decisions.map((row) => row.proofStatus), ["verified", "unknown", "verified"]);
+  assert.equal(batches.length, 1);
+});
+
 test("warmProofs reads company memories one at a time and fills the cache", async () => {
   const session = sessionWith("blob-1", "blob-2", "blob-3");
   session.decisions.push({ id: "p1", account: "personal", kind: "decision", text: "Private.", blobId: "blob-private", inviteMemberIds: [], contradicts: [], fileNames: [] });

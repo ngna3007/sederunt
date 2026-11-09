@@ -589,7 +589,8 @@ export function createApp(options = {}) {
   };
   if (proofWarmOn(env) && workspace.companyLoaded && deps.tatum) {
     // Read the company proofs once at start so the first room load is
-    // already verified. Sequential, through the reader's shared throttle.
+    // already verified. Several memories share one batch. The reader's
+    // throttle still caps the gateway at the free-plan rate.
     workspace.warm = Promise.resolve()
       .then(() => prepareWorkspace(workspace, ""))
       .then((current) => warmProofs(current, deps.tatum))

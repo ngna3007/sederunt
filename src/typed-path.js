@@ -2432,10 +2432,25 @@ async function answerRecall(input, session, deps) {
   await loadSentences(session, deps);
   const proofs = new Map();
   let failed = false;
-  for (const decision of visible) {
-    if (!decision.blobId || !deps.tatum?.getObject) continue;
+  const proving = visible.filter((decision) => decision.blobId && deps.tatum?.getObject);
+  let batched = null;
+  if (proving.length > 1 && typeof deps.tatum.getObjects === "function") {
     try {
-      const object = await deps.tatum.getObject(decision.blobId);
+      const results = await deps.tatum.getObjects(proving.map((decision) => ({
+        id: proofTarget(decision),
+        hints: proofHints(decision),
+      })));
+      batched = new Map(proving.map((decision, index) => [decision.id, results?.[index] || { ok: false }]));
+    } catch {
+      batched = new Map(proving.map((decision) => [decision.id, { ok: false }]));
+    }
+  }
+  for (const decision of proving) {
+    try {
+      const object = batched
+        ? (batched.get(decision.id)?.ok ? batched.get(decision.id).object : null)
+        : await deps.tatum.getObject(decision.blobId);
+      if (!object) throw new Error("Tatum read failed");
       const text = typeof object?.text === "string" && object.text.trim() ? object.text : decision.text;
       proofs.set(decision.id, {
         failed: false,
@@ -2855,6 +2870,12 @@ export async function readProofs(session, board, tatum, options = {}) {
       // The tip is optional. Each proof still reads on its own.
     }
   }
+  const sources = [];
+  for (const row of rows) {
+    const source = byId.get(row.id);
+    if (typeof source?.blobId === "string" && source.blobId && typeof tatum?.getObject === "function") sources.push(source);
+  }
+  const reads = proofReads(tatum, sources, { fresh });
   await Promise.all(rows.map(async (row) => {
     const source = byId.get(row.id);
     const blobId = typeof source?.blobId === "string" ? source.blobId : "";
@@ -2866,7 +2887,7 @@ export async function readProofs(session, board, tatum, options = {}) {
     }
     let object;
     try {
-      object = await settleWithin(lookupProof(tatum, source, { fresh }), timeoutMs);
+      object = await settleWithin(reads.get(blobId), timeoutMs);
     } catch {
       row.checkpoint = null;
       row.proofStatus = "unknown";
@@ -2934,19 +2955,89 @@ function proofCache(tatum) {
   return cache;
 }
 
+function proofTarget(source) {
+  const blobId = source?.blobId;
+  return typeof source?.objectId === "string" && /^0x[0-9a-fA-F]{64}$/.test(source.objectId) ? source.objectId : blobId;
+}
+
+function proofHints(source) {
+  return {
+    blobId: source.blobId,
+    owner: source?.blobOwner,
+    digest: source?.digest,
+    checkpoint: source?.checkpoint,
+  };
+}
+
+// Several memories share one BatchGetObjects and one BatchGetTransactions.
+// One memory stays on GetObject. A reader without getObjects stays one call
+// per memory. A verified result is cached per blob. A failure is not.
+function proofReads(tatum, sources, { fresh = false } = {}) {
+  const cache = proofCache(tatum);
+  const out = new Map();
+  const todo = [];
+  for (const source of sources) {
+    const blobId = source?.blobId;
+    if (!blobId || out.has(blobId) || todo.some((item) => item.blobId === blobId)) continue;
+    if (!fresh && cache.settled.has(blobId)) {
+      out.set(blobId, Promise.resolve(cache.settled.get(blobId)));
+      continue;
+    }
+    if (cache.running.has(blobId)) {
+      out.set(blobId, cache.running.get(blobId));
+      continue;
+    }
+    todo.push(source);
+  }
+  if (todo.length > 1 && typeof tatum?.getObjects === "function") {
+    const slots = new Map();
+    for (const source of todo) {
+      let resolve;
+      let reject;
+      const promise = new Promise((ok, fail) => {
+        resolve = ok;
+        reject = fail;
+      });
+      slots.set(source.blobId, { resolve, reject });
+      const running = promise.then((object) => {
+        cache.running.delete(source.blobId);
+        if (object?.proof?.status === "verified") cache.settled.set(source.blobId, object);
+        else cache.settled.delete(source.blobId);
+        return object;
+      }, (error) => {
+        cache.running.delete(source.blobId);
+        throw error;
+      });
+      cache.running.set(source.blobId, running);
+      out.set(source.blobId, running);
+    }
+    Promise.resolve()
+      .then(() => tatum.getObjects(todo.map((source) => ({ id: proofTarget(source), hints: proofHints(source) }))))
+      .then((results) => {
+        todo.forEach((source, index) => {
+          const result = results?.[index];
+          if (result?.ok && result.object) slots.get(source.blobId).resolve(result.object);
+          else {
+            const error = result?.error instanceof Error ? result.error : new Error("Tatum read failed");
+            slots.get(source.blobId).reject(error);
+          }
+        });
+      }, (error) => {
+        for (const slot of slots.values()) slot.reject(error);
+      });
+    return out;
+  }
+  for (const source of todo) out.set(source.blobId, lookupProof(tatum, source, { fresh }));
+  return out;
+}
+
 function lookupProof(tatum, source, { fresh = false } = {}) {
   const blobId = source.blobId;
   const cache = proofCache(tatum);
   if (!fresh && cache.settled.has(blobId)) return Promise.resolve(cache.settled.get(blobId));
   if (cache.running.has(blobId)) return cache.running.get(blobId);
-  const target = typeof source?.objectId === "string" && /^0x[0-9a-fA-F]{64}$/.test(source.objectId) ? source.objectId : blobId;
   const running = Promise.resolve()
-    .then(() => tatum.getObject(target, {
-      blobId,
-      owner: source?.blobOwner,
-      digest: source?.digest,
-      checkpoint: source?.checkpoint,
-    }))
+    .then(() => tatum.getObject(proofTarget(source), proofHints(source)))
     .then((object) => {
       cache.running.delete(blobId);
       if (object?.proof?.status === "verified") cache.settled.set(blobId, object);
@@ -2961,10 +3052,11 @@ function lookupProof(tatum, source, { fresh = false } = {}) {
 }
 
 /**
- * Read the chain proof for every company memory with a blob, one at a time,
- * so the first room load finds them already verified. Runs in the background
- * and goes through the reader's shared throttle; a failure is left for the
- * page to retry.
+ * Read the chain proof for every company memory with a blob, so the first
+ * room load finds them already verified. Several memories share one batch.
+ * One memory, or a reader without batch reads, stays one call at a time.
+ * Runs in the background through the reader's shared throttle. A failure is
+ * left for the page to retry.
  *
  * @param {{ decisions?: any[] }} session
  * @param {{ getObject?: Function }} tatum
@@ -2974,10 +3066,12 @@ export async function warmProofs(session, tatum) {
   const started = Date.now();
   const out = { verified: 0, failed: 0, ms: 0 };
   if (typeof tatum?.getObject !== "function") return out;
-  for (const decision of session?.decisions ?? []) {
-    if (!decision || decision.deleted || decision.account === "personal" || typeof decision.blobId !== "string" || !decision.blobId) continue;
+  const decisions = (session?.decisions ?? []).filter((decision) => decision && !decision.deleted && decision.account !== "personal" && typeof decision.blobId === "string" && decision.blobId);
+  const batched = decisions.length > 1 && typeof tatum.getObjects === "function";
+  const reads = batched ? proofReads(tatum, decisions, {}) : null;
+  for (const decision of decisions) {
     try {
-      const object = await lookupProof(tatum, decision);
+      const object = await (reads ? reads.get(decision.blobId) : lookupProof(tatum, decision));
       if (object?.proof?.status === "verified") {
         out.verified += 1;
         decision.proofStatus = "verified";

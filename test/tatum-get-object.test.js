@@ -164,6 +164,30 @@ function get(port, path, cookie = "") {
   });
 }
 
+test("two object reads share one batch and a miss keeps the other", async () => {
+  const other = `0x${"cd".repeat(32)}`;
+  let batches = 0;
+  const client = {
+    log: [],
+    async getObjects(ids) {
+      batches += 1;
+      assert.deepEqual(ids, [OBJECT_ID, other]);
+      return [
+        { objectId: OBJECT_ID, version: 1, digest: "GfKGew", objectType: "pkg::blob::Blob", checkpoint: 9, checkpointTime: "2026-11-04T00:00:00.000Z" },
+        null,
+      ];
+    },
+  };
+  const reader = createTatumReader({ TATUM_API_KEY: "k" }, { client });
+  const results = await reader.getObjects([{ id: OBJECT_ID }, { id: other }]);
+  assert.equal(batches, 1);
+  assert.equal(results[0].ok, true);
+  assert.equal(results[0].object.objectId, OBJECT_ID);
+  assert.equal(results[0].object.checkpoint, 9);
+  assert.equal(results[1].ok, false);
+  assert.equal(results[1].error.code, "not-found");
+});
+
 test("a blob with no stored owner uses the company account owner once and keeps the location", async () => {
   const { encodeBlobContent } = await import("../src/memory/blob.js");
   const ACCOUNT = "0x" + "12".repeat(32);

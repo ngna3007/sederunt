@@ -46,6 +46,30 @@ export function createTatumReader(env = process.env, options = {}) {
     }
     return accountOwner;
   };
+  const resolveLocated = async (id, hints) => {
+    let target = located.get(id) || null;
+    if (!target) {
+      const owner = await ownerFor(hints);
+      target = { ...(await resolveTarget(id, locate, client, owner ? { ...hints, owner } : hints)), owner };
+      if (target.objectId && target.blobId) located.set(id, target);
+    }
+    return target;
+  };
+  const readOne = async (id, hints) => {
+    let target;
+    try {
+      target = await resolveLocated(id, hints);
+    } catch (error) {
+      return { ok: false, error: readerError(error) };
+    }
+    let object;
+    try {
+      object = await client.getObject(target.objectId);
+    } catch (error) {
+      return { ok: false, error: readerError(error) };
+    }
+    return { ok: true, object: proved(object, target, hints) };
+  };
   return {
     calls,
     client,
@@ -62,39 +86,44 @@ export function createTatumReader(env = process.env, options = {}) {
     async getObject(id, hints = {}) {
       calls.push(id);
       if (!client) throw new Error("Tatum key not set");
-      let target = located.get(id) || null;
-      if (!target) {
+      const read = await readOne(id, hints);
+      if (!read.ok) throw read.error;
+      return read.object;
+    },
+    async getObjects(requests) {
+      const list = (Array.isArray(requests) ? requests : []).map(requestView);
+      list.forEach((request) => calls.push(request.id));
+      if (!client) throw new Error("Tatum key not set");
+      if (list.length === 0) return [];
+      const prepared = await Promise.all(list.map(async (request) => {
         try {
-          const owner = await ownerFor(hints);
-          target = { ...(await resolveTarget(id, locate, client, owner ? { ...hints, owner } : hints)), owner };
+          return { ok: true, request, target: await resolveLocated(request.id, request.hints) };
         } catch (error) {
-          throw readerError(error);
+          return { ok: false, request, error: readerError(error) };
         }
-        if (target.objectId && target.blobId) located.set(id, target);
+      }));
+      const wanted = prepared.filter((item) => item.ok).map((item) => item.target.objectId);
+      let objects = [];
+      if (wanted.length > 0) {
+        try {
+          objects = await client.getObjects(wanted);
+        } catch (error) {
+          const wrapped = readerError(error);
+          return prepared.map((item) => (item.ok ? { ok: false, id: item.request.id, error: wrapped } : { ok: false, id: item.request.id, error: item.error }));
+        }
       }
-      let object;
-      try {
-        object = await client.getObject(target.objectId);
-      } catch (error) {
-        throw readerError(error);
-      }
-      const checkpoint = Number.isInteger(object.checkpoint) ? object.checkpoint : target.checkpoint;
-      const checkpointTime = object.checkpointTime || target.checkpointTime || null;
-      const viewed = { ...object, checkpoint, checkpointTime };
-      const proof = verifyMemory({
-        object: viewed,
-        blobId: target.blobId || hints.blobId || null,
-        owner: hints.owner || target.owner || null,
+      let cursor = 0;
+      return prepared.map((item) => {
+        if (!item.ok) return { ok: false, id: item.request.id, error: item.error };
+        const object = objects[cursor];
+        cursor += 1;
+        if (!object) {
+          const error = new Error("Tatum read failed");
+          error.code = "not-found";
+          return { ok: false, id: item.request.id, error };
+        }
+        return { ok: true, id: item.request.id, object: proved(object, item.target, item.request.hints) };
       });
-      return {
-        text: "",
-        checkpoint,
-        objectId: object.objectId,
-        objectType: object.objectType,
-        version: object.version,
-        digest: object.digest,
-        proof,
-      };
     },
   };
 }
@@ -124,6 +153,34 @@ async function resolveTarget(id, locate, client, hints) {
     checkpoint: Number.isInteger(found.checkpoint) ? found.checkpoint : null,
     checkpointTime: found.checkpointTime || null,
     blobId: id,
+  };
+}
+
+function requestView(request) {
+  if (typeof request === "string") return { id: request, hints: {} };
+  return {
+    id: typeof request?.id === "string" ? request.id : "",
+    hints: request?.hints && typeof request.hints === "object" ? request.hints : {},
+  };
+}
+
+function proved(object, target, hints) {
+  const checkpoint = Number.isInteger(object.checkpoint) ? object.checkpoint : target.checkpoint;
+  const checkpointTime = object.checkpointTime || target.checkpointTime || null;
+  const viewed = { ...object, checkpoint, checkpointTime };
+  const proof = verifyMemory({
+    object: viewed,
+    blobId: target.blobId || hints.blobId || null,
+    owner: hints.owner || target.owner || null,
+  });
+  return {
+    text: "",
+    checkpoint,
+    objectId: object.objectId,
+    objectType: object.objectType,
+    version: object.version,
+    digest: object.digest,
+    proof,
   };
 }
 

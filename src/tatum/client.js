@@ -2,6 +2,9 @@ import { SuiGrpcClient } from "@mysten/sui/grpc";
 import { createNativeGrpcTransport, TATUM_GATEWAY } from "./transport.js";
 
 const OBJECT_READ = ["object_id", "version", "digest", "object_type", "owner", "contents", "previous_transaction"];
+const TX_READ = ["digest", "checkpoint", "timestamp"];
+const OBJECT_BATCH = 50;
+const TX_BATCH = 50;
 
 /**
  * Every Sui mainnet read goes through one governed native-gRPC client.
@@ -33,8 +36,10 @@ export function createTatumClient(options = {}) {
         return wireCalls(log);
       },
       getObject: missing,
+      getObjects: missing,
       listOwnedObjects: missing,
       getTransaction: missing,
+      getTransactions: missing,
       getCheckpoint: missing,
       getServiceInfo: missing,
       getAccountOwner: missing,
@@ -71,7 +76,42 @@ export function createTatumClient(options = {}) {
         objectId,
         readMask: { paths: OBJECT_READ },
       });
-      return normalizeObject(finished.response?.object, client);
+      return finishObject(finished.response?.object, client);
+    },
+    async getObjects(objectIds) {
+      const list = (Array.isArray(objectIds) ? objectIds : []).filter((id) => typeof id === "string" && id);
+      if (list.length === 0) return [];
+      const unique = [...new Set(list)];
+      const raw = new Map();
+      for (const group of chunks(unique, OBJECT_BATCH)) {
+        const finished = await sui.ledgerService.batchGetObjects({
+          requests: group.map((objectId) => ({ objectId })),
+          readMask: { paths: OBJECT_READ },
+        });
+        const rows = finished.response?.objects ?? [];
+        group.forEach((id, index) => {
+          const row = rows[index];
+          const object = row?.result?.oneofKind === "object" ? row.result.object : null;
+          raw.set(id, shapeObject(object));
+        });
+      }
+      const digests = [...new Set([...raw.values()].flatMap((object) => object?.previousTransaction ? [object.previousTransaction] : []))];
+      const certifying = new Map();
+      if (digests.length > 0) {
+        try {
+          const loaded = await client.getTransactions(digests);
+          digests.forEach((digest, index) => {
+            if (loaded[index]) certifying.set(digest, loaded[index]);
+          });
+        } catch {
+          // The object is still the proof. A missing checkpoint stays unknown.
+        }
+      }
+      return list.map((id) => {
+        const shaped = raw.get(id);
+        if (!shaped) return null;
+        return applyCertifying({ ...shaped }, certifying.get(shaped.previousTransaction));
+      });
     },
     async listOwnedObjects({ owner, type, cursor, limit = 50 } = {}) {
       return sui.listOwnedObjects({
@@ -87,16 +127,28 @@ export function createTatumClient(options = {}) {
       // wraps the result as { Transaction } and reads more than the proof needs.
       const finished = await sui.ledgerService.getTransaction({
         digest,
-        readMask: { paths: ["digest", "checkpoint", "timestamp"] },
+        readMask: { paths: TX_READ },
       });
-      const tx = finished.response?.transaction;
-      const checkpoint = tx?.checkpoint == null ? null : Number(tx.checkpoint);
-      const at = timestampIso(tx?.timestamp);
-      return {
-        digest: typeof tx?.digest === "string" ? tx.digest : digest,
-        checkpoint: Number.isSafeInteger(checkpoint) ? checkpoint : null,
-        timestampMs: at ? Date.parse(at) : null,
-      };
+      return transactionView(finished.response?.transaction, digest);
+    },
+    async getTransactions(digests) {
+      const list = (Array.isArray(digests) ? digests : []).filter((digest) => typeof digest === "string" && digest);
+      if (list.length === 0) return [];
+      const unique = [...new Set(list)];
+      const found = new Map();
+      for (const group of chunks(unique, TX_BATCH)) {
+        const finished = await sui.ledgerService.batchGetTransactions({
+          digests: group,
+          readMask: { paths: TX_READ },
+        });
+        const rows = finished.response?.transactions ?? [];
+        group.forEach((digest, index) => {
+          const row = rows[index];
+          const tx = row?.result?.oneofKind === "transaction" ? row.result.transaction : null;
+          if (tx) found.set(digest, transactionView(tx, digest));
+        });
+      }
+      return list.map((digest) => found.get(digest) ?? null);
     },
     async getCheckpoint(sequence) {
       const finished = await sui.ledgerService.getCheckpoint({
@@ -148,45 +200,64 @@ export function wireCalls(log) {
   return (Array.isArray(log) ? log : []).filter((entry) => entry && entry.outcome !== "cached").length;
 }
 
-async function normalizeObject(object, client) {
-  if (!object?.objectId) {
+async function finishObject(object, client) {
+  const shaped = shapeObject(object);
+  if (!shaped) {
     const error = new Error("Tatum read failed");
     error.code = "not-found";
     throw error;
   }
+  if (!shaped.previousTransaction) return shaped;
+  try {
+    return applyCertifying(shaped, await client.getTransaction(shaped.previousTransaction));
+  } catch {
+    return shaped;
+  }
+}
+
+function shapeObject(object) {
+  if (!object?.objectId) return null;
   const versionNumber = object.version == null ? null : Number(object.version);
   const ownerKind = object.owner?.kind;
   const ownerAddress = ownerKind === 1 || ownerKind === "ADDRESS"
     ? (typeof object.owner?.address === "string" ? object.owner.address : null)
     : null;
-  const content = object.contents?.value ? Buffer.from(object.contents.value) : null;
-  let checkpoint = null;
-  let checkpointTime = null;
-  let certifyingDigest = null;
-  if (object.previousTransaction) {
-    certifyingDigest = object.previousTransaction;
-    try {
-      const tx = await client.getTransaction(object.previousTransaction);
-      certifyingDigest = tx.digest || object.previousTransaction;
-      checkpoint = tx.checkpoint;
-      checkpointTime = tx.timestampMs == null ? null : new Date(tx.timestampMs).toISOString();
-    } catch {
-      checkpoint = null;
-      checkpointTime = null;
-    }
-  }
   return {
     objectId: object.objectId,
     version: Number.isSafeInteger(versionNumber) ? versionNumber : null,
     digest: object.digest || null,
     objectType: object.objectType || null,
     ownerAddress,
-    content,
+    content: object.contents?.value ? Buffer.from(object.contents.value) : null,
     previousTransaction: object.previousTransaction || null,
-    checkpoint,
-    checkpointTime,
-    certifyingDigest,
+    checkpoint: null,
+    checkpointTime: null,
+    certifyingDigest: object.previousTransaction || null,
   };
+}
+
+function applyCertifying(object, tx) {
+  if (!object || !tx) return object;
+  object.certifyingDigest = tx.digest || object.previousTransaction;
+  object.checkpoint = tx.checkpoint;
+  object.checkpointTime = tx.timestampMs == null ? null : new Date(tx.timestampMs).toISOString();
+  return object;
+}
+
+function transactionView(tx, digest) {
+  const checkpoint = tx?.checkpoint == null ? null : Number(tx.checkpoint);
+  const at = timestampIso(tx?.timestamp);
+  return {
+    digest: typeof tx?.digest === "string" ? tx.digest : digest,
+    checkpoint: Number.isSafeInteger(checkpoint) ? checkpoint : null,
+    timestampMs: at ? Date.parse(at) : null,
+  };
+}
+
+function chunks(items, size) {
+  const groups = [];
+  for (let index = 0; index < items.length; index += size) groups.push(items.slice(index, index + size));
+  return groups;
 }
 
 function timestampIso(timestamp) {
