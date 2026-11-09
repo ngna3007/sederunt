@@ -560,7 +560,7 @@ test("welcome shows the Slack bot as connected without a post channel", async ()
       const connected = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=chat&choice=connect" });
       assert.equal(connected.status, 302);
       absorb(jar, connected.cookie);
-      return await call(port, "GET", "/console/welcome?step=chat", { cookie: header(jar) });
+      return await call(port, "GET", "/console/welcome?step=chat&slack=connected", { cookie: header(jar) });
     } finally {
       app.close();
     }
@@ -569,6 +569,7 @@ test("welcome shows the Slack bot as connected without a post channel", async ()
   assert.equal(named.status, 200);
   assert.match(named.raw, /id="slack-status">[\s\S]*?Connected/);
   assert.match(named.raw, /Slack is connected/);
+  assert.doesNotMatch(named.raw, /id="ob-notice"/);
   assert.match(named.raw, /Bot connected/);
   assert.match(named.raw, /Add @Sederunt to a channel in Slack when you want it there/);
   assert.doesNotMatch(named.raw, /Posts to #|Where should Sederunt post|#C0DEMO|#sederunt-demo/);

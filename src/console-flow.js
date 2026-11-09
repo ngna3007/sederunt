@@ -248,8 +248,7 @@ async function renderStep(ctx, session, active, step, extra = {}) {
     }
     const noticeParts = [];
     const slackResult = String(extra.slack || "");
-    if (slackResult === "connected" && slackLinked) noticeParts.push("Slack is connected.");
-    else if (slackResult) noticeParts.push(slackWelcomeNotice(slackResult));
+    if (slackResult && slackResult !== "connected") noticeParts.push(slackWelcomeNotice(slackResult));
     else if (!slackLinked && (extra.asked || prefs.slack === "connect")) {
       noticeParts.push(ctx.slackInstall
         ? "Allow Slack in the other tab. This page updates when you come back."
