@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { once } from "node:events";
 import { request } from "node:http";
 import test from "node:test";
@@ -7,6 +8,7 @@ import { CONSOLE_COOKIE, sealSession } from "../src/console-auth.js";
 import { createApp } from "../src/server.js";
 
 const SECRET = "hearing-durable-session-secret";
+const RECALL_SECRET = `whsec_${Buffer.from("hearing-recall-fixture").toString("base64")}`;
 const SERVICE_KEY = "sb_secret_hearing_durable_test";
 const NORTHLINE = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
 const PERSONAL = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
@@ -16,6 +18,7 @@ function appEnv() {
     SEDERUNT_AUTH_FAKE: "1",
     SEDERUNT_SESSION_SECRET: SECRET,
     SEDERUNT_MEMBER: "mina",
+    RECALL_WEBHOOK_SECRET: RECALL_SECRET,
   };
 }
 
@@ -52,7 +55,7 @@ function identityFor() {
 
 function cookie({ userId, tenantId, accessToken }) {
   const token = sealSession({
-    kind: "oauth", provider: "google",
+    kind: "oauth",
     memberId: userId,
     userId,
     name: userId,
@@ -183,7 +186,7 @@ function listen(app) {
   return once(app, "listening").then(() => app.address().port);
 }
 
-function call(port, method, path, { json, cookie: cookieHeader } = {}) {
+function call(port, method, path, { json, cookie: cookieHeader, headers = {} } = {}) {
   const payload = json ? JSON.stringify(json) : null;
   return new Promise((resolve, reject) => {
     const req = request({
@@ -194,6 +197,7 @@ function call(port, method, path, { json, cookie: cookieHeader } = {}) {
       headers: {
         ...(payload ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {}),
         ...(cookieHeader ? { cookie: cookieHeader } : {}),
+        ...headers,
       },
     }, (res) => {
       const chunks = [];
@@ -240,20 +244,17 @@ function trackingMemory() {
 }
 
 function meetingLine(text, deliveryId) {
-  return {
-    door: "meeting",
-    text,
-    memberId: "mina",
-    room: {
-      id: "room-1",
-      kind: "meeting",
-      source: "recall",
-      botPresent: true,
-      memberIds: ["mina"],
-    },
-    participants: ["mina"],
-    deliveryId,
-  };
+  return { door: "meeting", text, memberId: "mina", room: { id: "room-1", kind: "meeting", source: "recall", botPresent: true, memberIds: ["mina"] }, participants: ["mina"], deliveryId };
+}
+
+async function deliverRecall(port, text, deliveryId) {
+  const json = { event: "transcript.data", data: { bot: { id: deliveryId }, transcript: { id: deliveryId }, data: { participant: { id: "mina", email: "mina@example.test", email_verified: true }, words: text.split(" ").map((text) => ({ text })) } } };
+  const payload = JSON.stringify(json);
+  const timestamp = "1731705121";
+  const signature = createHmac("sha256", Buffer.from(RECALL_SECRET.slice(6), "base64")).update(`${deliveryId}.${timestamp}.${payload}`).digest("base64");
+  const result = await call(port, "POST", "/api/recall", { json, headers: { "webhook-id": deliveryId, "webhook-timestamp": timestamp, "webhook-signature": `v1,${signature}` } });
+  assert.equal(result.status, 204);
+  return result;
 }
 
 async function withApp(store, fn, extras = {}) {
@@ -262,6 +263,7 @@ async function withApp(store, fn, extras = {}) {
     env: appEnv(),
     identity: extras.identity || identityFor(),
     botPreferences: store,
+    tenantBind: { async resolve(kind, id) { return id.startsWith("personal-") ? PERSONAL : NORTHLINE; } },
     ...(extras.deps ? { deps: extras.deps } : {}),
   });
   const port = await listen(app);
@@ -486,6 +488,7 @@ test("personal and company guests stay apart on a fresh app, including addressin
   });
 
   const second = freshStore(fake.fetchImpl);
+  const memory = trackingMemory();
   assert.notEqual(second, first);
   await withApp(second, async (port) => {
     const personalPage = await call(port, "GET", "/console/setup", { cookie: personalCookie });
@@ -501,34 +504,17 @@ test("personal and company guests stay apart on a fresh app, including addressin
     assert.equal(companyApi.json.hearing.name, "Quinn");
     assert.deepEqual(companyApi.json.hearing.triggers, ["red cedar"]);
 
-    const personalHit = await call(port, "POST", "/api/typed", {
-      cookie: personalCookie,
-      json: meetingLine("blue heron the offsite is in Lisbon", "personal-hit"),
-    });
-    assert.equal(personalHit.status, 200);
-    assert.equal(personalHit.json.entered, true);
-    assert.notEqual(personalHit.json.kind, "silence");
-    const personalMiss = await call(port, "POST", "/api/typed", {
-      cookie: personalCookie,
-      json: meetingLine("red cedar the offsite is in Lisbon", "personal-miss"),
-    });
-    assert.equal(personalMiss.json.kind, "silence");
-    assert.equal(personalMiss.json.entered, false);
+    await deliverRecall(port, "blue heron the personal offsite is in Lisbon", "personal-hit");
+    await deliverRecall(port, "red cedar the personal wrong guest should stay quiet", "personal-miss");
+    await deliverRecall(port, "red cedar the company offsite is in Lisbon", "company-hit");
+    await deliverRecall(port, "blue heron the company wrong guest should stay quiet", "company-miss");
+    const decisions = memory.remembered.filter((row) => row.decision);
+    assert.equal(decisions.length, 2);
+    assert.ok(decisions.some((row) => row.decision.text.includes("personal offsite")));
+    assert.ok(decisions.some((row) => row.decision.text.includes("company offsite")));
+    assert.equal(decisions.some((row) => row.decision.text.includes("wrong guest")), false);
 
-    const companyHit = await call(port, "POST", "/api/typed", {
-      cookie: ownerCookie,
-      json: meetingLine("red cedar the offsite is in Lisbon", "company-hit"),
-    });
-    assert.equal(companyHit.status, 200);
-    assert.equal(companyHit.json.entered, true);
-    assert.notEqual(companyHit.json.kind, "silence");
-    const companyMiss = await call(port, "POST", "/api/typed", {
-      cookie: ownerCookie,
-      json: meetingLine("blue heron the offsite is in Lisbon", "company-miss"),
-    });
-    assert.equal(companyMiss.json.kind, "silence");
-    assert.equal(companyMiss.json.entered, false);
-  });
+  }, { deps: { memory, tatum: { async getObject() { throw new Error("unavailable"); } } } });
 });
 
 test("a failed hearing write leaves the previous guest and does not remember", async () => {
@@ -562,16 +548,13 @@ test("a failed hearing write leaves the previous guest and does not remember", a
     const same = await call(port, "GET", "/api/console", { cookie: ownerCookie });
     assert.equal(same.json.hearing.name, "Quinn");
     assert.deepEqual(same.json.hearing.triggers, ["red cedar"]);
-    const heard = await call(port, "POST", "/api/typed", {
-      cookie: ownerCookie,
-      json: meetingLine("red cedar the offsite is in Lisbon", "still-quinn"),
-    });
-    assert.equal(heard.json.entered, true);
-    const missed = await call(port, "POST", "/api/typed", {
-      cookie: ownerCookie,
-      json: meetingLine("blue heron the offsite is in Lisbon", "not-nina"),
-    });
-    assert.equal(missed.json.kind, "silence");
+    const beforeDecisions = memory.remembered.filter((row) => row.decision).length;
+    await deliverRecall(port, "red cedar the offsite is in Lisbon", "still-quinn");
+    await deliverRecall(port, "blue heron the wrong guest should stay quiet", "not-nina");
+    const decisions = memory.remembered.filter((row) => row.decision);
+    assert.equal(decisions.length, beforeDecisions + 1);
+    assert.ok(decisions.some((row) => row.decision.text.includes("offsite is in Lisbon")));
+    assert.equal(decisions.some((row) => row.decision.text.includes("wrong guest")), false);
     const page = await call(port, "GET", "/console/setup", { cookie: ownerCookie });
     const failAt = page.raw.indexOf("The guest was not saved.");
     const toastAt = page.raw.indexOf("Saved. The meeting guest is ");
@@ -646,7 +629,8 @@ test("oauth hearing does not fall back to local or a company guest when spaces f
       cookie: ownerCookie,
       json: meetingLine("red cedar the offsite is in Lisbon", "no-company-guest"),
     });
-    assert.equal(missed.json.kind, "silence");
+    assert.equal(missed.status, 403);
+    assert.equal(memory.remembered.length, 0);
   }, {
     identity: {
       async myTenants() { throw new Error("spaces down"); },

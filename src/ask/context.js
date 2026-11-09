@@ -20,7 +20,7 @@ export function askScopeMatches(meta, principal) {
 }
 
 /** A request-scoped view; construct only after authenticating current tenant access. */
-export function scopeAskStore(store, principal) {
+export function scopeAskStore(store, principal, { deletionVersion } = {}) {
   const context = askContext(principal);
   const user = typeof principal?.user === "string" ? principal.user.trim() : "";
   if (!user) throw new TypeError("Ask context requires an authenticated user.");
@@ -28,9 +28,19 @@ export function scopeAskStore(store, principal) {
   const owner = (claimed) => {
     if (claimed !== user) throw new TypeError("Ask user does not match the current session.");
   };
+  const currentVersion = async () => {
+    if (typeof deletionVersion !== "function") return null;
+    const version = await deletionVersion();
+    if (typeof version !== "string" || !version) throw new Error("Deletion state is unavailable.");
+    return version;
+  };
+  const inScope = (row) => askScopeMatches(row, scope);
+  const visible = (row, version) => inScope(row) && (version === null || (row.deletionVersion && row.deletionVersion === version));
+  const owned = async (id) => inScope(await store.meta(id));
   const meta = async (id) => {
     const row = await store.meta(id);
-    return askScopeMatches(row, scope) ? row : null;
+    const version = await currentVersion();
+    return visible(row, version) ? row : null;
   };
   const filterIds = async (ids) => {
     const rows = await Promise.all(ids.map(meta));
@@ -42,12 +52,23 @@ export function scopeAskStore(store, principal) {
     async quota(claimed, limit) { owner(claimed); return store.quota(user, limit); },
     async claim(claimed, limit) { owner(claimed); return store.claim(user, limit); },
     async refund(claimed, key) { owner(claimed); return store.refund(user, key); },
-    async create(claimed, question) { owner(claimed); return store.create(user, question, context); },
+    async create(claimed, question) {
+      owner(claimed);
+      const version = await currentVersion();
+      return store.create(user, question, { ...context, ...(version === null ? {} : { deletionVersion: version }) });
+    },
     meta,
-    async chunks(id, from = 0) { return await meta(id) ? store.chunks(id, from) : []; },
-    async append(id, text) { if (await meta(id)) return store.append(id, text); },
-    async replace(id, text) { if (await meta(id)) return store.replace(id, text); },
-    async finish(id, fields) { if (await meta(id)) return store.finish(id, fields); },
+    async chunks(id, from = 0) {
+      const row = await store.meta(id);
+      const before = await currentVersion();
+      if (!visible(row, before)) return [];
+      const chunks = await store.chunks(id, from);
+      const after = await currentVersion();
+      return visible(row, after) && before === after ? chunks : [];
+    },
+    async append(id, text) { if (await owned(id)) return store.append(id, text); },
+    async replace(id, text) { if (await owned(id)) return store.replace(id, text); },
+    async finish(id, fields) { if (await owned(id)) return store.finish(id, fields); },
     async list(claimed) { owner(claimed); return filterIds(await store.list(user, context)); },
     async overview(claimed, limit) {
       owner(claimed);
@@ -55,8 +76,10 @@ export function scopeAskStore(store, principal) {
       return { quota: view.quota, ids: await filterIds(view.ids) };
     },
     async reads(ids, from = 0) {
+      const before = await currentVersion();
       const rows = await store.reads(ids, from);
-      return rows.map((row) => askScopeMatches(row.meta, scope) ? row : { meta: null, chunks: [] });
+      const after = await currentVersion();
+      return rows.map((row) => before === after && visible(row.meta, after) ? row : { meta: null, chunks: [] });
     },
   };
 }

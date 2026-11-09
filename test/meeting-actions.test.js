@@ -149,3 +149,17 @@ function payload(actionId, userId) {
     actions: [{ action_id: actionId, value: "form-retro" }],
   };
 }
+
+test("a calendar time edit sends the approved times and rejects incomplete times", async () => {
+  const calls = [];
+  const calendar = { async updateEventDetails() { throw new Error("wrong adapter method"); }, async call(name, args) { calls.push({ name, args }); return { id: "event-1" }; } };
+  const start = "2026-11-20T08:00:00Z";
+  const end = "2026-11-20T09:00:00Z";
+  const item = { kind: "edit_calendar", args: { eventId: "event-1", start, end } };
+  const result = await runApprovedAction(item, { calendar });
+  assert.equal(result.connectorId, "event-1");
+  assert.deepEqual(calls, [{ name: "update_event", args: { id: "event-1", start, end } }]);
+  const invalid = await runApprovedAction({ kind: "edit_calendar", args: { eventId: "event-1", start } }, { calendar });
+  assert.equal(invalid.submitted, false);
+  assert.equal(calls.length, 1);
+});

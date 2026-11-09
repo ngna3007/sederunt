@@ -252,7 +252,7 @@ test("a missing Linear token records the file and does not throw the token error
   }, deps);
   assert.deepEqual(deps.linear.calls, ["create"]);
   assert.equal(filed.status, "recorded");
-  assert.match(filed.body, /The edit did not happen/);
+  assert.match(filed.body, /result is uncertain/);
   assert.equal(JSON.stringify(filed).includes("secret-token"), false);
 });
 

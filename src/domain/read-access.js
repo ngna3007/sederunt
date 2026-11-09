@@ -26,7 +26,10 @@ export function readableSession(session, principal) {
     ...session, decisions, actions,
     rooms: (session.rooms || []).filter((room) => roomIds.has(room.id)
       || checkInvite(readPrincipalId(principal), room.memberIds).ok),
-    learned: (session.learned || []).filter((record) => roomIds.has(record.roomId)),
+    learned: (session.learned || []).filter((record) => {
+      if (!record.sourceDecisionId || !canReadRecord(principal, record)) return false;
+      return decisions.some((decision) => decision.id === record.sourceDecisionId && decision.roomId === record.roomId);
+    }),
     activity: (session.activity || []).filter((row) => roomIds.has(row.origin?.roomId)),
     accesses: (session.accesses || []).filter((row) => roomIds.has(row.roomId)),
   };

@@ -140,7 +140,8 @@ export function editModal(item) {
       {
         type: "input",
         block_id: "change",
-        label: { type: "plain_text", text: "What should change?" },
+        label: { type: "plain_text", text: item.tool === "update_event" ? "New event details" : "What should change?" },
+        ...(item.tool === "update_event" ? { hint: { type: "plain_text", text: "Use Description: followed by the new description, or Start: and End: followed by times with time zones." } } : {}),
         element: { type: "plain_text_input", action_id: "change", multiline: true },
       },
     ],
@@ -218,23 +219,37 @@ export async function runApprovedAction(item, ports = {}) {
       return { ok: false, link: "", text: "", next: "Connect Google Calendar, then approve again." };
     }
     try {
-      const updated = await ports.calendar.updateEventDetails(item.args || {});
+      const args = item.args || {};
+      const changesTime = typeof args.start === "string" || typeof args.end === "string";
+      if (changesTime && (typeof ports.calendar.call !== "function" || !args.start || !args.end
+        || !Number.isFinite(Date.parse(args.start)) || !Number.isFinite(Date.parse(args.end))
+        || Date.parse(args.start) >= Date.parse(args.end))) {
+        return { ok: false, submitted: false, next: "Provide a valid event and start and end times." };
+      }
+      const updated = changesTime
+        ? await ports.calendar.call("update_event", { id: args.id || args.eventId, start: args.start, end: args.end })
+        : await ports.calendar.updateEventDetails({ ...args, id: args.id || args.eventId });
       const link = updated?.link || updated?.htmlLink || "";
       if (!updated?.id && !updated?.eventId) return { ok: false, submitted: true, next: "Check Google Calendar for the update before trying again." };
       return { ok: true, connectorId: updated.id || updated.eventId, link, text: updated?.text || "Updated the calendar event.", next: "" };
     } catch (error) {
-      return { ok: false, link: "", text: "", next: error?.message || "Check the calendar event, then approve again." };
+      return { ok: false, submitted: true, link: "", text: "", next: "Check Google Calendar for the update before trying again." };
     }
   }
   const connector = item.kind === "create_form" ? (ports.formsConnector || ports.connector) : ports.connector;
   if (!connector || !item.tool) {
     return { ok: false, link: "", text: "", next: "Connect the tool, then approve again." };
   }
-  const result = await call(connector, item.tool, item.args || {}, ports.options || {});
+  let result;
+  try {
+    result = await call(connector, item.tool, item.args || {}, ports.options || {});
+  } catch {
+    return { ok: false, submitted: true, link: "", text: "", next: "Check the connected tool before trying again." };
+  }
   const text = result?.text || "";
   const link = result?.link || linkFrom(text);
   if (result?.ok !== true) {
-    return { ok: false, link, text, next: "Check the connector, then approve again." };
+    return { ok: false, submitted: result?.submitted !== false, link, text, next: "Check the connected tool before trying again." };
   }
   return { ok: true, connectorId: result.connectorId || result.id || "", link, text, next: "" };
 }

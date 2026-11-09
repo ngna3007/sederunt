@@ -154,5 +154,56 @@ for (const backend of ["redis", "rest"]) {
       if (keys.length) await client.del(keys);
     });
     await proveScope(t, store);
+    let version = "before";
+    const secured = scopeAskStore(store, companyA, { deletionVersion: async () => version });
+    const old = await secured.create("person", "Private answer");
+    await secured.append(old, "secret");
+    assert.equal((await secured.meta(old)).deletionVersion, "before");
+    assert.deepEqual(await secured.chunks(old), ["secret"]);
+    version = "after";
+    assert.equal(await secured.meta(old), null);
+    assert.deepEqual(await secured.chunks(old), []);
+    assert.equal((await secured.reads([old]))[0].meta, null);
+    const fresh = await secured.create("person", "Safe answer");
+    assert.equal((await secured.meta(fresh)).deletionVersion, "after");
   });
 }
+
+test("a deletion hides previous answers, active stream chunks and unversioned history", async () => {
+  const raw = createAskStore({});
+  let version = "empty";
+  const principal = { user: "alice", tenantId: "company-a", workspace: "company" };
+  const scoped = scopeAskStore(raw, principal, { deletionVersion: async () => version });
+  const legacy = await raw.create("alice", "old question", { tenantId: "company-a", workspace: "company" });
+  const before = await scoped.create("alice", "what changed?");
+  await scoped.append(before, "private old answer");
+  assert.equal((await scoped.meta(before)).deletionVersion, "empty");
+  assert.deepEqual(await scoped.chunks(before), ["private old answer"]);
+  assert.equal(await scoped.meta(legacy), null);
+  version = "after-delete";
+  assert.equal(await scoped.meta(before), null);
+  assert.deepEqual(await scoped.chunks(before), []);
+  assert.deepEqual(await scoped.list("alice"), []);
+  assert.equal((await scoped.reads([before]))[0].meta, null);
+  await scoped.append(before, "late internal work");
+  await scoped.finish(before, { status: "error" });
+  assert.equal((await raw.meta(before)).status, "error");
+  const after = await scoped.create("alice", "new question");
+  await scoped.append(after, "safe new answer");
+  assert.deepEqual(await scoped.chunks(after), ["safe new answer"]);
+  const down = scopeAskStore(raw, principal, { deletionVersion: async () => { throw new Error("database unavailable"); } });
+  await assert.rejects(() => down.meta(after), /unavailable/);
+  await assert.rejects(() => down.chunks(after), /unavailable/);
+  await assert.rejects(() => down.create("alice", "new"), /unavailable/);
+});
+
+test("a deletion during chunk retrieval suppresses that batch", async () => {
+  const raw = createAskStore({});
+  let version = "before";
+  const scoped = scopeAskStore(raw, { user: "alice", tenantId: "company-a", workspace: "company" }, { deletionVersion: async () => version });
+  const id = await scoped.create("alice", "question");
+  await scoped.append(id, "private");
+  const chunks = raw.chunks;
+  raw.chunks = async (...args) => { const rows = await chunks(...args); version = "after"; return rows; };
+  assert.deepEqual(await scoped.chunks(id), []);
+});

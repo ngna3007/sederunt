@@ -32,7 +32,13 @@ export function withDeletionOverlay(memory, store, tenantId) {
   const wrap = (method) => async (...args) => {
     const rows = await memory[method](...args);
     const intents = await store.list(tenantId);
-    return rows.filter((row) => !row.decision || (!row.decision.deleted && !intents.some((intent) => deletionMatches(intent, decisionDeletionScope(tenantId, row.decision)))));
+    return rows.filter((row) => {
+      const action = row.actionItem?.actionRecord;
+      const activity = row.activity;
+      const record = row.decision || (action && { id: action.id, roomId: action.roomId, sourceDeliveryId: action.deliveryId })
+        || (activity?.origin?.sourceDeliveryId && { id: activity.requestId, roomId: activity.origin.roomId, sourceDeliveryId: activity.origin.sourceDeliveryId });
+      return !record || (!record.deleted && !intents.some((intent) => deletionMatches(intent, decisionDeletionScope(tenantId, record))));
+    });
   };
   return { ...memory, ...(typeof memory.index === "function" ? { index: wrap("index") } : {}), ...(typeof memory.recall === "function" ? { recall: wrap("recall") } : {}) };
 }

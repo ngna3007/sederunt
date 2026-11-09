@@ -59,6 +59,11 @@ test("a bound Slack file is stored, and deleting the message hides it", async ()
         async members() { return ["U1"]; },
         async downloadFile() { return { name: "plan.txt", bytes: "PLAN" }; },
       },
+      memory: {
+        async remember() { return { blobId: null }; },
+        async index() { return []; },
+        async recall() { return []; },
+      },
     },
   });
   app.listen(0, "127.0.0.1");

@@ -4,6 +4,8 @@ import { request } from "node:http";
 import test from "node:test";
 import { GrpcTypes } from "@mysten/sui/grpc";
 import { createApp } from "../src/server.js";
+import { createSession } from "../src/session.js";
+import { sealSession } from "../src/console-auth.js";
 import { createTatumReader } from "../src/tatum/get-object.js";
 import { frameMessage } from "../src/tatum/transport.js";
 
@@ -74,7 +76,10 @@ test("GetObject is one native gRPC frame and the object page shows its version",
   });
   await assert.rejects(() => limited.getObject(OBJECT_ID), (error) => error.code === "rate-limit");
 
+  const session = createSession();
+  session.decisions.push({ id: "d1", roomId: "room", account: "company", kind: "decision", text: "A decision", objectId: OBJECT_ID, inviteMemberIds: ["alice"] });
   const app = createApp({
+    session, companyLoaded: true, env: { SEDERUNT_CONSOLE_SECRET: "object-test-secret" },
     deps: {
       tatum: {
         async getObject() {
@@ -86,7 +91,9 @@ test("GetObject is one native gRPC frame and the object page shows its version",
   app.listen(0, "127.0.0.1");
   await once(app, "listening");
   try {
-    const opened = await get(app.address().port, `/object/${OBJECT_ID}`);
+    const token = sealSession({ memberId: "alice" }, "object-test-secret");
+    assert.equal((await get(app.address().port, `/object/${OBJECT_ID}`)).status, 401);
+    const opened = await get(app.address().port, `/object/${OBJECT_ID}`, `sederunt_session=${token}`);
     assert.equal(opened.status, 200);
     assert.match(opened.raw, /checkpoint 338404208/);
     assert.match(opened.raw, /version 1062018188/);
@@ -145,9 +152,9 @@ function objectFrame() {
   return frameMessage(bytes);
 }
 
-function get(port, path) {
+function get(port, path, cookie = "") {
   return new Promise((resolve, reject) => {
-    const req = request({ hostname: "127.0.0.1", port, path, method: "GET" }, (res) => {
+    const req = request({ hostname: "127.0.0.1", port, path, method: "GET", headers: cookie ? { cookie } : {} }, (res) => {
       const chunks = [];
       res.on("data", (chunk) => chunks.push(chunk));
       res.on("end", () => resolve({ status: res.statusCode, raw: Buffer.concat(chunks).toString("utf8") }));

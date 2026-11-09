@@ -29,7 +29,14 @@ export function fileMetadata(file) {
     owner_name: String(file.ownerName || "").slice(0, 120),
     mime_type: String(file.mimeType || "").slice(0, 120),
     size_bytes: Number(file.sizeBytes) || 0,
+    ...(checksum(file.sha256) ? { sha256: checksum(file.sha256) } : {}),
   };
+}
+
+function checksum(value) {
+  if (Buffer.isBuffer(value) && value.length === 32) return value.toString("hex");
+  if (typeof value === "string" && /^[a-f0-9]{64}$/i.test(value)) return value.toLowerCase();
+  return "";
 }
 
 export function consoleObjectName(file) {

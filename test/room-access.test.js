@@ -60,3 +60,24 @@ test("verified participant bindings never match a different tenant or mailbox", 
   assert.deepEqual(await store.forUser("tenant-b", "user", "alice@example.com"), []);
   assert.deepEqual(await store.forUser("tenant-a", "user", "bob@example.com"), []);
 });
+
+test("learned corrections require their own invitation and a live source decision", async () => {
+  const session = createSession();
+  session.decisions = [decision({ id: "shared", text: "The budget is undecided", inviteMemberIds: ["bob"] })];
+  const room = { id: "room-1", botPresent: true, kind: "meeting", memberIds: ["alice"] };
+  const documents = [];
+  const memory = { async remember(document) { documents.push(structuredClone(document)); return { blobId: "saved" }; } };
+  await handleUtterance({ session, memberId: "alice", text: "correction: The secret budget is 90000", door: "meeting", addressed: true, room, participants: ["alice"], deliveryId: "private-source" }, { memory });
+  const source = session.decisions.find((row) => row.sourceDeliveryId === "private-source");
+  assert.ok(source);
+  const learned = documents.find((row) => row.learned)?.learned;
+  assert.equal(learned.sourceDecisionId, source.id);
+  assert.deepEqual(learned.inviteMemberIds, ["alice"]);
+  const ask = (memberId) => handleUtterance({ session, memberId, intent: "recall", text: "What is the secret budget?", room }, {});
+  assert.doesNotMatch((await ask("bob")).body, /90000/);
+  assert.match((await ask("alice")).body, /90000/);
+  source.deleted = true;
+  assert.doesNotMatch((await ask("alice")).body, /90000/);
+  session.learned.push({ key: "legacy", kind: "correction", text: "The secret budget is 91000", roomId: "room-1" });
+  assert.doesNotMatch((await ask("bob")).body, /91000/);
+});

@@ -284,7 +284,7 @@ test("a missing fact does not call the connector", async () => {
   assertWord(result);
 });
 
-test("a refused create stays recorded and says the edit did not happen", async () => {
+test("a connector error leaves the result uncertain without retrying", async () => {
   const linear = countingLinear(new Error("Linear refused lin_api_shouldnotleak"));
   const session = createSession();
   await handleUtterance(utterance(session, "set linear to do"), {});
@@ -295,10 +295,10 @@ test("a refused create stays recorded and says the edit did not happen", async (
   assert.equal(result.status, "recorded");
   assert.equal(result.issueId, null);
   assert.equal(result.link, null);
-  assert.match(result.body, /The edit did not happen/);
+  assert.match(result.body, /result is uncertain/);
   assert.doesNotMatch(result.body, /filed/);
   assert.doesNotMatch(result.body, /lin_api_/);
-  assert.equal(session.actions.at(-1).state, "available");
+  assert.equal(session.actions.at(-1).state, "outcome_unknown");
   assert.equal(linear.calls.length, 1);
   const repeat = await handleUtterance(
     utterance(session, "File the venue ticket hall-three", { deliveryId: "refused-1" }),
@@ -309,7 +309,7 @@ test("a refused create stays recorded and says the edit did not happen", async (
   assertWord(result);
 });
 
-test("an empty connector id stays recorded and a new confirmation can send it once", async () => {
+test("a missing connector receipt cannot be retried blindly", async () => {
   const linear = countingLinear({ identifier: "", id: "" });
   const session = createSession();
   await handleUtterance(utterance(session, "set linear to do"), {});
@@ -318,10 +318,10 @@ test("an empty connector id stays recorded and a new confirmation can send it on
     { linear },
   );
   assert.equal(failed.status, "recorded");
-  assert.match(failed.body, /The edit did not happen/);
+  assert.match(failed.body, /result is uncertain/);
   assert.equal(failed.link, null);
   assert.equal(linear.calls.length, 1);
-  assert.equal(session.actions.at(-1).state, "available");
+  assert.equal(session.actions.at(-1).state, "outcome_unknown");
   assert.equal(session.actions.at(-1).connectorId, null);
 
   const same = await handleUtterance(
@@ -336,14 +336,14 @@ test("an empty connector id stays recorded and a new confirmation can send it on
     utterance(session, `confirm ${failed.actionId}`, { deliveryId: "empty-confirm" }),
     { linear },
   );
-  assert.equal(linear.calls.length, 2);
-  assert.equal(retried.status, "filed");
-  assert.equal(retried.link, "ROW-44");
+  assert.equal(linear.calls.length, 1);
+  assert.equal(retried.status, "recorded");
+  assert.equal(retried.link, null);
   const retriedAgain = await handleUtterance(
     utterance(session, `confirm ${failed.actionId}`, { deliveryId: "empty-confirm" }),
     { linear },
   );
-  assert.equal(linear.calls.length, 2);
+  assert.equal(linear.calls.length, 1);
   assert.match(retriedAgain.body, /duplicate-delivery/);
 });
 

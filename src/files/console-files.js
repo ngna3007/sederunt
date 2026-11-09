@@ -318,6 +318,7 @@ export function importedFile(record, folder) {
     consoleFileId: String(record.id || ""),
     walrusBlobId: proof.blobId || null,
     suiObjectId: proof.objectId || null,
+    sha256: typeof meta.sha256 === "string" ? meta.sha256 : "",
     createdAt: record.created_at || null,
   };
 }

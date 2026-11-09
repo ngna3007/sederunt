@@ -2045,7 +2045,7 @@ test("a missing member, an empty room, and a huddle store no outside ask", async
     deliveryId: "wide-confirm",
   }, { memory: named });
   assert.match(confirmed.body, /not-invited/);
-  assert.match(confirmed.body, /hall-keep/);
+  assert.doesNotMatch(confirmed.body, /hall-keep/);
   const speakers = open.accesses.map((row) => row.speaker);
   assert.deepEqual(speakers, ["sam", "nile"]);
   const accessDocs = (await named.index()).filter((doc) => doc.kind === "access");

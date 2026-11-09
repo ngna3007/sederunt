@@ -1,0 +1,75 @@
+name: Validate
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '17 3 * * 1'
+permissions:
+  contents: read
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      app: ${{ steps.filter.outputs.app }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            app:
+              - 'src/**'
+              - 'test/**'
+              - 'scripts/**'
+              - 'supabase/**'
+              - 'public/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - '.nvmrc'
+              - '.github/workflows/**'
+  verify:
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: node scripts/validate.mjs syntax
+      - run: node scripts/validate.mjs test
+      - run: node scripts/validate.mjs integration --confirm
+  security:
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: node scripts/validate.mjs secrets
+      - run: node scripts/validate.mjs audit
+  gate:
+    if: always()
+    needs: [changes, verify, security]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check required jobs
+        env:
+          CHANGE_RESULT: ${{ needs.changes.result }}
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
+          APP_CHANGED: ${{ needs.changes.outputs.app }}
+        run: node -e 'if (process.env.CHANGE_RESULT !== "success" || process.env.SECURITY_RESULT !== "success" || (process.env.APP_CHANGED === "true" && process.env.VERIFY_RESULT !== "success")) process.exit(1)'

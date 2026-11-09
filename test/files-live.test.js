@@ -197,7 +197,7 @@ test("a failed upload shows to its owner only, who can remove it", async () => {
 test("after a restart the list comes back from Console metadata, with the Walrus details", async () => {
   const id = "11111111-2222-4333-a444-555555555555";
   const channelId = workspaceChannelId(TENANT);
-  const meta = fileMetadata({ id, tenantId: TENANT, channelId, ownerUserId: "u-mina", ownerName: "Mina Tran", mimeType: "text/plain", sizeBytes: 10 });
+  const meta = fileMetadata({ id, tenantId: TENANT, channelId, ownerUserId: "u-mina", ownerName: "Mina Tran", mimeType: "text/plain", sizeBytes: 10, sha256: "ab".repeat(32) });
   const record = {
     id: "console-1",
     bucket_id: "folder-1",
@@ -224,6 +224,14 @@ test("after a restart the list comes back from Console metadata, with the Walrus
     assert.equal(file.proof.objectId, "0xobj");
     const outsider = await call(server.port, "GET", "/api/files", { user: "zed" });
     assert.equal(outsider.body.files.length, 0);
+    const untrusted = importedFile({ ...record, metadata: { ...meta, sha256: "" } }, { folderId: "folder-1" });
+    const dropped = await liveApp({ users: USERS, rows: [untrusted] });
+    try {
+      const hidden = await call(dropped.port, "GET", "/api/files", { user: "rowan" });
+      assert.equal(hidden.body.files.some((item) => item.id === id), false);
+    } finally {
+      await dropped.close();
+    }
   } finally {
     await server.close();
   }
@@ -239,6 +247,12 @@ test("the Files page has an upload button, a delete confirm and the Walrus badge
   assert.match(html, /Show technical details/);
   assert.match(html, /Uploading…/);
   assert.match(html, /Couldn't upload/);
+  assert.match(html, /Deleting…/);
+  assert.match(html, /Deleting hides a file here while cleanup is pending\. It does not remove a copy already stored on Walrus\./);
+  assert.match(html, /Files could not be loaded\./);
+  assert.match(html, /Try again/);
+  assert.match(html, /for everyone in the workspace\? This cannot be undone\./);
+  assert.match(html, /fileButton\("Remove", "secondary", function \(\) \{ discardFailedFile/);
 });
 
 test("foreground delete finishes inside the request (Vercel shape)", async () => {

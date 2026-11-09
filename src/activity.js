@@ -259,6 +259,7 @@ export function activityEvent(input, now = new Date()) {
     tool: { name: clean(tool.name), server: clean(tool.server) },
     origin: {
       roomId: clean(origin.roomId),
+      sourceDeliveryId: clean(origin.sourceDeliveryId),
       roomName: clean(origin.roomName),
       at: Number.isFinite(origin.at) ? Math.max(0, Math.floor(origin.at)) : null,
       messageUrl: safeUrl(origin.messageUrl),

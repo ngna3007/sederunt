@@ -217,3 +217,42 @@ test("new minutes replace pending text before the first Slack delivery", async (
   const minutes = (await store.list(tenantId, { kind: "delivery" })).find(job => !job.data.actionId);
   assert.ok(minutes.data.text.includes("Latest"));
 });
+
+
+test("durably queued approval acknowledges before a single worker executes it", async () => {
+  let calls = 0;
+  const { coordinator, payload, store, action } = await setup({ execute: async () => { calls++; return { ok: true, connectorId: "form-1" }; } });
+  const accepted = await coordinator.interact({ ...payload, deferExecution: true });
+  assert.equal(accepted.status, "running");
+  assert.equal(calls, 0);
+  assert.equal((await coordinator.interact({ ...payload, deferExecution: true })).error, "closed");
+  await Promise.all([coordinator.drain(), coordinator.drain()]);
+  assert.equal(calls, 1);
+  assert.equal((await store.get(tenantId, action.id)).status, "done");
+  await coordinator.drain();
+  const deliveries = await store.list(tenantId, { kind: "delivery" });
+  const result = deliveries.find((row) => row.data.replyThreadTs);
+  assert.equal(result.data.requesterSlackId, "U1");
+  assert.equal(result.data.actionId, action.id);
+  assert.deepEqual(result.data.sourceIds, ["source-1"]);
+});
+
+test("a temporary access-check outage retries without sending a Slack message", async () => {
+  let now = 1000;
+  let accessUp = false;
+  let posts = 0;
+  const store = createMemoryFollowupStore({ clock: () => now });
+  const coordinator = createMeetingFollowups({ store, clock: () => now,
+    authorizeDelivery: async () => { if (!accessUp) throw new Error("database unavailable"); return true; },
+    slackFor: async () => ({ teamId: "T1", async openConversation() { return { channel: { id: "D1" } }; }, async postMessage() { posts++; return { ts: "1" }; } }) });
+  await coordinator.enqueue(evidence());
+  await coordinator.drain();
+  await coordinator.drain();
+  const failed = await store.list(tenantId, { kind: "delivery" });
+  assert.ok(failed.every((row) => row.status === "failed"));
+  assert.equal(posts, 0);
+  accessUp = true;
+  now += 5000;
+  await coordinator.drain();
+  assert.ok(posts > 0);
+});

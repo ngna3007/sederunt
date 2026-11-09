@@ -58,14 +58,19 @@ export function createMeetingFollowups({ store, handleUtterance, slackFor, autho
   }
   async function delivery(record) {
     const input = record.data;
-    if (typeof authorizeDelivery !== "function" || !await authorizeDelivery({ record: copy(record) })) return finish(record, "not_reached", { next: "Meeting access changed. Review the recipients before delivering." });
-    const slack = await slackFor(record.tenantId);
-    if (!slack || slack.teamId !== input.teamId) throw new Error("The meeting Slack installation is unavailable.");
+    let slack;
     let channel = input.channelId;
-    if (!channel) {
-      const opened = await slack.openConversation({ users: input.requesterSlackId });
-      channel = opened.channel?.id || opened.channel;
-      if (!channel) throw new Error("Slack did not open the conversation.");
+    try {
+      if (typeof authorizeDelivery !== "function" || !await authorizeDelivery({ record: copy(record) })) return finish(record, "not_reached", { next: "Meeting access changed. Review the recipients before delivering." });
+      slack = await slackFor(record.tenantId);
+      if (!slack || slack.teamId !== input.teamId) throw new Error("The meeting Slack installation is unavailable.");
+      if (!channel) {
+        const opened = await slack.openConversation({ users: input.requesterSlackId });
+        channel = opened.channel?.id || opened.channel;
+        if (!channel) throw new Error("Slack did not open the conversation.");
+      }
+    } catch {
+      return finish(record, "failed", { nextAttemptAt: clock() + Math.min(300000, 1000 * 2 ** record.data.attempts), next: "Check meeting access and Slack, then retry delivery." });
     }
     const message = { channel, thread_ts: input.replyThreadTs, text: input.text, blocks: input.blocks, username: input.botName, client_msg_id: input.messageId };
     if (input.receipt?.ts && typeof slack.updateMessage !== "function") throw new Error("Slack message updates are unavailable.");
@@ -83,11 +88,17 @@ export function createMeetingFollowups({ store, handleUtterance, slackFor, autho
   async function materialize(outcome) {
     const input = outcome.data.input;
     for (const proposal of proposalsFromEvidence(input)) {
-      const item = await store.put(proposal);
+      let item = await store.put(proposal);
+      if (item.status === "not_reached" && !item.data.requesterSlackId && proposal.data.requesterSlackId
+        && item.data.requesterMemberId === proposal.data.requesterMemberId) {
+        item = await finish(item, "pending", { requesterSlackId: proposal.data.requesterSlackId,
+          argumentVersion: item.data.argumentVersion + 1, next: "" });
+        if (!item) throw new Error("The requester changed while finalizing the meeting.");
+      }
       if (settled.has(item.status)) continue;
       const requester = item.data.requesterSlackId;
       if (!requester) { await finish(item, "not_reached", { next: "Match this verified attendee to Slack before creating a replacement proposal." }); continue; }
-      await store.put({ id: followupId("delivery", input.tenantId, input.meetingId, item.id), tenantId: input.tenantId, meetingId: input.meetingId, kind: "delivery", status: "pending", data: { teamId: input.teamId, actionId: item.id, requesterSlackId: requester, text: actionLine(item.data), blocks: followupBlocks(item), botName: item.data.botName, messageId: hash(item.id).slice(0, 32), attempts: 0 } });
+      await store.put({ id: followupId("delivery", input.tenantId, input.meetingId, item.id), tenantId: input.tenantId, meetingId: input.meetingId, kind: "delivery", status: "pending", data: { teamId: input.teamId, actionId: item.id, sourceIds: [item.data.sourceId], requesterSlackId: requester, text: actionLine(item.data), blocks: followupBlocks(item), botName: item.data.botName, messageId: hash(item.id).slice(0, 32), attempts: 0 } });
     }
     // A channel is usable only when the caller established its complete recipient set may read every source.
     const permittedPeople = (input.meeting?.people || []).filter(person => person.memberId && input.memberIds.includes(person.memberId) && input.sources.every(source => !source.deleted && (source.inviteMemberIds || input.memberIds).includes(person.memberId)));
@@ -98,9 +109,9 @@ export function createMeetingFollowups({ store, handleUtterance, slackFor, autho
     for (const target of destinations) {
       const destination = target.channelId || target.requesterSlackId;
       const id = followupId("delivery", input.tenantId, input.meetingId, ["minutes", destination]);
-      const existing = await store.put({ id, tenantId: input.tenantId, meetingId: input.meetingId, kind: "delivery", status: "pending", data: { ...target, teamId: input.teamId, text, botName: input.botName || "Adam", messageId: hash(id).slice(0, 32), attempts: 0 } });
+      const existing = await store.put({ id, tenantId: input.tenantId, meetingId: input.meetingId, kind: "delivery", status: "pending", data: { ...target, teamId: input.teamId, sourceIds: input.sources.map((source) => source.id), text, botName: input.botName || "Adam", messageId: hash(id).slice(0, 32), attempts: 0 } });
       if (existing.data.text !== text) {
-        if (!["done", "pending", "failed"].includes(existing.status) || !await finish(existing, "pending", { text, attempts: 0 })) throw new Error("Wait for the existing minutes delivery to settle before amending it.");
+        if (!["done", "pending", "failed"].includes(existing.status) || !await finish(existing, "pending", { text, sourceIds: input.sources.map((source) => source.id), attempts: 0 })) throw new Error("Wait for the existing minutes delivery to settle before amending it.");
       }
     }
     return finish(outcome, "done", { notReached: plan.notReached });
@@ -122,7 +133,7 @@ export function createMeetingFollowups({ store, handleUtterance, slackFor, autho
       : record.status === "skipped" ? `Skipped: ${actionLine(record.data)}.`
         : `${actionLine(record.data)}: ${record.data.next || "Check the connected tool before trying again."}`;
     const resultId = followupId("delivery", record.tenantId, record.meetingId, [record.id, record.data.argumentVersion, record.status]);
-    await store.put({ id: resultId, tenantId: record.tenantId, meetingId: record.meetingId, kind: "delivery", status: "pending", data: { teamId: record.data.teamId, channelId: record.data.channelId, replyThreadTs: record.data.threadTs, text, botName: record.data.botName, messageId: hash(resultId).slice(0, 32), attempts: 0 } });
+    await store.put({ id: resultId, tenantId: record.tenantId, meetingId: record.meetingId, kind: "delivery", status: "pending", data: { teamId: record.data.teamId, actionId: record.id, sourceIds: [record.data.sourceId], requesterSlackId: record.data.requesterSlackId, channelId: record.data.channelId, replyThreadTs: record.data.threadTs, text, botName: record.data.botName, messageId: hash(resultId).slice(0, 32), attempts: 0 } });
     await finish(record, record.status, { notificationsDirty: false });
   }
   async function drain({ tenantId, limit = 25 } = {}) {
@@ -132,12 +143,17 @@ export function createMeetingFollowups({ store, handleUtterance, slackFor, autho
       ...await store.list(tenantId, { kind: "action", statuses: ["running"], limit }),
       ...await store.list(tenantId, { kind: "outcome", statuses: ["pending", "failed", "running"], limit }),
       ...await store.list(tenantId, { kind: "delivery", statuses: ["pending", "failed", "running"], limit }),
-    ].filter(row => row.status === "running" ? row.data.claimUntil <= clock() : !(row.data.nextAttemptAt > clock() || row.data.attempts >= maxAttempts))
+    ].filter(row => row.status === "running" ? (row.data.dispatchPending === true || row.data.claimUntil <= clock()) : !(row.data.nextAttemptAt > clock() || row.data.attempts >= maxAttempts))
       .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt)).slice(0, Math.max(1, Math.min(100, limit)));
     const results = [];
     for (const row of rows) {
       if (row.kind === "action") {
-        if (row.status === "running" && row.data.claimUntil <= clock()) results.push(await finish(row, "outcome_unknown", { next: "Check the connected tool before retrying this action." }));
+        if (row.data.dispatchPending && !row.data.permitConsumed) {
+          const dispatched = await finish(row, "running", { dispatchPending: false, claimUntil: clock() + claimMs });
+          if (dispatched) results.push(await executeClaimed(dispatched, dispatched.data.requesterSlackId));
+        } else if (row.status === "running" && row.data.claimUntil <= clock()) {
+          results.push(await finish(row, "outcome_unknown", { next: "Check the connected tool before retrying this action." }));
+        }
         continue;
       }
       if (row.status === "running") {
@@ -194,15 +210,19 @@ export function createMeetingFollowups({ store, handleUtterance, slackFor, autho
       return { ok: Boolean(changed), ran: false, record: changed };
     }
     if (input.verb !== "approve" || record.status === "editing" || typeof handleUtterance !== "function") return { ok: false, error: "invalid" };
-    const claimed = await finish(record, "running", { claimId: randomUUID(), claimUntil: clock() + claimMs, permitConsumed: false });
+    const claimed = await finish(record, "running", { claimId: randomUUID(), claimUntil: clock() + claimMs, permitConsumed: false, dispatchPending: input.deferExecution === true });
     if (!claimed) return { ok: false, error: "conflict" };
+    if (input.deferExecution === true) return { ok: true, ran: false, status: "running" };
+    return executeClaimed(claimed, input.actorSlackId);
+  }
+  async function executeClaimed(claimed, actorSlackId) {
     const item = claimed.data;
     let result;
     try {
-      result = await handleUtterance({ door: "slack", intent: "followup-approve", memberId: item.requesterMemberId, room: { id: record.meetingId, botPresent: true, memberIds: item.memberIds }, participants: item.memberIds, followup: { id: record.id, tenantId: record.tenantId, meetingId: record.meetingId, version: item.argumentVersion, actorSlackId: input.actorSlackId, requesterSlackId: item.requesterSlackId, sourceId: item.sourceId, kind: item.kind, tool: item.tool, args: copy(item.args), existingActionId: item.existingActionId, explicit: item.explicit, claimId: item.claimId } });
+      result = await handleUtterance({ door: "slack", intent: "followup-approve", memberId: item.requesterMemberId, room: { id: claimed.meetingId, botPresent: true, memberIds: item.memberIds }, participants: item.memberIds, followup: { id: claimed.id, tenantId: claimed.tenantId, meetingId: claimed.meetingId, version: item.argumentVersion, actorSlackId: actorSlackId, requesterSlackId: item.requesterSlackId, sourceId: item.sourceId, kind: item.kind, tool: item.tool, args: copy(item.args), existingActionId: item.existingActionId, explicit: item.explicit, claimId: item.claimId } });
     } catch { result = null; }
     const status = result?.ok === true && result.connectorId ? "done" : result?.submitted === false ? "failed" : "outcome_unknown";
-    const current = await store.get(record.tenantId, record.id);
+    const current = await store.get(claimed.tenantId, claimed.id);
     const saved = current?.status === "running" && current.data.claimId === claimed.data.claimId ? await finish(current, status, { receipt: result?.connectorId ? { connectorId: result.connectorId, link: result.link || "" } : null, next: result?.next || (status === "outcome_unknown" ? "Check the connected tool before retrying this action." : "Check the required details and connector.") }) : null;
     if (saved) await syncAction(saved);
     return { ok: status === "done", ran: true, status, result, record: saved };

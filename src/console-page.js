@@ -554,7 +554,7 @@ ${slack}
       <a class="secondary" href="/console"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10 3.5 5.5 8 10 12.5"/></svg>Back to Home</a>
     </section>
     <section id="files" hidden>
-      <div class="page-head" id="files-head"><div><p class="page-title">Files</p><p class="page-lede"><span>Files in the channels you can see.</span> <span>Kept with this workspace.</span></p></div><div class="page-actions" id="files-actions" hidden><label class="sr" for="files-channel">Channel</label><select id="files-channel" hidden></select><input id="files-input" type="file" hidden><button type="button" class="primary" id="files-upload">Upload file</button></div></div>
+      <div class="page-head" id="files-head"><div><p class="page-title">Files</p><p class="page-lede"><span>Files in the channels you can see.</span> <span>Kept with this workspace.</span> <span>Deleting hides a file here while cleanup is pending. It does not remove a copy already stored on Walrus.</span></p></div><div class="page-actions" id="files-actions" hidden><label class="sr" for="files-channel">Channel</label><select id="files-channel" hidden></select><input id="files-input" type="file" hidden><button type="button" class="primary" id="files-upload">Upload file</button></div></div>
       <div id="files-unanswered" hidden></div>
       <div id="files-requests" hidden></div>
       <div id="channel-files-empty" class="empty-state" hidden>
@@ -563,7 +563,7 @@ ${slack}
         <p id="channel-files-empty-copy">Files from your channels show up here.</p>
       </div>
       <div id="files-list"></div>
-      <p id="files-error" class="meta" hidden></p>
+      <div id="files-error" class="meta" hidden></div>
     </section>
     <section id="people" hidden>
       <div class="page-head"><div><p class="page-title">People</p><p class="page-lede">Names heard in a room.</p></div></div>
@@ -4976,10 +4976,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
       renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
       loadSpeakerLanes().then(function () { paintTimeline(); });
     }).catch(function () {
-      roomMediaState = { state: "none", forRoom: asked };
+      roomMediaState = { state: "novideo", forRoom: asked, duration: 0, lines: [], segments: [], events: [], videoUrl: "", transcriptUrl: "" };
       paintPlayer(roomMediaState);
       paintArtifacts(roomMediaState);
       renderTranscript(fileRoom ? decisionsFor(fileRoom) : []);
+      paintTimeline();
     }).finally(function () {
       if (mediaFlight === asked) mediaFlight = "";
     });
@@ -8180,10 +8181,16 @@ if (sessionWhen && sessionWhen.dataset.at) {
       .then(function (body) { paintFiles(body || {}); })
       .then(scheduleFilesPoll)
       .catch(function () {
-        if (error) {
-          error.hidden = false;
-          error.textContent = "Files could not be loaded.";
-        }
+        if (!error) return;
+        error.hidden = false;
+        error.replaceChildren();
+        var note = document.createElement("span");
+        note.textContent = "Files could not be loaded. ";
+        var retry = document.createElement("button");
+        retry.type = "button";
+        retry.textContent = "Try again";
+        retry.addEventListener("click", function () { loadFiles(); });
+        error.append(note, retry);
       });
   }
 

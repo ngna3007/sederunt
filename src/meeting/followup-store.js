@@ -28,8 +28,19 @@ export function createMemoryFollowupStore({ clock = Date.now } = {}) {
       records.set(key(record.tenantId, record.id), next);
       return copy(next);
     },
-    async list(tenantId, { kind, statuses, needsSync, limit = 50 } = {}) {
-      return [...records.values()].filter(row => (!tenantId || row.tenantId === tenantId) && (!kind || row.kind === kind) && (!statuses || statuses.includes(row.status)) && (!needsSync || row.data.notificationsDirty === true)).slice(0, Math.min(limit, 100)).map(copy);
+    async list(tenantId, { kind, statuses, needsSync, meetingId, limit = 50 } = {}) {
+      const cap = Math.min(limit, 100);
+      const rows = [];
+      for (const row of records.values()) {
+        if (tenantId && row.tenantId !== tenantId) continue;
+        if (kind && row.kind !== kind) continue;
+        if (statuses && !statuses.includes(row.status)) continue;
+        if (needsSync && row.data.notificationsDirty !== true) continue;
+        if (meetingId && row.meetingId !== meetingId) continue;
+        rows.push(copy(row));
+        if (rows.length >= cap) break;
+      }
+      return rows;
     },
   };
 }
@@ -64,12 +75,13 @@ export function createSupabaseFollowupStore(env, { fetchImpl = globalThis.fetch 
       assertFollowupRecord({ ...record, status, data });
       return shape(await call("rpc/meeting_followup_change", { p_tenant: record.tenantId, p_id: record.id, p_revision: record.revision, p_status: status, p_data: data }));
     },
-    async list(tenantId, { kind, statuses, needsSync, limit = 50 } = {}) {
+    async list(tenantId, { kind, statuses, needsSync, meetingId, limit = 50 } = {}) {
       const params = new URLSearchParams({ select: "*", order: "updated_at.asc,id.asc", limit: String(Math.min(100, limit)) });
       if (tenantId) params.set("tenant_id", `eq.${tenantId}`);
       if (kind) params.set("kind", `eq.${kind}`);
       if (needsSync) params.set("data->>notificationsDirty", "eq.true");
       if (statuses) params.set("status", `in.(${statuses.join(",")})`);
+      if (meetingId) params.set("meeting_id", `eq.${meetingId}`);
       return (await call(`meeting_followups?${params}`)).map(shape);
     },
   };

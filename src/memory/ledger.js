@@ -78,6 +78,7 @@ export function ledgerMemory({ accountId, delegateKey }) {
         blobId: doc.blobId ?? null,
         idempotencyKey: doc.idempotencyKey,
         decision: doc.decision ? { ...doc.decision, text: "" } : null,
+        actionItem: doc.actionItem?.actionRecord ? structuredClone(doc.actionItem) : null,
         preference: doc.preference ? { ...doc.preference } : null,
         roomSetting: doc.roomSetting ? { ...doc.roomSetting } : null,
         expiry: doc.expiry ? { ...doc.expiry } : null,

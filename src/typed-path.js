@@ -1,9 +1,10 @@
 import { canReadRecord, readPrincipalId, readableSession } from "./domain/read-access.js";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { displayName, logAction, logFailure, logRequest, logUndo, renderActivity, undoRefusal } from "./activity.js";
 import { formatActivitySentence, selectActivity } from "./activity-feed.js";
 import { canReplay, canUndo, fieldUndoPlan, readCalendarEvent, replayPlan, replaySupported, runReplay } from "./activity-replay.js";
 import { authorize } from "./domain/allow.js";
+import { runApprovedAction } from "./meeting/actions.js";
 import { clashStatuses } from "./domain/clash.js";
 import { checkInvite } from "./domain/invite.js";
 import { gateEvent } from "./domain/log.js";
@@ -114,6 +115,7 @@ export async function handleUtterance(input, deps = {}) {
     const receipt = await remember(deps, { account: decision.account || "company", kind: "decision", text: `${decision.id} deleted`, idempotencyKey: `${decision.id}:deleted`, decision: decisionDocument(tombstone) });
     return { ok: receipt != null, receipt };
   }
+  if (input.intent === "followup-approve") return approveFollowup(input, session, deps);
   if (input.openedRoom) return openMeetingRoom(session, deps, input.openedRoom);
   if (!enters(input)) return silence();
 
@@ -206,7 +208,7 @@ export async function handleUtterance(input, deps = {}) {
   session.trace.tool = parsed.tool || parsed.type || "";
   session.trace.private = parsed.private === true;
   if (parsed.type === "confirm") return confirmAction(input, session, deps, parsed.actionId);
-  if (parsed.type === "dismiss") return dismissAction(session, parsed.actionId);
+  if (parsed.type === "dismiss") return dismissAction(session, parsed.actionId, deps);
   if (parsed.type === "preference") return storePreference(input, session, deps, parsed);
   if (parsed.type === "room-voice") return storeRoomVoice(input, session, deps, parsed);
   if (parsed.type === "room-clash") return storeRoomClash(input, session, deps, parsed);
@@ -380,6 +382,97 @@ async function answerRead(input, session, deps, parsed) {
   });
 }
 
+const FOLLOWUP_TOOLS = {
+  create_issue: { kind: "assign_task", preference: "linear" },
+  create_form: { kind: "create_form", preference: "forms" },
+  update_event: { kind: "edit_calendar", preference: "calendar" },
+};
+
+function followupTitle(args) {
+  const title = args?.title;
+  return title ? String(title).trim() : "";
+}
+
+async function approveFollowup(input, session, deps) {
+  const followup = input.followup;
+  const mapped = FOLLOWUP_TOOLS[followup?.tool];
+  if (!mapped || !followup?.id) return { ok: false, submitted: false, next: "This approval is not a connected action." };
+  if (mapped.kind === "assign_task" || mapped.kind === "create_form") {
+    const title = followupTitle(followup.args);
+    if (!title) return { ok: false, submitted: false, next: "A title is required." };
+  }
+  let calendar = null;
+  if (mapped.kind === "edit_calendar") {
+    if (!(followup.args?.eventId || followup.args?.id)) return { ok: false, submitted: false, next: "The calendar event is required." };
+    calendar = typeof deps.calendarFor === "function" ? await deps.calendarFor(input.memberId) : null;
+    if (!calendar?.updateEventDetails) return { ok: false, submitted: false, next: "Connect Google Calendar, then approve again." };
+  }
+  if (typeof deps.followups?.authorizeExecution !== "function") return { ok: false, submitted: false, next: "Approval could not be checked." };
+  const permitted = await deps.followups.authorizeExecution(input);
+  if (!permitted) return { ok: false, submitted: false, next: "This approval is no longer valid." };
+  const explicit = followup.explicit === true;
+  const preference = explicit
+    ? resolvePreference(session.preferences, mapped.preference, followup.meetingId)
+    : "ask";
+  const actionId = explicit && followup.existingActionId ? followup.existingActionId : followup.id;
+  const permission = authorize({
+    action: "write",
+    tool: mapped.preference,
+    preference,
+    confirmed: true,
+    actionId,
+    confirmActionId: actionId,
+  });
+  if (!permission.allowed) return { ok: false, submitted: false, next: "This change was not approved." };
+  if (explicit && followup.existingActionId) {
+    const existing = session.actions.find((row) => row.id === followup.existingActionId);
+    if (existing?.connectorId) return { ok: true, connectorId: existing.connectorId, submitted: true };
+    if (existing) {
+      if (mapped.kind === "edit_calendar") {
+        const args = followup.args || {};
+        const description = typeof args.description === "string" && args.description.trim();
+        const time = args.start && args.end && Number.isFinite(Date.parse(args.start))
+          && Number.isFinite(Date.parse(args.end)) && Date.parse(args.start) < Date.parse(args.end);
+        if (!(args.eventId || args.id) || Boolean(description) === Boolean(time)
+          || Object.keys(args).some((key) => !["eventId", "id", "start", "end", "description"].includes(key))) {
+          return { ok: false, submitted: false, next: "Provide the event and a description or valid start and end times." };
+        }
+      }
+      existing.params = { ...existing.params, ...followup.args };
+      const result = await confirmAction(input, session, mapped.kind === "edit_calendar" ? { ...deps, calendar } : deps, existing.id);
+      if (existing.connectorId) return { ok: true, connectorId: existing.connectorId, submitted: true };
+      return { ok: false, submitted: result?.allow === "confirmed", next: "Check the connected tool before trying again." };
+    }
+    return { ok: false, submitted: false, next: "The original request could not be loaded. Refresh the meeting and try again." };
+  }
+  let ran;
+  try {
+    ran = await runApprovedAction({ kind: mapped.kind, tool: followup.tool, args: { ...followup.args, idempotencyKey: followup.id } }, {
+      connector: mapped.kind === "create_form" ? deps.forms : deps.linear,
+      formsConnector: deps.forms,
+      calendar,
+      callTool: deps.callTool || defaultFollowupCall,
+    });
+  } catch {
+    return { ok: false, submitted: true, next: "Check the connected tool before trying again." };
+  }
+  if (ran?.ok === true && ran.connectorId) return { ok: true, connectorId: ran.connectorId, link: ran.link || "", submitted: true };
+  if (ran?.submitted === true || (ran?.ok === true && !ran.connectorId)) {
+    return { ok: false, submitted: true, next: ran?.next || "Check the connected tool before trying again." };
+  }
+  return { ok: false, submitted: false, next: ran.next };
+}
+
+async function defaultFollowupCall(connector, tool, args) {
+  if (tool === "create_issue" && typeof connector?.createIssue === "function") {
+    const created = await connector.createIssue({ title: args.title, idempotencyKey: args?.idempotencyKey });
+    const connectorId = created?.identifier || created?.id || "";
+    return { ok: Boolean(connectorId), connectorId, id: connectorId };
+  }
+  if (typeof connector?.call === "function") return connector.call(tool, args);
+  return { ok: false, submitted: false };
+}
+
 async function requestWrite(input, session, deps, parsed) {
   const invited = writerInvite(input);
   const preference = resolvePreference(session.preferences, parsed.tool, invited.room?.id || input.room?.id);
@@ -394,7 +487,7 @@ async function requestWrite(input, session, deps, parsed) {
     });
   }
   const action = {
-    id: nextId(session, "action"),
+    id: stableActionId(input, deps),
     deliveryId: byteTrim(String(input.deliveryId ?? "").trim(), 255),
     roomId: invited.room.id,
     memberId: input.memberId,
@@ -412,15 +505,13 @@ async function requestWrite(input, session, deps, parsed) {
     roomName: roomLabel(input, invited.room),
     offset: Number.isFinite(input.offset) ? input.offset : null,
   };
+  if (action.deliveryId && session.actions.some((row) => row.id === action.id)) {
+    return finish(session, { status: "recorded", kind: "duplicate", body: "duplicate-delivery", allow: "duplicate-delivery", outcome: "duplicate-delivery", actionId: action.id });
+  }
   session.actions.push(action);
-  await remember(deps, {
-    account: "company",
-    kind: "action",
-    text: action.statement,
-    idempotencyKey: action.deliveryId || action.id,
-  });
   if (action.missingFact) {
     action.state = "available";
+    if (!await persistAction(deps, action)) return refusal(session, "memory-remember-failed");
     const gap = action.missingFact === "owner" ? "Who owns it?" : `missing fact: ${action.missingFact}`;
     return finish(session, {
       status: "recorded",
@@ -441,6 +532,11 @@ async function requestWrite(input, session, deps, parsed) {
   });
   if (!auth.allowed) {
     action.state = "paused";
+    if (!await persistAction(deps, action)) {
+      session.actions = session.actions.filter((row) => row !== action);
+      session.deliveries.delete(action.deliveryId);
+      return refusal(session, "memory-remember-failed");
+    }
     return finish(session, {
       status: "recorded",
       kind: "ticket",
@@ -450,12 +546,18 @@ async function requestWrite(input, session, deps, parsed) {
       actionId: action.id,
     });
   }
+  action.state = "sending";
+  if (!await persistAction(deps, action)) {
+    session.actions = session.actions.filter((row) => row !== action);
+    session.deliveries.delete(action.deliveryId);
+    return refusal(session, "memory-remember-failed");
+  }
   return callConnector(session, deps, action, auth);
 }
 
 async function confirmAction(input, session, deps, actionId) {
   const action = session.actions.find((item) => item.id === actionId);
-  if (!action || action.state === "dismissed" || action.state === "closed" || action.state === "sending" || action.connectorId || action.missingFact) {
+  if (!action) {
     return finish(session, {
       status: "recorded",
       kind: "ticket",
@@ -471,11 +573,14 @@ async function confirmAction(input, session, deps, actionId) {
     return finish(session, {
       status: "recorded",
       kind: "ticket",
-      body: `${action.statement}\nrecorded\npreference ${action.preference}\n${invited.reason}`,
+      body: `${invited.reason}\nrecorded\npreference ask`,
       allow: invited.reason,
       preference: action.preference,
       actionId: action.id,
     });
+  }
+  if (action.state === "dismissed" || action.state === "closed" || action.state === "sending" || action.state === "outcome_unknown" || action.connectorId || action.missingFact) {
+    return finish(session, { status: "recorded", kind: "ticket", body: `${actionId}\nrecorded\npreference ask`, allow: "ask", preference: "ask", actionId });
   }
   const auth = authorize({
     action: "write",
@@ -496,12 +601,19 @@ async function confirmAction(input, session, deps, actionId) {
     });
   }
   action.state = "sending";
+  if (!await persistAction(deps, action)) {
+    action.state = "paused";
+    return refusal(session, "memory-remember-failed");
+  }
   return callConnector(session, deps, action, auth);
 }
 
-function dismissAction(session, actionId) {
+async function dismissAction(session, actionId, deps) {
   const action = session.actions.find((item) => item.id === actionId);
-  if (action && (action.state === "waiting" || action.state === "paused")) action.state = "dismissed";
+  if (action && (action.state === "waiting" || action.state === "paused")) {
+    action.state = "dismissed";
+    if (!await persistAction(deps, action)) { action.state = "paused"; return refusal(session, "memory-remember-failed"); }
+  }
   return finish(session, {
     status: "recorded",
     kind: "ticket",
@@ -513,12 +625,33 @@ function dismissAction(session, actionId) {
 }
 
 async function callConnector(session, deps, action, auth) {
+  if (!deps.actionClaims && deps.requireActionClaims) {
+    action.state = "paused";
+    await persistAction(deps, action);
+    return finish(session, { status: "recorded", kind: "ticket", body: "The change could not be claimed. Try again when storage is available.", allow: "ask", preference: "ask", actionId: action.id });
+  }
+  if (deps.actionClaims) {
+    let claimed;
+    try {
+      claimed = await deps.actionClaims.claim({ tenantId: deps.actionClaimTenantId || deps.tenantId, roomId: action.roomId, sourceId: action.deliveryId || action.id, action: action.tool });
+    } catch {
+      action.state = "paused";
+      await persistAction(deps, action);
+      return finish(session, { status: "recorded", kind: "ticket", body: "The change could not be claimed. Try again when storage is available.", allow: "ask", preference: "ask", actionId: action.id });
+    }
+    if (!claimed) {
+      action.state = "outcome_unknown";
+      await persistAction(deps, action);
+      return didNotHappen(session, deps, action, auth, "");
+    }
+  }
   let created;
   try {
     created = await runConnector(deps, action);
   } catch (error) {
-    action.state = "available";
+    action.state = "outcome_unknown";
     action.connectorId = null;
+    await persistAction(deps, action);
     const message = error instanceof Error ? error.message : "";
     return didNotHappen(session, deps, action, auth, message);
   }
@@ -526,12 +659,18 @@ async function callConnector(session, deps, action, auth) {
   const assigning = action.edit === "assign";
   const status = itemStatus({ kind: "ticket", edit: assigning ? "update" : action.edit }, issueId);
   if (status !== "filed" && status !== "updated") {
-    action.state = "available";
+    action.state = "outcome_unknown";
     action.connectorId = null;
+    await persistAction(deps, action);
     return didNotHappen(session, deps, action, auth, "");
   }
   action.state = "closed";
   action.connectorId = issueId;
+  const savedReceipt = await persistAction(deps, action);
+  if (!savedReceipt) {
+    action.state = "outcome_unknown";
+    return didNotHappen(session, deps, action, auth, "The result could not be saved. Check the connected tool before trying again.");
+  }
   // An assignment edits an existing ticket; it never becomes another decision's ticket.
   const linked = assigning
     ? null
@@ -627,6 +766,9 @@ async function keepAssignment(session, deps, action, issueId) {
 
 async function runConnector(deps, action) {
   if (action.tool === "calendar") {
+    if (typeof action.params?.description === "string" && (action.params.eventId || action.params.id)) {
+      return deps.calendar.updateEventDetails({ id: action.params.eventId || action.params.id, description: action.params.description });
+    }
     const tools = await deps.calendar.listTools();
     const writeTool = (tools ?? []).find((tool) => tool.write === true && tool.name);
     if (!writeTool) return { id: "" };
@@ -662,17 +804,19 @@ async function runConnector(deps, action) {
 
 async function didNotHappen(session, deps, action, auth, message) {
   session.items.push({ kind: "ticket", status: "recorded", text: action.statement, issueId: null });
-  await noteActivity(session, deps, action, {
-    role: "failure",
-    actor: "Sederunt",
-    actorKind: "sederunt",
-    outcome: "failed",
-    error: failureText(message),
-  });
+  if (action.state !== "outcome_unknown") {
+    await noteActivity(session, deps, action, {
+      role: "failure",
+      actor: "Sederunt",
+      actorKind: "sederunt",
+      outcome: "failed",
+      error: failureText(message),
+    });
+  }
   return finish(session, {
     status: "recorded",
     kind: "ticket",
-    body: `${action.statement}\nrecorded\npreference ${action.preference}\nThe edit did not happen.`,
+    body: `${action.statement}\nrecorded\npreference ${action.preference}\n${action.state === "outcome_unknown" ? "The result is uncertain. Check the connected tool before trying again." : "The edit did not happen."}`,
     allow: auth.reason,
     preference: action.preference,
     actionId: action.id,
@@ -745,6 +889,7 @@ async function noteActivity(session, deps, action, fields) {
     tool: { name: "act", server: "sederunt-mcp" },
     origin: {
       roomId: action.roomId || "",
+      sourceDeliveryId: action.deliveryId || "",
       roomName: action.roomName || "",
       at: Number.isFinite(action.offset) ? action.offset : null,
     },
@@ -1574,7 +1719,6 @@ async function storeDecision(input, session, deps, parsed) {
     return renderVisible(session, input.memberId, existing.roomId, null);
   }
   const learned = parseLearnedUtterance(sentence);
-  if (learned) await keepLearned(session, deps, learned, room.id);
   return keepDecision(input, session, deps, {
     text: sentence,
     facts: passage.facts,
@@ -1582,11 +1726,12 @@ async function storeDecision(input, session, deps, parsed) {
     inviteMemberIds,
     roomId: room.id,
     kind: "decision",
+    learned,
   });
 }
 
-async function keepLearned(session, deps, learned, roomId) {
-  const key = learnedKey(learned.kind, learned.text);
+async function keepLearned(session, deps, learned, decision) {
+  const key = `${learnedKey(learned.kind, learned.text)}:${decision.id}`;
   if ((session.learned ?? []).some((item) => item.key === key)) return;
   const row = {
     key,
@@ -1594,7 +1739,9 @@ async function keepLearned(session, deps, learned, roomId) {
     text: learned.text,
     at: new Date().toISOString(),
     verified: "unknown",
-    roomId,
+    roomId: decision.roomId,
+    sourceDecisionId: decision.id,
+    inviteMemberIds: [...decision.inviteMemberIds],
   };
   session.learned.push(row);
   await remember(deps, {
@@ -1602,7 +1749,7 @@ async function keepLearned(session, deps, learned, roomId) {
     kind: learned.kind,
     text: learned.text,
     idempotencyKey: key,
-    learned: { kind: learned.kind, text: learned.text, roomId, at: row.at, key },
+    learned: { ...row },
   });
 }
 
@@ -1678,6 +1825,7 @@ async function keepDecision(input, session, deps, draft) {
     if (!other.contradicts.includes(decision.id)) other.contradicts.push(decision.id);
   }
   session.decisions.push(decision);
+  if (draft.learned) await keepLearned(session, deps, draft.learned, decision);
   session.items.push({ kind: "decision", status: "recorded", text: decision.text, issueId: null });
   return renderVisible(session, input.memberId, decision.roomId, null);
 }
@@ -1901,6 +2049,30 @@ async function loadSentences(session, deps) {
   }
 }
 
+async function persistAction(deps, action) {
+  const revision = (action.revision || 0) + 1;
+  const inviteMemberIds = Array.isArray(action.inviteMemberIds) && action.inviteMemberIds.length ? [...action.inviteMemberIds] : [action.memberId].filter(Boolean);
+  const record = { ...action, revision, params: { ...(action.params || {}) }, inviteMemberIds };
+  const saved = await remember(deps, { account: "company", kind: "action", text: `action ${action.id} ${revision}`,
+    idempotencyKey: `${action.id}:action:${revision}`, actionItem: { actionRecord: record } });
+  if (!saved) return false;
+  action.revision = revision;
+  return true;
+}
+
+function absorbAction(session, document) {
+  const row = document?.actionItem?.actionRecord;
+  if (!row || typeof row.id !== "string" || typeof row.roomId !== "string" || typeof row.memberId !== "string"
+    || !Array.isArray(row.inviteMemberIds) || !row.inviteMemberIds.includes(row.memberId)
+    || !Number.isSafeInteger(row.revision) || row.revision < 1) return;
+  const existing = session.actions.find((item) => item.id === row.id);
+  if (existing && (existing.revision || 0) >= row.revision) return;
+  const action = { ...row, params: { ...(row.params || {}) }, inviteMemberIds: [...row.inviteMemberIds] };
+  if (action.state === "sending") action.state = "outcome_unknown";
+  if (existing) Object.assign(existing, action);
+  else { noteIssuedId(session, action.id); session.actions.push(action); }
+}
+
 function decisionDocument(decision) {
   return {
     id: decision.id,
@@ -1974,6 +2146,7 @@ function applyIndexedDocuments(session, docs, blankText) {
     absorbAccess(session, copyAccess(doc));
     absorbHearing(session, copyHearing(doc));
     absorbActivity(session, doc?.activity);
+    absorbAction(session, doc);
     absorbLearned(session, doc);
     const observedId = typeof doc?.expiry?.decisionId === "string" ? doc.expiry.decisionId : "";
     const observed = epochOf(doc?.expiry?.expiryEpoch);
@@ -2024,7 +2197,7 @@ function absorbLearned(session, doc) {
   const kind = row.kind || "memory";
   const key = typeof row.key === "string" && row.key ? row.key : `${kind}:${text}`;
   session.learned ??= [];
-  if (session.learned.some((item) => item.key === key || (item.kind === kind && item.text === text))) return;
+  if (session.learned.some((item) => item.key === key)) return;
   session.learned.push({
     key,
     kind,
@@ -2032,6 +2205,8 @@ function absorbLearned(session, doc) {
     at: typeof row.at === "string" ? row.at : "",
     verified: "unknown",
     roomId: typeof row.roomId === "string" ? row.roomId : "",
+    sourceDecisionId: typeof row.sourceDecisionId === "string" ? row.sourceDecisionId : "",
+    inviteMemberIds: Array.isArray(row.inviteMemberIds) ? row.inviteMemberIds.filter((id) => typeof id === "string") : [],
   });
 }
 
@@ -2223,6 +2398,7 @@ async function answerRecall(input, session, deps) {
         objectId: typeof object?.objectId === "string" ? object.objectId : null,
       });
       if (object?.proof?.status) decision.proofStatus = object.proof.status;
+      if (object?.proof?.status === "verified" && typeof object.objectId === "string" && object.objectId) decision.objectId = object.objectId;
     } catch {
       failed = true;
       proofs.set(decision.id, { failed: true });
@@ -2257,7 +2433,7 @@ function renderVisible(session, memberId, roomId, proofs, failed = false, scope 
     }
     const text = proof?.text ?? decision.text;
     const status = statusOf.get(decision.id) || "recorded";
-    if (proof?.objectId) objectLink = `/object/${encodeURIComponent(proof.objectId)}`;
+    if (proof?.objectId && decision.objectId === proof.objectId) objectLink = `/object/${encodeURIComponent(proof.objectId)}`;
     lines.push(text, status);
     visible.push(visibleRow(decision, text, status, true));
     if (text) session.lastSpoken = text;
@@ -2525,6 +2701,13 @@ function nextId(session, prefix) {
   return id;
 }
 
+function stableActionId(input, deps) {
+  const deliveryId = String(input.deliveryId || "").trim();
+  if (!deliveryId) return `action-${randomBytes(16).toString("hex")}`;
+  const scope = JSON.stringify([deps.tenantId || "", input.room?.id || "", deliveryId]);
+  return `action-${createHash("sha256").update(scope).digest("hex").slice(0, 32)}`;
+}
+
 /** Slack (and similar) delivery ids must mint one stable decision id so MemWal
  * idempotency keys do not collide across cold isolates that all restart nextId at 1. */
 function stableDecisionId(session, deliveryId) {
@@ -2684,7 +2867,10 @@ function applyProof(row, source, object, blobId) {
   if (proof.blobId) row.blobId = proof.blobId;
   if (proof.objectId) row.objectId = proof.objectId;
   if (proof.digest) row.digest = proof.digest;
-  if (source) source.proofStatus = proof.status;
+  if (source) {
+    source.proofStatus = proof.status;
+    if (proof.status === "verified" && proof.objectId) source.objectId = proof.objectId;
+  }
 }
 
 // One proof cache per Tatum reader. A verified read is kept, so the second
@@ -2787,7 +2973,9 @@ export async function endMeeting(session, deps, roomId) {
   const actionItems = (current.actions ?? [])
     .filter((item) => item.roomId === id)
     .map((item) => ({ text: item.statement, owner: item.memberId || item.speaker || "", due: "" }));
-  const minutes = draftMinutes({ room, decisions, memories: current.learned ?? [] });
+  const visibleSources = new Set(decisions.map((decision) => decision.id));
+  const memories = (current.learned ?? []).filter((record) => record.roomId === id && record.sourceDecisionId && visibleSources.has(record.sourceDecisionId));
+  const minutes = draftMinutes({ room, decisions, memories });
   return rememberMeetingOutcome({
     room: { ...room, attendees: room.memberIds || [] },
     minutes,

@@ -21,5 +21,10 @@ export function createParticipantBindings(env = {}, { fetchImpl = globalThis.fet
       if (durable) return (await call("verified_participants_for_user", { p_tenant: tenantId, p_user: userId })) || [];
       return [...rows.values()].filter((row) => row.tenantId === tenantId && row.email === email.trim().toLowerCase());
     },
+    async forRoom(tenantId, roomId) {
+      if (!tenantId || !roomId) return [];
+      if (durable) return (await call("verified_participants_for_room", { p_tenant: tenantId, p_room: roomId })) || [];
+      return [...rows.values()].filter((row) => row.tenantId === tenantId && row.roomId === roomId);
+    },
   };
 }

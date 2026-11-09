@@ -203,7 +203,7 @@ function commandStore(env, kind, run, clock = Date.now) {
       const id = newId();
       const now = String(Date.now());
       await run([
-        ["HSET", key("meta", id), "id", id, "user", user, "question", question, "status", "streaming", "createdAt", now, "updatedAt", now, ...(provenance ? ["tenantId", provenance.tenantId, "workspace", provenance.workspace] : [])],
+        ["HSET", key("meta", id), "id", id, "user", user, "question", question, "status", "streaming", "createdAt", now, "updatedAt", now, ...(provenance ? ["tenantId", provenance.tenantId, "workspace", provenance.workspace] : []), ...(typeof context?.deletionVersion === "string" ? ["deletionVersion", context.deletionVersion] : [])],
         ["EXPIRE", key("meta", id), ttl],
         ["LPUSH", key("user", user), id],
         ["LTRIM", key("user", user), 0, KEEP_PER_USER - 1],
@@ -282,6 +282,7 @@ function shapeMeta(raw) {
     user: raw.user || "",
     tenantId: raw.tenantId || "",
     workspace: raw.workspace || "",
+    deletionVersion: typeof raw.deletionVersion === "string" ? raw.deletionVersion : "",
     question: raw.question || "",
     status: raw.status || "streaming",
     source: raw.source || "",
@@ -357,7 +358,7 @@ function memoryStore(env, clock = Date.now) {
       const provenance = context === undefined ? null : askContext(context);
       const id = newId();
       const now = Date.now();
-      metas.set(id, { id, user, question, status: "streaming", createdAt: String(now), updatedAt: String(now), ...provenance });
+      metas.set(id, { id, user, question, status: "streaming", createdAt: String(now), updatedAt: String(now), ...provenance, ...(typeof context?.deletionVersion === "string" ? { deletionVersion: context.deletionVersion } : {}) });
       chunkMap.set(id, []);
       const list = [id, ...(users.get(user) || [])].slice(0, KEEP_PER_USER);
       users.set(user, list);

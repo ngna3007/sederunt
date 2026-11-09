@@ -215,7 +215,7 @@ test("ending a meeting writes the room outcome and skips a decision that already
     deleted: false,
   });
   session.actions.push({ id: "action-9", roomId: "booth", statement: "Order the banner.", memberId: "rowan" });
-  session.learned = [{ kind: "team-preference", text: "Post minutes to #sederunt-demo." }];
+  session.learned = [{ kind: "team-preference", text: "Post minutes to #sederunt-demo.", roomId: "booth", sourceDecisionId: "decision-9", inviteMemberIds: ["mina", "rowan"] }];
   const memory = countingMemory();
   const written = await endMeeting(session, { memory }, "booth");
   assert.equal(written.some((row) => row.kind === "minutes"), true);
