@@ -24,6 +24,8 @@ import { CALENDAR_SCOPES, calendarPresentedConnected, calendarTimeZone, createCa
 import { createConsoleAdapter } from "./console/upload.js";
 import { createLinearClient } from "./linear/mcp.js";
 import { loadLinearToken } from "./linear/token.js";
+import { createLinearInstallationStore } from "./linear/installations.js";
+import { handleLinearOAuth, linearClientMetadata, tenantLinearClient } from "./linear/oauth.js";
 import { renderCameraPage } from "./meeting/camera.js";
 import { createMeetingAdapter, mediaFromBot, meetingDoorReady, meetingEnded, recallBotUrl, recallTranscriptDelivery, verifyRecallRequest } from "./meeting/recall.js";
 import { createMeetingFollowups, parseFollowupValue } from "./meeting/followups.js";
@@ -388,6 +390,13 @@ async function doorsForRequest(workspace, { companyId = "", personId = "", req }
       doors.slack = claim.linked === true;
     }
   }
+  if (tenantId && workspace.linearInstallations?.get) {
+    try {
+      if (await workspace.linearInstallations.get(tenantId)) doors.linear = true;
+    } catch {
+      // A storage miss keeps the process door. It does not turn Linear off.
+    }
+  }
   return doors;
 }
 
@@ -566,6 +575,8 @@ export function createApp(options = {}) {
     memwalClient: options.memwal || null,
     tenantBind: options.tenantBind || createTenantBind(env, { fetchImpl: options.fetch || globalThis.fetch }),
     slackInstallations: options.slackInstallations || createInstallationStore(env, { fetch: options.fetch }),
+    linearInstallations: options.linearInstallations || createLinearInstallationStore(env, { fetch: options.fetch }),
+    linearProfiles: new Map(),
     companyLoaded: loadedCompany(options, deps, env, companies),
     linearReady: options.linearReady === true || (options.env ? false : linearReady()),
     recall: options.recall || null,
@@ -763,6 +774,30 @@ export function createApp(options = {}) {
       env,
       installations: workspace.slackInstallations,
       fetchImpl: options.slackOAuthFetch || options.fetch || globalThis.fetch,
+      activeTenant: async (request) => {
+        const gate = guardConsole(request, env);
+        if (!identity || gate.session?.kind !== "oauth") return { unauthorized: true };
+        const view = await loadSpaceView(identity, gate.session);
+        return { userId: String(gate.session.userId || ""), tenantId: view?.activeId || "", role: view?.activeRole || "" };
+      },
+      roleIn: async (request, tenantId) => {
+        const gate = guardConsole(request, env);
+        if (!identity || gate.session?.kind !== "oauth") return "";
+        try {
+          const tenants = await identity.myTenants(gate.session.accessToken);
+          const hit = (tenants || []).find((item) => item?.id === tenantId);
+          return hit?.role || "";
+        } catch {
+          return "";
+        }
+      },
+    })) {
+      return;
+    }
+    if (await handleLinearOAuth(req, res, url, {
+      env,
+      installations: workspace.linearInstallations,
+      fetchImpl: options.linearOAuthFetch || options.fetch || globalThis.fetch,
       activeTenant: async (request) => {
         const gate = guardConsole(request, env);
         if (!identity || gate.session?.kind !== "oauth") return { unauthorized: true };
@@ -1160,7 +1195,7 @@ export function createApp(options = {}) {
       const knownStats = oauth && url.pathname === "/console" && spaces?.activeId && typeof identity.workspaceStats === "function"
         ? identity.workspaceStats(gate.session.accessToken, spaces.activeId).catch(() => null)
         : Promise.resolve(undefined);
-      const [slackClaim, calendarOn, accountProfile, botView, hearing, stats] = await Promise.all([
+      const [slackClaim, calendarOn, accountProfile, botView, hearing, stats, linearGrant] = await Promise.all([
         within(pageSlack(workspace, env, spaces, connectedDoors), PAGE_DOOR_WAIT_MS, {
           linked: connectedDoors?.slack === true,
           teamName: "",
@@ -1178,7 +1213,9 @@ export function createApp(options = {}) {
           null,
         ),
         Promise.all([knownStats, warmUser]).then(([rows]) => rows),
+        within(pageLinear(workspace, spaces?.activeId || ""), PAGE_DOOR_WAIT_MS, null),
       ]);
+      if (connectedDoors && linearGrant) connectedDoors.linear = true;
       if (connectedDoors && workspace.tenantBind && env.SEDERUNT_TOOLS_FAKE !== "1") {
         connectedDoors.slack = slackClaim.linked === true;
       }
@@ -1206,7 +1243,11 @@ export function createApp(options = {}) {
               ? "Set RECALL_WEBHOOK_SECRET to the Recall workspace verification secret, then restart."
               : "Check that SEDERUNT_PUBLIC_ORIGIN is a public https address, then restart.",
         calendarConnected: (connectedDoors || doors).calendar === true,
-        linearConnected: doors.linear === true,
+        linearConnected: (connectedDoors || doors).linear === true,
+        linearInstall: linearInstallReady(env, identity, workspace.linearInstallations),
+        linearResult: url.searchParams.get("linear") || "",
+        linearWorkspace: linearGrant?.workspaceName
+          || ((connectedDoors || doors).linear === true ? String(env.LINEAR_WORKSPACE || "").trim() : ""),
         slackConnected: (connectedDoors || doors).slack === true,
         slackReady: slackOAuthConfigured(env) && spaces?.activeId
           ? Boolean(env.SLACK_SIGNING_SECRET && (connectedDoors || doors).slack === true)
@@ -2848,11 +2889,12 @@ function depsFor(workspace, companyId, unfiltered = false) {
   const deletionDeps = { deletions: workspace.deletions, deletionTenantId, actionClaims: workspace.actionClaims,
     actionClaimTenantId: tenantId || "00000000-0000-4000-8000-000000000001", requireActionClaims: identityConfigured(workspace.env) };
   const filtered = (memory) => memory && workspace.deletions && !unfiltered ? withDeletionOverlay(memory, workspace.deletions, deletionTenantId) : memory;
-  const slackScoped = slackOAuthConfigured(workspace.env || {})
-    ? { slack: tenantSlackClient(workspace, tenantId), app: { ...(workspace.deps.app || {}), slackChannel: "" } }
-    : {};
+  const slackOn = slackOAuthConfigured(workspace.env || {});
+  const appBase = slackOn ? { ...(workspace.deps.app || {}), slackChannel: "" } : workspace.deps.app;
+  const slackScoped = slackOn ? { slack: tenantSlackClient(workspace, tenantId) } : {};
+  const linearScoped = linearDeps(workspace, tenantId, appBase);
   if (workspace.companies) {
-    return { ...workspace.deps, ...slackScoped, ...deletionDeps, memory: filtered(workspace.companies[id]), tenantId };
+    return { ...workspace.deps, ...slackScoped, ...linearScoped, ...deletionDeps, memory: filtered(workspace.companies[id]), tenantId };
   }
   const memory = bindMemoryTenant(
     workspace.deps.memory,
@@ -2861,7 +2903,37 @@ function depsFor(workspace, companyId, unfiltered = false) {
     workspace.memwalClient,
     workspace.deps.tatum,
   );
-  return { ...workspace.deps, ...slackScoped, ...deletionDeps, memory: filtered(memory), tenantId };
+  return { ...workspace.deps, ...slackScoped, ...linearScoped, ...deletionDeps, memory: filtered(memory), tenantId };
+}
+
+function linearDeps(workspace, tenantId, app) {
+  if (!tenantId || !workspace.linearInstallations?.open) return { app };
+  const proxied = new Proxy(app || {}, {
+    get(target, prop, receiver) {
+      const profile = workspace.linearProfiles?.get(tenantId);
+      if (prop === "linearWorkspace" && profile?.workspaceKey) return profile.workspaceKey;
+      if (prop === "linearTeam" && profile?.teamKey) return profile.teamKey;
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+  return { app: proxied, linear: tenantLinearClient(workspace, tenantId) };
+}
+
+function linearInstallReady(env, identity, installations) {
+  if (!identity || !linearClientMetadata(env) || !sessionSecret(env)) return false;
+  const local = env.NODE_ENV !== "production" && !env.VERCEL_ENV && env.SEDERUNT_AUTH_FAKE === "1";
+  if (local) return true;
+  return installations?.durable === true && installations?.encrypted === true;
+}
+
+async function pageLinear(workspace, tenantId) {
+  const id = String(tenantId || "").trim();
+  if (!id || !workspace.linearInstallations?.get) return null;
+  try {
+    return await workspace.linearInstallations.get(id);
+  } catch {
+    return null;
+  }
 }
 
 /**

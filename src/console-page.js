@@ -2,6 +2,7 @@ import { priorAsksForThread } from "./ask/thread.js";
 import { normalizeHearing } from "./hearing.js";
 import { CALENDAR_CONNECT_PATH } from "./connectors/calendar-preset.js";
 import { SLACK_INSTALL_PATH } from "./slack/oauth.js";
+import { LINEAR_INSTALL_PATH } from "./linear/oauth.js";
 import { brandLogo, brandSprite } from "./brand-logos.js";
 import { formatLastTested } from "./console/local-time.js";
 import { renderBotSettings } from "./console/bot-settings.js";
@@ -35,6 +36,8 @@ export function renderConsolePage(state = {}) {
   const slackConnected = state.slackConnected === true;
   const slackInstall = state.slackInstall === true;
   const slackWorkspace = String(state.slackWorkspace || "").trim();
+  const linearInstall = state.linearInstall === true;
+  const linearWorkspace = String(state.linearWorkspace || "").trim();
   const slackNotice = ({
     connected: "Slack is installed for this workspace.",
     partial: "Slack did not grant all required permissions. Reconnect and approve the requested scopes.",
@@ -47,6 +50,17 @@ export function renderConsolePage(state = {}) {
     declined: "Slack setup was cancelled. Your saved connection was not changed.",
     unsupported: "Choose an individual Slack workspace. Organization-wide installations are not supported.",
   })[String(state.slackResult || "")] || "";
+  const linearNotice = ({
+    connected: "Linear is connected for this workspace.",
+    partial: "Linear did not grant read and write. Reconnect and approve both.",
+    failed: "Linear could not be connected. Your previous saved connection was not changed. Try again.",
+    forbidden: "Only a workspace owner or admin can connect or change Linear.",
+    conflict: "That Linear workspace is already connected to another Sederunt workspace.",
+    different: "This workspace already has a different Linear connection. Use a different Linear workspace to replace it.",
+    stale: "The Linear connection changed while setup was open. Reload and try again.",
+    expired: "This Linear setup link expired or was already used. Start again.",
+    declined: "Linear setup was cancelled. Your saved connection was not changed.",
+  })[String(state.linearResult || "")] || "";
   const hearingIn = state.hearing && typeof state.hearing === "object" ? state.hearing : null;
   // Effective guest (saved or default), never blank fields that look unset.
   const hearing = normalizeHearing(hearingIn);
@@ -328,8 +342,9 @@ ${slack}
           ${linearIcon}
           <div class="set-copy" data-col="tool">
             <strong>Linear</strong>
+            ${linearNotice ? `<p class="conn-hint" role="status">${escapeHtml(linearNotice)}</p>` : ""}
             <p id="lin-conn" class="conn-state${linearConnected ? "" : " off"}">${linearConnected ? "Connected" : "Not connected"}</p>
-            <p id="lin-line" class="sr">Linear runs automatically.</p>
+            <p id="lin-line" class="${linearConnected && linearWorkspace ? "conn-hint" : "sr"}">${linearConnected && linearWorkspace ? `Linear workspace: ${escapeHtml(linearWorkspace)}.` : "Linear runs automatically."}</p>
           </div>
           <div class="conn-actions" data-col="action">
             <button type="button" class="conn-connect" id="lin-connect" data-connect="linear"${linearConnected ? " hidden" : ""}>Connect</button>
@@ -2817,7 +2832,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       ? "Sederunt answers in a channel it has already joined."
       : "Slack is not set up on this server yet. Calendar, rooms, and chat still work.";
     text("cal-line", calendarMode === "Ask" ? "Calendar waits before a change." : "Calendar runs automatically.");
-    text("lin-line", linearMode === "Ask" ? "Linear waits before a change." : "Linear runs automatically.");
+    text("lin-line", linearStatusLine(!!doors.linear, linearMode === "Ask"));
     text("slack-line", slackStatusLine(next.slack === "ready"));
     text("prefs", "");
     var calAsk = document.getElementById("cal-ask");
@@ -5112,7 +5127,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         box.checked = !on;
         text(line, result && result.allow === "missing-member" ? "This server has no member configured." : "Run automatically was not saved.");
       } else {
-        text(line, tool === "slack" ? slackStatusLine(true) : "");
+        text(line, tool === "slack" ? slackStatusLine(true) : tool === "linear" ? linearStatusLine(true, false) : "");
         toast("Saved.");
       }
     }).catch(function () {
@@ -5359,7 +5374,14 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   var slackWorkspaceName = ${JSON.stringify(slackWorkspace)};
+  var linearWorkspaceName = ${JSON.stringify(linearWorkspace)};
   var toolManageKind = "";
+
+  function linearStatusLine(ready, asking) {
+    if (!ready) return "Linear runs automatically.";
+    if (linearWorkspaceName) return "Linear workspace: " + linearWorkspaceName + ".";
+    return asking ? "Linear waits before a change." : "Linear runs automatically.";
+  }
 
   function slackStatusLine(ready) {
     if (!ready) return "Chat and rooms work without Slack. Connect it when a bot token is ready.";
@@ -5399,7 +5421,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var account = document.createElement("p");
     account.className = "tool-manage-account";
     if (kind === "slack") account.textContent = slackWorkspaceName ? "Slack workspace: " + slackWorkspaceName + "." : "Slack is connected for this workspace.";
-    else if (kind === "linear") account.textContent = "Linear is connected for this workspace.";
+    else if (kind === "linear") account.textContent = linearWorkspaceName ? "Linear workspace: " + linearWorkspaceName + "." : "Linear is connected for this workspace.";
     else account.textContent = "Google account for this workspace.";
     var list = document.createElement("ul");
     list.className = "tool-manage-does";
@@ -5456,6 +5478,23 @@ if (sessionWhen && sessionWhen.dataset.at) {
       calendarNote.textContent = "This opens Google. The current Calendar link is replaced after you approve.";
       body.append(calendarActions, calendarNote);
     }
+    if (kind === "linear" && ${JSON.stringify(linearInstall)}) {
+      var linearActions = document.createElement("div");
+      linearActions.className = "wait-actions";
+      var linearButton = document.createElement("button");
+      linearButton.type = "button";
+      linearButton.className = "secondary";
+      linearButton.id = "lin-change-workspace";
+      linearButton.textContent = "Use a different Linear workspace";
+      linearButton.addEventListener("click", function () {
+        location.href = ${JSON.stringify(LINEAR_INSTALL_PATH)} + "?change=1&next=" + encodeURIComponent("/console/setup");
+      });
+      linearActions.append(linearButton);
+      var linearNote = document.createElement("p");
+      linearNote.className = "tool-manage-account";
+      linearNote.textContent = "This opens Linear. You pick the workspace there. The current Linear link is replaced after you approve.";
+      body.append(linearActions, linearNote);
+    }
     if (kind === "slack" && ${JSON.stringify(slackInstall)}) {
       var slackActions = document.createElement("div");
       slackActions.className = "wait-actions";
@@ -5499,6 +5538,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
       }
       if (which === "slack") {
         text("connector-who", "Slack install is not set up on this deployment.");
+        return;
+      }
+      if (which === "linear" && ${JSON.stringify(linearInstall)}) {
+        location.href = ${JSON.stringify(LINEAR_INSTALL_PATH)} + "?next=" + encodeURIComponent("/console/setup");
         return;
       }
       var url = "https://developers.google.com/workspace/calendar/api/guides/configure-mcp-server";
