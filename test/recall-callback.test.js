@@ -177,7 +177,7 @@ test("a transcript lands on the opened meeting room without a typed name", async
   }
 });
 
-test("join sends one bot to the public camera page and a failed join omits the key", async () => {
+test("join leaves the camera off and a failed join omits the key", async () => {
   const key = "recall-key-toolsecret";
   const env = { RECALL_API_KEY: key, RECALL_WEBHOOK_SECRET: secret, SEDERUNT_PUBLIC_ORIGIN: "https://sederunt.example" };
   const meeting = { url: "https://meet.google.com/abc-defg-hij" };
@@ -211,7 +211,7 @@ test("join sends one bot to the public camera page and a failed join omits the k
   const body = JSON.parse(sent[0].init.body);
   assert.equal(body.meeting_url, "https://meet.google.com/abc-defg-hij");
   assert.equal(body.bot_name, "Adam");
-  assert.equal(body.output_media.camera.config.url, "https://sederunt.example/meeting?name=Maple");
+  assert.equal(body.output_media, undefined);
   sent.length = 0;
   await createMeetingAdapter(env, {
     async fetch(url, init) {
@@ -221,7 +221,7 @@ test("join sends one bot to the public camera page and a failed join omits the k
   }).join({ ...meeting, name: "Maple", botName: "Mai" });
   const renamed = JSON.parse(sent[0].init.body);
   assert.equal(renamed.bot_name, "Mai");
-  assert.equal(renamed.output_media.camera.config.url, "https://sederunt.example/meeting?name=Maple");
+  assert.equal(renamed.output_media, undefined);
   assert.deepEqual(body.recording_config, {
     video_mixed_mp4: {},
     transcript: {

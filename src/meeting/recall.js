@@ -42,8 +42,9 @@ export function recallBotUrl(id) {
 }
 
 /**
- * Recall.ai Output Media in ap-northeast-1. Join posts one bot only when the
+ * Recall.ai in ap-northeast-1. Join posts one bot only when the
  * key, an https meeting url, and a public https origin are all present.
+ * The camera stays off so Google Meet draws its own tile. The origin is the transcript webhook.
  * Localhost is refused before any request. The key is never put in the error.
  *
  * @param {NodeJS.ProcessEnv} [env]
@@ -80,9 +81,6 @@ export function createMeetingAdapter(env = process.env, options = {}) {
           body: JSON.stringify({
             meeting_url: meetingUrl,
             bot_name: botName,
-            output_media: {
-              camera: { kind: "webpage", config: { url: cameraUrl } },
-            },
             recording_config: {
               video_mixed_mp4: {},
               transcript: {
