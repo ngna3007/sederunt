@@ -25,6 +25,8 @@ const BUILTIN_TOOLS = [
 ];
 
 const claimedLines = new Set();
+const spokenLines = new Set();
+const pendingFinals = new Set();
 const voiceLanes = new Map();
 
 /** How long the same person can continue without saying the name again. */
@@ -33,33 +35,41 @@ const MEETING_FLOOR_MS = 90_000;
 /**
  * Answer a called line, the next chunk of that call, or the same person while their floor is open.
  * Someone else in the room is not a turn. A bare uh-huh, okay, or thanks is not a turn.
+ * While a reply is still being composed, only that speaker continues it.
  * The armed room is not a reason to speak.
  *
- * @param {{ hearing?: { name?: string, triggers?: string[] }, hearingHold?: { roomId?: string, until?: number }, meetingFloor?: { roomId?: string, speaker?: string, until?: number } } | null | undefined} session
+ * @param {{ hearing?: { name?: string, triggers?: string[] }, hearingHold?: { roomId?: string, until?: number, speaker?: string }, meetingFloor?: { roomId?: string, speaker?: string, until?: number }, meetingCompose?: { roomId?: string, speaker?: string } } | null | undefined} session
  * @param {{ text?: string, addressed?: boolean, room?: { id?: string }, memberId?: string, speakerName?: string } | null | undefined} delivery
  */
 export function meetingLineShouldAnswer(session, delivery) {
   const text = String(delivery?.text || "");
   if (!text.trim()) return false;
   const hearing = session?.hearing;
+  if (sameGuest(delivery?.speakerName, hearing?.name)) return false;
   if (isBackchannel(text, hearing) || isDismiss(text, hearing)) return false;
   const roomId = typeof delivery?.room?.id === "string" ? delivery.room.id : "";
   const addressed = delivery?.addressed === true || addressesHearing(text, hearing);
-  if (addressed) return true;
   const speaker = speakerKey(delivery);
+  const compose = session?.meetingCompose;
+  const composing = Boolean(roomId && compose?.roomId === roomId && compose.speaker);
+  if (composing && speaker && speaker !== compose.speaker && !addressed) return false;
+  if (addressed) return true;
   const floor = session?.meetingFloor;
   const floorOpen = Boolean(roomId && floor?.roomId === roomId && floor.speaker && typeof floor.until === "number" && floor.until > Date.now());
-  if (floorOpen && speaker && speaker === floor.speaker) return true;
+  if (!composing && floorOpen && speaker && speaker === floor.speaker) return true;
+  if (composing && speaker && speaker === compose.speaker) return true;
   const hold = session?.hearingHold;
   const held = Boolean(roomId && hold?.roomId === roomId && typeof hold.until === "number" && hold.until > Date.now());
   if (!held) return false;
+  const holdSpeaker = typeof hold?.speaker === "string" ? hold.speaker : "";
+  if (speaker && holdSpeaker && speaker !== holdSpeaker) return false;
   if (speaker && floorOpen && speaker !== floor.speaker) return false;
   return true;
 }
 
 /**
  * Keep a final line whether or not it is answered. The model can use it later.
- * Partials and the guest's own voice are not stored here.
+ * Partials, the guest's own voice, and a pure backchannel are not stored here.
  *
  * @param {{ hearing?: { name?: string }, roomHeard?: string[] } | null | undefined} session
  * @param {{ text?: string, partial?: boolean, speakerName?: string } | null | undefined} delivery
@@ -67,7 +77,7 @@ export function meetingLineShouldAnswer(session, delivery) {
 export function noteMeetingHeard(session, delivery) {
   if (!session || delivery?.partial) return;
   const text = String(delivery?.text || "").replace(/\s+/g, " ").trim();
-  if (!text || sameGuest(delivery?.speakerName, session.hearing?.name)) return;
+  if (!text || sameGuest(delivery?.speakerName, session.hearing?.name) || isBackchannel(text, session.hearing)) return;
   const who = String(delivery?.speakerName || "").trim() || "Someone";
   const line = `${who}: ${text}`.slice(0, 180);
   const heard = Array.isArray(session.roomHeard) ? session.roomHeard : [];
@@ -84,6 +94,7 @@ export function noteMeetingHeard(session, delivery) {
  */
 export function meetingLineClosesFloor(session, delivery) {
   if (!session || delivery?.partial) return false;
+  if (sameGuest(delivery?.speakerName, session.hearing?.name)) return false;
   const text = String(delivery?.text || "");
   if (!isDismiss(text, session.hearing)) return false;
   const roomId = typeof delivery?.room?.id === "string" ? delivery.room.id : "";
@@ -104,7 +115,7 @@ export function meetingLineClosesFloor(session, delivery) {
  */
 export function refreshMeetingFloor(session, delivery) {
   const roomId = typeof delivery?.room?.id === "string" ? delivery.room.id : "";
-  if (!session || !roomId) return;
+  if (!session || !roomId || sameGuest(delivery?.speakerName, session.hearing?.name)) return;
   if (isDismiss(delivery?.text, session.hearing)) {
     if (!meetingLineClosesFloor(session, delivery)) return;
     if (session.meetingFloor?.roomId === roomId) delete session.meetingFloor;
@@ -114,7 +125,8 @@ export function refreshMeetingFloor(session, delivery) {
   if (isBackchannel(delivery?.text, session.hearing)) return;
   const speaker = speakerKey(delivery);
   if (!speaker) return;
-  session.meetingFloor = { roomId, speaker, until: Date.now() + MEETING_FLOOR_MS };
+  const at = Date.now();
+  session.meetingFloor = { roomId, speaker, until: at + MEETING_FLOOR_MS, at };
 }
 
 function speakerKey(delivery) {
@@ -218,6 +230,7 @@ export function spokenLine(text) {
 /**
  * Spoken answer for one addressed meeting line.
  * A new line before this one is spoken joins it. A new request after speech starts, or while a write is running, replaces this answer. The write still finishes.
+ * The replacement clip is not handed off until that stop has finished, so a late delete cannot drop it.
  * Uh-huh, okay, and yeah during speech or a write do not replace it.
  * A failure does not throw: the keep is already stored.
  * A write is submitted through the MCP gate and is never confirmed here.
@@ -259,8 +272,17 @@ export async function speakMeetingTurn(input = {}) {
     botId = typeof input.room?.id === "string" ? input.room.id : "";
     if (!recallKey || !botId || botId === "meeting") return { spoke: false };
     if (isDismiss(text, input.session?.hearing)) return { spoke: false };
-    if (!claimLine(botId, input.deliveryId)) return { spoke: false };
-    const opened = beginTurn(botId, text, input.session?.hearing);
+    const presence = presenceCheck(text);
+    // Claim before the turn starts so a second copy cannot speak or cancel the first.
+    if (!claimOnce(botId, input.deliveryId)) {
+      settleDuplicate(botId, input, text, "line", input.deliveryId);
+      return { spoke: false };
+    }
+    if (presence && !claimOnce(botId, input.utteranceId)) {
+      settleDuplicate(botId, input, text, "utterance", input.utteranceId);
+      return { spoke: false };
+    }
+    const opened = beginTurn(botId, text, input.session?.hearing, input.session, input, input.cutPlayback);
     generation = opened.generation;
     if (opened.skip) return { spoke: false };
 
@@ -276,6 +298,8 @@ export async function speakMeetingTurn(input = {}) {
       if (!spoken) return false;
       const audio = await openRouterSpeech({ env, text: spoken, fetchImpl });
       if (!audio.audio || !stillMine()) return false;
+      if (opened.cut) await opened.cut;
+      if (!stillMine()) return false;
       const played = await enqueueClip(botId, async () => {
         if (!stillMine()) return false;
         const lane = laneFor(botId);
@@ -283,22 +307,34 @@ export async function speakMeetingTurn(input = {}) {
         lane.audible = true;
         if (typeof input.deliver === "function") {
           try {
-            if (await input.deliver(audio.audio) === true) return true;
+            if (typeof input.stageFloor === "function") {
+              const speaker = speakerKey(input);
+              if (speaker) input.stageFloor({ roomId: botId, speaker });
+            }
+            if (await input.deliver(audio.audio) === true) return "queued";
           } catch {
             // The page missed the clip. Output Audio can still play it.
           }
         }
         if (!stillMine()) return false;
-        return playClip({
+        const sent = await playClip({
           fetchImpl,
           apiKey: recallKey,
           botId,
           audio: audio.audio,
           wait: input.wait,
         });
+        return sent === true ? "played" : false;
       });
-      if (!played || !stillMine()) return false;
+      if ((played !== "queued" && played !== "played") || !stillMine()) return false;
       session.lastVoiceLine = spoken;
+      // The page queue is not playback. The floor opens when that clip is taken, or when Output Audio accepts it.
+      if (played === "played") {
+        markSpoken(botId, input.deliveryId, input.utteranceId);
+        if (input.partial !== true || finalIsWaiting(botId, input.deliveryId, input.utteranceId)) {
+          answeredFloor(session, input, text);
+        }
+      }
       const turns = priorTurns(session);
       if (!heard) turns.push({ role: "user", content: `${who}: ${heardText}` });
       heard = true;
@@ -307,11 +343,7 @@ export async function speakMeetingTurn(input = {}) {
       return true;
     };
     // A check is one canned line. The model and the tool list wait for a real question.
-    if (presenceCheck(text)) {
-      if (!claimUtterance(botId, input.utteranceId)) {
-        finishTurn(botId, generation);
-        return { spoke: false };
-      }
+    if (presence) {
       await sayLine("Yes, I can hear you.");
       finishTurn(botId, generation);
       return { spoke: heard };
@@ -334,7 +366,6 @@ export async function speakMeetingTurn(input = {}) {
     ];
     const models = voiceModels(env);
     const runTool = input.runTool || defaultRunTool;
-    const beat = Number.isFinite(input.toolBeatMs) ? input.toolBeatMs : 500;
     let spoken = "";
     const toolLines = [];
     const rounds = 3;
@@ -372,9 +403,6 @@ export async function speakMeetingTurn(input = {}) {
         lane.phase = "holding";
         lane.toolHold = true;
       }
-      const stillRunning = await toolsStillRunning(pending, beat);
-      const ack = toolAck(calls);
-      if (stillRunning && ack && stillMine()) await sayLine(ack);
       await Promise.all(pending.map((job) => job.done));
       if (!stillMine()) return { spoke: false };
       const lane = laneFor(botId);
@@ -584,26 +612,41 @@ function laneFor(botId) {
   return lane;
 }
 
-function beginTurn(botId, text, hearing) {
+function beginTurn(botId, text, hearing, session, delivery, cutPlayback) {
   const lane = laneFor(botId);
   if (isBackchannel(text, hearing)) return { skip: true, generation: lane.generation, lines: [] };
-  if (lane.phase === "thinking" && lane.open) {
+  const speaker = speakerKey(delivery);
+  const composeSpeaker = session?.meetingCompose?.roomId === botId ? session.meetingCompose.speaker : "";
+  const sameComposer = Boolean(speaker && composeSpeaker && speaker === composeSpeaker);
+  // A bare wait drops the reply still being composed. The same speaker's longer line still joins it.
+  if (lane.phase === "thinking" && lane.open && !isInterrupt(text, hearing) && sameComposer) {
     lane.lines.push(text);
     lane.generation += 1;
-    return { skip: false, generation: lane.generation, lines: lane.lines.slice() };
+    return { skip: false, generation: lane.generation, lines: lane.lines.slice(), cut: null };
   }
+  const replacing = lane.generation > 0;
   lane.generation += 1;
   lane.lines = [text];
   lane.phase = "thinking";
   lane.open = true;
   lane.audible = false;
   lane.toolHold = false;
-  return { skip: false, generation: lane.generation, lines: lane.lines.slice() };
+  if (session && speaker) {
+    session.meetingCompose = { roomId: botId, speaker };
+    lane.composeSession = session;
+  }
+  const cut = replacing && typeof cutPlayback === "function"
+    ? Promise.resolve().then(() => cutPlayback()).catch(() => {})
+    : null;
+  return { skip: false, generation: lane.generation, lines: lane.lines.slice(), cut };
 }
 
 function finishTurn(botId, generation) {
   const lane = laneFor(botId);
   if (lane.generation !== generation) return;
+  const session = lane.composeSession;
+  if (session?.meetingCompose?.roomId === botId) delete session.meetingCompose;
+  lane.composeSession = null;
   lane.phase = "idle";
   lane.open = false;
   lane.audible = false;
@@ -615,6 +658,10 @@ function isBackchannel(text, hearing) {
   const stripped = phraseResidue(text, hearing);
   if (!stripped || stripped.length > 20) return false;
   return /^(uh huh|mm hmm|mmm|mm|yeah|yep|okay|ok|right|sure|got it|makes sense)$/.test(stripped);
+}
+
+function isInterrupt(text, hearing) {
+  return phraseResidue(text, hearing) === "wait";
 }
 
 function enqueueClip(botId, run) {
@@ -656,38 +703,84 @@ function startMeetingTool(call, ctx) {
   return job;
 }
 
-async function toolsStillRunning(pending, beat) {
-  if (beat <= 0) return pending.some((job) => !job.settled);
-  let timer;
-  const mark = await Promise.race([
-    Promise.all(pending.map((job) => job.done)).then(() => "done"),
-    new Promise((resolve) => { timer = setTimeout(() => resolve("slow"), beat); }),
-  ]);
-  clearTimeout(timer);
-  return mark === "slow";
+function answeredFloor(session, input, text) {
+  refreshMeetingFloor(session, {
+    text,
+    room: input.room,
+    memberId: input.memberId,
+    speakerName: input.speakerName,
+  });
 }
 
-function toolAck(calls) {
-  const names = calls.map((call) => call.name);
-  if (names.some((name) => name !== "recall")) return "";
-  if (names.length > 1) return "I'm on those.";
-  return "I'm looking that up.";
-}
-
-function claimLine(roomId, deliveryId) {
-  const id = String(deliveryId || "").trim();
-  if (!id) return true;
-  const key = `${roomId}:${id}`;
-  if (claimedLines.has(key)) return false;
-  claimedLines.add(key);
-  if (claimedLines.size > 400) claimedLines.delete(claimedLines.values().next().value);
+/**
+ * Copy a floor that opened because the page took the clip.
+ * A queued clip has no floor yet. A close newer than the session copy drops that copy.
+ *
+ * @param {{ meetingFloor?: { roomId?: string, speaker?: string, until?: number, at?: number } } | null | undefined} session
+ * @param {{ roomId?: string, speaker?: string, until?: number, at?: number } | null | undefined} played
+ * @param {string} roomId
+ * @param {number} [closedAt]
+ * @returns {boolean}
+ */
+export function applyPlayedFloor(session, played, roomId, closedAt = 0) {
+  if (!session || !roomId) return false;
+  const closed = Number(closedAt) || 0;
+  const floor = session.meetingFloor;
+  if (floor?.roomId === roomId && closed > 0) {
+    const openedAt = Number(floor.at) || (typeof floor.until === "number" ? floor.until - 90_000 : 0);
+    if (openedAt > 0 && closed >= openedAt) delete session.meetingFloor;
+  }
+  if (!played || played.roomId !== roomId || !played.speaker || !(played.until > Date.now())) return false;
+  if (closed > 0 && (Number(played.at) || 0) <= closed) return false;
+  const current = session.meetingFloor;
+  if (current?.roomId === played.roomId && current.speaker === played.speaker && current.until >= played.until) return false;
+  session.meetingFloor = {
+    roomId: played.roomId,
+    speaker: played.speaker,
+    until: played.until,
+    at: Number(played.at) || Date.now(),
+  };
   return true;
 }
 
-function claimUtterance(roomId, utteranceId) {
-  const id = String(utteranceId || "").trim();
-  if (!id) return true;
-  const key = `${roomId}:${id}`;
+function settleDuplicate(roomId, input, text, kind, id) {
+  if (input.partial === true) return;
+  rememberLine(pendingFinals, lineKey(roomId, kind, id));
+  if (spokenBefore(roomId, kind, id)) answeredFloor(input.session, input, text);
+}
+
+function lineKey(roomId, kind, id) {
+  const value = String(id || "").trim();
+  if (!roomId || !value) return "";
+  return `${kind}:${roomId}:${value}`;
+}
+
+function rememberLine(set, key) {
+  if (!key) return;
+  set.add(key);
+  if (set.size > 400) set.delete(set.values().next().value);
+}
+
+function markSpoken(roomId, deliveryId, utteranceId) {
+  rememberLine(spokenLines, lineKey(roomId, "line", deliveryId));
+  rememberLine(spokenLines, lineKey(roomId, "utterance", utteranceId));
+}
+
+function spokenBefore(roomId, kind, id) {
+  const key = lineKey(roomId, kind, id);
+  return Boolean(key && spokenLines.has(key));
+}
+
+function finalIsWaiting(roomId, deliveryId, utteranceId) {
+  const line = lineKey(roomId, "line", deliveryId);
+  const utterance = lineKey(roomId, "utterance", utteranceId);
+  return Boolean((line && pendingFinals.has(line)) || (utterance && pendingFinals.has(utterance)));
+}
+
+function claimOnce(roomId, id) {
+  const value = String(id || "").trim();
+  if (!value) return true;
+  const key = `${roomId}:${value}`;
   if (claimedLines.has(key)) return false;
   claimedLines.add(key);
   if (claimedLines.size > 400) claimedLines.delete(claimedLines.values().next().value);

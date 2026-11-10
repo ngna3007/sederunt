@@ -76,10 +76,19 @@ function meetingRoomId(input) {
   return typeof input.room?.id === "string" ? input.room.id.trim() : "";
 }
 
-function armMeetingHearing(session, roomId) {
+function meetingSpeakerKey(input) {
+  const id = String(input?.memberId || "").trim();
+  if (id) return `id:${id}`;
+  const name = String(input?.speakerName || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  return name ? `name:${name}` : "";
+}
+
+function armMeetingHearing(session, roomId, speaker) {
   if (!roomId) return;
   const until = Date.now() + HEARING_HOLD_MS;
-  session.hearingHold = { roomId, until };
+  const hold = { roomId, until };
+  if (speaker) hold.speaker = speaker;
+  session.hearingHold = hold;
   session.hearingArmedRooms ??= new Set();
   session.hearingArmedRooms.add(roomId);
 }
@@ -134,14 +143,14 @@ export async function handleUtterance(input, deps = {}) {
       session.hearingArmedRooms.add(roomId);
     }
     if (addressedNow && !String(stripped).trim()) {
-      armMeetingHearing(session, roomId);
+      armMeetingHearing(session, roomId, meetingSpeakerKey(input));
       return silence();
     }
     // Refresh the short hold after a remember-this keep so a split
     // continuation can still enter. Other addressed lines consume it,
     // matching Slack-adjacent meeting tests and avoiding leftover holds.
     if (roomId && rememberKeep) {
-      armMeetingHearing(session, roomId);
+      armMeetingHearing(session, roomId, meetingSpeakerKey(input));
     } else if (roomId) {
       if (session.hearingHold) delete session.hearingHold;
     }
@@ -313,7 +322,12 @@ function enters(input) {
   const roomId = meetingRoomId(input);
   if (!roomId) return false;
   const until = input.session?.hearingHold?.roomId === roomId ? input.session.hearingHold.until : 0;
-  if (typeof until === "number" && until > Date.now()) return true;
+  if (typeof until === "number" && until > Date.now()) {
+    const speaker = meetingSpeakerKey(input);
+    const holdSpeaker = input.session?.hearingHold?.speaker;
+    if (speaker && holdSpeaker && speaker !== holdSpeaker) return false;
+    return true;
+  }
   return roomHearingArmed(input.session, roomId) && meetingRememberKeep(input.text, hearing);
 }
 

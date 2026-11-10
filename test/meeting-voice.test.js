@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { meetingLineClosesFloor, meetingLineShouldAnswer, meetingToolArguments, noteMeetingHeard, refreshMeetingFloor, speakMeetingTurn, spokenLine } from "../src/meeting/voice.js";
+import { applyPlayedFloor, meetingLineClosesFloor, meetingLineShouldAnswer, meetingToolArguments, noteMeetingHeard, refreshMeetingFloor, speakMeetingTurn, spokenLine } from "../src/meeting/voice.js";
 
 const env = {
   OPENROUTER_API_KEY: "sk-test-voice",
@@ -131,6 +131,36 @@ test("wait stays a request, and thanks with the name still closes", () => {
   const thanksJane = { text: "thanks Mary Jane", room, memberId: "200", speakerName: "Lan" };
   assert.equal(meetingLineShouldAnswer(jane, thanksJane), false);
   assert.equal(meetingLineClosesFloor(jane, thanksJane), true);
+});
+
+test("a short hold stays with the caller, and a line with no speaker still enters", () => {
+  const room = { id: "bot-1" };
+  const session = {
+    hearing: { name: "Adam", triggers: ["hey adam"] },
+    hearingHold: { roomId: "bot-1", speaker: "id:100", until: Date.now() + 15_000 },
+  };
+  assert.equal(meetingLineShouldAnswer(session, { text: "what time is the launch", room, memberId: "200", speakerName: "Lan" }), false);
+  assert.equal(meetingLineShouldAnswer(session, { text: "what time is the launch", room }), true);
+  assert.equal(meetingLineShouldAnswer(session, { text: "what time is the launch", room, memberId: "100", speakerName: "Anh" }), true);
+});
+
+test("a backchannel stays out of the model context", () => {
+  const session = { hearing: { name: "Adam", triggers: ["hey adam"] }, roomHeard: [] };
+  const room = { id: "bot-1" };
+  noteMeetingHeard(session, { text: "okay", room, memberId: "100", speakerName: "Anh" });
+  noteMeetingHeard(session, { text: "the launch moved", room, memberId: "200", speakerName: "Lan" });
+  noteMeetingHeard(session, { text: "I can hear you", room, speakerName: "Adam" });
+  assert.deepEqual(session.roomHeard, ["Lan: the launch moved"]);
+});
+
+test("the guest's own line does not take the floor", () => {
+  const session = { hearing: { name: "Adam", triggers: ["hey adam"] } };
+  const room = { id: "bot-1" };
+  const own = { text: "the launch is Thursday", room, memberId: "9", speakerName: "Adam" };
+  assert.equal(meetingLineShouldAnswer(session, own), false);
+  assert.equal(meetingLineClosesFloor(session, { ...own, text: "thanks" }), false);
+  refreshMeetingFloor(session, own);
+  assert.equal(session.meetingFloor, undefined);
 });
 
 test("recall and act keep the transcript member and drop a model member id", () => {
@@ -473,6 +503,544 @@ test("an unanswered model still says it could not answer", async () => {
   assert.equal(speech.input, "I could not answer that just now.");
 });
 
+test("the floor opens when the answer is spoken", async () => {
+  let release = () => {};
+  const gate = new Promise((resolve) => { release = resolve; });
+  let saw = () => {};
+  const ready = new Promise((resolve) => { saw = resolve; });
+  const http = scripted(async (url) => {
+    if (url.includes("/chat/completions")) {
+      saw();
+      await gate;
+      return chat({ content: "The launch is Thursday." });
+    }
+    if (url.includes("/audio/speech")) return mp3Response();
+    if (url.includes("/output_audio/")) return { ok: true, async text() { return ""; } };
+    throw new Error(`unexpected ${url}`);
+  });
+  const session = { hearing: { name: "Adam", triggers: ["hey adam"] } };
+  const turn = speakMeetingTurn({
+    answer: true,
+    text: "Adam, when is the launch",
+    speakerName: "Anh",
+    botName: "Adam",
+    memberId: "100",
+    room: { id: "bot-floor-open" },
+    session,
+    deliveryId: "floor-open",
+    env,
+    fetchImpl: http.fetch,
+  });
+  await ready;
+  assert.equal(session.meetingFloor, undefined);
+  release();
+  assert.equal((await turn).spoke, true);
+  assert.equal(session.meetingFloor.speaker, "id:100");
+  assert.ok(session.meetingFloor.until > Date.now());
+});
+
+test("a presence partial does not open the floor, and the final does", async () => {
+  const http = scripted((url) => {
+    if (url.includes("/audio/speech")) return mp3Response();
+    if (url.includes("/output_audio/")) return { ok: true, async text() { return ""; } };
+    throw new Error(`unexpected ${url}`);
+  });
+  const session = { hearing: { name: "Adam" } };
+  const base = {
+    answer: true,
+    text: "hey adam can you hear me",
+    speakerName: "Anh",
+    botName: "Adam",
+    memberId: "100",
+    room: { id: "bot-partial-floor" },
+    session,
+    utteranceId: "tr-floor",
+    env,
+    fetchImpl: http.fetch,
+  };
+  const early = await speakMeetingTurn({ ...base, partial: true, deliveryId: "partial-floor" });
+  assert.equal(early.spoke, true);
+  assert.equal(session.meetingFloor, undefined);
+  const finalLine = await speakMeetingTurn({ ...base, deliveryId: "final-floor" });
+  assert.equal(finalLine.spoke, false);
+  assert.equal(session.meetingFloor.speaker, "id:100");
+  const again = { hearing: { name: "Adam" } };
+  const repeated = {
+    ...base,
+    session: again,
+    room: { id: "bot-same-delivery" },
+    utteranceId: "tr-same",
+    deliveryId: "same-line",
+  };
+  assert.equal((await speakMeetingTurn({ ...repeated, partial: true })).spoke, true);
+  assert.equal(again.meetingFloor, undefined);
+  assert.equal((await speakMeetingTurn(repeated)).spoke, false);
+  assert.equal(again.meetingFloor.speaker, "id:100");
+});
+
+test("a final does not open the floor when the answer never played", async () => {
+  const http = scripted((url) => {
+    if (url.includes("/audio/speech")) return mp3Response();
+    if (url.includes("/output_audio/")) return { ok: false, async text() { return ""; } };
+    throw new Error(`unexpected ${url}`);
+  });
+  const failed = {
+    answer: true,
+    text: "hey adam can you hear me",
+    speakerName: "Anh",
+    botName: "Adam",
+    memberId: "100",
+    env,
+    fetchImpl: http.fetch,
+    wait: async () => {},
+  };
+  const same = { hearing: { name: "Adam" } };
+  const sameBase = { ...failed, session: same, room: { id: "bot-unplayed-same" }, utteranceId: "tr-unplayed-same", deliveryId: "unplayed-same" };
+  assert.equal((await speakMeetingTurn({ ...sameBase, partial: true })).spoke, false);
+  assert.equal(same.meetingFloor, undefined);
+  assert.equal((await speakMeetingTurn(sameBase)).spoke, false);
+  assert.equal(same.meetingFloor, undefined);
+  const other = { hearing: { name: "Adam" } };
+  const otherBase = { ...failed, session: other, room: { id: "bot-unplayed-other" }, utteranceId: "tr-unplayed-other" };
+  assert.equal((await speakMeetingTurn({ ...otherBase, partial: true, deliveryId: "unplayed-partial" })).spoke, false);
+  assert.equal((await speakMeetingTurn({ ...otherBase, deliveryId: "unplayed-final" })).spoke, false);
+  assert.equal(other.meetingFloor, undefined);
+});
+
+test("a presence final during playback still lets the check finish", async () => {
+  let release = () => {};
+  const gate = new Promise((resolve) => { release = resolve; });
+  let saw = () => {};
+  const ready = new Promise((resolve) => { saw = resolve; });
+  const http = scripted(async (url) => {
+    if (url.includes("/audio/speech")) return mp3Response();
+    if (url.includes("/output_audio/")) {
+      saw();
+      await gate;
+      return { ok: true, async text() { return ""; } };
+    }
+    throw new Error(`unexpected ${url}`);
+  });
+  const session = { hearing: { name: "Adam" } };
+  const base = {
+    answer: true,
+    text: "hey adam can you hear me",
+    speakerName: "Anh",
+    botName: "Adam",
+    memberId: "100",
+    room: { id: "bot-final-during-play" },
+    session,
+    utteranceId: "tr-during",
+    env,
+    fetchImpl: http.fetch,
+  };
+  const partial = speakMeetingTurn({ ...base, partial: true, deliveryId: "during-partial" });
+  await ready;
+  const finalLine = await speakMeetingTurn({ ...base, deliveryId: "during-final" });
+  assert.equal(finalLine.spoke, false);
+  assert.equal(session.meetingFloor, undefined);
+  release();
+  assert.equal((await partial).spoke, true);
+  assert.equal(session.meetingFloor.speaker, "id:100");
+  const said = http.calls.filter((call) => call.url.includes("/audio/speech")).map((call) => JSON.parse(call.init.body).input);
+  assert.deepEqual(said, ["Yes, I can hear you."]);
+});
+
+test("wait replaces a reply that has not been spoken", async () => {
+  let releaseChat = () => {};
+  const chatGate = new Promise((resolve) => { releaseChat = resolve; });
+  let sawFirst = () => {};
+  const firstReady = new Promise((resolve) => { sawFirst = resolve; });
+  const users = [];
+  const http = scripted(async (url, init) => {
+    if (url.includes("/chat/completions")) {
+      const body = JSON.parse(init.body);
+      const user = body.messages.filter((row) => row.role === "user").map((row) => String(row.content || "")).join("\n");
+      users.push(user);
+      if (users.length === 1) {
+        sawFirst();
+        await chatGate;
+        return chat({ content: "I only heard the first request." });
+      }
+      return chat({ content: "Okay, I am waiting." });
+    }
+    if (url.includes("/audio/speech")) return mp3Response();
+    if (url.includes("/output_audio/")) return { ok: true, async text() { return ""; } };
+    throw new Error(`unexpected ${url}`);
+  });
+  const base = {
+    answer: true,
+    speakerName: "Anh",
+    botName: "Adam",
+    memberId: "100",
+    room: { id: "bot-wait" },
+    session: { hearing: { name: "Adam", triggers: ["hey adam"] } },
+    env,
+    fetchImpl: http.fetch,
+  };
+  const first = speakMeetingTurn({ ...base, text: "Adam, file a booth ticket", deliveryId: "wait-1" });
+  await firstReady;
+  const second = speakMeetingTurn({ ...base, text: "Adam, wait", deliveryId: "wait-2" });
+  releaseChat();
+  const [older, newer] = await Promise.all([first, second]);
+  assert.equal(older.spoke, false);
+  assert.equal(newer.spoke, true);
+  assert.equal(users.at(-1).includes("wait"), true);
+  assert.equal(users.at(-1).includes("file a booth ticket"), false);
+  const said = http.calls.filter((call) => call.url.includes("/audio/speech")).map((call) => JSON.parse(call.init.body).input);
+  assert.deepEqual(said, ["Okay, I am waiting."]);
+});
+
+test("a longer line that starts with wait still joins the reply being composed", async () => {
+  let releaseChat = () => {};
+  const chatGate = new Promise((resolve) => { releaseChat = resolve; });
+  let sawFirst = () => {};
+  const firstReady = new Promise((resolve) => { sawFirst = resolve; });
+  const users = [];
+  const http = scripted(async (url, init) => {
+    if (url.includes("/chat/completions")) {
+      const body = JSON.parse(init.body);
+      const user = body.messages.filter((row) => row.role === "user").map((row) => String(row.content || "")).join("\n");
+      users.push(user);
+      if (users.length === 1) {
+        sawFirst();
+        await chatGate;
+        return chat({ content: "I only heard the first request." });
+      }
+      return chat({ content: "The other ticket is filed." });
+    }
+    if (url.includes("/audio/speech")) return mp3Response();
+    if (url.includes("/output_audio/")) return { ok: true, async text() { return ""; } };
+    throw new Error(`unexpected ${url}`);
+  });
+  const base = {
+    answer: true,
+    speakerName: "Anh",
+    botName: "Adam",
+    memberId: "100",
+    room: { id: "bot-wait-more" },
+    session: { hearing: { name: "Adam", triggers: ["hey adam"] } },
+    env,
+    fetchImpl: http.fetch,
+  };
+  const first = speakMeetingTurn({ ...base, text: "Adam, file a booth ticket", deliveryId: "wait-more-1" });
+  await firstReady;
+  const second = speakMeetingTurn({ ...base, text: "Adam, wait, also file the other ticket", deliveryId: "wait-more-2" });
+  releaseChat();
+  const [older, newer] = await Promise.all([first, second]);
+  assert.equal(older.spoke, false);
+  assert.equal(newer.spoke, true);
+  assert.equal(users.some((line) => line.includes("file a booth ticket") && line.includes("file the other ticket")), true);
+});
+
+test("the same caller can continue while a reply is composing, and someone else cannot", async () => {
+  const users = [];
+  let releaseChat = () => {};
+  let chatGate = new Promise((resolve) => { releaseChat = resolve; });
+  let sawChat = () => {};
+  let chatReady = new Promise((resolve) => { sawChat = resolve; });
+  let releasePlay = () => {};
+  let playGate = new Promise((resolve) => { releasePlay = resolve; });
+  let sawPlay = () => {};
+  let playReady = new Promise((resolve) => { sawPlay = resolve; });
+  const arm = () => {
+    chatGate = new Promise((resolve) => { releaseChat = resolve; });
+    chatReady = new Promise((resolve) => { sawChat = resolve; });
+    playGate = new Promise((resolve) => { releasePlay = resolve; });
+    playReady = new Promise((resolve) => { sawPlay = resolve; });
+  };
+  const http = scripted(async (url, init) => {
+    if (url.includes("/chat/completions")) {
+      const body = JSON.parse(init.body);
+      const user = body.messages.filter((row) => row.role === "user").map((row) => String(row.content || "")).join("\n");
+      users.push(user);
+      if (user.includes("file a booth ticket") && !user.includes("make it about the launch")) {
+        sawChat();
+        await chatGate;
+        return chat({ content: "I only heard the first request." });
+      }
+      if (user.includes("make it about the launch")) return chat({ content: "The booth opens at nine, for the launch." });
+      if (user.includes("wait")) return chat({ content: "Okay, I am waiting." });
+      return chat({ content: "Okay." });
+    }
+    if (url.includes("/audio/speech")) return mp3Response();
+    if (url.includes("/output_audio/")) {
+      sawPlay();
+      await playGate;
+      return { ok: true, async text() { return ""; } };
+    }
+    throw new Error(`unexpected ${url}`);
+  });
+  const hearing = { name: "Adam", triggers: ["hey adam"] };
+  const joinSession = { hearing };
+  const joinRoom = { id: "bot-compose-join" };
+  const joinBase = {
+    answer: true,
+    speakerName: "Anh",
+    botName: "Adam",
+    memberId: "100",
+    room: joinRoom,
+    session: joinSession,
+    env,
+    fetchImpl: http.fetch,
+  };
+  const joining = speakMeetingTurn({ ...joinBase, text: "Adam, file a booth ticket", deliveryId: "compose-join-1" });
+  await chatReady;
+  assert.equal(joinSession.hearingHold, undefined);
+  assert.equal(joinSession.meetingFloor, undefined);
+  const follow = { text: "make it about the launch", room: joinRoom, memberId: "100", speakerName: "Anh" };
+  const other = { text: "make it about the launch", room: joinRoom, memberId: "200", speakerName: "Lan" };
+  const elsewhere = { text: "make it about the launch", room: { id: "bot-other" }, memberId: "100", speakerName: "Anh" };
+  assert.equal(meetingLineShouldAnswer(joinSession, follow), true);
+  assert.equal(meetingLineShouldAnswer(joinSession, { text: "wait", room: joinRoom, memberId: "100", speakerName: "Anh" }), true);
+  assert.equal(meetingLineShouldAnswer(joinSession, { text: "okay", room: joinRoom, memberId: "100", speakerName: "Anh" }), false);
+  assert.equal(meetingLineShouldAnswer(joinSession, other), false);
+  assert.equal(meetingLineShouldAnswer(joinSession, elsewhere), false);
+  assert.equal(joinSession.meetingFloor, undefined);
+  const joined = speakMeetingTurn({ ...joinBase, text: follow.text, deliveryId: "compose-join-2" });
+  releaseChat();
+  await playReady;
+  assert.equal(joinSession.meetingFloor, undefined);
+  releasePlay();
+  const [olderJoin, newerJoin] = await Promise.all([joining, joined]);
+  assert.equal(olderJoin.spoke, false);
+  assert.equal(newerJoin.spoke, true);
+  assert.equal(joinSession.meetingFloor.speaker, "id:100");
+  joinSession.meetingFloor.until = Date.now() - 1;
+  assert.equal(meetingLineShouldAnswer(joinSession, follow), false);
+  assert.equal(users.some((line) => line.includes("file a booth ticket") && line.includes("make it about the launch")), true);
+  assert.equal(users.some((line) => line.includes("Lan")), false);
+
+  arm();
+  users.length = 0;
+  const waitSession = { hearing };
+  const waitRoom = { id: "bot-compose-wait" };
+  const waitBase = { ...joinBase, room: waitRoom, session: waitSession };
+  const waiting = speakMeetingTurn({ ...waitBase, text: "Adam, file a booth ticket", deliveryId: "compose-wait-1" });
+  await chatReady;
+  assert.equal(waitSession.meetingFloor, undefined);
+  const holdOn = { text: "wait", room: waitRoom, memberId: "100", speakerName: "Anh" };
+  assert.equal(meetingLineShouldAnswer(waitSession, holdOn), true);
+  assert.equal(meetingLineShouldAnswer(waitSession, { text: "wait", room: waitRoom, memberId: "200", speakerName: "Lan" }), false);
+  assert.equal(waitSession.meetingFloor, undefined);
+  const held = speakMeetingTurn({ ...waitBase, text: holdOn.text, deliveryId: "compose-wait-2" });
+  releaseChat();
+  await playReady;
+  assert.equal(waitSession.meetingFloor, undefined);
+  releasePlay();
+  const [olderWait, newerWait] = await Promise.all([waiting, held]);
+  assert.equal(olderWait.spoke, false);
+  assert.equal(newerWait.spoke, true);
+  assert.equal(users.at(-1).includes("wait"), true);
+  assert.equal(users.at(-1).includes("file a booth ticket"), false);
+  assert.equal(waitSession.meetingFloor.speaker, "id:100");
+  waitSession.meetingFloor.until = Date.now() - 1;
+  assert.equal(meetingLineShouldAnswer(waitSession, holdOn), false);
+  const said = http.calls.filter((call) => call.url.includes("/audio/speech")).map((call) => JSON.parse(call.init.body).input);
+  assert.deepEqual(said, ["The booth opens at nine, for the launch.", "Okay, I am waiting."]);
+});
+
+test("a floor owner does not join another speaker's reply", async () => {
+  const users = [];
+  let releaseChat = () => {};
+  const chatGate = new Promise((resolve) => { releaseChat = resolve; });
+  let sawChat = () => {};
+  const chatReady = new Promise((resolve) => { sawChat = resolve; });
+  const http = scripted(async (url, init) => {
+    if (url.includes("/chat/completions")) {
+      const body = JSON.parse(init.body);
+      const user = body.messages.filter((row) => row.role === "user").map((row) => String(row.content || "")).join("\n");
+      users.push(user);
+      if (user.includes("file a booth ticket")) {
+        sawChat();
+        await chatGate;
+        return chat({ content: "I only heard the first request." });
+      }
+      return chat({ content: "Pricing is on the sheet." });
+    }
+    if (url.includes("/audio/speech")) return mp3Response();
+    if (url.includes("/output_audio/")) return { ok: true, async text() { return ""; } };
+    throw new Error(`unexpected ${url}`);
+  });
+  const room = { id: "bot-floor-owner" };
+  const session = { hearing: { name: "Adam", triggers: ["hey adam"] } };
+  const base = {
+    answer: true,
+    speakerName: "Anh",
+    botName: "Adam",
+    memberId: "100",
+    room,
+    session,
+    env,
+    fetchImpl: http.fetch,
+  };
+  const first = speakMeetingTurn({ ...base, text: "Adam, file a booth ticket", deliveryId: "floor-owner-1" });
+  await chatReady;
+  session.meetingFloor = { roomId: room.id, speaker: "id:200", until: Date.now() + 90_000 };
+  const side = { text: "what about pricing", room, memberId: "200", speakerName: "Lan" };
+  const called = { text: "Adam, what about pricing", room, memberId: "200", speakerName: "Lan" };
+  assert.equal(meetingLineShouldAnswer(session, side), false);
+  assert.equal(meetingLineShouldAnswer(session, called), true);
+  const second = speakMeetingTurn({
+    ...base,
+    text: called.text,
+    speakerName: "Lan",
+    memberId: "200",
+    deliveryId: "floor-owner-2",
+  });
+  releaseChat();
+  const [older, newer] = await Promise.all([first, second]);
+  assert.equal(older.spoke, false);
+  assert.equal(newer.spoke, true);
+  assert.equal(users.some((line) => line.includes("file a booth ticket") && line.includes("what about pricing")), false);
+  assert.equal(users.at(-1).includes("what about pricing"), true);
+  assert.equal(users.at(-1).includes("file a booth ticket"), false);
+});
+
+test("a replacement clip waits until the hold finishes", async () => {
+  let chatHits = 0;
+  let delivered = false;
+  const http = scripted(async (url) => {
+    if (url.includes("/chat/completions")) {
+      chatHits += 1;
+      return chat({ content: "Pricing is on the sheet." });
+    }
+    if (url.includes("/audio/speech")) return mp3Response();
+    if (url.includes("/output_audio/")) return { ok: true, async text() { return ""; } };
+    throw new Error(`unexpected ${url}`);
+  });
+  const room = { id: "bot-cut-wait" };
+  const session = { hearing: { name: "Adam", triggers: ["hey adam"] } };
+  const base = {
+    answer: true,
+    speakerName: "Anh",
+    botName: "Adam",
+    memberId: "100",
+    room,
+    session,
+    env,
+    fetchImpl: http.fetch,
+  };
+  const first = await speakMeetingTurn({
+    ...base,
+    text: "hey adam",
+    deliveryId: "cut-wait-1",
+    utteranceId: "cut-wait-u1",
+  });
+  assert.equal(first.spoke, true);
+  let releaseCut = () => {};
+  const cutGate = new Promise((resolve) => { releaseCut = resolve; });
+  let markCut = () => {};
+  const cutSeen = new Promise((resolve) => { markCut = resolve; });
+  const second = speakMeetingTurn({
+    ...base,
+    text: "Adam, what is the price",
+    deliveryId: "cut-wait-2",
+    cutPlayback: () => {
+      markCut();
+      return cutGate;
+    },
+    deliver: async () => {
+      delivered = true;
+      return true;
+    },
+  });
+  await cutSeen;
+  for (let i = 0; i < 30; i += 1) await Promise.resolve();
+  assert.equal(chatHits, 1);
+  assert.equal(delivered, false);
+  releaseCut();
+  const result = await second;
+  assert.equal(result.spoke, true);
+  assert.equal(delivered, true);
+});
+
+test("queueing a page clip does not open the floor", async () => {
+  const http = scripted((url) => {
+    if (url.includes("/audio/speech")) return mp3Response();
+    if (url.includes("/output_audio/")) return { ok: true, async text() { return ""; } };
+    throw new Error(`unexpected ${url}`);
+  });
+  const session = { hearing: { name: "Adam" } };
+  const result = await speakMeetingTurn({
+    answer: true,
+    text: "hey adam can you hear me",
+    speakerName: "Anh",
+    botName: "Adam",
+    memberId: "100",
+    room: { id: "bot-queued-floor" },
+    session,
+    deliveryId: "queued-floor",
+    utteranceId: "tr-queued",
+    env,
+    fetchImpl: http.fetch,
+    deliver: async () => true,
+  });
+  assert.equal(result.spoke, true);
+  assert.equal(session.meetingFloor, undefined);
+  assert.equal(http.calls.some((call) => String(call.url).includes("/output_audio/")), false);
+  const played = { roomId: "bot-queued-floor", speaker: "id:100", until: Date.now() + 90_000 };
+  assert.equal(applyPlayedFloor(session, played, "bot-queued-floor"), true);
+  assert.equal(session.meetingFloor.speaker, "id:100");
+  assert.equal(applyPlayedFloor(session, { ...played, until: played.until - 1 }, "bot-queued-floor"), false);
+  assert.equal(session.meetingFloor.until, played.until);
+  const openedAt = session.meetingFloor.at;
+  assert.equal(applyPlayedFloor(session, null, "bot-queued-floor", openedAt + 1), false);
+  assert.equal(session.meetingFloor, undefined);
+  const later = Date.now();
+  session.meetingFloor = { roomId: "bot-queued-floor", speaker: "id:100", until: later + 90_000, at: later };
+  assert.equal(applyPlayedFloor(session, null, "bot-queued-floor", later - 10), false);
+  assert.equal(session.meetingFloor.speaker, "id:100");
+});
+
+test("a lookup stays silent until the result", async () => {
+  let release = () => {};
+  const gate = new Promise((resolve) => { release = resolve; });
+  let started = () => {};
+  const ready = new Promise((resolve) => { started = resolve; });
+  const http = scripted(async (url, init) => {
+    if (url.includes("/chat/completions")) {
+      const body = JSON.parse(init.body);
+      const tools = body.messages.filter((row) => row.role === "tool").map((row) => String(row.content || "")).join("\n");
+      if (tools.includes("Thursday")) return chat({ content: "The launch is Thursday." });
+      return chat({
+        content: "",
+        tool_calls: [{
+          id: "call-recall",
+          type: "function",
+          function: { name: "recall", arguments: JSON.stringify({ text: "launch" }) },
+        }],
+      });
+    }
+    if (url.includes("/audio/speech")) return mp3Response();
+    if (url.includes("/output_audio/")) return { ok: true, async text() { return ""; } };
+    throw new Error(`unexpected ${url}`);
+  });
+  const turn = speakMeetingTurn({
+    answer: true,
+    text: "Adam, when is the launch",
+    speakerName: "Anh",
+    botName: "Adam",
+    memberId: "100",
+    room: { id: "bot-quiet-lookup" },
+    session: { hearing: { name: "Adam" } },
+    deliveryId: "quiet-lookup",
+    env,
+    fetchImpl: http.fetch,
+    runTool: async () => {
+      started();
+      await gate;
+      return { ok: true, text: "Thursday" };
+    },
+  });
+  await ready;
+  assert.equal(http.calls.some((call) => call.url.includes("/audio/speech")), false);
+  release();
+  assert.equal((await turn).spoke, true);
+  const said = http.calls.filter((call) => call.url.includes("/audio/speech")).map((call) => JSON.parse(call.init.body).input);
+  assert.deepEqual(said, ["The launch is Thursday."]);
+});
+
 test("a later request is answered while an earlier write is still running", async () => {
   let releaseAct = () => {};
   const actGate = new Promise((resolve) => { releaseAct = resolve; });
@@ -531,7 +1099,6 @@ test("a later request is answered while an earlier write is still running", asyn
     session,
     env,
     fetchImpl: http.fetch,
-    toolBeatMs: 0,
     runTool: async (call) => {
       if (call.name === "act") {
         actStarted();
@@ -562,6 +1129,8 @@ test("a later request is answered while an earlier write is still running", asyn
   assert.equal(said.includes("I'm sending that for approval."), false);
   assert.equal(said.includes("That goes for approval."), false);
   assert.equal(said.includes("The launch is Thursday."), true);
+  assert.equal(said.includes("I'm looking that up."), false);
+  assert.equal(said.includes("I'm on those."), false);
 });
 
 test("a second line before the answer is spoken is answered once", async () => {
@@ -698,7 +1267,6 @@ test("an automatic write is spoken as done, and a held write still needs approva
     memberId: "100",
     env,
     fetchImpl: http.fetch,
-    toolBeatMs: 0,
   };
   const filing = speakMeetingTurn({
     ...base,

@@ -27,9 +27,9 @@ import { loadLinearToken } from "./linear/token.js";
 import { createLinearInstallationStore } from "./linear/installations.js";
 import { handleLinearOAuth, linearClientMetadata, tenantLinearClient } from "./linear/oauth.js";
 import { renderCameraPage } from "./meeting/camera.js";
-import { bindMeetingEar, offerMeetingClip, takeMeetingClip } from "./meeting/voice-bus.js";
+import { bindMeetingEar, clearPlayedFloor, meetingFloorClosedAt, offerMeetingClip, playedMeetingFloor, requestMeetingHold, stageMeetingFloor, takeMeetingVoice } from "./meeting/voice-bus.js";
 import { createMeetingAdapter, mediaFromBot, meetingCallUpdate, meetingDoorReady, meetingEnded, recallBotUrl, recallTranscriptDelivery, transcriptLines, verifyRecallRequest } from "./meeting/recall.js";
-import { meetingLineClosesFloor, meetingLineShouldAnswer, meetingPresenceLine, noteMeetingHeard, refreshMeetingFloor, speakMeetingTurn } from "./meeting/voice.js";
+import { applyPlayedFloor, meetingLineClosesFloor, meetingLineShouldAnswer, meetingPresenceLine, noteMeetingHeard, refreshMeetingFloor, speakMeetingTurn } from "./meeting/voice.js";
 import { createMeetingFollowups, parseFollowupValue } from "./meeting/followups.js";
 import { createSupabaseFollowupStore } from "./meeting/followup-store.js";
 import { acceptMeetingEnd, buildMeetingFollowupInput, followupInteractionFields, validateFollowupEdit } from "./meeting/live-followups.js";
@@ -1290,12 +1290,21 @@ export function createApp(options = {}) {
       return;
     }
     if (req.method === "GET" && url.pathname === "/meeting/voice") {
-      const clip = await takeMeetingClip(workspace, url.searchParams.get("ear") || "", env, workspace.fetchImpl);
-      if (!clip) {
-        send(res, 204, "text/plain; charset=utf-8", "", { "cache-control": "no-store" });
+      const ear = url.searchParams.get("ear") || "";
+      const voice = await takeMeetingVoice(workspace, ear, env, workspace.fetchImpl, url.searchParams.get("n"));
+      if (!voice.audio) {
+        const headers = { "cache-control": "no-store" };
+        if (voice.stop) {
+          headers["x-sederunt-hold"] = "stop";
+          headers["x-sederunt-at"] = String(voice.at || Date.now());
+        }
+        send(res, 204, "text/plain; charset=utf-8", "", headers);
         return;
       }
-      send(res, 200, "audio/mpeg", clip, { "cache-control": "no-store" });
+      send(res, 200, "audio/mpeg", voice.audio, {
+        "cache-control": "no-store",
+        "x-sederunt-at": String(voice.at || Date.now()),
+      });
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/hearing") {
@@ -1598,9 +1607,14 @@ export function createApp(options = {}) {
             const speakerName = typeof participant?.name === "string" ? participant.name : "";
             const heardDelivery = speakerName ? { ...delivery, speakerName } : delivery;
             if (!delivery.partial) noteMeetingHeard(current, heardDelivery);
+            if (botId) {
+              const played = await playedMeetingFloor(workspace, botId, env, workspace.fetchImpl);
+              applyPlayedFloor(current, played, botId, meetingFloorClosedAt(workspace, botId));
+            }
             const answerLine = meetingLineShouldAnswer(current, heardDelivery);
-            if (!delivery.partial && (answerLine || meetingLineClosesFloor(current, heardDelivery))) {
+            if (!delivery.partial && meetingLineClosesFloor(current, heardDelivery)) {
               refreshMeetingFloor(current, heardDelivery);
+              if (botId) await clearPlayedFloor(workspace, botId, env, workspace.fetchImpl);
             }
             const seenDelivery = Boolean(
               delivery.deliveryId
@@ -1611,6 +1625,7 @@ export function createApp(options = {}) {
               voiceWork = speakMeetingTurn({
                 answer: true,
                 text: delivery.text,
+                partial: delivery.partial === true,
                 speakerName,
                 botName: current.hearing?.name || "",
                 memberId: delivery.memberId,
@@ -1621,6 +1636,8 @@ export function createApp(options = {}) {
                 env,
                 fetchImpl: workspace.fetchImpl,
                 deliver: (audio) => offerMeetingClip(workspace, delivery.room?.id, audio, env, workspace.fetchImpl),
+                stageFloor: (floor) => stageMeetingFloor(workspace, delivery.room?.id, floor),
+                cutPlayback: () => requestMeetingHold(workspace, delivery.room?.id, env, workspace.fetchImpl),
                 deps: depsFor(workspace, companyId),
                 context: {
                   tenantId: companyId || "",
@@ -1647,7 +1664,7 @@ export function createApp(options = {}) {
             }
             if (!delivery.partial) {
               if (!current.readReport?.ok) current = await prepareWorkspace(workspace, companyId);
-              await handleUtterance({ ...delivery, session: current }, depsFor(workspace, companyId));
+              await handleUtterance({ ...heardDelivery, session: current }, depsFor(workspace, companyId));
               if (delivery.room?.id) {
                 await noteMeetingCall(current, depsFor(workspace, companyId), delivery.room.id, "in_call_recording").catch(() => {});
               }

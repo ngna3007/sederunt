@@ -27,7 +27,8 @@ test("meeting address-only arms hold; next chunk keeps launch code", async () =>
     session,
   }, {});
   assert.equal(silence.kind, "silence");
-  assert.ok(session.hearingHold?.roomId === room.id || true);
+  assert.equal(session.hearingHold?.roomId, room.id);
+  assert.equal(session.hearingHold?.speaker, "id:anh");
 
   const kept = await handleUtterance({
     text: "Remember this: the launch code is cedar92",
@@ -48,6 +49,36 @@ test("meeting address-only arms hold; next chunk keeps launch code", async () =>
     `expected cedar92 in decisions, got ${JSON.stringify(texts)}`,
   );
   assert.ok(!texts.some((t) => /^maple$/i.test(String(t).trim())), "must not keep bare maple");
+});
+
+test("someone else during the short hold leaves it for the caller", async () => {
+  const session = createSession();
+  session.hearing = { name: "Maple", triggers: [] };
+  const room = { id: "bot-hold-speaker", botPresent: true, source: "recall", kind: "meeting", memberIds: ["anh", "lan"] };
+  await handleUtterance({
+    text: "Maple.",
+    memberId: "anh",
+    speakerName: "Anh",
+    door: "meeting",
+    addressed: true,
+    deliveryId: "hold-name",
+    room,
+    session,
+  }, {});
+  const until = session.hearingHold.until;
+  const side = await handleUtterance({
+    text: "the launch moved to Friday",
+    memberId: "lan",
+    speakerName: "Lan",
+    door: "meeting",
+    addressed: false,
+    deliveryId: "hold-side",
+    room,
+    session,
+  }, {});
+  assert.equal(side.kind, "silence");
+  assert.equal(session.hearingHold.speaker, "id:anh");
+  assert.equal(session.hearingHold.until, until);
 });
 
 test("unaddressed meeting line without hold stays silence", async () => {

@@ -2,8 +2,10 @@
  * The meeting camera. Output Media always shows this page, so the tile is
  * the brand field with the guest's name. Cream on #081428 is the same pair
  * used for type on the dark field. White paper read as a blank avatar.
- * The page polls for a spoken clip and stops when the room talks over it.
- * Meeting audio is analysed and never played back into the call.
+ * The page polls for a spoken clip and stops when the server says the line moved on.
+ * A stop from an older poll does not cut a clip a newer poll already started.
+ * A clip queued after that stop still plays. The poll ticket is the time it started, so a reloaded page is not stuck behind the previous count.
+ * A bare okay is not a stop. The page does not guess from loudness.
  */
 const CAMERA_TEMPLATE = `<!doctype html>
 <html lang="en">
@@ -43,7 +45,16 @@ var ear = params.get("ear") || "";
 if (!/^[a-f0-9]{32,64}$/.test(ear)) ear = "";
 var playing = false;
 var objectUrl = "";
-var loudTicks = 0;
+var pollTicket = 0;
+var playedTicket = 0;
+var heardAt = 0;
+
+function nextTicket() {
+  var now = Date.now();
+  var ticket = now > pollTicket ? now : pollTicket + 1;
+  pollTicket = ticket;
+  return ticket;
+}
 
 function mark(on) {
   guest.className = on ? "speaking" : "";
@@ -75,45 +86,30 @@ function playClip(blob) {
 
 function poll() {
   if (!ear) return;
-  fetch("/meeting/voice?ear=" + encodeURIComponent(ear), { cache: "no-store" }).then(function (response) {
-    if (!response.ok || response.status === 204) return null;
-    return response.blob();
-  }).then(function (blob) {
-    if (!blob || !blob.size) return;
-    playClip(blob);
+  var ticket = nextTicket();
+  fetch("/meeting/voice?ear=" + encodeURIComponent(ear) + "&n=" + ticket, { cache: "no-store" }).then(function (response) {
+    var at = Number(response.headers.get("x-sederunt-at")) || 0;
+    var stop = response.headers.get("x-sederunt-hold") === "stop";
+    if (!response.ok || response.status === 204) return { at: at, stop: stop, blob: null };
+    return response.blob().then(function (blob) { return { at: at, stop: stop, blob: blob }; });
+  }).then(function (result) {
+    if (!result) return;
+    if (result.blob && result.blob.size) {
+      if (ticket < playedTicket) return;
+      if (result.at && result.at < heardAt) return;
+      playedTicket = ticket;
+      if (result.at) heardAt = result.at;
+      playClip(result.blob);
+      return;
+    }
+    if (result.stop && ticket >= playedTicket && (!result.at || result.at >= heardAt)) {
+      if (result.at) heardAt = result.at;
+      stopTalking();
+    }
   }).catch(function () {});
 }
 
 if (ear) setInterval(poll, 300);
-
-if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-  navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
-    var Context = window.AudioContext || window.webkitAudioContext;
-    if (!Context) return;
-    var context = new Context();
-    var source = context.createMediaStreamSource(stream);
-    var analyser = context.createAnalyser();
-    analyser.fftSize = 512;
-    source.connect(analyser);
-    if (context.resume) context.resume().catch(function () {});
-    var samples = new Uint8Array(analyser.fftSize);
-    setInterval(function () {
-      analyser.getByteTimeDomainData(samples);
-      var sum = 0;
-      for (var i = 0; i < samples.length; i += 1) {
-        var sample = (samples[i] - 128) / 128;
-        sum += sample * sample;
-      }
-      var level = Math.sqrt(sum / samples.length);
-      if (level > 0.12) {
-        loudTicks += 1;
-        if (loudTicks >= 2 && playing) stopTalking();
-      } else {
-        loudTicks = 0;
-      }
-    }, 80);
-  }).catch(function () {});
-}
 </script>
 </body>
 </html>
