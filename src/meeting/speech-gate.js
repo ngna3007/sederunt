@@ -11,8 +11,10 @@ export const HEAR_LINE = "Yes, I can hear you.";
 const UNFINISHED_TAIL = new Set(["about", "the", "what", "who", "when", "where", "why", "how", "which"]);
 
 const KNOWN_WORDS = new Set(
-  "a an the i you we they he she it my your our me us is am are was were be been being do does did not no yes can could should would will to of in on for at and or but if so this that with from just now what who when where why how which got ready help take hear hey need needs done write ran approval before ill ill send okay waiting could answer launch thursday booth yes im here"
+  `a an the i you we they he she it my your our me us is am are was were be been being do does did not no yes can could should would will to of in on for at and or but if so this that with from just now what who when where why how which got ready help take hear hey need needs done write ran approval before ill send okay waiting answer launch thursday booth im here
+  set sets reminder reminders booked book booking tonight today tomorrow noon midnight morning afternoon evening note notes noted summarize summary meeting meetings calendar invite invited demo stay stays stayed saturn nine open opens opened check recording sent see seen tell told ask asked put keep made make give gave look looked call called share move moved start started stop stopped record please thanks thank sound sounds good great sure change changes then there back over again still also very time times people person team only high deck email run runs about all come day get go know like long more new one out say some than them these think two up use want way well work after any both first last many other same week next room`
     .split(/\s+/)
+    .filter(Boolean)
     .concat(["i'll", "ill"]),
 );
 
@@ -74,7 +76,11 @@ export function claimMeetingSpeech(queue, generation, now) {
 }
 
 function splitSentences(text) {
-  const value = String(text || "").replace(/\s+/g, " ").trim();
+  const value = String(text || "")
+    .replace(/…/g, ".")
+    .replace(/\.{2,}/g, ".")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!value) return [];
   const parts = value.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [];
   return parts.map((part) => part.trim()).filter(Boolean);
@@ -91,12 +97,24 @@ export function isEnglishSentence(sentence) {
   const { words, known } = knownCount(sentence);
   if (!words.length || known === 0) return false;
   if (words.length === 1) return known === 1 && words[0].length >= 3;
-  return known >= 2;
+  if (known === words.length) return true;
+  return known >= 2 && known * 2 >= words.length;
 }
 
 function isHearSentence(sentence) {
   const folded = wordsOf(sentence).join(" ");
   return folded === "yes i can hear you" || folded === "i can hear you" || folded === "yes i can hear you yes";
+}
+
+function withoutHearPhrase(sentence) {
+  return sentence
+    .replace(/\b(?:yes[\s,]*)?i[\s,]*can[\s,]*hear[\s,]*you(?:[\s,]*yes)?\b/gi, " ")
+    .replace(/\s+([,.;!?])/g, "$1")
+    .replace(/([,;])(?:\s*[,;])+/g, "$1")
+    .replace(/^[,\s]+/g, "")
+    .replace(/[,\s]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function clipSpoken(text, options = {}) {
@@ -105,9 +123,17 @@ export function clipSpoken(text, options = {}) {
   const sentences = splitSentences(text);
   const kept = [];
   for (const sentence of sentences) {
-    if (isHearSentence(sentence) && (sentences.length > 1 || options.priorHear === true)) continue;
-    if (!isEnglishSentence(sentence)) continue;
-    kept.push(sentence.replace(/\s+/g, " ").trim());
+    if (isHearSentence(sentence)) {
+      if (sentences.length > 1 || options.priorHear === true) continue;
+      const line = sentence.replace(/\s+/g, " ").trim();
+      if (!isEnglishSentence(line)) continue;
+      kept.push(line);
+      if (kept.length === 2) break;
+      continue;
+    }
+    const cleaned = withoutHearPhrase(sentence);
+    if (!cleaned || isHearSentence(cleaned) || !isEnglishSentence(cleaned)) continue;
+    kept.push(cleaned);
     if (kept.length === 2) break;
   }
   return kept.join(" ");
@@ -123,8 +149,8 @@ function memoryBlob(memory) {
 }
 
 const ASK_AGAIN = /what time|when should|who should i invite|what about the meeting|who to invite|who should be invited/i;
-const HAS_TIME = /\b7\s*pm\b|\b7pm\b|at 7 pm|at 7pm/;
-const HAS_INVITE = /invite me only|invite only me|invite only you|only you/;
+const HAS_TIME = /\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\b(?:noon|midnight|tonight)\b/;
+const HAS_INVITE = /invite me only|invite only me|invite only you|invite only|only you|only me/;
 
 export function memoryHasPlan(memory) {
   const blob = memoryBlob(memory);

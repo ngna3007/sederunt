@@ -5,6 +5,7 @@ import {
   claimMeetingSpeech,
   finishSpokenReply,
   meetingContext,
+  memoryHasPlan,
   rememberMeetingExchange,
   rememberMeetingLine,
   scheduleMeetingSpeech,
@@ -67,6 +68,7 @@ test("a bare wake stays claimable after the real question is scheduled", () => {
   const queue = { items: [], seq: 0 };
   const now = 10_000;
   const wake = scheduleMeetingSpeech(queue, { text: "hey adam", name: "Adam" }, now);
+  assert.equal(wake.holdMs, 800);
   const question = scheduleMeetingSpeech(queue, { text: "what can you do", name: "Adam" }, now + 100);
   assert.equal(claimMeetingSpeech(queue, wake.generation, now + 800).wake, true);
   assert.equal(claimMeetingSpeech(queue, question.generation, now + 899), null);
@@ -105,6 +107,16 @@ test("spoken text is at most two English sentences, and the garbage lines are si
     clipSpoken("Not done. It needs approval before it runs."),
     "Not done. It needs approval before it runs.",
   );
+  assert.equal(clipSpoken("Set a reminder."), "Set a reminder.");
+  assert.equal(clipSpoken("Booked for tonight."), "Booked for tonight.");
+  const breath = clipSpoken("got it amy… ready to help… yes i can hear you… I can take notes, summarize, set reminders…");
+  assert.equal(/hear you/i.test(breath), false);
+  assert.match(breath, /got it amy/i);
+  assert.match(breath, /ready to help/i);
+  const comma = clipSpoken("Got it Amy, yes I can hear you, I can take notes and set a reminder.");
+  assert.equal(/hear you/i.test(comma), false);
+  assert.match(comma, /Got it Amy/);
+  assert.match(comma, /take notes and set a reminder/);
 });
 
 test("a second request still has the 7pm time and the invite, and does not ask again", () => {
@@ -126,6 +138,20 @@ test("a second request still has the 7pm time and the invite, and does not ask a
   assert.match(spoken, /Saturn demo/);
   assert.equal(session.rooms[0].lines.length, 2);
   assert.equal(session.rooms[0].exchanges.length, 1);
+});
+
+test("a saved 8pm and invite only you are not asked again", () => {
+  const memory = {
+    kept: [
+      { speaker: "You", text: "at 8 pm today" },
+      { speaker: "You", text: "invite only you" },
+    ],
+    exchanges: [],
+  };
+  assert.equal(memoryHasPlan(memory), true);
+  const spoken = finishSpokenReply("Who should I invite and what time? Booked for tonight.", memory);
+  assert.equal(/who should i invite|what time/i.test(spoken), false);
+  assert.equal(spoken, "Booked for tonight.");
 });
 
 test("a partial produces no speech", async () => {
@@ -214,6 +240,47 @@ test("a later answer does not glue the hear-me line or speak the garbage strings
   assert.deepEqual(speechInputs(http.calls), ["Got it Amy. I can take notes and set a reminder."]);
 });
 
+test("the speaker drops a hear-me phrase glued into one breath and still says a short reply", async () => {
+  const replies = [
+    "got it amy… ready to help… yes i can hear you… I can take notes, summarize, set reminders…",
+    "Got it Amy, yes I can hear you, I can take notes and set a reminder.",
+    "Set a reminder.",
+    "Booked for tonight.",
+  ];
+  let step = 0;
+  const http = scripted(async (url) => {
+    if (url.includes("/chat/completions")) return chat({ content: replies[step++] || "" });
+    if (url.includes("/audio/speech")) return mp3Response();
+    if (url.includes("/output_audio/")) return { ok: true, async text() { return ""; } };
+    throw new Error(`unexpected ${url}`);
+  });
+  const base = {
+    answer: true,
+    speakerName: "Anh",
+    botName: "Adam",
+    memberId: "100",
+    session: { meetingHeardCheck: true },
+    env,
+    fetchImpl: http.fetch,
+  };
+  const breath = await speakMeetingTurn({ ...base, text: "Adam, what can you do", room: { id: "bot-breath" }, deliveryId: "breath-1" });
+  const comma = await speakMeetingTurn({ ...base, text: "Adam, say that again", room: { id: "bot-comma" }, deliveryId: "comma-1" });
+  const reminder = await speakMeetingTurn({ ...base, text: "Adam, set a reminder", room: { id: "bot-reminder" }, deliveryId: "reminder-1" });
+  const booked = await speakMeetingTurn({ ...base, text: "Adam, book tonight", room: { id: "bot-booked" }, deliveryId: "booked-1" });
+  assert.equal(breath.spoke, true);
+  assert.equal(comma.spoke, true);
+  assert.equal(reminder.spoke, true);
+  assert.equal(booked.spoke, true);
+  const said = speechInputs(http.calls);
+  assert.equal(said.some((line) => /hear you/i.test(line)), false);
+  assert.match(said[0], /got it amy/i);
+  assert.match(said[0], /ready to help/i);
+  assert.match(said[1], /Got it Amy/);
+  assert.match(said[1], /take notes and set a reminder/);
+  assert.equal(said[2], "Set a reminder.");
+  assert.equal(said[3], "Booked for tonight.");
+});
+
 test("a held write is spoken as needing approval", async () => {
   const http = scripted(async (url, init) => {
     if (url.includes("/chat/completions")) {
@@ -293,4 +360,35 @@ test("a second reply uses the saved lines and does not ask for the time or the i
   assert.equal(again.exchanges.length, 1);
   assert.match(again.kept.map((line) => line.text).join("\n"), /7 pm today/);
   assert.match(again.kept.map((line) => line.text).join("\n"), /invite me only/);
+});
+
+test("the speaker does not ask again when the saved time is 8pm", async () => {
+  const session = {
+    rooms: [{ id: "bot-eight", kind: "meeting", platform: "Google Meet", botPresent: true, call: "in_call_recording" }],
+  };
+  rememberMeetingLine(session, "bot-eight", { speaker: "You", text: "at 8 pm today" });
+  rememberMeetingLine(session, "bot-eight", { speaker: "You", text: "invite only you" });
+  const http = scripted(async (url) => {
+    if (url.includes("/chat/completions")) {
+      return chat({ content: "Who should I invite and what time? Booked for tonight." });
+    }
+    if (url.includes("/audio/speech")) return mp3Response();
+    if (url.includes("/output_audio/")) return { ok: true, async text() { return ""; } };
+    throw new Error(`unexpected ${url}`);
+  });
+  const result = await speakMeetingTurn({
+    answer: true,
+    text: "Adam, what about the meeting",
+    speakerName: "Anh",
+    botName: "Adam",
+    memberId: "100",
+    room: { id: "bot-eight" },
+    session,
+    deliveryId: "eight-1",
+    env,
+    fetchImpl: http.fetch,
+  });
+  assert.equal(result.spoke, true);
+  const said = speechInputs(http.calls);
+  assert.deepEqual(said, ["Booked for tonight."]);
 });
