@@ -284,9 +284,12 @@ test("a called line speaks the model reply and can use a connected tool", async 
   assert.equal(names.includes("act"), true);
   assert.equal(names.includes("notes__search"), true);
   assert.equal(JSON.stringify(chatBody.tools).includes("memberId"), false);
-  const speech = JSON.parse(http.calls.find((call) => call.url.includes("/audio/speech")).init.body);
+  const speeches = http.calls
+    .filter((call) => call.url.includes("/audio/speech"))
+    .map((call) => JSON.parse(call.init.body));
+  assert.deepEqual(speeches.map((speech) => speech.input), ["One moment.", "The launch is Thursday."]);
+  const speech = speeches.at(-1);
   assert.equal(speech.response_format, "mp3");
-  assert.equal(speech.input, "The launch is Thursday.");
   const played = http.calls.find((call) => call.url.includes("/output_audio/"));
   assert.equal(played.url, "https://ap-northeast-1.recall.ai/api/v1/bot/bot-1/output_audio/");
   assert.equal(played.init.headers.authorization, "Token recall-test-key");
@@ -342,8 +345,10 @@ test("a held write is described as waiting, and the model member id is ignored",
   assert.equal(result.spoke, true);
   assert.equal(seen[0].arguments.memberId, "100");
   assert.equal(seen[0].arguments.text, "file the ticket");
-  const speech = JSON.parse(http.calls.find((call) => call.url.includes("/audio/speech")).init.body);
-  assert.equal(speech.input, "I'll send that for approval.");
+  const speeches = http.calls
+    .filter((call) => call.url.includes("/audio/speech"))
+    .map((call) => JSON.parse(call.init.body).input);
+  assert.deepEqual(speeches, ["One moment.", "I'll send that for approval."]);
 });
 
 test("the guest's own line, an echo, a missing key, and a failed clip stay quiet", async () => {
@@ -1487,7 +1492,10 @@ test("an automatic write is spoken as done, and a held write still needs approva
     },
   });
   await ready;
-  assert.equal(http.calls.some((call) => call.url.includes("/audio/speech")), false);
+  const during = http.calls
+    .filter((call) => call.url.includes("/audio/speech"))
+    .map((call) => JSON.parse(call.init.body).input);
+  assert.deepEqual(during, ["One moment."]);
   release();
   assert.equal((await filing).spoke, true);
   const held = await speakMeetingTurn({
@@ -1673,4 +1681,258 @@ test("a meeting page still runs a connected tool and leaves a write on the allow
   assert.equal(said.includes("I'll send that for approval."), true);
   assert.equal(clips.length >= 2, true);
   assert.equal(http.calls.some((call) => String(call.url).includes("/output_audio/")), false);
+});
+
+test("a slow connector speaks one moment before the result and does not open the floor", async () => {
+  let release = () => {};
+  const gate = new Promise((resolve) => { release = resolve; });
+  let toolReady = () => {};
+  const ready = new Promise((resolve) => { toolReady = resolve; });
+  let cuts = 0;
+  let staged = 0;
+  const http = scripted(async (url, init) => {
+    if (url.includes("/chat/completions")) {
+      const body = JSON.parse(init.body);
+      const toolText = body.messages.filter((row) => row.role === "tool").map((row) => String(row.content || "")).join("\n");
+      if (!body.tools?.length) return chat({ content: "The launch is Thursday." });
+      if (toolText.includes("Thursday")) return chat({ content: "" });
+      return chat({
+        content: "",
+        tool_calls: [{
+          id: "call-notes",
+          type: "function",
+          function: { name: "notes__search", arguments: JSON.stringify({ query: "launch" }) },
+        }],
+      });
+    }
+    if (url.includes("/audio/speech")) return mp3Response();
+    if (url.includes("/output_audio/")) return { ok: true, async text() { return ""; } };
+    throw new Error(`unexpected ${url}`);
+  });
+  const session = { hearing: { name: "Adam" } };
+  const started = Date.now();
+  const turn = speakMeetingTurn({
+    answer: true,
+    text: "Adam, when is the launch",
+    speakerName: "Anh",
+    botName: "Adam",
+    memberId: "100",
+    room: { id: "bot-filler" },
+    session,
+    deliveryId: "filler-1",
+    env,
+    fetchImpl: http.fetch,
+    cutPlayback: () => { cuts += 1; },
+    stageFloor: () => { staged += 1; },
+    deliver: async () => true,
+    listTools: async () => [{
+      name: "notes__search",
+      description: "Search notes",
+      inputSchema: { type: "object", properties: { query: { type: "string" } } },
+    }],
+    runTool: async () => {
+      toolReady();
+      await gate;
+      return { ok: true, text: "Thursday" };
+    },
+  });
+  await ready;
+  const during = http.calls
+    .filter((call) => call.url.includes("/audio/speech"))
+    .map((call) => JSON.parse(call.init.body).input);
+  assert.deepEqual(during, ["One moment."]);
+  assert.equal(session.meetingFloor, undefined);
+  assert.equal(staged, 0);
+  assert.equal(cuts, 0);
+  release();
+  const result = await turn;
+  assert.equal(result.spoke, true);
+  assert.equal(Date.now() - started < 10_000, true);
+  const said = http.calls
+    .filter((call) => call.url.includes("/audio/speech"))
+    .map((call) => JSON.parse(call.init.body).input);
+  assert.equal(said[0], "One moment.");
+  assert.equal(said.filter((line) => line === "One moment.").length, 1);
+  assert.equal(said.includes("The launch is Thursday."), true);
+  assert.equal(session.meetingFloor, undefined);
+  assert.equal(staged, 1);
+  assert.equal(cuts, 0);
+});
+
+test("a second tool call in the same turn does not speak another filler", async () => {
+  let calls = 0;
+  const http = scripted(async (url, init) => {
+    if (url.includes("/chat/completions")) {
+      const body = JSON.parse(init.body);
+      const toolText = body.messages.filter((row) => row.role === "tool").map((row) => String(row.content || "")).join("\n");
+      if (!body.tools?.length) return chat({ content: "The launch is Thursday." });
+      if ((toolText.match(/Thursday/g) || []).length >= 2) return chat({ content: "" });
+      const id = toolText.includes("Thursday") ? "call-notes-2" : "call-notes-1";
+      return chat({
+        content: "",
+        tool_calls: [{
+          id,
+          type: "function",
+          function: { name: "notes__search", arguments: JSON.stringify({ query: "launch" }) },
+        }],
+      });
+    }
+    if (url.includes("/audio/speech")) return mp3Response();
+    if (url.includes("/output_audio/")) return { ok: true, async text() { return ""; } };
+    throw new Error(`unexpected ${url}`);
+  });
+  const result = await speakMeetingTurn({
+    answer: true,
+    text: "Adam, when is the launch",
+    speakerName: "Anh",
+    botName: "Adam",
+    memberId: "100",
+    room: { id: "bot-filler-once" },
+    session: { hearing: { name: "Adam" } },
+    deliveryId: "filler-once",
+    env,
+    fetchImpl: http.fetch,
+    listTools: async () => [{ name: "notes__search", description: "Search notes", inputSchema: { type: "object" } }],
+    runTool: async () => {
+      calls += 1;
+      return { ok: true, text: "Thursday" };
+    },
+  });
+  assert.equal(result.spoke, true);
+  assert.equal(calls, 2);
+  const said = http.calls
+    .filter((call) => call.url.includes("/audio/speech"))
+    .map((call) => JSON.parse(call.init.body).input);
+  assert.equal(said.filter((line) => line === "One moment.").length, 1);
+  assert.equal(said.at(-1), "The launch is Thursday.");
+});
+
+test("a connector that passes the tool budget still speaks, and the write can finish later", async () => {
+  let release = () => {};
+  const gate = new Promise((resolve) => { release = resolve; });
+  let finished = false;
+  let bareChats = 0;
+  const http = scripted(async (url, init) => {
+    if (url.includes("/chat/completions")) {
+      const body = JSON.parse(init.body);
+      const toolText = body.messages.filter((row) => row.role === "tool").map((row) => String(row.content || "")).join("\n");
+      if (!body.tools?.length) {
+        bareChats += 1;
+        if (toolText.includes("taking too long")) {
+          return chat({ content: "That is taking too long. I will follow up after the call." });
+        }
+        return chat({ content: "The launch is Thursday." });
+      }
+      if (toolText) return chat({ content: "" });
+      return chat({
+        content: "",
+        tool_calls: [{
+          id: "call-slow",
+          type: "function",
+          function: { name: "notes__search", arguments: JSON.stringify({ query: "launch" }) },
+        }],
+      });
+    }
+    if (url.includes("/audio/speech")) return mp3Response();
+    if (url.includes("/output_audio/")) return { ok: true, async text() { return ""; } };
+    throw new Error(`unexpected ${url}`);
+  });
+  const started = Date.now();
+  const turn = await speakMeetingTurn({
+    answer: true,
+    text: "Adam, when is the launch",
+    speakerName: "Anh",
+    botName: "Adam",
+    memberId: "100",
+    room: { id: "bot-tool-budget" },
+    session: { hearing: { name: "Adam" } },
+    deliveryId: "tool-budget",
+    env,
+    fetchImpl: http.fetch,
+    listTools: async () => [{ name: "notes__search", description: "Search notes", inputSchema: { type: "object" } }],
+    runTool: async () => {
+      await gate;
+      finished = true;
+      return { ok: true, text: "Thursday" };
+    },
+  });
+  assert.equal(turn.spoke, true);
+  assert.equal(finished, false);
+  assert.equal(Date.now() - started < 10_000, true);
+  assert.equal(bareChats, 1);
+  const said = http.calls
+    .filter((call) => call.url.includes("/audio/speech"))
+    .map((call) => JSON.parse(call.init.body).input);
+  assert.deepEqual(said, ["One moment.", "That is taking too long. I will follow up after the call."]);
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(finished, true);
+});
+
+test("voice tools keep recall and act, follow the allow list, and shorten a long schema", async () => {
+  const sent = [];
+  const http = scripted(async (url, init) => {
+    if (url.includes("/chat/completions")) {
+      const body = JSON.parse(init.body);
+      sent.push(body.tools.map((tool) => ({
+        name: tool.function.name,
+        parameters: tool.function.parameters,
+      })));
+      return chat({ content: "The launch is Thursday." });
+    }
+    if (url.includes("/audio/speech")) return mp3Response();
+    if (url.includes("/output_audio/")) return { ok: true, async text() { return ""; } };
+    throw new Error(`unexpected ${url}`);
+  });
+  const shortSchema = { type: "object", properties: { query: { type: "string" } } };
+  const longSchema = { type: "object", properties: { note: { type: "string", description: "n".repeat(1600) } } };
+  assert.equal(JSON.stringify(longSchema).length > 1500, true);
+  const connectors = [
+    "notes__search",
+    "calendar__list",
+    "slack__post",
+    "linear__issues",
+    "github__issues",
+    "notion__search",
+    "extra__one",
+  ];
+  const listTools = async () => [
+    { name: "notes__search", description: "Search", inputSchema: shortSchema },
+    { name: "calendar__list", description: "List", parameters: longSchema },
+    ...connectors.slice(2).map((name) => ({ name, description: name, inputSchema: shortSchema })),
+    { name: "not a tool", description: "skip" },
+  ];
+  const base = {
+    answer: true,
+    text: "Adam, when is the launch",
+    speakerName: "Anh",
+    botName: "Adam",
+    memberId: "100",
+    session: { hearing: { name: "Adam" } },
+    env,
+    fetchImpl: http.fetch,
+    listTools,
+  };
+  await speakMeetingTurn({
+    ...base,
+    room: { id: "bot-tools-allow" },
+    deliveryId: "tools-allow",
+    env: { ...env, SEDERUNT_VOICE_TOOLS: "notes__search, calendar__list, missing__tool" },
+  });
+  await speakMeetingTurn({
+    ...base,
+    room: { id: "bot-tools-cap" },
+    deliveryId: "tools-cap",
+  });
+  assert.deepEqual(sent[0].map((tool) => tool.name), ["recall", "act", "notes__search", "calendar__list"]);
+  assert.equal(sent[0][2].parameters.properties.query.type, "string");
+  assert.deepEqual(sent[0][3].parameters, { type: "object", additionalProperties: true });
+  assert.deepEqual(sent[1].map((tool) => tool.name), [
+    "recall",
+    "act",
+    "notes__search",
+    "calendar__list",
+    "slack__post",
+    "linear__issues",
+  ]);
 });

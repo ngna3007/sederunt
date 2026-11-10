@@ -367,7 +367,7 @@ test("a held write is spoken as needing approval", async () => {
     runTool: async () => ({ held: true, needsConfirmation: true }),
   });
   assert.equal(held.spoke, true);
-  assert.deepEqual(speechInputs(http.calls), ["Not done. It needs approval before it runs."]);
+  assert.deepEqual(speechInputs(http.calls), ["One moment.", "Not done. It needs approval before it runs."]);
 });
 
 test("a second reply still carries the saved lines", async () => {

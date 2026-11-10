@@ -321,16 +321,20 @@ export async function speakMeetingTurn(input = {}) {
     const fetchImpl = input.fetchImpl || fetch;
     const stillMine = () => laneFor(botId).generation === generation;
     let heard = false;
-    const sayLine = async (line, presenceKind) => {
+    const sayLine = async (line, presenceKind, options = {}) => {
+      const filler = options.filler === true;
       if (!stillMine()) return false;
-      const spoken = finishSpokenReply(line, meetingContext(session, botId), {
-        priorHear: session.meetingHeardCheck === true,
-        presence: presenceKind,
-      });
+      const spoken = filler
+        ? "One moment."
+        : finishSpokenReply(line, meetingContext(session, botId), {
+          priorHear: session.meetingHeardCheck === true,
+          presence: presenceKind,
+        });
       if (!spoken) return false;
       const audio = await openRouterSpeech({ env, text: spoken, fetchImpl });
       if (!audio.audio || !stillMine()) return false;
-      if (opened.cut) await opened.cut;
+      // A filler plays over the current clip. It does not stop it or open the floor.
+      if (!filler && opened.cut) await opened.cut;
       if (!stillMine()) return false;
       const played = await enqueueClip(botId, async () => {
         if (!stillMine()) return false;
@@ -339,7 +343,7 @@ export async function speakMeetingTurn(input = {}) {
         lane.audible = true;
         if (typeof input.deliver === "function") {
           try {
-            if (typeof input.stageFloor === "function") {
+            if (!filler && typeof input.stageFloor === "function") {
               const speaker = speakerKey(input);
               if (speaker) input.stageFloor({ roomId: botId, speaker });
             }
@@ -360,10 +364,10 @@ export async function speakMeetingTurn(input = {}) {
       });
       if ((played !== "queued" && played !== "played") || !stillMine()) return false;
       const talkMs = clipTalkMs(audio.audio);
-      if (talkMs) laneFor(botId).talkingUntil = Date.now() + talkMs;
+      if (talkMs && !filler) laneFor(botId).talkingUntil = Date.now() + talkMs;
       session.lastVoiceLine = spoken;
       // The page queue is not playback. The floor opens when that clip is taken, or when Output Audio accepts it.
-      if (played === "played") {
+      if (!filler && played === "played") {
         markSpoken(botId, input.deliveryId, input.utteranceId);
         if (input.partial !== true || finalIsWaiting(botId, input.deliveryId, input.utteranceId)) {
           answeredFloor(session, input, text);
@@ -409,7 +413,8 @@ export async function speakMeetingTurn(input = {}) {
     const runTool = input.runTool || defaultRunTool;
     let spoken = "";
     const toolLines = [];
-    const rounds = 3;
+    let spokeFiller = false;
+    const rounds = 2;
     for (let round = 0; round < rounds && !spoken; round += 1) {
       if (!stillMine()) return { spoke: false };
       const turn = await openRouterTurn({ env, fetchImpl, messages, tools, models, maxTokens: 700 });
@@ -439,12 +444,16 @@ export async function speakMeetingTurn(input = {}) {
         deps: input.deps,
         context: input.context,
       }));
+      if (!spokeFiller && calls.some((call) => call.name !== "recall") && stillMine()) {
+        spokeFiller = true;
+        sayLine("One moment.", "", { filler: true }).catch(() => {});
+      }
       if (calls.some((call) => call.name !== "recall") && stillMine()) {
         const lane = laneFor(botId);
         lane.phase = "holding";
         lane.toolHold = true;
       }
-      await Promise.all(pending.map((job) => job.done));
+      await Promise.all(pending.map((job) => finishToolWithinBudget(job)));
       if (!stillMine()) return { spoke: false };
       const lane = laneFor(botId);
       if (lane.phase === "holding") lane.phase = "thinking";
@@ -517,17 +526,27 @@ async function meetingTools(input) {
     extra = [];
   }
   const tools = [...BUILTIN_TOOLS];
+  const allow = voiceToolAllowList(input.env ?? process.env);
+  const cap = allow ? 16 : 6;
   for (const tool of Array.isArray(extra) ? extra : []) {
     const name = typeof tool?.name === "string" ? tool.name : "";
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(name) || name === "recall" || name === "act") continue;
+    if (allow && !allow.has(name)) continue;
     tools.push({
       name,
       description: String(tool.description || ""),
       parameters: tool.parameters || tool.inputSchema,
     });
-    if (tools.length >= 16) break;
+    if (tools.length >= cap) break;
   }
   return tools;
+}
+
+/** Comma-separated slug__tool names. A blank value leaves the list unset. */
+function voiceToolAllowList(env) {
+  const raw = typeof env?.SEDERUNT_VOICE_TOOLS === "string" ? env.SEDERUNT_VOICE_TOOLS : "";
+  const names = raw.split(",").map((name) => name.trim()).filter(Boolean);
+  return names.length ? new Set(names) : null;
 }
 
 async function defaultRunTool(input) {
@@ -617,15 +636,24 @@ function alignSpeech(modelText, toolLines) {
   if (ran && /approval|after the call/i.test(said)) return "Done. The write ran.";
   if (needs && !/approval/i.test(said)) return "Not done. It needs approval before it runs.";
   if (said) return said;
+  if (lines.some((line) => line === TOOL_SLOW_LINE)) return TOOL_SLOW_LINE;
   if (ran) return "Done. The write ran.";
   if (needs) return "Not done. It needs approval before it runs.";
   return "";
 }
 
+const VOICE_SCHEMA_CHARS = 1500;
+
 function objectSchema(schema) {
-  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return { type: "object", additionalProperties: true };
-  if (schema.type === "object") return schema;
-  return { type: "object", ...schema };
+  const open = { type: "object", additionalProperties: true };
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return open;
+  const object = schema.type === "object" ? schema : { type: "object", ...schema };
+  try {
+    if (JSON.stringify(object).length > VOICE_SCHEMA_CHARS) return open;
+  } catch {
+    return open;
+  }
+  return object;
 }
 
 function sameGuest(speakerName, botName) {
@@ -735,6 +763,24 @@ function enqueueClip(botId, run) {
   const next = lane.tail.then(run, run);
   lane.tail = next.then(() => {}, () => {});
   return next;
+}
+
+const TOOL_BUDGET_MS = 8000;
+const TOOL_SLOW_LINE = "That is taking too long. I will follow up after the call.";
+
+/** Release the turn at the budget. The tool promise keeps running. */
+function finishToolWithinBudget(job) {
+  let timer;
+  const budget = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      job.resultText = TOOL_SLOW_LINE;
+      resolve();
+    }, TOOL_BUDGET_MS);
+  });
+  return Promise.race([
+    job.done.finally(() => clearTimeout(timer)),
+    budget,
+  ]);
 }
 
 function startMeetingTool(call, ctx) {
