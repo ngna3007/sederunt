@@ -125,6 +125,10 @@ export async function callCustomTool(input) {
   const summary = argumentSummary(input.args);
   if (!decision.allowed) {
     const actionId = hold(input.session, name);
+    const heldAction = (input.session?.actions || []).find((row) => row?.id === actionId);
+    if (heldAction && !(heldAction.revision >= 1) && typeof input.persistHold === "function") {
+      await input.persistHold(heldAction);
+    }
     safeLog(() => logRequest(input.session, activityInput({
       id: actionId,
       verb: "call",
@@ -394,8 +398,27 @@ function redactToolText(text, ...tokens) {
 function hold(session, toolName) {
   if (!session) return "mcp-hold-1";
   session.actions = Array.isArray(session.actions) ? session.actions : [];
+  const staged = session.actions.find((row) => row
+    && row.state === "paused"
+    && row.roomId
+    && row.memberId
+    && (row.tool === toolName || row.callName === toolName));
+  if (staged) return staged.id;
   const id = `mcp-hold-${session.actions.length + 1}`;
-  session.actions.push({ id, tool: toolName, preference: "ask" });
+  session.actions.push({
+    id,
+    tool: toolName,
+    callName: toolName,
+    preference: "ask",
+    state: "paused",
+    roomId: "",
+    memberId: "",
+    statement: "",
+    params: {},
+    inviteMemberIds: [],
+    connectorId: null,
+    missingFact: "",
+  });
   return id;
 }
 

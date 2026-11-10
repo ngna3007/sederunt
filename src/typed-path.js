@@ -2060,6 +2060,27 @@ async function loadSentences(session, deps) {
   }
 }
 
+/**
+ * Save a paused action the console can confirm after the process is gone.
+ * absorbAction reloads this record. The connector does not run here.
+ *
+ * @param {{ memory?: { remember?: Function } }} deps
+ * @param {object} action
+ */
+export async function rememberHeldAction(deps, action) {
+  if (!action || typeof action.id !== "string" || typeof action.roomId !== "string" || !action.roomId
+    || typeof action.memberId !== "string" || !action.memberId) return false;
+  action.state = "paused";
+  action.preference = "ask";
+  action.connectorId = null;
+  action.missingFact = "";
+  action.params = { ...(action.params || {}) };
+  action.inviteMemberIds = Array.isArray(action.inviteMemberIds) && action.inviteMemberIds.includes(action.memberId)
+    ? [...action.inviteMemberIds]
+    : [action.memberId];
+  return persistAction(deps, action);
+}
+
 async function persistAction(deps, action) {
   const revision = (action.revision || 0) + 1;
   const inviteMemberIds = Array.isArray(action.inviteMemberIds) && action.inviteMemberIds.length ? [...action.inviteMemberIds] : [action.memberId].filter(Boolean);

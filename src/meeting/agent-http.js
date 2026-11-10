@@ -16,6 +16,7 @@ import { meetingContext, rememberMeetingExchange } from "./speech-gate.js";
 import { voiceModels } from "./voice-models.js";
 import { refreshMeetingFloor } from "./voice.js";
 import { handleMcpRequest } from "../mcp.js";
+import { rememberHeldAction } from "../typed-path.js";
 import {
   agentMember,
   agentTurnCurrent,
@@ -26,6 +27,7 @@ import {
 } from "./seat.js";
 import { openRouterSpeechStream, openRouterStream } from "../openrouter.js";
 import { noteStageMetric, noteToolMetric } from "./metrics.js";
+import { createHash } from "node:crypto";
 
 const FIRST_TOKEN_MS = 2500;
 const ROUND_MS = 10_000;
@@ -422,7 +424,7 @@ async function executeAgentTool(input) {
       const raw = { ok: false, reason: "claimed", held: false };
       return { raw, wrapped: wrapToolResult(raw, name) };
     }
-    rememberHold(input, name, args, member.memberId);
+    await rememberHold(input, name, args, member.memberId);
   }
   const child = new AbortController();
   const stopRead = () => {
@@ -481,7 +483,40 @@ function recallForRoom(result) {
   };
 }
 
-function rememberHold(input, name, args, memberId) {
+function heldParams(name, args) {
+  const source = claimArgsFor(name, args);
+  const params = source && typeof source === "object" && !Array.isArray(source) ? { ...source } : {};
+  const title = String(args?.title || args?.text || params.title || params.text || "").replace(/\s+/g, " ").trim().slice(0, 200);
+  if (title) params.title = title;
+  return params;
+}
+
+function heldActionId(roomId, memberId, name, args) {
+  const body = JSON.stringify([roomId, memberId, name, claimArgsFor(name, args)]);
+  return `action-${createHash("sha256").update(body).digest("hex").slice(0, 32)}`;
+}
+
+async function rememberHold(input, name, args, memberId) {
+  const params = heldParams(name, args);
+  const statement = String(params.title || params.text || name).slice(0, 500);
+  const linear = name === "linear__create_issue";
+  const action = {
+    id: heldActionId(input.seat.roomId, memberId, name, args),
+    roomId: input.seat.roomId,
+    memberId,
+    tool: linear ? "linear" : name,
+    callName: name,
+    preference: "ask",
+    statement,
+    params,
+    missingFact: "",
+    connectorId: null,
+    inviteMemberIds: [memberId],
+    state: "paused",
+    speaker: String(input.speaker || "").slice(0, 80),
+    source: "Google Meet",
+    roomName: input.seat.roomId,
+  };
   const row = {
     tenantId: input.seat.tenantId,
     roomId: input.seat.roomId,
@@ -490,18 +525,22 @@ function rememberHold(input, name, args, memberId) {
     speaker: input.speaker,
     memberId,
     turnId: input.turnId,
+    actionId: action.id,
     status: "held",
   };
   const session = input.session;
   if (session && typeof session === "object") {
     session.agentHolds = Array.isArray(session.agentHolds) ? session.agentHolds : [];
     session.agentHolds.push(row);
+    session.actions = Array.isArray(session.actions) ? session.actions : [];
+    if (!session.actions.some((item) => item.id === action.id)) session.actions.push(action);
   }
   const bag = input.workspace.meetingVoice;
   if (bag && typeof bag === "object") {
     bag.agentHolds = Array.isArray(bag.agentHolds) ? bag.agentHolds : [];
     bag.agentHolds.push(row);
   }
+  if (!(action.revision >= 1)) await rememberHeldAction(input.deps, action);
   return row;
 }
 
@@ -549,7 +588,10 @@ async function invokeTool(input, name, args, signal) {
   return handleMcpRequest({
     name,
     arguments: { ...args, session: input.session },
-  }, { ...input.deps, connectors: input.deps?.connectors, tenantId: input.seat.tenantId }, context);
+  }, { ...input.deps, connectors: input.deps?.connectors, tenantId: input.seat.tenantId }, {
+    ...context,
+    persistHold: (action) => rememberHeldAction(input.deps, action),
+  });
 }
 
 async function speakSentence(req, res, env, workspace, seat, body) {

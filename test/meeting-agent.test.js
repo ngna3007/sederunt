@@ -2,17 +2,21 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { request } from "node:http";
 import test from "node:test";
+import vm from "node:vm";
 import { createSession } from "../src/session.js";
-import { endOfTurn, spokenLines, wordsFromTranscript, withoutBotSpeech } from "../src/meeting/agent.js";
+import { endOfTurn, spokenLines, utteranceToCommit, wordsFromTranscript, withoutBotSpeech } from "../src/meeting/agent.js";
+import { renderCameraPage } from "../src/meeting/camera.js";
 import { endAgentSeat, noteAgentMember, noteAgentSpeaker } from "../src/meeting/seat.js";
 import { openRouterSpeechStream } from "../src/openrouter.js";
 import { createApp } from "../src/server.js";
+import { handleUtterance, rebuildCompanyIndex } from "../src/typed-path.js";
 
 const EAR = "ab".repeat(24);
 const EAR_B = "cd".repeat(24);
 const KEY = "sk-or-v1-agent-test-key";
 const TENANT_A = "11111111-1111-4111-8111-111111111111";
 const TENANT_B = "22222222-2222-4222-8222-222222222222";
+const TENANT_C = "33333333-3333-4333-8333-333333333333";
 const SEAT = { ear: EAR, botId: "bot-1", tenantId: "", roomId: "bot-1", botName: "Adam" };
 
 function chatStream(text, { hang = false, signal } = {}) {
@@ -230,6 +234,59 @@ test("endpointing waits out an unfinished tail and transcript words keep both sh
   assert.equal(webhook[0].start, 1.5);
   assert.equal(webhook[0].speaker, "Priya");
   assert.equal(withoutBotSpeech([...webhook, ...socket], { name: "Adam", participantId: "9" }).map((word) => word.text).join(" "), "Thursday");
+});
+
+test("a second transcript of the same words does not open another turn", () => {
+  const bot = { name: "Adam", participantId: "99" };
+  const finalWords = {
+    event: "transcript.data",
+    data: { data: { words: [{ text: "Adam," }, { text: "keep" }, { text: "Thursday." }], participant: { id: 7, name: "Priya" } } },
+  };
+  const partial = { ...finalWords, event: "transcript.partial_data" };
+  assert.equal(utteranceToCommit(null, partial, bot).open, false);
+  const first = utteranceToCommit(null, finalWords, bot);
+  assert.equal(first.open, true);
+  assert.equal(first.text, "Adam, keep Thursday.");
+  assert.equal(first.speaker, "Priya");
+  const copy = utteranceToCommit({ text: first.text, speaker: first.speaker }, {
+    words: ["Adam,", "keep", "Thursday."],
+    participant: { id: 7, name: "Priya" },
+  }, bot);
+  assert.equal(copy.open, false);
+  const later = utteranceToCommit({ text: first.text, speaker: first.speaker }, {
+    event: "transcript.data",
+    transcript: { words: [{ text: "Adam," }, { text: "file" }, { text: "the" }, { text: "note." }] },
+    participant: { id: 7, name: "Priya" },
+  }, bot);
+  assert.equal(later.open, true);
+  assert.equal(later.text, "Adam, file the note.");
+  const sam = utteranceToCommit({ text: first.text, speaker: first.speaker }, {
+    event: "transcript.data",
+    words: ["Adam,", "keep", "Thursday."],
+    participant: { id: 8, name: "Sam" },
+  }, bot);
+  assert.equal(sam.open, true);
+  assert.equal(sam.speaker, "Sam");
+  assert.equal(utteranceToCommit(null, {
+    event: "transcript.data",
+    words: [{ text: "Thursday." }],
+    participant: { id: "99", name: "Adam" },
+  }, bot), null);
+  const page = renderCameraPage();
+  const start = page.indexOf("function utteranceToCommit");
+  const tail = page.indexOf("var params", start);
+  assert.equal(start > 0 && tail > start, true);
+  assert.equal(page.includes(utteranceToCommit.toString()), true);
+  assert.match(page, /utteranceToCommit\(committed, message/);
+  assert.match(page, /if \(!heard\.open\) return/);
+  const fromPage = vm.runInNewContext(`${page.slice(start, tail)}\nutteranceToCommit`);
+  assert.equal(fromPage(null, partial, bot).open, false);
+  assert.equal(fromPage({ text: first.text, speaker: first.speaker }, finalWords, bot).open, false);
+  assert.equal(fromPage(null, {
+    event: "transcript.data",
+    words: ["Adam,", "file", "the", "note."],
+    participant: { id: 7, name: "Priya" },
+  }, bot).open, true);
 });
 
 test("the meeting page is the agent and a bad ear cannot open a turn", async () => {
@@ -631,6 +688,68 @@ test("a write is held before the model speaks and is not described as done", asy
     assert.match(told, /"ok":false/);
     assert.equal(spoken.raw.includes("the write ran"), false);
     assert.match(spoken.raw, /The launch stays Thursday/);
+  } finally {
+    await close(app);
+  }
+});
+
+test("a held linear write confirms on a fresh session", async () => {
+  const docs = [];
+  const memory = {
+    async remember(row) { docs.push(structuredClone(row)); return { blobId: "saved" }; },
+    async index() { return docs.map((row) => structuredClone(row)); },
+  };
+  const issues = [];
+  const linear = {
+    async createIssue(input) {
+      issues.push(input);
+      return { identifier: "ROW-9", id: "ROW-9" };
+    },
+  };
+  const meetingVoice = {};
+  const { app, session } = boot(async (_url, init) => {
+    const payload = JSON.parse(init.body);
+    const answering = (payload.messages || []).some((message) => message.role === "tool");
+    if (answering) return { ok: true, status: 200, body: chatStream("We will keep Thursday.") };
+    return { ok: true, status: 200, body: toolCallStream("linear__create_issue", { title: "Launch note", team: "other-team" }) };
+  }, {
+    meetingVoice,
+    seats: [{ ear: EAR, botId: "bot-hold", tenantId: TENANT_C, roomId: "bot-hold", botName: "Adam" }],
+    connectors: connectorStore([connected("linear", "create_issue", "write")]),
+    deps: { memory, linear },
+  });
+  noteAgentMember({ meetingVoice }, "bot-hold", { participantId: "7", name: "Priya", memberId: "7" });
+  const port = await listen(app);
+  try {
+    const spoken = await call(port, "POST", "/api/meeting/agent/turn", {
+      headers: { "content-type": "application/json", "x-meeting-ear": EAR },
+      body: turnBody("Adam, file the launch note.", "Priya", { participantId: "7", turn_id: "linear-hold" }),
+    });
+    assert.equal(spoken.status, 200);
+    assert.equal(meetingVoice.agentHolds[0].status, "held");
+    assert.equal(meetingVoice.agentHolds[0].tool, "linear__create_issue");
+    assert.equal(issues.length, 0);
+    const fresh = createSession();
+    assert.equal(fresh === session, false);
+    await rebuildCompanyIndex(fresh, { memory });
+    const paused = fresh.actions.find((row) => row.state === "paused");
+    assert.equal(paused.tool, "linear");
+    assert.equal(paused.roomId, "bot-hold");
+    assert.equal(paused.memberId, "7");
+    assert.equal(paused.params.title, "Launch note");
+    assert.match(paused.statement, /Launch note/);
+    assert.equal(paused.inviteMemberIds.includes("7"), true);
+    const result = await handleUtterance({
+      session: fresh,
+      text: `confirm ${paused.id}`,
+      deliveryId: "confirm-held",
+      memberId: "7",
+      room: { id: "bot-hold", kind: "meeting", source: "recall", botPresent: true, memberIds: ["7"] },
+      participants: ["7"],
+    }, { memory, linear });
+    assert.equal(issues.length, 1);
+    assert.equal(issues[0].title, "Launch note");
+    assert.equal(result.issueId, "ROW-9");
   } finally {
     await close(app);
   }

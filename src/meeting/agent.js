@@ -135,6 +135,85 @@ export function wordsFromTranscript(message) {
   }).filter((word) => word.text);
 }
 
+/**
+ * A final that is not the utterance already committed can open a turn.
+ * A partial, the bot's own voice, and a repeat of that utterance do not.
+ * The meeting page runs this function. It does not import the module.
+ *
+ * @param {{ text?: string, speaker?: string } | null | undefined} committed
+ * @param {unknown} message
+ * @param {{ name?: string, participantId?: string | null } | null | undefined} [bot]
+ * @returns {{ open: boolean, barge: boolean, text: string, speaker: string, participantId: string } | null}
+ */
+export function utteranceToCommit(committed, message, bot) {
+  function letters(value) {
+    return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  }
+  function partial(value) {
+    if (value.partial === true) return true;
+    const event = String(value.event || value.type || "");
+    if (event === "transcript.partial_data" || event.indexOf("partial_data") !== -1) return true;
+    const data = value.data && typeof value.data === "object" ? value.data : null;
+    if (data && data.partial === true) return true;
+    const nested = data ? String(data.event || "") : "";
+    return nested === "transcript.partial_data" || nested.indexOf("partial_data") !== -1;
+  }
+  function listOf(value) {
+    if (value.data && value.data.data && Array.isArray(value.data.data.words)) return value.data.data.words;
+    if (value.data && Array.isArray(value.data.words)) return value.data.words;
+    if (value.transcript && Array.isArray(value.transcript.words)) return value.transcript.words;
+    if (Array.isArray(value.words)) return value.words;
+    return [];
+  }
+  function whoOf(value, word) {
+    if (word && typeof word === "object" && word.participant) return word.participant;
+    if (value.data && value.data.data && value.data.data.participant) return value.data.data.participant;
+    if (value.data && value.data.participant) return value.data.participant;
+    if (value.participant) return value.participant;
+    return null;
+  }
+  const root = message && typeof message === "object" ? message : null;
+  if (!root) return null;
+  const botName = letters(bot && bot.name);
+  const botId = bot && bot.participantId != null ? String(bot.participantId) : "";
+  const words = [];
+  const list = listOf(root);
+  for (let index = 0; index < list.length; index += 1) {
+    const word = list[index];
+    const raw = typeof word === "string" ? word : (word && word.text ? String(word.text) : "");
+    const clean = raw.replace(/\s+/g, " ").trim();
+    if (!clean) continue;
+    const who = whoOf(root, word) || {};
+    const name = who.name ? String(who.name) : "";
+    const id = who.id == null ? "" : String(who.id);
+    if (botId && id && id === botId) continue;
+    if (botName && letters(name) === botName) continue;
+    words.push({ text: clean, speaker: name, participantId: id });
+  }
+  if (!words.length) return null;
+  const last = words[words.length - 1];
+  let said = "";
+  for (let index = 0; index < words.length; index += 1) {
+    said += (said ? " " : "") + words[index].text;
+  }
+  said = said.replace(/\s+/g, " ").trim();
+  if (!said) return null;
+  const speaker = last.speaker || "";
+  const participantId = last.participantId || "";
+  const priorText = String(committed && committed.text || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const priorSpeaker = letters(committed && committed.speaker);
+  const repeat = priorText.length > 0 && priorText === said.toLowerCase() && priorSpeaker === letters(speaker);
+  const row = { open: false, barge: false, text: said, speaker, participantId };
+  if (repeat) return row;
+  if (partial(root)) {
+    row.barge = true;
+    return row;
+  }
+  row.open = true;
+  row.barge = true;
+  return row;
+}
+
 /** Drop the bot's own participant. The page must not answer Adam. */
 export function withoutBotSpeech(words, bot = {}) {
   const name = letters(bot?.name);

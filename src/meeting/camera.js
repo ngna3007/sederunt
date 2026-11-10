@@ -1,3 +1,5 @@
+import { utteranceToCommit } from "./agent.js";
+
 /**
  * Output Media shows this page as the meeting camera.
  * The page hears mixed meeting audio, reads the Recall transcript socket,
@@ -35,6 +37,7 @@ const AGENT_PAGE = `<!doctype html>
 <audio id="voice"></audio>
 <script>
 (function () {
+  ${utteranceToCommit.toString()}
   var params = new URLSearchParams(location.search);
   var guest = document.getElementById("guest");
   var voice = document.getElementById("voice");
@@ -49,6 +52,7 @@ const AGENT_PAGE = `<!doctype html>
   var lineText = "";
   var lineSpeaker = "";
   var lineParticipant = "";
+  var committed = null;
   var lastWordAt = 0;
   var playStarted = 0;
   var turnTimer = 0;
@@ -127,39 +131,15 @@ const AGENT_PAGE = `<!doctype html>
     fetch("/api/meeting/agent/cancel", { method: "POST", headers: headers(), signal: controller.signal }).catch(function () {});
   }
 
-  function wordsOf(message) {
-    var list = null;
-    if (message && message.data && message.data.data && Array.isArray(message.data.data.words)) list = message.data.data.words;
-    else if (message && message.data && Array.isArray(message.data.words)) list = message.data.words;
-    else if (message && message.transcript && Array.isArray(message.transcript.words)) list = message.transcript.words;
-    else if (message && Array.isArray(message.words)) list = message.words;
-    return list || [];
-  }
-
-  function participantOf(message, word) {
-    if (word && word.participant) return word.participant;
-    if (message && message.data && message.data.data && message.data.data.participant) return message.data.data.participant;
-    if (message && message.data && message.data.participant) return message.data.participant;
-    if (message && message.participant) return message.participant;
-    return null;
-  }
-
   function onTranscript(message) {
-    var words = wordsOf(message).filter(function (word) {
-      var who = participantOf(message, word);
-      var name = who && who.name ? who.name : "";
-      var id = who && who.id != null ? String(who.id) : "";
-      if (participantId && id && id === String(participantId)) return false;
-      if (name && letters(name) === letters(botName)) return false;
-      return true;
-    });
-    if (!words.length) return;
-    var last = participantOf(message, words[words.length - 1]) || {};
-    lineSpeaker = last.name || lineSpeaker;
-    lineParticipant = last.id == null ? lineParticipant : String(last.id);
-    lineText = words.map(function (word) { return typeof word === "string" ? word : (word.text || ""); }).join(" ").replace(/\\s+/g, " ").trim();
+    var heard = utteranceToCommit(committed, message, { name: botName, participantId: participantId });
+    if (!heard) return;
+    if (heard.barge && playStarted && Date.now() - playStarted >= 300) barge();
+    if (!heard.open) return;
+    lineSpeaker = heard.speaker || lineSpeaker;
+    lineParticipant = heard.participantId || lineParticipant;
+    lineText = heard.text;
     lastWordAt = Date.now();
-    if (playStarted && Date.now() - playStarted >= 300) barge();
   }
 
   function maybeCommit() {
@@ -170,6 +150,7 @@ const AGENT_PAGE = `<!doctype html>
     var claimed = lineParticipant;
     lineText = "";
     lastWordAt = 0;
+    committed = { text: text, speaker: speaker };
     if (!shouldRespond(text, speaker, Date.now(), claimed)) return;
     ask(text, speaker, claimed);
   }
