@@ -1,12 +1,40 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyPlayedFloor, meetingLineClosesFloor, meetingLineShouldAnswer, meetingToolArguments, noteMeetingHeard, refreshMeetingFloor, speakMeetingTurn, spokenLine } from "../src/meeting/voice.js";
+import { applyPlayedFloor, claimMeetingEvent, claimMeetingEventLocal, meetingEventKey, meetingLineClosesFloor, meetingLineShouldAnswer, meetingToolArguments, noteMeetingHeard, refreshMeetingFloor, speakMeetingTurn, spokenLine } from "../src/meeting/voice.js";
 
 const env = {
   OPENROUTER_API_KEY: "sk-test-voice",
   OPENROUTER_VOICE_MODEL: "voice-model",
   RECALL_API_KEY: "recall-test-key",
 };
+
+test("one transcript event is claimed once per session, and Redis NX blocks the other instance", async () => {
+  assert.equal(meetingEventKey("bot-1", { deliveryId: "chunk" }, "msg-1"), "bot-1:msg-1");
+  assert.equal(meetingEventKey("bot-1", { deliveryId: "chunk" }, "msg-2"), "bot-1:msg-2");
+  assert.equal(meetingEventKey("bot-1", { deliveryId: "evt-9" }), "bot-1:evt-9");
+  assert.equal(meetingEventKey("bot-1", { memberId: "100", utteranceId: "tr:1.2" }), "bot-1:100:tr:1.2");
+  assert.equal(meetingEventKey("meeting", { deliveryId: "evt-9" }), "");
+  const here = {};
+  const there = {};
+  assert.equal(claimMeetingEventLocal(here, "bot-1:evt-9"), true);
+  assert.equal(claimMeetingEventLocal(here, "bot-1:evt-9"), false);
+  assert.equal(claimMeetingEventLocal(there, "bot-1:evt-9"), true);
+  const seen = new Set();
+  const redisEnv = { UPSTASH_REDIS_REST_URL: "https://redis.test", UPSTASH_REDIS_REST_TOKEN: "token" };
+  const fetchImpl = async (url) => {
+    const key = decodeURIComponent(String(url).split("/set/")[1].split("/")[0]);
+    assert.match(key, /^sederunt:voice:heard:bot-1:evt-9$/);
+    assert.match(String(url), /NX=true/);
+    assert.match(String(url), /EX=600/);
+    if (seen.has(key)) return { ok: true, async json() { return { result: null }; } };
+    seen.add(key);
+    return { ok: true, async json() { return { result: "OK" }; } };
+  };
+  assert.equal(await claimMeetingEvent(redisEnv, "bot-1:evt-9", fetchImpl), true);
+  assert.equal(await claimMeetingEvent(redisEnv, "bot-1:evt-9", fetchImpl), false);
+  assert.equal(await claimMeetingEvent(redisEnv, "bot-1:evt-9", async () => { throw new Error("down"); }), true);
+  assert.equal(await claimMeetingEvent({}, "bot-1:evt-9", fetchImpl), true);
+});
 
 function chat(message) {
   return { ok: true, async json() { return { choices: [{ message }] }; } };

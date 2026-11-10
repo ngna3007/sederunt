@@ -30,7 +30,7 @@ import { handleLinearOAuth, linearClientMetadata, tenantLinearClient } from "./l
 import { renderCameraPage } from "./meeting/camera.js";
 import { bindMeetingEar, clearPlayedFloor, meetingFloorClosedAt, offerMeetingClip, playedMeetingFloor, requestMeetingHold, stageMeetingFloor, takeMeetingVoice } from "./meeting/voice-bus.js";
 import { createMeetingAdapter, mediaFromBot, meetingCallUpdate, meetingDoorReady, meetingEnded, recallBotUrl, recallTranscriptDelivery, transcriptLines, verifyRecallRequest } from "./meeting/recall.js";
-import { applyPlayedFloor, meetingLineClosesFloor, meetingLineJoinsOpenTurn, meetingLineShouldAnswer, meetingPresenceLine, noteMeetingHeard, refreshMeetingFloor, speakMeetingTurn } from "./meeting/voice.js";
+import { applyPlayedFloor, claimMeetingEvent, claimMeetingEventLocal, meetingEventKey, meetingLineClosesFloor, meetingLineJoinsOpenTurn, meetingLineShouldAnswer, noteMeetingHeard, refreshMeetingFloor, speakMeetingTurn } from "./meeting/voice.js";
 import { claimMeetingSpeech, keepRoomTranscript, meetingSpeechBook, rememberMeetingLine, scheduleMeetingSpeech, speechSpeakerKey } from "./meeting/speech-gate.js";
 import { createMeetingFollowups, parseFollowupValue } from "./meeting/followups.js";
 import { createSupabaseFollowupStore } from "./meeting/followup-store.js";
@@ -1582,182 +1582,223 @@ export function createApp(options = {}) {
         headers: req.headers,
         payload: raw,
       });
-      let voiceWork = null;
-      if (accepted) {
-        try {
-          const payload = JSON.parse(raw || "{}");
-          const delivery = recallTranscriptDelivery(payload);
-          if (delivery) {
-            const botId = typeof delivery.room?.id === "string" ? delivery.room.id : "";
-            const companyId = await resolveBoundTenant(workspace, { botId });
-            // Race: join bound after Recall fires — ask provider to retry; never ingest unbound.
-            if (!companyId && identityConfigured(env) && requiresDurableBind(env)) {
-              send(res, 503, "text/plain; charset=utf-8", "bind-pending");
-              return;
-            }
-            // Unbound production memory fails closed (empty tenant + no allowUnscoped).
-            // A check can be spoken from the session already in hand. A question
-            // gets a short head start, then speaks while the rest of the index finishes.
-            let current = sessionFor(workspace, companyId);
-            const presence = meetingPresenceLine(delivery.text);
-            if (!current.readReport?.ok && !delivery.partial && !presence) {
-              current = await prepareWorkspace(workspace, companyId, false, SPEECH_INDEX_WAIT_MS);
-            }
-            const participant = payload?.data?.data?.participant || payload?.data?.participant;
-            // Display names and unverified mailbox claims never establish attendance identity.
-            if (!delivery.partial && participant?.email_verified === true && typeof participant.email === "string" && delivery.memberId) {
-              try {
-                await workspace.participantBindings.record({ tenantId: companyId, roomId: delivery.room.id, memberId: delivery.memberId, email: participant.email });
-              } catch (error) {
-                // A changed mailbox is permanent. An outage must be retried, so the words are not acknowledged yet.
-                if (error?.code !== "participant-identity") {
-                  send(res, 503, "text/plain; charset=utf-8", "participant-pending");
-                  return;
-                }
-              }
-            }
-            const speakerName = typeof participant?.name === "string" ? participant.name : "";
-            const heardDelivery = speakerName ? { ...delivery, speakerName } : delivery;
-            if (!delivery.partial) {
-              noteMeetingHeard(current, heardDelivery);
-              if (botId) rememberMeetingLine(current, botId, { speaker: speakerName || "Someone", text: delivery.text });
-            }
-            if (botId) {
-              const played = await playedMeetingFloor(workspace, botId, env, workspace.fetchImpl);
-              applyPlayedFloor(current, played, botId, meetingFloorClosedAt(workspace, botId));
-            }
-            const speaker = speechSpeakerKey({ memberId: delivery.memberId, speakerName }) || "speaker";
-            const book = botId ? meetingSpeechBook(current, botId) : null;
-            const answerLine = meetingLineShouldAnswer(current, heardDelivery);
-            const joining = meetingLineJoinsOpenTurn(current, heardDelivery, book, speaker);
-            if (!delivery.partial && meetingLineClosesFloor(current, heardDelivery)) {
-              refreshMeetingFloor(current, heardDelivery);
-              if (botId) await clearPlayedFloor(workspace, botId, env, workspace.fetchImpl);
-            }
-            const seenDelivery = Boolean(
-              delivery.deliveryId
-              && current.deliveries instanceof Set
-              && current.deliveries.has(delivery.deliveryId),
-            );
-            // A partial is not spoken. Final pieces from one speaker join until the
-            // hold ends. This promise is what waitUntil keeps alive on Vercel.
-            if (delivery.partial) {
-              if (answerLine && delivery.room?.id) {
-                current.hearingArmedRooms ??= new Set();
-                current.hearingArmedRooms.add(delivery.room.id);
-              }
-            } else if (book && (answerLine || joining) && !seenDelivery) {
-              const scheduled = scheduleMeetingSpeech(book, {
-                partial: false,
-                text: delivery.text,
-                name: current.hearing?.name || "",
-                speaker,
-                id: delivery.deliveryId,
-              }, Date.now());
-              if (scheduled.release) {
-                const generation = scheduled.generation;
-                const holdMs = scheduled.holdMs;
-                voiceWork = (async () => {
-                  await new Promise((resolve) => setTimeout(resolve, holdMs));
-                  const claimed = claimMeetingSpeech(book, generation, Date.now());
-                  if (!claimed?.text) return;
-                  const spoken = speakMeetingTurn({
-                    answer: true,
-                    text: claimed.text,
-                    partial: false,
-                    speakerName,
-                    botName: current.hearing?.name || "",
-                    memberId: delivery.memberId,
-                    room: delivery.room,
-                    session: current,
-                    deliveryId: delivery.deliveryId,
-                    utteranceId: delivery.utteranceId,
-                    env,
-                    fetchImpl: workspace.fetchImpl,
-                    deliver: (audio) => offerMeetingClip(workspace, delivery.room?.id, audio, env, workspace.fetchImpl),
-                    stageFloor: (floor) => stageMeetingFloor(workspace, delivery.room?.id, floor),
-                    cutPlayback: () => requestMeetingHold(workspace, delivery.room?.id, env, workspace.fetchImpl),
-                    deps: depsFor(workspace, companyId),
-                    context: {
-                      tenantId: companyId || "",
-                      env,
-                      personId: "",
-                      googleGrants: workspace.googleGrants,
-                      forms: workspace.forms,
-                      calendarMcp: workspace.calendarMcp,
-                      calendarSave: workspace.calendarSave,
-                      fetch: workspace.fetchImpl,
-                      origin: typeof env.SEDERUNT_PUBLIC_ORIGIN === "string" ? env.SEDERUNT_PUBLIC_ORIGIN : "",
-                    },
-                  }).catch(() => {});
-                  await spoken;
-                })().catch(() => {});
-              }
-            }
-            if (!delivery.partial) {
-              if (!current.readReport?.ok) current = await prepareWorkspace(workspace, companyId);
-              await handleUtterance({ ...heardDelivery, session: current }, depsFor(workspace, companyId));
-              if (delivery.room?.id) {
-                await noteMeetingCall(current, depsFor(workspace, companyId), delivery.room.id, "in_call_recording").catch(() => {});
-                keepRoomTranscript(current, delivery.room.id, { speaker: speakerName || "Someone", text: delivery.text });
-              }
-            }
-            if (!delivery.partial && companyId && workspace.followups && workspace.followupStore) {
-              const outcomes = await workspace.followupStore.list(companyId, { kind: "outcome", meetingId: delivery.room.id, limit: 1 });
-              if (outcomes.length) await persistMeetingFollowups(workspace, companyId, delivery.room.id);
-            }
-          }
-          const progress = meetingCallUpdate(payload);
-          if (progress?.roomId && progress.call !== "done" && progress.call !== "call_ended") {
-            const progressCompany = await resolveBoundTenant(workspace, { botId: progress.roomId });
-            if (!progressCompany && identityConfigured(env) && requiresDurableBind(env)) {
-              send(res, 503, "text/plain; charset=utf-8", "bind-pending");
-              return;
-            }
-            const progressSession = await prepareWorkspace(workspace, progressCompany);
-            await noteMeetingCall(progressSession, depsFor(workspace, progressCompany), progress.roomId, progress.call).catch(() => {});
-          }
-          const ended = meetingEnded(payload);
-          if (ended?.roomId) {
-            const companyId = await resolveBoundTenant(workspace, { botId: ended.roomId });
-            if (!companyId && identityConfigured(env) && requiresDurableBind(env)) {
-              send(res, 503, "text/plain; charset=utf-8", "bind-pending");
-              return;
-            }
-            if (companyId && !workspace.followups) { const error = new Error("Finalization unavailable"); error.code = "followup-persist"; throw error; }
-            if (companyId && workspace.followups) await persistMeetingFollowups(workspace, companyId, ended.roomId);
-            const current = await prepareWorkspace(workspace, companyId);
-            const endedCall = progress?.roomId === ended.roomId && progress.call ? progress.call : "done";
-            await noteMeetingCall(current, depsFor(workspace, companyId), ended.roomId, endedCall).catch(() => {});
-            try {
-              await endMeeting(current, depsFor(workspace, companyId), ended.roomId);
-            } catch {
-              // The finalization job is already saved. Memory minutes can be retried.
-            }
-          }
-        } catch (error) {
-          if (error?.code === "followup-persist") {
-            send(res, 503, "text/plain; charset=utf-8", "finalization-pending");
+      if (!accepted) {
+        send(res, 401, "text/plain; charset=utf-8", "rejected");
+        return;
+      }
+      let recallWork = null;
+      try {
+        const payload = JSON.parse(raw || "{}");
+        const delivery = recallTranscriptDelivery(payload);
+        const progress = meetingCallUpdate(payload);
+        const ended = meetingEnded(payload);
+        let transcriptCompany = "";
+        let ownedTranscript = false;
+        let eventKey = "";
+        if (delivery) {
+          const botId = typeof delivery.room?.id === "string" ? delivery.room.id : "";
+          transcriptCompany = await resolveBoundTenant(workspace, { botId });
+          // Race: join bound after Recall fires — ask provider to retry; never ingest unbound.
+          if (!transcriptCompany && identityConfigured(env) && requiresDurableBind(env)) {
+            send(res, 503, "text/plain; charset=utf-8", "bind-pending");
             return;
           }
-          // A signed callback is still accepted when the transcript has no words.
-        }
-      }
-      let voiceDeferred = false;
-      if (voiceWork && env.VERCEL) {
-        try {
-          const { waitUntil } = await import("@vercel/functions");
-          if (typeof waitUntil === "function") {
-            waitUntil(voiceWork);
-            voiceDeferred = true;
+          const participant = payload?.data?.data?.participant || payload?.data?.participant;
+          // Display names and unverified mailbox claims never establish attendance identity.
+          if (!delivery.partial && participant?.email_verified === true && typeof participant.email === "string" && delivery.memberId) {
+            try {
+              await workspace.participantBindings.record({ tenantId: transcriptCompany, roomId: delivery.room.id, memberId: delivery.memberId, email: participant.email });
+            } catch (error) {
+              // A changed mailbox is permanent. An outage must be retried, so the words are not acknowledged yet.
+              if (error?.code !== "participant-identity") {
+                send(res, 503, "text/plain; charset=utf-8", "participant-pending");
+                return;
+              }
+            }
           }
-        } catch {
-          // Local Node has no request waitUntil. The reply still finishes below.
+          eventKey = meetingEventKey(botId, delivery, headerValue(req.headers["webhook-id"]));
+          ownedTranscript = claimMeetingEventLocal(sessionFor(workspace, transcriptCompany), eventKey);
+        }
+        let progressCompany = "";
+        const progressOpen = Boolean(progress?.roomId && progress.call !== "done" && progress.call !== "call_ended");
+        if (progressOpen) {
+          progressCompany = await resolveBoundTenant(workspace, { botId: progress.roomId });
+          if (!progressCompany && identityConfigured(env) && requiresDurableBind(env)) {
+            send(res, 503, "text/plain; charset=utf-8", "bind-pending");
+            return;
+          }
+        }
+        let endedCompany = "";
+        if (ended?.roomId) {
+          endedCompany = await resolveBoundTenant(workspace, { botId: ended.roomId });
+          if (!endedCompany && identityConfigured(env) && requiresDurableBind(env)) {
+            send(res, 503, "text/plain; charset=utf-8", "bind-pending");
+            return;
+          }
+          if (endedCompany && !workspace.followups) { const error = new Error("Finalization unavailable"); error.code = "followup-persist"; throw error; }
+          if (endedCompany && workspace.followups) await persistMeetingFollowups(workspace, endedCompany, ended.roomId);
+        }
+        // Signature and tenant checks are done. The index, the saved line, and the
+        // joined reply follow the ack. waitUntil keeps that work alive on Vercel.
+        recallWork = (async () => {
+          const tasks = [];
+          if (delivery && ownedTranscript) {
+            tasks.push((async () => {
+              const botId = typeof delivery.room?.id === "string" ? delivery.room.id : "";
+              if (eventKey) {
+                const won = await claimMeetingEvent(env, eventKey, workspace.fetchImpl);
+                if (!won) return;
+              }
+              const companyId = transcriptCompany;
+              let current = sessionFor(workspace, companyId);
+              const participant = payload?.data?.data?.participant || payload?.data?.participant;
+              const speakerName = typeof participant?.name === "string" ? participant.name : "";
+              const heardDelivery = speakerName ? { ...delivery, speakerName } : delivery;
+              if (!delivery.partial) {
+                noteMeetingHeard(current, heardDelivery);
+                if (botId) rememberMeetingLine(current, botId, { speaker: speakerName || "Someone", text: delivery.text });
+              }
+              if (botId) {
+                const played = await playedMeetingFloor(workspace, botId, env, workspace.fetchImpl);
+                applyPlayedFloor(current, played, botId, meetingFloorClosedAt(workspace, botId));
+              }
+              const speaker = speechSpeakerKey({ memberId: delivery.memberId, speakerName }) || "speaker";
+              const book = botId ? meetingSpeechBook(current, botId) : null;
+              const answerLine = meetingLineShouldAnswer(current, heardDelivery);
+              const joining = meetingLineJoinsOpenTurn(current, heardDelivery, book, speaker);
+              if (!delivery.partial && meetingLineClosesFloor(current, heardDelivery)) {
+                refreshMeetingFloor(current, heardDelivery);
+                if (botId) await clearPlayedFloor(workspace, botId, env, workspace.fetchImpl);
+              }
+              const seenDelivery = Boolean(
+                delivery.deliveryId
+                && current.deliveries instanceof Set
+                && current.deliveries.has(delivery.deliveryId),
+              );
+              let speak = Promise.resolve();
+              if (delivery.partial) {
+                if (answerLine && delivery.room?.id) {
+                  current.hearingArmedRooms ??= new Set();
+                  current.hearingArmedRooms.add(delivery.room.id);
+                }
+              } else if (book && (answerLine || joining) && !seenDelivery) {
+                const scheduled = scheduleMeetingSpeech(book, {
+                  partial: false,
+                  text: delivery.text,
+                  name: current.hearing?.name || "",
+                  speaker,
+                  id: delivery.deliveryId,
+                }, Date.now());
+                if (scheduled.release) {
+                  const generation = scheduled.generation;
+                  const holdMs = scheduled.holdMs;
+                  speak = (async () => {
+                    await new Promise((resolve) => setTimeout(resolve, holdMs));
+                    const claimed = claimMeetingSpeech(book, generation, Date.now());
+                    if (!claimed?.text) return;
+                    await speakMeetingTurn({
+                      answer: true,
+                      text: claimed.text,
+                      partial: false,
+                      speakerName,
+                      botName: current.hearing?.name || "",
+                      memberId: delivery.memberId,
+                      room: delivery.room,
+                      session: current,
+                      deliveryId: delivery.deliveryId,
+                      utteranceId: delivery.utteranceId,
+                      env,
+                      fetchImpl: workspace.fetchImpl,
+                      deliver: (audio) => offerMeetingClip(workspace, delivery.room?.id, audio, env, workspace.fetchImpl),
+                      stageFloor: (floor) => stageMeetingFloor(workspace, delivery.room?.id, floor),
+                      cutPlayback: () => requestMeetingHold(workspace, delivery.room?.id, env, workspace.fetchImpl),
+                      deps: depsFor(workspace, companyId),
+                      context: {
+                        tenantId: companyId || "",
+                        env,
+                        personId: "",
+                        googleGrants: workspace.googleGrants,
+                        forms: workspace.forms,
+                        calendarMcp: workspace.calendarMcp,
+                        calendarSave: workspace.calendarSave,
+                        fetch: workspace.fetchImpl,
+                        origin: typeof env.SEDERUNT_PUBLIC_ORIGIN === "string" ? env.SEDERUNT_PUBLIC_ORIGIN : "",
+                      },
+                    }).catch(() => {});
+                  })();
+                }
+              }
+              const save = (async () => {
+                if (delivery.partial) return;
+                if (!current.readReport?.ok) current = await prepareWorkspace(workspace, companyId);
+                await handleUtterance({ ...heardDelivery, session: current }, depsFor(workspace, companyId));
+                if (delivery.room?.id) {
+                  await noteMeetingCall(current, depsFor(workspace, companyId), delivery.room.id, "in_call_recording").catch(() => {});
+                  keepRoomTranscript(current, delivery.room.id, { speaker: speakerName || "Someone", text: delivery.text });
+                }
+                if (companyId && workspace.followups && workspace.followupStore) {
+                  const outcomes = await workspace.followupStore.list(companyId, { kind: "outcome", meetingId: delivery.room.id, limit: 1 });
+                  if (outcomes.length) await persistMeetingFollowups(workspace, companyId, delivery.room.id);
+                }
+              })();
+              await Promise.all([speak, save]);
+            })());
+          }
+          if (progressOpen) {
+            tasks.push((async () => {
+              const progressSession = await prepareWorkspace(workspace, progressCompany);
+              await noteMeetingCall(progressSession, depsFor(workspace, progressCompany), progress.roomId, progress.call).catch(() => {});
+            })());
+          }
+          if (ended?.roomId) {
+            tasks.push((async () => {
+              const current = await prepareWorkspace(workspace, endedCompany);
+              const endedCall = progress?.roomId === ended.roomId && progress.call ? progress.call : "done";
+              await noteMeetingCall(current, depsFor(workspace, endedCompany), ended.roomId, endedCall).catch(() => {});
+              try {
+                await endMeeting(current, depsFor(workspace, endedCompany), ended.roomId);
+              } catch {
+                // The finalization job is already saved. Memory minutes can be retried.
+              }
+            })());
+          }
+          await Promise.all(tasks);
+        })();
+      } catch (error) {
+        if (error?.code === "followup-persist") {
+          send(res, 503, "text/plain; charset=utf-8", "finalization-pending");
+          return;
+        }
+        // A signed callback is still accepted when the transcript has no words.
+      }
+      if (env.VERCEL) {
+        let held = false;
+        if (recallWork) {
+          try {
+            const { waitUntil } = await import("@vercel/functions");
+            if (typeof waitUntil === "function") {
+              waitUntil(recallWork);
+              held = true;
+            }
+          } catch {
+            // Outside a Vercel request the import cannot hold the invocation.
+          }
+        }
+        send(res, 204, "text/plain; charset=utf-8", "");
+        if (recallWork && !held) recallWork.catch(() => {});
+        scheduleRecovery();
+        return;
+      }
+      try {
+        if (recallWork) await recallWork;
+      } catch (error) {
+        if (error?.code === "followup-persist") {
+          send(res, 503, "text/plain; charset=utf-8", "finalization-pending");
+          return;
         }
       }
-      send(res, accepted ? 204 : 401, "text/plain; charset=utf-8", accepted ? "" : "rejected");
-      if (voiceWork && !voiceDeferred) await voiceWork;
-      if (accepted) scheduleRecovery();
+      send(res, 204, "text/plain; charset=utf-8", "");
+      scheduleRecovery();
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/slack/interactivity") {
@@ -3227,7 +3268,6 @@ async function currentBot(workspace, req) {
 
 const BOARD_PROOF_WAIT_MS = 400;
 const BOARD_INDEX_WAIT_MS = 80;
-const SPEECH_INDEX_WAIT_MS = 80;
 const BOARD_SIDE_WAIT_MS = 1200;
 const PAGE_DOOR_WAIT_MS = 400;
 

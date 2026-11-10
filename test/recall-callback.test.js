@@ -852,3 +852,143 @@ test("hey adam can you hear me is spoken before the keep finishes", async () => 
     await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
   }
 });
+
+test("a transcript ack returns before the company index finishes", async () => {
+  let releaseIndex = () => {};
+  const indexGate = new Promise((resolve) => { releaseIndex = resolve; });
+  const remembered = [];
+  const app = createApp({
+    companyLoaded: true,
+    env: {
+      VERCEL: "1",
+      RECALL_WEBHOOK_SECRET: secret,
+      RECALL_API_KEY: "recall-test-key",
+      SEDERUNT_MEMBER: "100",
+    },
+    deps: {
+      memory: {
+        async remember(row) { remembered.push(row); return { blobId: null }; },
+        async index() { await indexGate; return []; },
+        async recall() { return []; },
+      },
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+    },
+  });
+  app.listen(0, "127.0.0.1");
+  await once(app, "listening");
+  const port = app.address().port;
+  const payload = JSON.stringify({
+    event: "transcript.data",
+    data: {
+      bot: { id: "55555555-5555-4555-8555-555555555555" },
+      transcript: { id: "tr-ack" },
+      data: {
+        participant: { id: 100, name: "Anh" },
+        words: ["Hey", "Maple", "the", "booth", "opens", "at", "nine."].map((text) => ({ text })),
+      },
+    },
+  });
+  try {
+    const started = Date.now();
+    const accepted = await Promise.race([
+      post(port, "/api/recall", payload, {
+        "webhook-id": "msg-ack",
+        "webhook-timestamp": "1731705121",
+        "webhook-signature": `v1,${sign(secret, "msg-ack", "1731705121", payload)}`,
+      }),
+      new Promise((resolve) => setTimeout(() => resolve({ status: 0 }), 800)),
+    ]);
+    assert.equal(accepted.status, 204);
+    assert.equal(Date.now() - started < 400, true);
+    assert.equal(remembered.length, 0);
+    releaseIndex();
+    const start = Date.now();
+    while (remembered.length < 1 && Date.now() - start < 2000) {
+      await new Promise((resolve) => setTimeout(resolve, 15));
+    }
+    assert.equal(remembered.length >= 1, true);
+    assert.match(JSON.stringify(remembered), /booth opens at nine/);
+  } finally {
+    releaseIndex();
+    await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
+test("a retried transcript on another instance is spoken once", async () => {
+  const redis = new Set();
+  let speeches = 0;
+  const fetchImpl = async (url) => {
+    const href = String(url);
+    if (href.includes("redis.test/set/")) {
+      const key = decodeURIComponent(href.split("/set/")[1].split("/")[0]);
+      if (redis.has(key)) return { ok: true, async json() { return { result: null }; }, async text() { return ""; } };
+      redis.add(key);
+      return { ok: true, async json() { return { result: "OK" }; }, async text() { return ""; } };
+    }
+    if (href.includes("/chat/completions")) {
+      return { ok: true, async json() { return { choices: [{ message: { content: "Pricing is on the sheet." } }] }; }, async text() { return ""; } };
+    }
+    if (href.includes("/audio/speech")) {
+      speeches += 1;
+      return { ok: true, async arrayBuffer() { return Uint8Array.from([0xff, 0xfb, 0x90, 0x64]).buffer; }, async text() { return ""; } };
+    }
+    if (href.includes("/output_audio/")) return { ok: true, async text() { return ""; }, async json() { return {}; } };
+    return { ok: false, async text() { return ""; }, async json() { return {}; } };
+  };
+  const env = {
+    RECALL_WEBHOOK_SECRET: secret,
+    RECALL_API_KEY: "recall-test-key",
+    OPENROUTER_API_KEY: "sk-test-voice",
+    OPENROUTER_VOICE_MODEL: "voice-model",
+    SEDERUNT_MEMBER: "100",
+    UPSTASH_REDIS_REST_URL: "https://redis.test",
+    UPSTASH_REDIS_REST_TOKEN: "token",
+  };
+  const memory = {
+    async remember() { return { blobId: null }; },
+    async index() { return []; },
+    async recall() { return []; },
+  };
+  const tatum = { async getObject() { return { text: "", checkpoint: null, objectId: null }; } };
+  const open = async () => {
+    const app = createApp({
+      companyLoaded: true,
+      env,
+      fetch: fetchImpl,
+      deps: { memory, tatum },
+    });
+    app.listen(0, "127.0.0.1");
+    await once(app, "listening");
+    return app;
+  };
+  const first = await open();
+  const second = await open();
+  const payload = JSON.stringify({
+    event: "transcript.data",
+    data: {
+      bot: { id: "66666666-6666-4666-8666-666666666666" },
+      transcript: { id: "tr-once" },
+      data: {
+        participant: { id: 100, name: "Anh" },
+        words: ["hey", "adam", "what", "is", "the", "price"].map((text, index) => ({ text, start_timestamp: { relative: index } })),
+      },
+    },
+  });
+  const headers = {
+    "webhook-id": "msg-once",
+    "webhook-timestamp": "1731705121",
+    "webhook-signature": `v1,${sign(secret, "msg-once", "1731705121", payload)}`,
+  };
+  try {
+    const [opened, retried] = await Promise.all([
+      post(first.address().port, "/api/recall", payload, headers),
+      post(second.address().port, "/api/recall", payload, headers),
+    ]);
+    assert.equal(opened.status, 204);
+    assert.equal(retried.status, 204);
+    assert.equal(redis.size, 1);
+    assert.equal(speeches, 1);
+  } finally {
+    await Promise.all([first, second].map((app) => new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())))));
+  }
+});
