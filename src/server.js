@@ -11,7 +11,8 @@ import { createServer } from "node:http";
 import { readRequestBytes } from "./http-body.js";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { extname, resolve } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { redact } from "./domain/redact.js";
 import { handleCalendarEvent } from "./calendar/route.js";
@@ -764,7 +765,8 @@ export function createApp(options = {}) {
       const file = url.pathname.endsWith("GeistMono-Variable.woff2")
         ? "geist-mono/GeistMono-Variable.woff2"
         : "geist-sans/Geist-Variable.woff2";
-      const bytes = await readFile(resolve("node_modules/geist/dist/fonts", file));
+      const fontDir = resolve(dirname(createRequire(import.meta.url).resolve("geist/font")), "fonts");
+      const bytes = await readFile(resolve(fontDir, file));
       res.writeHead(200, { "content-type": "font/woff2", "cache-control": "public, max-age=86400" });
       res.end(bytes);
       return;
