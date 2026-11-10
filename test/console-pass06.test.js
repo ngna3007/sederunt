@@ -310,9 +310,9 @@ serial("empty home and chat offer a next step", async (t) => {
   await page.goto(`http://127.0.0.1:${opened.port}/console`, { waitUntil: "networkidle" });
   await page.waitForSelector("#home-add-meeting", { timeout: 45000 });
   await page.click("#home-add-meeting");
-  await page.waitForSelector("#create-dialog:not([hidden])", { timeout: 45000 });
-  const dialog = await page.locator("#create-title").textContent();
-  assert.match(dialog, /room|Meeting/i);
+  await page.waitForSelector("#join-dialog:not([hidden])", { timeout: 45000 });
+  const dialog = await page.locator("#join-title").textContent();
+  assert.match(dialog, /Add to a meeting/);
   assert.deepEqual(errors, []);
 });
 

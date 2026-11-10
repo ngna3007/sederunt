@@ -801,6 +801,26 @@ ${slack}
     </div>
   </div>
 </div>
+<div id="join-dialog" class="dialog" hidden role="dialog" aria-modal="true" aria-labelledby="join-title">
+  <div class="shade" data-close="join-dialog"></div>
+  <div class="panel">
+    <div class="panel-bar">
+      <h2 id="join-title">Add to a meeting</h2>
+      <button type="button" class="close" data-close="join-dialog" aria-label="Close">${closeIcon}</button>
+    </div>
+    <div class="panel-body">
+    <p>Join a call that is happening now.</p>
+    <form id="meet-form">
+      <label id="meet-link-label"${state.meeting ? "" : " hidden"}>Meeting link <input id="meet-link" name="meet" placeholder="Paste a Zoom, Google Meet, Teams, or Webex link"></label>
+      <p id="join-ready"${state.meeting ? " hidden" : ""}>${state.meeting ? "" : joinUnavailable}</p>
+      <button id="join-submit" class="primary" type="submit"${joinDisabled}>Join now</button>
+      <button id="meet-connectors" class="primary" type="button"${state.meeting ? " hidden" : ""}>Open Setup</button>
+      <p id="join-hint" class="sr">Sederunt joins that meeting when Meet is ready. If Meet is not ready, the status line says so.</p>
+    </form>
+    <p id="join-status"></p>
+    </div>
+  </div>
+</div>
 <div id="create-dialog" class="dialog" hidden role="dialog" aria-modal="true" aria-labelledby="create-title">
   <div class="shade" data-close="create-dialog"></div>
   <div class="panel">
@@ -818,24 +838,22 @@ ${slack}
       <p>No channel is in use.</p>
       <button type="button" data-close="create-dialog">Close</button>
     </div>
-    <form id="meet-form">
-      <label id="meet-link-label"${state.meeting ? "" : " hidden"}>Meeting link <input id="meet-link" name="meet" placeholder="Paste a Zoom, Google Meet, Teams, or Webex link"></label>
+    <div id="room-meeting">
+      <p>A future meeting stays on the calendar. The room appears once Sederunt is in the call.</p>
+      <div id="room-events"></div>
+      <p id="room-events-empty" class="meta" hidden>No upcoming meeting is on the calendar.</p>
+      <p id="room-events-note" class="meta">Scheduling uses the meeting link on the calendar event. Add to a meeting joins a live call.</p>
       <label id="join-trigger-label">Trigger
         <span class="join-trigger-hint">People say this to wake the bot.</span>
         <textarea id="join-trigger" name="trigger" rows="2" placeholder="A sentence that wakes the bot">${escapeHtml(joinTrigger)}</textarea>
       </label>
-      <p id="join-ready"${state.meeting ? " hidden" : ""}>${state.meeting ? "" : joinUnavailable}</p>
-      <button id="join-submit" class="primary" type="submit"${joinDisabled}>Join with this link</button>
-      <button id="meet-connectors" class="primary" type="button"${state.meeting ? " hidden" : ""}>Open Setup</button>
-      <p id="join-hint" class="sr">Sederunt joins that meeting when Meet is ready. If Meet is not ready, the status line says so.</p>
-    </form>
+    </div>
     <div id="channel-door" hidden>
       ${slackAsk}
       <p id="channel-setup"></p>
       <p>No channel is in use.<br>Slack is the channel tool. Status shows whether it is connected.</p>
       <button id="channel-connectors" type="button">Open Setup</button>
     </div>
-    <p id="join-status"></p>
     </div>
   </div>
 </div>
@@ -1402,7 +1420,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (button) {
       button.disabled = !ready;
       button.hidden = false;
-      button.textContent = ready ? "Join with this link" : "Join";
+      button.textContent = ready ? "Join now" : "Join";
       button.classList.toggle("primary", ready);
     }
     var alt = document.getElementById("meet-connectors");
@@ -3274,7 +3292,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function dialogOpen() {
-    var ids = ["proof-dialog", "event-dialog", "profile-dialog", "decision-dialog", "create-dialog", "workspace-dialog", "space-dialog", "invite-dialog", "tool-manage-dialog", "mcp-dialog", "mcp-manage-dialog", "mcp-token-dialog", "mcp-remove-dialog", "file-proof-dialog", "file-delete-dialog"];
+    var ids = ["proof-dialog", "event-dialog", "profile-dialog", "decision-dialog", "join-dialog", "create-dialog", "workspace-dialog", "space-dialog", "invite-dialog", "tool-manage-dialog", "mcp-dialog", "mcp-manage-dialog", "mcp-token-dialog", "mcp-remove-dialog", "file-proof-dialog", "file-delete-dialog"];
     for (var i = 0; i < ids.length; i += 1) {
       var node = document.getElementById(ids[i]);
       if (node && !node.hidden) return true;
@@ -5444,10 +5462,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (blockedPanel) blockedPanel.hidden = true;
     document.getElementById("pick-meeting").setAttribute("aria-pressed", meeting ? "true" : "false");
     document.getElementById("pick-channel").setAttribute("aria-pressed", meeting ? "false" : "true");
-    document.getElementById("meet-form").hidden = !meeting;
+    var roomMeeting = document.getElementById("room-meeting");
+    if (roomMeeting) roomMeeting.hidden = !meeting;
     document.getElementById("channel-door").hidden = meeting;
     text("create-title", "New room");
-    syncJoinReady();
+    if (meeting) paintRoomEvents();
     if (!meeting) showLine("channel-setup", "");
   }
 
@@ -5489,6 +5508,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     workspaceKind = kind;
     closeMenu();
     closeDialog("decision-dialog");
+    closeDialog("join-dialog");
     closeDialog("create-dialog");
     closeDialog("file-dialog");
     closeDialog("workspace-dialog");
@@ -5831,7 +5851,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     showSection("connectors");
   });
   document.getElementById("meet-connectors").addEventListener("click", function () {
-    closeDialog("create-dialog");
+    closeDialog("join-dialog");
     if (home.hidden) return;
     showSection("connectors");
   });
@@ -6036,6 +6056,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var shown = meetings;
     box.hidden = failed || meetings.length === 0;
     list.replaceChildren();
+    paintRoomEvents();
     if (box.hidden) return;
     shown.forEach(function (meeting) {
       if (!meeting || !meeting.id) return;
@@ -6059,6 +6080,25 @@ if (sessionWhen && sessionWhen.dataset.at) {
       row.append(copy, edit);
       list.append(row);
     });
+  }
+
+  function paintRoomEvents() {
+    var list = document.getElementById("room-events");
+    var empty = document.getElementById("room-events-empty");
+    var note = document.getElementById("room-events-note");
+    if (!list) return;
+    var meetings = (state && state.meetings) || [];
+    list.replaceChildren();
+    meetings.forEach(function (meeting) {
+      if (!meeting || !meeting.title) return;
+      var row = document.createElement("p");
+      row.className = "meta";
+      var when = eventWhenText(meeting.start, meeting.end);
+      row.textContent = when ? meeting.title + " · " + when : meeting.title;
+      list.append(row);
+    });
+    if (empty) empty.hidden = meetings.length > 0;
+    if (note) note.hidden = meetings.length === 0;
   }
 
   function showEventError(message) {
@@ -6509,9 +6549,17 @@ if (sessionWhen && sessionWhen.dataset.at) {
     }
   });
 
+  function openLiveJoin(force) {
+    if (!force && shouldAsk("calendar") && revealCalendarAsk()) return;
+    text("join-status", "");
+    syncJoinReady();
+    openDialog("join-dialog");
+    var label = document.getElementById("meet-link-label");
+    var link = document.getElementById("meet-link");
+    if (label && !label.hidden && link) link.focus();
+  }
   function onHomeAddMeeting() {
-    if (shouldAsk("calendar") && revealCalendarAsk()) return;
-    document.getElementById("new-room").click();
+    openLiveJoin(false);
   }
   var homeAdd = document.getElementById("home-add-meeting");
   if (homeAdd) homeAdd.addEventListener("click", onHomeAddMeeting);
@@ -6537,11 +6585,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
     showSection("connectors");
   });
   document.getElementById("new-room").addEventListener("click", function () {
-    text("join-status", "");
     pickDoor(true);
     openDialog("create-dialog");
-    var linkLabel = document.getElementById("meet-link-label");
-    if (linkLabel && !linkLabel.hidden) document.getElementById("meet-link").focus();
+    var trigger = document.getElementById("join-trigger");
+    if (trigger) trigger.focus();
   });
   document.getElementById("pick-meeting").addEventListener("click", function () { pickDoor(true); });
   document.getElementById("pick-channel").addEventListener("click", function () {
@@ -6573,7 +6620,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
           location.href = "/console/setup";
           return;
         }
-        if (tool === "calendar" && choice === "later") document.getElementById("new-room").click();
+        if (tool === "calendar" && choice === "later") openLiveJoin(true);
       }).catch(function () {
         if (!error) return;
         error.hidden = false;
@@ -6618,6 +6665,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     else if (!document.getElementById("palette").hidden) closePalette();
     else if (document.getElementById("proof-dialog") && !document.getElementById("proof-dialog").hidden) closeDialog("proof-dialog");
     else if (!document.getElementById("decision-dialog").hidden) closeDialog("decision-dialog");
+    else if (!document.getElementById("join-dialog").hidden) closeDialog("join-dialog");
     else if (!document.getElementById("create-dialog").hidden) closeDialog("create-dialog");
     else if (!document.getElementById("file-dialog").hidden) closeDialog("file-dialog");
     else if (!document.getElementById("workspace-dialog").hidden) closeDialog("workspace-dialog");
@@ -7336,17 +7384,15 @@ if (sessionWhen && sessionWhen.dataset.at) {
       joinButton.disabled = true;
       joinButton.textContent = "Joining…";
     }
-    text("join-status", "");
-    saveJoinTrigger().then(function () {
-      text("join-status", "Sederunt is joining that meeting…");
-      return fetch("/api/join", {
+    text("join-status", "Sederunt is joining that meeting…");
+    fetch("/api/join", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ url: link })
     }).then(function (response) { return response.json(); }).then(function (result) {
       if (result.join === "sent") {
         document.getElementById("meet-link").value = "";
-        closeDialog("create-dialog");
+        closeDialog("join-dialog");
         text("status", "Sederunt is on the way to the meeting.");
         load();
         return;
@@ -7356,9 +7402,6 @@ if (sessionWhen && sessionWhen.dataset.at) {
         : "Meet is not ready, so Sederunt cannot join that meeting yet.");
     }).catch(function () {
       text("join-status", "Sederunt could not join that meeting.");
-    });
-    }).catch(function () {
-      text("join-status", "The trigger was not saved.");
     }).finally(function () {
       joinBusy = false;
       syncJoinReady();
@@ -7385,6 +7428,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
       });
     });
   }
+  var joinTriggerBox = document.getElementById("join-trigger");
+  if (joinTriggerBox) joinTriggerBox.addEventListener("blur", function () {
+    saveJoinTrigger().catch(function () {
+      toast("The trigger was not saved.");
+    });
+  });
   function reserveComposer() {
     var chat = document.getElementById("chat");
     var form = document.getElementById("chat-form");

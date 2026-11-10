@@ -310,9 +310,9 @@ test("console edit dialog, ask, and layout", { timeout: 180000 }, async (t) => {
   assert.equal(home.roomEdit, true);
 
   await page.click("#home-add-to-meeting");
-  await page.waitForSelector("#create-dialog:not([hidden])");
-  await page.click("#create-dialog .close");
-  await page.waitForFunction(() => document.getElementById("create-dialog").hidden);
+  await page.waitForSelector("#join-dialog:not([hidden])");
+  await page.click("#join-dialog .close");
+  await page.waitForFunction(() => document.getElementById("join-dialog").hidden);
 
   await page.goto(`${origin}/console/rooms/booth`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("#file-edit-event:not([hidden])", { timeout: 45000 });
@@ -537,7 +537,9 @@ test("console edit dialog, ask, and layout", { timeout: 180000 }, async (t) => {
   assert.equal(askHome.dialog, true);
   await offPage.click("#home-add-meeting");
   const createHidden = await offPage.locator("#create-dialog").getAttribute("hidden");
+  const joinHidden = await offPage.locator("#join-dialog").getAttribute("hidden");
   assert.notEqual(createHidden, null);
+  assert.notEqual(joinHidden, null);
 
   assert.deepEqual(errors, []);
   assert.deepEqual(outbound, []);
