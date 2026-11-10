@@ -387,6 +387,45 @@ test("a transcript with no speaker cannot borrow the configured member identity"
   }
 });
 
+test("a host ending the call stores call_ended", async () => {
+  const remembered = [];
+  const app = createApp({
+    companyLoaded: true,
+    env: { RECALL_WEBHOOK_SECRET: secret, SEDERUNT_MEMBER: "U_MINA" },
+    deps: {
+      memory: {
+        async remember(input) { remembered.push(input); return { blobId: null }; },
+        async index() { return []; },
+        async recall() { return []; },
+      },
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+    },
+  });
+  app.listen(0, "127.0.0.1");
+  await once(app, "listening");
+  const port = app.address().port;
+  try {
+    const payload = JSON.stringify({
+      event: "bot.call_ended",
+      data: {
+        data: { code: "call_ended", sub_code: null, updated_at: "2026-11-09T17:33:30.000Z" },
+        bot: { id: "ba18bf31-3ac6-42a8-8973-ad64cdc99fe8", metadata: {} },
+      },
+    });
+    const accepted = await post(port, "/api/recall", payload, {
+      "webhook-id": "msg-ended",
+      "webhook-timestamp": "1731705121",
+      "webhook-signature": `v1,${sign(secret, "msg-ended", "1731705121", payload)}`,
+    });
+    assert.equal(accepted.status, 204);
+    const room = remembered.find((row) => row.kind === "room");
+    assert.equal(room.room.id, "ba18bf31-3ac6-42a8-8973-ad64cdc99fe8");
+    assert.equal(room.room.call, "call_ended");
+  } finally {
+    await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
 test("verification rejects a secret that does not sign the raw body", () => {
   const payload = "{\"event\":\"bot.done\"}";
   const headers = {

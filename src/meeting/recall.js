@@ -155,21 +155,17 @@ export function createMeetingAdapter(env = process.env, options = {}) {
  * @param {unknown} payload
  */
 /**
- * A meeting is over when Recall says the bot is done and names that bot.
+ * A meeting is over when Recall says the bot left or finished, and names that bot.
+ * The host can end the call at any time. That arrives as `bot.call_ended`, then `bot.done`.
  * A bare `{ event: "bot.done" }` has no room, so it is not an ending.
  *
  * @param {unknown} payload
  */
 export function meetingEnded(payload) {
-  const root = payload && typeof payload === "object" ? payload : {};
-  const event = typeof root.event === "string" ? root.event : "";
-  if (event !== "bot.done" && event !== "bot.status_change") return null;
-  const data = root.data && typeof root.data === "object" ? root.data : {};
-  const status = typeof data.status === "string" ? data.status : (data.status?.code || "");
-  if (event === "bot.status_change" && status !== "done" && status !== "call_ended") return null;
-  const botId = data.bot?.id || data.bot_id || root.bot?.id || "";
-  if (typeof botId !== "string" || !botId.trim()) return null;
-  return { roomId: botId.trim() };
+  const update = meetingCallUpdate(payload);
+  if (!update) return null;
+  if (update.call !== "call_ended" && update.call !== "done") return null;
+  return { roomId: update.roomId };
 }
 
 /** Recall bot phases, earliest to latest. A later phase does not move backward. */
@@ -186,6 +182,12 @@ export const MEETING_CALLS = Object.freeze([
 export function meetingCallRank(code) {
   const rank = MEETING_CALLS.indexOf(code);
   return rank < 0 ? 0 : rank + 1;
+}
+
+/** True while the bot can still be in the call. A host ending it moves past these. */
+export function meetingStillLive(code) {
+  const rank = meetingCallRank(code);
+  return rank > 0 && rank <= meetingCallRank("in_call_recording");
 }
 
 /**
@@ -231,9 +233,11 @@ export function meetingCallUpdate(payload) {
   const root = payload && typeof payload === "object" ? payload : {};
   const event = typeof root.event === "string" ? root.event : "";
   const data = root.data && typeof root.data === "object" ? root.data : {};
+  const inner = data.data && typeof data.data === "object" ? data.data : {};
   const raw = typeof data.status === "string" ? data.status : (data.status && typeof data.status.code === "string" ? data.status.code : "");
+  const nested = typeof inner.code === "string" ? inner.code : "";
   const fromEvent = event.startsWith("bot.") ? event.slice(4) : "";
-  const code = meetingCallRank(raw) ? raw : (meetingCallRank(fromEvent) ? fromEvent : "");
+  const code = meetingCallRank(raw) ? raw : (meetingCallRank(nested) ? nested : (meetingCallRank(fromEvent) ? fromEvent : ""));
   if (!code && event !== "bot.done") return null;
   const botId = data.bot?.id || data.bot_id || root.bot?.id || "";
   if (typeof botId !== "string" || !botId.trim()) return null;

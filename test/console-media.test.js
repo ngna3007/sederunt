@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import test from "node:test";
 import { sealSession } from "../src/console-auth.js";
-import { mediaFromBot, transcriptLines } from "../src/meeting/recall.js";
+import { mediaFromBot, meetingCallUpdate, meetingEnded, transcriptLines } from "../src/meeting/recall.js";
 import { createApp } from "../src/server.js";
 import { rankDecisions } from "../src/console-page.js";
 
@@ -152,6 +152,26 @@ test("a finished Meet is Done and keeps Recall's video", () => {
   assert.equal(fileReady.state, "ready");
 });
 
+test("a host ending the call is the meeting ending", () => {
+  const payload = {
+    event: "bot.call_ended",
+    data: {
+      data: { code: "call_ended", sub_code: null, updated_at: "2026-11-09T17:33:30.000Z" },
+      bot: { id: "ba18bf31-3ac6-42a8-8973-ad64cdc99fe8", metadata: {} },
+    },
+  };
+  assert.deepEqual(meetingCallUpdate(payload), {
+    roomId: "ba18bf31-3ac6-42a8-8973-ad64cdc99fe8",
+    call: "call_ended",
+  });
+  assert.deepEqual(meetingEnded(payload), { roomId: "ba18bf31-3ac6-42a8-8973-ad64cdc99fe8" });
+  assert.deepEqual(meetingEnded({
+    event: "bot.done",
+    data: { data: { code: "done", sub_code: null, updated_at: "2026-11-09T17:33:40.000Z" }, bot: { id: "ba18bf31-3ac6-42a8-8973-ad64cdc99fe8" } },
+  }), { roomId: "ba18bf31-3ac6-42a8-8973-ad64cdc99fe8" });
+  assert.equal(meetingEnded({ event: "bot.in_call_recording", data: { bot: { id: "ba18bf31-3ac6-42a8-8973-ad64cdc99fe8" } } }), null);
+});
+
 test("a Recall transcript becomes spoken lines with times", () => {
   const lines = transcriptLines([
     {
@@ -210,6 +230,106 @@ test("an opened meeting with no decision still plays the Recall recording", asyn
     assert.equal(saved.duration, 184);
     const hidden = await fetch(`http://127.0.0.1:${port}/console/rooms/22222222-2222-4222-8222-222222222222/media?member=mina`);
     assert.equal(hidden.status, 404);
+  } finally {
+    app.close();
+  }
+});
+
+test("an open meeting the host already ended is Done on the next list", async () => {
+  const session = (await import("../src/session.js")).createSession();
+  const id = "ba18bf31-3ac6-42a8-8973-ad64cdc99fe8";
+  const quiet = "3b7e84ff-42d7-493b-80f1-c1e000140a64";
+  session.rooms.push(
+    { id, kind: "meeting", platform: "Google Meet", botPresent: true, call: "in_call_recording" },
+    { id: quiet, kind: "meeting", platform: "Google Meet", botPresent: true },
+  );
+  session.readReport = { ok: true, empty: false };
+  const reads = [];
+  const remembered = [];
+  const app = createApp({
+    companyLoaded: true,
+    session,
+    env: { RECALL_API_KEY: KEY, SEDERUNT_MEMBER: "mina" },
+    deps: {
+      memory: {
+        async index() { return []; },
+        async recall() { return []; },
+        async remember(input) { remembered.push(input); return { blobId: null }; },
+      },
+    },
+    recall: {
+      async readBot(botId) {
+        reads.push(botId);
+        return {
+          id: botId,
+          status_changes: [
+            { code: "in_call_recording" },
+            { code: "call_ended", sub_code: null },
+            { code: "done" },
+          ],
+          recordings: [{
+            started_at: "2026-11-09T17:32:55.000Z",
+            completed_at: "2026-11-09T17:33:25.000Z",
+            status: { code: "done" },
+            media_shortcuts: { video_mixed: { data: { download_url: "https://example.test/mixed.mp4" } } },
+          }],
+        };
+      },
+    },
+  });
+  const port = await listen(app);
+  try {
+    const first = await fetch(`http://127.0.0.1:${port}/api/console?member=mina`);
+    assert.equal(first.status, 200);
+    const listed = await first.json();
+    const row = listed.rooms.find((room) => room.id === id);
+    assert.equal(row.call, "done");
+    assert.equal(row.startedAt, "2026-11-09T17:32:55.000Z");
+    assert.equal(row.duration, 30);
+    assert.equal(listed.rooms.find((room) => room.id === quiet).call, undefined);
+    assert.deepEqual(reads, [id]);
+    assert.equal(remembered.some((item) => item?.room?.id === id && item.room.call === "done"), true);
+    const second = await fetch(`http://127.0.0.1:${port}/api/console?member=mina`);
+    assert.equal((await second.json()).rooms.find((room) => room.id === id).call, "done");
+    assert.deepEqual(reads, [id]);
+  } finally {
+    app.close();
+  }
+});
+
+test("a meeting that is still recording stays In call", async () => {
+  const session = (await import("../src/session.js")).createSession();
+  const id = "ba18bf31-3ac6-42a8-8973-ad64cdc99fe8";
+  session.rooms.push({ id, kind: "meeting", platform: "Google Meet", botPresent: true, call: "in_call_recording" });
+  session.readReport = { ok: true, empty: false };
+  const remembered = [];
+  const app = createApp({
+    companyLoaded: true,
+    session,
+    env: { RECALL_API_KEY: KEY, SEDERUNT_MEMBER: "mina" },
+    deps: {
+      memory: {
+        async index() { return []; },
+        async recall() { return []; },
+        async remember(input) { remembered.push(input); return { blobId: null }; },
+      },
+    },
+    recall: {
+      async readBot() {
+        return {
+          id,
+          status_changes: [{ code: "in_call_recording" }],
+          recordings: [{ status: { code: "processing" }, media_shortcuts: {} }],
+        };
+      },
+    },
+  });
+  const port = await listen(app);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/console?member=mina`);
+    const listed = await response.json();
+    assert.equal(listed.rooms.find((room) => room.id === id).call, "in_call_recording");
+    assert.equal(remembered.some((item) => item?.room?.call && item.room.call !== "in_call_recording"), false);
   } finally {
     app.close();
   }
