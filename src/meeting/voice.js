@@ -12,6 +12,7 @@ import {
   isBareWake,
   meetingContext,
   rememberMeetingExchange,
+  speechBufferOpen,
 } from "./speech-gate.js";
 
 const TEXT_SCHEMA = {
@@ -74,6 +75,24 @@ export function meetingLineShouldAnswer(session, delivery) {
   if (speaker && holdSpeaker && speaker !== holdSpeaker) return false;
   if (speaker && floorOpen && speaker !== floor.speaker) return false;
   return true;
+}
+
+/**
+ * A later piece from the speaker who already has a buffer joins that turn.
+ * A backchannel, a thanks, or someone else does not.
+ *
+ * @param {object | null | undefined} session
+ * @param {{ text?: string, partial?: boolean, speakerName?: string } | null | undefined} delivery
+ * @param {object | null | undefined} book
+ * @param {string} speaker
+ */
+export function meetingLineJoinsOpenTurn(session, delivery, book, speaker) {
+  const text = String(delivery?.text || "");
+  if (!text.trim() || delivery?.partial) return false;
+  const hearing = session?.hearing;
+  if (sameGuest(delivery?.speakerName, hearing?.name)) return false;
+  if (isBackchannel(text, hearing) || isDismiss(text, hearing)) return false;
+  return speechBufferOpen(book, speaker);
 }
 
 /**
@@ -467,7 +486,7 @@ function meetingSystem(botName, kept, tasks, heard, saved) {
   return [
     buildSystemPrompt({ mode: "live_voice", botName, language: "en" }),
     "Speak at most two sentences, in English. Do not repeat that you can hear them.",
-    "If the lines already include a time and who to invite, do not ask for either again. A write still needs approval. Do not say it is done during the call.",
+    "A write still needs approval. Do not say it is done during the call.",
     "You can call tools. recall reads what this person is allowed to see. act submits one write. Other tools are the connected connectors. Never send a member id, a token, or a session.",
     "If they only say your name, answer in one short line that you are listening.",
     "Room talk that does not address you is context. Do not answer it. Use it when someone asks you something that depends on it.",

@@ -30,8 +30,8 @@ import { handleLinearOAuth, linearClientMetadata, tenantLinearClient } from "./l
 import { renderCameraPage } from "./meeting/camera.js";
 import { bindMeetingEar, clearPlayedFloor, meetingFloorClosedAt, offerMeetingClip, playedMeetingFloor, requestMeetingHold, stageMeetingFloor, takeMeetingVoice } from "./meeting/voice-bus.js";
 import { createMeetingAdapter, mediaFromBot, meetingCallUpdate, meetingDoorReady, meetingEnded, recallBotUrl, recallTranscriptDelivery, transcriptLines, verifyRecallRequest } from "./meeting/recall.js";
-import { applyPlayedFloor, meetingLineClosesFloor, meetingLineShouldAnswer, meetingPresenceLine, noteMeetingHeard, refreshMeetingFloor, speakMeetingTurn } from "./meeting/voice.js";
-import { claimMeetingSpeech, keepRoomTranscript, rememberMeetingLine, scheduleMeetingSpeech } from "./meeting/speech-gate.js";
+import { applyPlayedFloor, meetingLineClosesFloor, meetingLineJoinsOpenTurn, meetingLineShouldAnswer, meetingPresenceLine, noteMeetingHeard, refreshMeetingFloor, speakMeetingTurn } from "./meeting/voice.js";
+import { claimMeetingSpeech, keepRoomTranscript, meetingSpeechBook, rememberMeetingLine, scheduleMeetingSpeech, speechSpeakerKey } from "./meeting/speech-gate.js";
 import { createMeetingFollowups, parseFollowupValue } from "./meeting/followups.js";
 import { createSupabaseFollowupStore } from "./meeting/followup-store.js";
 import { acceptMeetingEnd, buildMeetingFollowupInput, followupInteractionFields, validateFollowupEdit } from "./meeting/live-followups.js";
@@ -1626,7 +1626,10 @@ export function createApp(options = {}) {
               const played = await playedMeetingFloor(workspace, botId, env, workspace.fetchImpl);
               applyPlayedFloor(current, played, botId, meetingFloorClosedAt(workspace, botId));
             }
+            const speaker = speechSpeakerKey({ memberId: delivery.memberId, speakerName }) || "speaker";
+            const book = botId ? meetingSpeechBook(current, botId) : null;
             const answerLine = meetingLineShouldAnswer(current, heardDelivery);
+            const joining = meetingLineJoinsOpenTurn(current, heardDelivery, book, speaker);
             if (!delivery.partial && meetingLineClosesFloor(current, heardDelivery)) {
               refreshMeetingFloor(current, heardDelivery);
               if (botId) await clearPlayedFloor(workspace, botId, env, workspace.fetchImpl);
@@ -1636,58 +1639,58 @@ export function createApp(options = {}) {
               && current.deliveries instanceof Set
               && current.deliveries.has(delivery.deliveryId),
             );
-            const startSpeech = () => {
-              voiceWork = speakMeetingTurn({
-                answer: true,
-                text: delivery.text,
-                partial: delivery.partial === true,
-                speakerName,
-                botName: current.hearing?.name || "",
-                memberId: delivery.memberId,
-                room: delivery.room,
-                session: current,
-                deliveryId: delivery.deliveryId,
-                utteranceId: delivery.utteranceId,
-                env,
-                fetchImpl: workspace.fetchImpl,
-                deliver: (audio) => offerMeetingClip(workspace, delivery.room?.id, audio, env, workspace.fetchImpl),
-                stageFloor: (floor) => stageMeetingFloor(workspace, delivery.room?.id, floor),
-                cutPlayback: () => requestMeetingHold(workspace, delivery.room?.id, env, workspace.fetchImpl),
-                deps: depsFor(workspace, companyId),
-                context: {
-                  tenantId: companyId || "",
-                  env,
-                  personId: "",
-                  googleGrants: workspace.googleGrants,
-                  forms: workspace.forms,
-                  calendarMcp: workspace.calendarMcp,
-                  calendarSave: workspace.calendarSave,
-                  fetch: workspace.fetchImpl,
-                  origin: typeof env.SEDERUNT_PUBLIC_ORIGIN === "string" ? env.SEDERUNT_PUBLIC_ORIGIN : "",
-                },
-              }).catch(() => {});
-            };
-            // A partial is an intermediate. It does not speak. A finished line waits, then speaks once.
+            // A partial is not spoken. Final pieces from one speaker join until the
+            // hold ends. This promise is what waitUntil keeps alive on Vercel.
             if (delivery.partial) {
               if (answerLine && delivery.room?.id) {
                 current.hearingArmedRooms ??= new Set();
                 current.hearingArmedRooms.add(delivery.room.id);
               }
-            } else if (answerLine && !seenDelivery) {
-              const queue = current.meetingSpeech || (current.meetingSpeech = { items: [], seq: 0 });
-              const scheduled = scheduleMeetingSpeech(queue, {
+            } else if (book && (answerLine || joining) && !seenDelivery) {
+              const scheduled = scheduleMeetingSpeech(book, {
                 partial: false,
                 text: delivery.text,
                 name: current.hearing?.name || "",
+                speaker,
                 id: delivery.deliveryId,
               }, Date.now());
               if (scheduled.release) {
                 const generation = scheduled.generation;
+                const holdMs = scheduled.holdMs;
                 voiceWork = (async () => {
-                  await new Promise((resolve) => setTimeout(resolve, scheduled.holdMs));
-                  if (!claimMeetingSpeech(queue, generation, Date.now())) return;
-                  startSpeech();
-                  await voiceWork;
+                  await new Promise((resolve) => setTimeout(resolve, holdMs));
+                  const claimed = claimMeetingSpeech(book, generation, Date.now());
+                  if (!claimed?.text) return;
+                  const spoken = speakMeetingTurn({
+                    answer: true,
+                    text: claimed.text,
+                    partial: false,
+                    speakerName,
+                    botName: current.hearing?.name || "",
+                    memberId: delivery.memberId,
+                    room: delivery.room,
+                    session: current,
+                    deliveryId: delivery.deliveryId,
+                    utteranceId: delivery.utteranceId,
+                    env,
+                    fetchImpl: workspace.fetchImpl,
+                    deliver: (audio) => offerMeetingClip(workspace, delivery.room?.id, audio, env, workspace.fetchImpl),
+                    stageFloor: (floor) => stageMeetingFloor(workspace, delivery.room?.id, floor),
+                    cutPlayback: () => requestMeetingHold(workspace, delivery.room?.id, env, workspace.fetchImpl),
+                    deps: depsFor(workspace, companyId),
+                    context: {
+                      tenantId: companyId || "",
+                      env,
+                      personId: "",
+                      googleGrants: workspace.googleGrants,
+                      forms: workspace.forms,
+                      calendarMcp: workspace.calendarMcp,
+                      calendarSave: workspace.calendarSave,
+                      fetch: workspace.fetchImpl,
+                      origin: typeof env.SEDERUNT_PUBLIC_ORIGIN === "string" ? env.SEDERUNT_PUBLIC_ORIGIN : "",
+                    },
+                  }).catch(() => {});
+                  await spoken;
                 })().catch(() => {});
               }
             }

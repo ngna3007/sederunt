@@ -696,6 +696,85 @@ test("a partial transcript answers a check and is not kept", async () => {
   }
 });
 
+test("two finals from one speaker are spoken once", async () => {
+  const users = [];
+  let speeches = 0;
+  const app = createApp({
+    companyLoaded: true,
+    env: {
+      RECALL_WEBHOOK_SECRET: secret,
+      RECALL_API_KEY: "recall-test-key",
+      OPENROUTER_API_KEY: "sk-test-voice",
+      OPENROUTER_VOICE_MODEL: "voice-model",
+      SEDERUNT_MEMBER: "100",
+    },
+    deps: {
+      memory: {
+        async remember() { return { blobId: null }; },
+        async index() { return []; },
+        async recall() { return []; },
+      },
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+    },
+    fetch: async (url, init) => {
+      const href = String(url);
+      if (href.includes("/chat/completions")) {
+        const body = JSON.parse(init.body);
+        users.push(body.messages.filter((row) => row.role === "user").map((row) => row.content).join("\n"));
+        return { ok: true, async json() { return { choices: [{ message: { content: "The billing service moves to Postgres." } }] }; }, async text() { return ""; } };
+      }
+      if (href.includes("/audio/speech")) {
+        speeches += 1;
+        return { ok: true, async arrayBuffer() { return Uint8Array.from([0xff, 0xfb, 0x10, 0x00]); }, async text() { return ""; } };
+      }
+      if (href.includes("/output_audio/")) {
+        return { ok: true, async text() { return ""; }, async json() { return {}; } };
+      }
+      return { ok: false, async text() { return ""; }, async json() { return {}; } };
+    },
+  });
+  app.listen(0, "127.0.0.1");
+  await once(app, "listening");
+  const port = app.address().port;
+  const deliver = (words, id) => {
+    const payload = JSON.stringify({
+      event: "transcript.data",
+      data: {
+        bot: { id: "44444444-4444-4444-8444-444444444444" },
+        transcript: { id: "tr-join" },
+        data: {
+          participant: { id: 100, name: "Anh Nguyễn" },
+          words: words.map((text, index) => ({ text, start_timestamp: { relative: index + words.length } })),
+        },
+      },
+    });
+    return post(port, "/api/recall", payload, {
+      "webhook-id": id,
+      "webhook-timestamp": "1731705121",
+      "webhook-signature": `v1,${sign(secret, id, "1731705121", payload)}`,
+    });
+  };
+  try {
+    const first = deliver(["hey", "adam", "the", "billing", "service"], "msg-join-1");
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const second = deliver(["moves", "to", "postgres"], "msg-join-2");
+    const [opened, followed] = await Promise.all([first, second]);
+    assert.equal(opened.status, 204);
+    assert.equal(followed.status, 204);
+    const start = Date.now();
+    while (speeches < 1 && Date.now() - start < 3000) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    assert.equal(speeches, 1);
+    assert.equal(users.length, 1);
+    assert.match(users[0], /billing service/);
+    assert.match(users[0], /moves to postgres/);
+  } finally {
+    await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
 test("hey adam can you hear me is spoken before the keep finishes", async () => {
   let rememberFinished = false;
   let releaseRemember = () => {};

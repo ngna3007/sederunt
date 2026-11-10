@@ -1,6 +1,6 @@
-/** Hold after a finished transcript line, and after one that still looks unfinished. */
-export const FINISHED_HOLD_MS = 800;
-export const UNFINISHED_HOLD_MS = 2200;
+/** Hold after the latest finished piece, and after one that still ends on a dangling word. */
+export const FINISHED_HOLD_MS = 1200;
+export const UNFINISHED_HOLD_MS = 2500;
 
 /** How long the same person can continue without saying the name again. */
 export const CONVERSATION_MS = 20_000;
@@ -8,7 +8,7 @@ export const CONVERSATION_MS = 20_000;
 export const WAKE_ACK = "Hey! What do you need?";
 export const HEAR_LINE = "Yes, I can hear you.";
 
-const UNFINISHED_TAIL = new Set(["about", "the", "what", "who", "when", "where", "why", "how", "which"]);
+const UNFINISHED_TAIL = new Set(["about", "the", "and", "what", "who", "when", "where", "why", "how", "which"]);
 
 const ANCHORS = new Set(
   "a an the i you we they he she it my your our me us is am are was were be been being do does did not no yes can could should would will to of in on for at and or but if so this that with from just now what who when where why how which im ill ok okay here done sure got it"
@@ -43,34 +43,64 @@ export function isBareWake(text, name = "") {
   return new RegExp(`^(hey |hi |hello )?${who}$`).test(bare);
 }
 
+/** Stable speaker slot. A participant id stays apart from a display name. */
+export function speechSpeakerKey(line) {
+  const id = String(line?.memberId ?? "").trim();
+  if (id) return `id:${id}`;
+  const name = String(line?.speakerName || line?.speaker || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  return name ? `name:${name}` : "";
+}
+
+/** One book per bot. Two meetings on the same team do not share a buffer. */
+export function meetingSpeechBook(session, botId) {
+  const id = String(botId || "").trim();
+  if (!session || typeof session !== "object" || !id) return null;
+  if (!session.meetingSpeechBooks || typeof session.meetingSpeechBooks !== "object" || Array.isArray(session.meetingSpeechBooks)) {
+    session.meetingSpeechBooks = {};
+  }
+  if (!session.meetingSpeechBooks[id] || typeof session.meetingSpeechBooks[id] !== "object") {
+    session.meetingSpeechBooks[id] = { seq: 0, speakers: {} };
+  }
+  const book = session.meetingSpeechBooks[id];
+  if (!book.speakers || typeof book.speakers !== "object" || Array.isArray(book.speakers)) book.speakers = {};
+  return book;
+}
+
+/** True while this speaker still has pieces waiting to be claimed. */
+export function speechBufferOpen(book, speaker) {
+  return Boolean(speaker && book?.speakers?.[speaker]);
+}
+
 export function scheduleMeetingSpeech(queue, line, now) {
   const clock = Number(now) || 0;
   if (!queue || line?.partial) return { release: false, holdMs: 0, generation: 0 };
   const text = String(line?.text || "").replace(/\s+/g, " ").trim();
-  if (!text) return { release: false, holdMs: 0, generation: 0 };
+  const speaker = String(line?.speaker || "").trim() || speechSpeakerKey(line);
+  if (!text || !speaker) return { release: false, holdMs: 0, generation: 0 };
   const holdMs = lineHoldMs(text);
-  const wake = isBareWake(text, line?.name);
+  if (!queue.speakers || typeof queue.speakers !== "object" || Array.isArray(queue.speakers)) queue.speakers = {};
   queue.seq = (queue.seq || 0) + 1;
+  const prior = queue.speakers[speaker];
+  const joined = prior ? `${prior.text} ${text}`.replace(/\s+/g, " ").trim().slice(0, 4000) : text;
   const item = {
     id: String(line?.id || queue.seq),
-    text,
+    text: joined,
     due: clock + holdMs,
-    wake,
+    wake: isBareWake(joined, line?.name),
     generation: queue.seq,
+    speaker,
   };
-  const items = Array.isArray(queue.items) ? queue.items : [];
-  queue.items = items.filter((row) => row && (row.wake || row.due <= clock));
-  queue.items.push(item);
-  return { release: true, holdMs, generation: item.generation };
+  queue.speakers[speaker] = item;
+  return { release: true, holdMs, generation: item.generation, text: joined };
 }
 
 export function claimMeetingSpeech(queue, generation, now) {
   if (!queue || !generation) return null;
   const clock = Number(now) || 0;
-  const items = Array.isArray(queue.items) ? queue.items : [];
-  const mine = items.find((row) => row && row.generation === generation && row.due <= clock) || null;
+  const speakers = queue.speakers && typeof queue.speakers === "object" ? queue.speakers : {};
+  const mine = Object.values(speakers).find((row) => row && row.generation === generation && row.due <= clock) || null;
   if (!mine) return null;
-  queue.items = items.filter((row) => row !== mine);
+  if (speakers[mine.speaker] === mine) delete speakers[mine.speaker];
   return mine;
 }
 
@@ -138,35 +168,8 @@ export function clipSpoken(text, options = {}) {
   return kept.join(" ");
 }
 
-function memoryBlob(memory) {
-  const lines = Array.isArray(memory?.kept) ? memory.kept : (Array.isArray(memory?.lines) ? memory.lines : []);
-  const exchanges = Array.isArray(memory?.exchanges) ? memory.exchanges : [];
-  return [
-    ...lines.map((line) => `${line?.speaker || ""} ${line?.text || ""}`),
-    ...exchanges.map((row) => `${row?.user || ""} ${row?.assistant || ""}`),
-  ].join("\n").toLowerCase();
-}
-
-const ASK_AGAIN = /what time|when should|who should i invite|what about the meeting|who to invite|who should be invited/i;
-const HAS_TIME = /\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\b(?:noon|midnight|tonight)\b/;
-const HAS_INVITE = /invite me only|invite only me|invite only you|invite only|only you|only me/;
-
-export function memoryHasPlan(memory) {
-  const blob = memoryBlob(memory);
-  return HAS_TIME.test(blob) && HAS_INVITE.test(blob);
-}
-
-export function replyAsksAgain(text, memory) {
-  if (!memoryHasPlan(memory)) return false;
-  return ASK_AGAIN.test(String(text || ""));
-}
-
-export function finishSpokenReply(text, memory, options = {}) {
-  let source = String(text || "");
-  if (memoryHasPlan(memory)) {
-    source = splitSentences(source).filter((sentence) => !ASK_AGAIN.test(sentence)).join(" ");
-  }
-  return clipSpoken(source, options);
+export function finishSpokenReply(text, _memory, options = {}) {
+  return clipSpoken(String(text || ""), options);
 }
 
 function roomMemory(session, roomId) {

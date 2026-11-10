@@ -5,12 +5,14 @@ import {
   claimMeetingSpeech,
   finishSpokenReply,
   meetingContext,
-  memoryHasPlan,
+  meetingSpeechBook,
   rememberMeetingExchange,
   rememberMeetingLine,
   scheduleMeetingSpeech,
+  speechBufferOpen,
+  speechSpeakerKey,
 } from "../src/meeting/speech-gate.js";
-import { meetingLineShouldAnswer, refreshMeetingFloor, speakMeetingTurn } from "../src/meeting/voice.js";
+import { meetingLineJoinsOpenTurn, meetingLineShouldAnswer, refreshMeetingFloor, speakMeetingTurn } from "../src/meeting/voice.js";
 
 const env = {
   OPENROUTER_API_KEY: "sk-test-voice",
@@ -41,38 +43,75 @@ function speechInputs(calls) {
   return calls.filter((call) => call.url.includes("/audio/speech")).map((call) => JSON.parse(call.init.body).input);
 }
 
-test("a partial is not scheduled and a finished line waits 0.8s", () => {
-  const queue = { items: [], seq: 0 };
+test("a partial is not scheduled and a finished line waits 1.2s", () => {
+  const queue = { seq: 0, speakers: {} };
   const now = 5_000;
   assert.deepEqual(
-    scheduleMeetingSpeech(queue, { partial: true, text: "hey adam can you hear me", name: "Adam" }, now),
+    scheduleMeetingSpeech(queue, { partial: true, text: "hey adam can you hear me", name: "Adam", speaker: "id:100" }, now),
     { release: false, holdMs: 0, generation: 0 },
   );
-  const scheduled = scheduleMeetingSpeech(queue, { text: "hey adam what can you do", name: "Adam" }, now);
-  assert.equal(scheduled.holdMs, 800);
-  assert.equal(claimMeetingSpeech(queue, scheduled.generation, now + 799), null);
-  const claimed = claimMeetingSpeech(queue, scheduled.generation, now + 800);
+  const scheduled = scheduleMeetingSpeech(queue, { text: "hey adam what can you do", name: "Adam", speaker: "id:100" }, now);
+  assert.equal(scheduled.holdMs, 1200);
+  assert.equal(claimMeetingSpeech(queue, scheduled.generation, now + 1199), null);
+  const claimed = claimMeetingSpeech(queue, scheduled.generation, now + 1200);
   assert.equal(claimed.text, "hey adam what can you do");
 });
 
-test("a line that still ends on about waits 2.2s", () => {
-  const queue = { items: [], seq: 0 };
+test("a line that still ends on about or and waits 2.5s", () => {
+  const queue = { seq: 0, speakers: {} };
   const now = 8_000;
-  const scheduled = scheduleMeetingSpeech(queue, { text: "at 7 pm today about", name: "Adam" }, now);
-  assert.equal(scheduled.holdMs, 2200);
-  assert.equal(claimMeetingSpeech(queue, scheduled.generation, now + 2199), null);
-  assert.equal(claimMeetingSpeech(queue, scheduled.generation, now + 2200).text, "at 7 pm today about");
+  const about = scheduleMeetingSpeech(queue, { text: "at 7 pm today about", name: "Adam", speaker: "id:100" }, now);
+  assert.equal(about.holdMs, 2500);
+  assert.equal(claimMeetingSpeech(queue, about.generation, now + 2499), null);
+  assert.equal(claimMeetingSpeech(queue, about.generation, now + 2500).text, "at 7 pm today about");
+  const dangling = scheduleMeetingSpeech(queue, { text: "set a reminder and", name: "Adam", speaker: "id:100" }, now + 3000);
+  assert.equal(dangling.holdMs, 2500);
+  assert.equal(claimMeetingSpeech(queue, dangling.generation, now + 3000 + 2500).text, "set a reminder and");
 });
 
-test("a bare wake stays claimable after the real question is scheduled", () => {
-  const queue = { items: [], seq: 0 };
-  const now = 10_000;
-  const wake = scheduleMeetingSpeech(queue, { text: "hey adam", name: "Adam" }, now);
-  assert.equal(wake.holdMs, 800);
-  const question = scheduleMeetingSpeech(queue, { text: "what can you do", name: "Adam" }, now + 100);
-  assert.equal(claimMeetingSpeech(queue, wake.generation, now + 800).wake, true);
-  assert.equal(claimMeetingSpeech(queue, question.generation, now + 899), null);
-  assert.equal(claimMeetingSpeech(queue, question.generation, now + 900).text, "what can you do");
+test("pieces from one speaker join into one turn, and another speaker or bot stays apart", () => {
+  const session = { hearing: { name: "Adam", triggers: ["hey adam"] } };
+  const now = 20_000;
+  const adam = meetingSpeechBook(session, "bot-a");
+  const other = meetingSpeechBook(session, "bot-b");
+  const speaker = speechSpeakerKey({ memberId: "100", speakerName: "Anh" });
+  const first = scheduleMeetingSpeech(adam, { text: "hey adam", name: "Adam", speaker }, now);
+  assert.equal(first.holdMs, 1200);
+  assert.equal(speechBufferOpen(adam, speaker), true);
+  const question = scheduleMeetingSpeech(adam, { text: "the billing service moves to postgres", name: "Adam", speaker }, now + 400);
+  assert.equal(question.holdMs, 1200);
+  assert.equal(question.text, "hey adam the billing service moves to postgres");
+  assert.equal(claimMeetingSpeech(adam, first.generation, now + 1200), null);
+  assert.equal(claimMeetingSpeech(adam, question.generation, now + 400 + 1199), null);
+  const side = speechSpeakerKey({ memberId: "200", speakerName: "Lan" });
+  const sideLine = scheduleMeetingSpeech(adam, { text: "I will take the notes", name: "Adam", speaker: side }, now + 500);
+  assert.equal(meetingLineJoinsOpenTurn(session, {
+    text: "the billing service moves to postgres",
+    speakerName: "Anh",
+    memberId: "100",
+    room: { id: "bot-a" },
+  }, adam, speaker), true);
+  assert.equal(meetingLineJoinsOpenTurn(session, {
+    text: "okay",
+    speakerName: "Anh",
+    memberId: "100",
+    room: { id: "bot-a" },
+  }, adam, speaker), false);
+  assert.equal(meetingLineJoinsOpenTurn(session, {
+    text: "what about pricing",
+    speakerName: "Lan",
+    memberId: "200",
+    room: { id: "bot-a" },
+  }, adam, side), true);
+  const claimed = claimMeetingSpeech(adam, question.generation, now + 1600);
+  assert.equal(claimed.text, "hey adam the billing service moves to postgres");
+  assert.equal(claimed.wake, false);
+  assert.equal(speechBufferOpen(adam, speaker), false);
+  assert.equal(claimMeetingSpeech(adam, sideLine.generation, now + 500 + 1200).text, "I will take the notes");
+  const foreign = scheduleMeetingSpeech(other, { text: "hello there", name: "Adam", speaker }, now);
+  assert.equal(claimMeetingSpeech(adam, foreign.generation, now + 5000), null);
+  assert.equal(claimMeetingSpeech(other, foreign.generation, now + 1200).text, "hello there");
+  assert.notEqual(adam, other);
 });
 
 test("a sentence inside 20 seconds does not need the name, and one after does", (t) => {
@@ -147,13 +186,12 @@ test("a second request still has the 7pm time and the invite, and does not ask a
     "What about the meeting? Who should I invite and what time? The Saturn demo stays on the calendar.",
     memory,
   );
-  assert.doesNotMatch(spoken, /what about the meeting|who should i invite|what time/i);
-  assert.match(spoken, /Saturn demo/);
+  assert.equal(spoken, "What about the meeting? Who should I invite and what time?");
   assert.equal(session.rooms[0].lines.length, 2);
   assert.equal(session.rooms[0].exchanges.length, 1);
 });
 
-test("a saved 8pm and invite only you are not asked again", () => {
+test("a saved time and an only-me phrase do not rewrite the reply", () => {
   const memory = {
     kept: [
       { speaker: "You", text: "at 8 pm today" },
@@ -161,10 +199,8 @@ test("a saved 8pm and invite only you are not asked again", () => {
     ],
     exchanges: [],
   };
-  assert.equal(memoryHasPlan(memory), true);
   const spoken = finishSpokenReply("Who should I invite and what time? Booked for tonight.", memory);
-  assert.equal(/who should i invite|what time/i.test(spoken), false);
-  assert.equal(spoken, "Booked for tonight.");
+  assert.equal(spoken, "Who should I invite and what time? Booked for tonight.");
 });
 
 test("a partial produces no speech", async () => {
@@ -334,7 +370,7 @@ test("a held write is spoken as needing approval", async () => {
   assert.deepEqual(speechInputs(http.calls), ["Not done. It needs approval before it runs."]);
 });
 
-test("a second reply uses the saved lines and does not ask for the time or the invite", async () => {
+test("a second reply still carries the saved lines", async () => {
   const session = {
     rooms: [{ id: "bot-saturn", kind: "meeting", platform: "Google Meet", botPresent: true, call: "in_call_recording" }],
   };
@@ -367,15 +403,14 @@ test("a second reply uses the saved lines and does not ask for the time or the i
   assert.equal(result.spoke, true);
   const said = speechInputs(http.calls);
   assert.equal(said.length, 1);
-  assert.doesNotMatch(said[0], /what about the meeting|who should i invite|what time/i);
-  assert.match(said[0], /Saturn demo/);
+  assert.equal(said[0], "What about the meeting? Who should I invite and what time?");
   const again = meetingContext(session, "bot-saturn");
   assert.equal(again.exchanges.length, 1);
   assert.match(again.kept.map((line) => line.text).join("\n"), /7 pm today/);
   assert.match(again.kept.map((line) => line.text).join("\n"), /invite me only/);
 });
 
-test("the speaker does not ask again when the saved time is 8pm", async () => {
+test("a saved time does not delete the model's question", async () => {
   const session = {
     rooms: [{ id: "bot-eight", kind: "meeting", platform: "Google Meet", botPresent: true, call: "in_call_recording" }],
   };
@@ -403,5 +438,5 @@ test("the speaker does not ask again when the saved time is 8pm", async () => {
   });
   assert.equal(result.spoke, true);
   const said = speechInputs(http.calls);
-  assert.deepEqual(said, ["Booked for tonight."]);
+  assert.deepEqual(said, ["Who should I invite and what time? Booked for tonight."]);
 });
