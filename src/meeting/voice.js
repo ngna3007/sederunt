@@ -359,6 +359,8 @@ export async function speakMeetingTurn(input = {}) {
         return sent === true ? "played" : false;
       });
       if ((played !== "queued" && played !== "played") || !stillMine()) return false;
+      const talkMs = clipTalkMs(audio.audio);
+      if (talkMs) laneFor(botId).talkingUntil = Date.now() + talkMs;
       session.lastVoiceLine = spoken;
       // The page queue is not playback. The floor opens when that clip is taken, or when Output Audio accepts it.
       if (played === "played") {
@@ -653,6 +655,8 @@ function laneFor(botId) {
       phase: "idle",
       open: false,
       audible: false,
+      talkingUntil: 0,
+      speaker: "",
       toolHold: false,
       lines: [],
     };
@@ -667,15 +671,20 @@ function beginTurn(botId, text, hearing, session, delivery, cutPlayback) {
   const speaker = speakerKey(delivery);
   const composeSpeaker = session?.meetingCompose?.roomId === botId ? session.meetingCompose.speaker : "";
   const sameComposer = Boolean(speaker && composeSpeaker && speaker === composeSpeaker);
-  // A bare wait drops the reply still being composed. The same speaker's longer line still joins it.
+  // A bare wait or stop drops the reply still being composed. The same speaker's longer line still joins it.
   if (lane.phase === "thinking" && lane.open && !isInterrupt(text, hearing) && sameComposer) {
     lane.lines.push(text);
     lane.generation += 1;
     return { skip: false, generation: lane.generation, lines: lane.lines.slice(), cut: null };
   }
-  const replacing = lane.generation > 0;
+  // A finished reply stays playing. Cut only when this speaker talks over it, or anyone says wait or stop.
+  const talking = lane.audible === true || lane.phase === "speaking" || (lane.talkingUntil || 0) > Date.now();
+  const sameSpeaker = Boolean(speaker && lane.speaker && speaker === lane.speaker);
+  const replacing = (talking && sameSpeaker) || isInterrupt(text, hearing);
+  if (replacing) lane.talkingUntil = 0;
   lane.generation += 1;
   lane.lines = [text];
+  lane.speaker = speaker;
   lane.phase = "thinking";
   lane.open = true;
   lane.audible = false;
@@ -710,7 +719,15 @@ function isBackchannel(text, hearing) {
 }
 
 function isInterrupt(text, hearing) {
-  return phraseResidue(text, hearing) === "wait";
+  const residue = phraseResidue(text, hearing);
+  return residue === "wait" || residue === "stop";
+}
+
+/** How long a handed-off clip keeps playing. 128 kbps, and a tiny buffer is already over. */
+function clipTalkMs(audio) {
+  const bytes = audio?.length || 0;
+  if (bytes < 32) return 0;
+  return Math.min(12000, Math.ceil(bytes / 16));
 }
 
 function enqueueClip(botId, run) {

@@ -898,9 +898,9 @@ test("a floor owner does not join another speaker's reply", async () => {
   assert.equal(users.at(-1).includes("file a booth ticket"), false);
 });
 
-test("a replacement clip waits until the hold finishes", async () => {
+test("a finished reply does not stop the next line", async () => {
+  let cuts = 0;
   let chatHits = 0;
-  let delivered = false;
   const http = scripted(async (url) => {
     if (url.includes("/chat/completions")) {
       chatHits += 1;
@@ -910,7 +910,7 @@ test("a replacement clip waits until the hold finishes", async () => {
     if (url.includes("/output_audio/")) return { ok: true, async text() { return ""; } };
     throw new Error(`unexpected ${url}`);
   });
-  const room = { id: "bot-cut-wait" };
+  const room = { id: "bot-no-cut" };
   const session = { hearing: { name: "Adam", triggers: ["hey adam"] } };
   const base = {
     answer: true,
@@ -925,18 +925,65 @@ test("a replacement clip waits until the hold finishes", async () => {
   const first = await speakMeetingTurn({
     ...base,
     text: "hey adam",
-    deliveryId: "cut-wait-1",
-    utteranceId: "cut-wait-u1",
+    deliveryId: "no-cut-1",
+    utteranceId: "no-cut-u1",
+    cutPlayback: () => { cuts += 1; },
   });
   assert.equal(first.spoke, true);
+  const second = await speakMeetingTurn({
+    ...base,
+    text: "Adam, what is the price",
+    deliveryId: "no-cut-2",
+    cutPlayback: () => { cuts += 1; },
+  });
+  assert.equal(cuts, 0);
+  assert.equal(chatHits, 1);
+  assert.equal(second.spoke, true);
+});
+
+test("the same speaker stops playback while the bot is talking", async () => {
+  let releaseDeliver = () => {};
+  const deliverGate = new Promise((resolve) => { releaseDeliver = resolve; });
+  let markSpeaking = () => {};
+  const speakingSeen = new Promise((resolve) => { markSpeaking = resolve; });
+  const http = scripted(async (url) => {
+    if (url.includes("/chat/completions")) return chat({ content: "Pricing is on the sheet." });
+    if (url.includes("/audio/speech")) return mp3Response();
+    if (url.includes("/output_audio/")) return { ok: true, async text() { return ""; } };
+    throw new Error(`unexpected ${url}`);
+  });
+  const room = { id: "bot-cut-talking" };
+  const session = { hearing: { name: "Adam", triggers: ["hey adam"] } };
+  const base = {
+    answer: true,
+    speakerName: "Anh",
+    botName: "Adam",
+    memberId: "100",
+    room,
+    session,
+    env,
+    fetchImpl: http.fetch,
+  };
+  const first = speakMeetingTurn({
+    ...base,
+    text: "Adam, what is the price",
+    deliveryId: "cut-talk-1",
+    deliver: async () => {
+      markSpeaking();
+      await deliverGate;
+      return true;
+    },
+  });
+  await speakingSeen;
   let releaseCut = () => {};
   const cutGate = new Promise((resolve) => { releaseCut = resolve; });
   let markCut = () => {};
   const cutSeen = new Promise((resolve) => { markCut = resolve; });
+  let delivered = false;
   const second = speakMeetingTurn({
     ...base,
-    text: "Adam, what is the price",
-    deliveryId: "cut-wait-2",
+    text: "Adam, when is the launch",
+    deliveryId: "cut-talk-2",
     cutPlayback: () => {
       markCut();
       return cutGate;
@@ -948,12 +995,142 @@ test("a replacement clip waits until the hold finishes", async () => {
   });
   await cutSeen;
   for (let i = 0; i < 30; i += 1) await Promise.resolve();
-  assert.equal(chatHits, 1);
   assert.equal(delivered, false);
   releaseCut();
-  const result = await second;
-  assert.equal(result.spoke, true);
+  releaseDeliver();
+  const [older, newer] = await Promise.all([first, second]);
+  assert.equal(older.spoke, false);
+  assert.equal(newer.spoke, true);
   assert.equal(delivered, true);
+});
+
+test("another speaker does not stop playback while the bot is talking", async () => {
+  let cuts = 0;
+  let releaseDeliver = () => {};
+  const deliverGate = new Promise((resolve) => { releaseDeliver = resolve; });
+  let markSpeaking = () => {};
+  const speakingSeen = new Promise((resolve) => { markSpeaking = resolve; });
+  const http = scripted(async (url) => {
+    if (url.includes("/chat/completions")) return chat({ content: "Pricing is on the sheet." });
+    if (url.includes("/audio/speech")) return mp3Response();
+    if (url.includes("/output_audio/")) return { ok: true, async text() { return ""; } };
+    throw new Error(`unexpected ${url}`);
+  });
+  const room = { id: "bot-cut-other" };
+  const session = { hearing: { name: "Adam", triggers: ["hey adam"] } };
+  const base = {
+    answer: true,
+    botName: "Adam",
+    room,
+    session,
+    env,
+    fetchImpl: http.fetch,
+    cutPlayback: () => { cuts += 1; },
+  };
+  const first = speakMeetingTurn({
+    ...base,
+    text: "Adam, what is the price",
+    speakerName: "Anh",
+    memberId: "100",
+    deliveryId: "cut-other-1",
+    deliver: async () => {
+      markSpeaking();
+      await deliverGate;
+      return true;
+    },
+  });
+  await speakingSeen;
+  const second = speakMeetingTurn({
+    ...base,
+    text: "Adam, what about pricing",
+    speakerName: "Lan",
+    memberId: "200",
+    deliveryId: "cut-other-2",
+    deliver: async () => true,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(cuts, 0);
+  releaseDeliver();
+  const [older, newer] = await Promise.all([first, second]);
+  assert.equal(older.spoke, false);
+  assert.equal(newer.spoke, true);
+  assert.equal(cuts, 0);
+});
+
+test("a clip still playing stops for that speaker, and stop does too", async () => {
+  const bytes = new Uint8Array(24000);
+  bytes[0] = 0xff;
+  const fat = { ok: true, async arrayBuffer() { return bytes.buffer; } };
+  let cuts = 0;
+  const http = scripted(async (url) => {
+    if (url.includes("/chat/completions")) return chat({ content: "Pricing is on the sheet." });
+    if (url.includes("/audio/speech")) return fat;
+    if (url.includes("/output_audio/")) return { ok: true, async text() { return ""; } };
+    throw new Error(`unexpected ${url}`);
+  });
+  const session = { hearing: { name: "Adam", triggers: ["hey adam"] } };
+  const base = {
+    answer: true,
+    speakerName: "Anh",
+    botName: "Adam",
+    memberId: "100",
+    session,
+    env,
+    fetchImpl: http.fetch,
+    cutPlayback: () => { cuts += 1; },
+  };
+  const playing = await speakMeetingTurn({
+    ...base,
+    text: "Adam, what is the price",
+    room: { id: "bot-still-playing" },
+    deliveryId: "still-1",
+  });
+  assert.equal(playing.spoke, true);
+  assert.equal(cuts, 0);
+  const over = await speakMeetingTurn({
+    ...base,
+    text: "Adam, when is the launch",
+    room: { id: "bot-still-playing" },
+    deliveryId: "still-2",
+  });
+  assert.equal(cuts, 1);
+  assert.equal(over.spoke, true);
+  const quiet = scripted(async (url) => {
+    if (url.includes("/chat/completions")) return chat({ content: "Okay, stopping." });
+    if (url.includes("/audio/speech")) return mp3Response();
+    if (url.includes("/output_audio/")) return { ok: true, async text() { return ""; } };
+    throw new Error(`unexpected ${url}`);
+  });
+  let stopped = 0;
+  const idle = await speakMeetingTurn({
+    answer: true,
+    text: "hey adam",
+    speakerName: "Anh",
+    botName: "Adam",
+    memberId: "100",
+    room: { id: "bot-stop" },
+    session: { hearing: { name: "Adam", triggers: ["hey adam"] } },
+    deliveryId: "stop-1",
+    utteranceId: "stop-u1",
+    env,
+    fetchImpl: quiet.fetch,
+  });
+  assert.equal(idle.spoke, true);
+  const halt = await speakMeetingTurn({
+    answer: true,
+    text: "Adam, stop",
+    speakerName: "Lan",
+    botName: "Adam",
+    memberId: "200",
+    room: { id: "bot-stop" },
+    session: { hearing: { name: "Adam", triggers: ["hey adam"] } },
+    deliveryId: "stop-2",
+    env,
+    fetchImpl: quiet.fetch,
+    cutPlayback: () => { stopped += 1; },
+  });
+  assert.equal(stopped, 1);
+  assert.equal(halt.spoke, true);
 });
 
 test("queueing a page clip does not open the floor", async () => {
