@@ -189,6 +189,26 @@ test("the console board answers fast with a pending proof and /api/proof finishe
   }
 });
 
+test("start-up proof warm does not rebuild the unbound company index", async () => {
+  let indexed = 0;
+  const app = createApp({
+    session: sessionWith("blob-1"),
+    companyLoaded: true,
+    env: { SEDERUNT_MEMBER: "mina", SEDERUNT_WARM_PROOFS: "1" },
+    deps: {
+      tatum: { async getObject(_target, hints) { return VERIFIED(hints.blobId); } },
+      memory: {
+        async index() { indexed += 1; return []; },
+        async recall() { indexed += 1; return []; },
+        async remember() { return { blobId: null }; },
+      },
+    },
+  });
+  const report = await app.proofWarm;
+  assert.equal(report.verified, 1);
+  assert.equal(indexed, 0);
+});
+
 test("with the flag, the server warms the proofs at start", async () => {
   const session = sessionWith("blob-1", "blob-2");
   let calls = 0;

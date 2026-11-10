@@ -588,12 +588,10 @@ export function createApp(options = {}) {
     participantBindings: options.participantBindings || createParticipantBindings(env, { fetchImpl: options.fetch || globalThis.fetch }),
   };
   if (proofWarmOn(env) && workspace.companyLoaded && deps.tatum) {
-    // Read the company proofs once at start so the first room load is
-    // already verified. Several memories share one batch. The reader's
-    // throttle still caps the gateway at the free-plan rate.
-    workspace.warm = Promise.resolve()
-      .then(() => prepareWorkspace(workspace, ""))
-      .then((current) => warmProofs(current, deps.tatum))
+    // Verify proofs already on this process. Rebuilding the unbound company
+    // index here searches the shared namespace, drops every tenant document,
+    // and competes with the signed-in load.
+    workspace.warm = warmProofs(workspace.session, deps.tatum)
       .then((report) => {
         if (typeof deps.log === "function") deps.log({ kind: "proof-warm", ...report });
         return report;

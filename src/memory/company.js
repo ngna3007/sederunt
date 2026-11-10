@@ -90,14 +90,15 @@ export async function indexCompany({ client, env = process.env, tenantId, allowU
     "meeting room hearing",
   ];
   const byKey = new Map();
-  for (const query of queries) {
-    let hits = [];
+  const batches = await Promise.all(queries.map(async (query) => {
     try {
       const result = await memwal.recall({ query, topK: 50, namespace: NAMESPACE });
-      hits = Array.isArray(result?.results) ? result.results : [];
+      return Array.isArray(result?.results) ? result.results : [];
     } catch {
-      continue;
+      return [];
     }
+  }));
+  for (const hits of batches) {
     for (const hit of hits) {
       const parsed = readDecisionPayload(hit?.text);
       if (!parsed) continue;

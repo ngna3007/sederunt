@@ -151,6 +151,62 @@ test("rebuildCompanyIndex hydrates only the bound tenant", async () => {
   assert.equal(/Northline/.test(textsB), false);
 });
 
+test("company index searches run together and a failed search stays out", async () => {
+  let inflight = 0;
+  let peak = 0;
+  let release;
+  const open = new Promise((resolve) => { release = resolve; });
+  const queries = [];
+  const client = {
+    async recall({ query }) {
+      queries.push(query);
+      inflight += 1;
+      peak = Math.max(peak, inflight);
+      if (queries.length === 6) release();
+      await open;
+      inflight -= 1;
+      if (query === "remember this") throw new Error("relayer down");
+      const text = `kept from ${query}`;
+      const results = [{
+        text: JSON.stringify({
+          mark: "sederunt-decision",
+          text,
+          kind: "decision",
+          account: "company",
+          tenantId: TENANT_A,
+          decision: decisionDoc(`dec-${query}`, text),
+        }),
+        blob_id: `blob-${query}`,
+        distance: 0.2,
+      }];
+      if (query === "sederunt-decision" || query === "meeting room hearing") {
+        results.push({
+          text: JSON.stringify({
+            mark: "sederunt-decision",
+            text: `shared from ${query}`,
+            kind: "decision",
+            account: "company",
+            tenantId: TENANT_A,
+            decision: decisionDoc("dec-shared", `shared from ${query}`),
+          }),
+          blob_id: "blob-shared",
+          distance: 0.1,
+        });
+      }
+      return { results };
+    },
+  };
+  const rows = await Promise.race([
+    indexCompany({ client, env, tenantId: TENANT_A }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("searches did not overlap")), 400)),
+  ]);
+  assert.equal(peak, 6);
+  assert.equal(queries.length, 6);
+  assert.equal(rows.some((row) => /remember this/.test(row.decision?.text || "")), false);
+  assert.equal(rows.find((row) => row.blobId === "blob-shared").decision.text, "shared from sederunt-decision");
+  assert.equal(rows.length, 6);
+});
+
 test("raw Slack channel ids are treated as non-display names", () => {
   function looksLikeRawRoomId(value) {
     const s = String(value || "").replace(/^#/, "").trim();
