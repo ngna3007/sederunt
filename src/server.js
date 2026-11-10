@@ -27,7 +27,7 @@ import { loadLinearToken } from "./linear/token.js";
 import { createLinearInstallationStore } from "./linear/installations.js";
 import { handleLinearOAuth, linearClientMetadata, tenantLinearClient } from "./linear/oauth.js";
 import { renderCameraPage } from "./meeting/camera.js";
-import { createMeetingAdapter, mediaFromBot, meetingCallUpdate, meetingDoorReady, meetingEnded, meetingStillLive, recallBotUrl, recallTranscriptDelivery, transcriptLines, verifyRecallRequest } from "./meeting/recall.js";
+import { createMeetingAdapter, mediaFromBot, meetingCallUpdate, meetingDoorReady, meetingEnded, recallBotUrl, recallTranscriptDelivery, transcriptLines, verifyRecallRequest } from "./meeting/recall.js";
 import { meetingLineShouldAnswer, speakMeetingTurn } from "./meeting/voice.js";
 import { createMeetingFollowups, parseFollowupValue } from "./meeting/followups.js";
 import { createSupabaseFollowupStore } from "./meeting/followup-store.js";
@@ -3141,9 +3141,7 @@ async function currentBot(workspace, req) {
 const BOARD_PROOF_WAIT_MS = 400;
 const BOARD_INDEX_WAIT_MS = 80;
 const BOARD_SIDE_WAIT_MS = 1200;
-const LIVE_MEETING_WAIT_MS = 1200;
 const PAGE_DOOR_WAIT_MS = 400;
-const BOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function consoleSection(pathname) {
   if (pathname === "/console" || pathname === "/console/") return "home";
@@ -3378,13 +3376,7 @@ async function consolePayload(workspace, current, memberId, kind = "company", op
   }
   const report = current.readReport;
   const config = appConfig(workspace.env);
-  if (open !== "personal") {
-    await within(hydrateSlackChannels(current, workspace.deps), 400, undefined);
-    // Recall's status webhooks are workspace events, not the in-call transcript.
-    // A host can end the meeting before one arrives, so a room still marked
-    // live is read here. Recall's own order is call_ended, then done.
-    await refreshLiveMeetings(workspace, current, companyId);
-  }
+  if (open !== "personal") await within(hydrateSlackChannels(current, workspace.deps), 400, undefined);
   const principal = req && gate.session?.kind === "oauth" ? await consolePrincipal(workspace, req, companyId, open) : memberId;
   const board = open === "personal" ? personalBoard(current, principal) : companyBoard(current, principal, { timeZone: config.timeZone, slackChannel: config.slackChannel });
   if (!report.ok) {
@@ -3475,51 +3467,6 @@ function bindMember(env, supplied) {
   );
   if (bound.refusal) return { ok: false, reason: bound.refusal };
   return { ok: true, memberId: bound.message.params.arguments.memberId };
-}
-
-async function refreshLiveMeetings(workspace, current, companyId) {
-  const rooms = (current?.rooms || []).filter((room) =>
-    room?.kind === "meeting" && meetingStillLive(room.call) && BOT_ID.test(String(room.id || ""))
-  );
-  if (!rooms.length) return;
-  await within(
-    Promise.all(rooms.map((room) => settleLiveMeeting(workspace, current, companyId, room.id))),
-    LIVE_MEETING_WAIT_MS,
-    undefined,
-  );
-}
-
-async function settleLiveMeeting(workspace, current, companyId, id) {
-  let bot = null;
-  try {
-    bot = await readRecallBot(workspace, id);
-  } catch {
-    bot = null;
-  }
-  if (!bot) return;
-  const body = mediaFromBot(bot);
-  const tenant = typeof companyId === "string" ? companyId : "";
-  if (body.call) await noteMeetingCall(current, depsFor(workspace, tenant), id, body.call).catch(() => {});
-  if (body.startedAt || body.duration > 0) await persistRecordingSpan(workspace, current, id, body.startedAt, body.duration);
-}
-
-async function readRecallBot(workspace, id) {
-  const reader = workspace.recall?.readBot || workspace.deps?.recall?.readBot;
-  if (typeof reader === "function") return reader(id);
-  const key = typeof workspace.env?.RECALL_API_KEY === "string" ? workspace.env.RECALL_API_KEY : "";
-  if (!key || !BOT_ID.test(id)) return null;
-  const response = await fetch(recallBotUrl(id), {
-    headers: { authorization: `Token ${key}`, accept: "application/json" },
-    signal: AbortSignal.timeout(1000),
-  });
-  const text = await response.text();
-  if (key && text.split(key).length > 1 && text.includes("\"authorization\"")) return null;
-  if (!response.ok && !/media has already expired/i.test(text)) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return /media has already expired/i.test(text) ? { message: text } : null;
-  }
 }
 
 async function persistRecordingSpan(workspace, current, id, startedAt, duration) {

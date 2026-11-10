@@ -2785,7 +2785,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
           if (aside) aside.textContent = "Rooms will show here.";
         }
       }
-      if (!readingTimer) readingTimer = setTimeout(function () { readingTimer = null; load(); }, shell ? 700 : 1500);
+      if (!readingTimer) readingTimer = setTimeout(function () { readingTimer = null; load(); }, shell ? 200 : 1500);
       return;
     }
     readingTries = 0;

@@ -184,12 +184,6 @@ export function meetingCallRank(code) {
   return rank < 0 ? 0 : rank + 1;
 }
 
-/** True while the bot can still be in the call. A host ending it moves past these. */
-export function meetingStillLive(code) {
-  const rank = meetingCallRank(code);
-  return rank > 0 && rank <= meetingCallRank("in_call_recording");
-}
-
 /**
  * The latest known Recall phase for one bot.
  * A finished recording with no status list is done.

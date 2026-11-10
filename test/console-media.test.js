@@ -235,16 +235,40 @@ test("an opened meeting with no decision still plays the Recall recording", asyn
   }
 });
 
-test("an open meeting the host already ended is Done on the next list", async () => {
+test("the room list does not wait when a live meeting's recording is slow", async () => {
   const session = (await import("../src/session.js")).createSession();
   const id = "ba18bf31-3ac6-42a8-8973-ad64cdc99fe8";
-  const quiet = "3b7e84ff-42d7-493b-80f1-c1e000140a64";
-  session.rooms.push(
-    { id, kind: "meeting", platform: "Google Meet", botPresent: true, call: "in_call_recording" },
-    { id: quiet, kind: "meeting", platform: "Google Meet", botPresent: true },
-  );
+  session.rooms.push({ id, kind: "meeting", platform: "Google Meet", botPresent: true, call: "in_call_recording" });
   session.readReport = { ok: true, empty: false };
-  const reads = [];
+  let reads = 0;
+  const app = createApp({
+    companyLoaded: true,
+    session,
+    env: { RECALL_API_KEY: KEY, SEDERUNT_MEMBER: "mina" },
+    deps: { memory: { async index() { return []; }, async recall() { return []; } } },
+    recall: { async readBot() { reads += 1; await new Promise(() => {}); } },
+  });
+  const port = await listen(app);
+  try {
+    const startedAt = Date.now();
+    const response = await fetch(`http://127.0.0.1:${port}/api/console?member=mina`);
+    const elapsed = Date.now() - startedAt;
+    assert.equal(response.status, 200);
+    assert.ok(elapsed < 500, `list waited ${elapsed}ms`);
+    const listed = await response.json();
+    assert.equal(listed.rooms.find((room) => room.id === id).call, "in_call_recording");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(reads, 0);
+  } finally {
+    app.close();
+  }
+});
+
+test("room media marks a meeting Done after the host ended it", async () => {
+  const session = (await import("../src/session.js")).createSession();
+  const id = "ba18bf31-3ac6-42a8-8973-ad64cdc99fe8";
+  session.rooms.push({ id, kind: "meeting", platform: "Google Meet", botPresent: true, call: "in_call_recording" });
+  session.readReport = { ok: true, empty: false };
   const remembered = [];
   const app = createApp({
     companyLoaded: true,
@@ -258,10 +282,9 @@ test("an open meeting the host already ended is Done on the next list", async ()
       },
     },
     recall: {
-      async readBot(botId) {
-        reads.push(botId);
+      async readBot() {
         return {
-          id: botId,
+          id,
           status_changes: [
             { code: "in_call_recording" },
             { code: "call_ended", sub_code: null },
@@ -279,19 +302,17 @@ test("an open meeting the host already ended is Done on the next list", async ()
   });
   const port = await listen(app);
   try {
-    const first = await fetch(`http://127.0.0.1:${port}/api/console?member=mina`);
-    assert.equal(first.status, 200);
-    const listed = await first.json();
+    const media = await fetch(`http://127.0.0.1:${port}/console/rooms/${id}/media?member=mina`);
+    assert.equal(media.status, 200);
+    const body = await media.json();
+    assert.equal(body.call, "done");
+    assert.equal(body.duration, 30);
+    const listed = await (await fetch(`http://127.0.0.1:${port}/api/console?member=mina`)).json();
     const row = listed.rooms.find((room) => room.id === id);
     assert.equal(row.call, "done");
     assert.equal(row.startedAt, "2026-11-09T17:32:55.000Z");
     assert.equal(row.duration, 30);
-    assert.equal(listed.rooms.find((room) => room.id === quiet).call, undefined);
-    assert.deepEqual(reads, [id]);
     assert.equal(remembered.some((item) => item?.room?.id === id && item.room.call === "done"), true);
-    const second = await fetch(`http://127.0.0.1:${port}/api/console?member=mina`);
-    assert.equal((await second.json()).rooms.find((room) => room.id === id).call, "done");
-    assert.deepEqual(reads, [id]);
   } finally {
     app.close();
   }
@@ -326,8 +347,9 @@ test("a meeting that is still recording stays In call", async () => {
   });
   const port = await listen(app);
   try {
-    const response = await fetch(`http://127.0.0.1:${port}/api/console?member=mina`);
-    const listed = await response.json();
+    const media = await fetch(`http://127.0.0.1:${port}/console/rooms/${id}/media?member=mina`);
+    assert.equal((await media.json()).call, "in_call_recording");
+    const listed = await (await fetch(`http://127.0.0.1:${port}/api/console?member=mina`)).json();
     assert.equal(listed.rooms.find((room) => room.id === id).call, "in_call_recording");
     assert.equal(remembered.some((item) => item?.room?.call && item.room.call !== "in_call_recording"), false);
   } finally {
