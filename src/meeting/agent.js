@@ -214,6 +214,20 @@ export function utteranceToCommit(committed, message, bot) {
   return row;
 }
 
+/**
+ * Identity of one spoken line.
+ * A new turn id does not make the same line a new utterance.
+ *
+ * @param {unknown} text
+ * @param {unknown} speaker
+ */
+export function utteranceKey(text, speaker) {
+  const said = String(text || "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!said) return "";
+  const who = String(speaker || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  return `${who}\n${said}`;
+}
+
 /** Drop the bot's own participant. The page must not answer Adam. */
 export function withoutBotSpeech(words, bot = {}) {
   const name = letters(bot?.name);

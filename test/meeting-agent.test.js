@@ -289,6 +289,87 @@ test("a second transcript of the same words does not open another turn", () => {
   }, bot).open, true);
 });
 
+test("the meeting page asks once when the same final arrives twice", async () => {
+  const page = renderCameraPage();
+  const start = page.indexOf("<script>");
+  const end = page.indexOf("</script>");
+  const posts = [];
+  let now = 1_000_000;
+  const intervals = [];
+  let socket = null;
+  const guest = { dataset: { state: "listening" }, textContent: "" };
+  class Socket {
+    constructor(url) {
+      this.url = url;
+      socket = this;
+    }
+  }
+  vm.runInNewContext(page.slice(start + "<script>".length, end), {
+    URLSearchParams,
+    WebSocket: Socket,
+    AbortController,
+    Promise,
+    JSON,
+    Math,
+    RegExp,
+    URL,
+    Uint8Array,
+    Date: { now: () => now },
+    setInterval: (fn) => {
+      intervals.push(fn);
+      return intervals.length;
+    },
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    document: { getElementById: (id) => (id === "voice" ? {} : guest) },
+    location: { search: `?ear=${EAR}&name=Adam` },
+    navigator: {},
+    window: {},
+    fetch: (url, init) => {
+      posts.push({ url: String(url), body: init && init.body ? String(init.body) : "" });
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ botName: "Adam", participantId: "99" }),
+        body: null,
+      });
+    },
+  });
+  const turns = () => posts.filter((row) => row.url === "/api/meeting/agent/turn");
+  const fire = () => intervals.forEach((fn) => fn());
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  const send = (message) => socket.onmessage({ data: JSON.stringify(message) });
+  const words = (event, text) => ({
+    event,
+    data: { data: { words: text.split(" ").map((text) => ({ text })), participant: { id: 7, name: "Priya" } } },
+  });
+  send(words("transcript.partial_data", "Adam, keep Thursday."));
+  now += 1500;
+  fire();
+  assert.equal(turns().length, 0);
+  send(words("transcript.data", "Adam, keep Thursday."));
+  send(words("transcript.data", "Adam, keep Thursday."));
+  now += 1500;
+  fire();
+  await settle();
+  assert.equal(turns().length, 1);
+  const first = JSON.parse(turns()[0].body);
+  assert.equal(first.text, "Adam, keep Thursday.");
+  now += 20;
+  send(words("transcript.data", "Adam, keep Thursday."));
+  now += 1500;
+  fire();
+  await settle();
+  assert.equal(turns().length, 1);
+  send(words("transcript.data", "Adam, file the note."));
+  now += 1500;
+  fire();
+  await settle();
+  assert.equal(turns().length, 2);
+  const second = JSON.parse(turns()[1].body);
+  assert.equal(second.text, "Adam, file the note.");
+  assert.equal(first.turn_id === second.turn_id, false);
+});
+
 test("the meeting page is the agent and a bad ear cannot open a turn", async () => {
   const seen = [];
   const { app } = boot(async (url) => {
@@ -378,6 +459,12 @@ test("an addressed turn streams two English sentences and ignores ids in the bod
       body: turnBody("Adam, keep the launch on Thursday.", "Priya", { turn_id: "turn-a" }),
     });
     assert.equal(sseEvents(again.raw).some((event) => event.data?.duplicate === true), true);
+    assert.equal(chats.length, 1);
+    const repeated = await call(port, "POST", "/api/meeting/agent/turn", {
+      headers: { "content-type": "application/json", "x-meeting-ear": EAR },
+      body: turnBody("Adam, keep the launch on Thursday.", "Priya", { turn_id: "turn-b" }),
+    });
+    assert.equal(sseEvents(repeated.raw).some((event) => event.data?.duplicate === true), true);
     assert.equal(chats.length, 1);
     const follow = await call(port, "POST", "/api/meeting/agent/turn", {
       headers: { "content-type": "application/json", "x-meeting-ear": EAR },

@@ -10,6 +10,7 @@ import {
   sentenceHash,
   shouldRespond,
   toolIsWrite,
+  utteranceKey,
   wrapToolResult,
 } from "./agent.js";
 import { meetingContext, rememberMeetingExchange } from "./speech-gate.js";
@@ -45,6 +46,7 @@ function runtime(workspace) {
       lines: new Map(),
       heard: new Map(),
       speaks: new Map(),
+      committed: new Map(),
     };
   }
   return workspace.agentRuntime;
@@ -182,18 +184,6 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
       res.end();
     }
   };
-  if (requested) {
-    if (seenTurn(bag, seat.botId, requested)) {
-      finish({ duplicate: true });
-      return;
-    }
-    const won = await rememberAgentTurn(env, workspace.fetchImpl, seat.botId, requested);
-    markTurn(bag, seat.botId, requested);
-    if (!won) {
-      finish({ duplicate: true });
-      return;
-    }
-  }
   const session = sessionFor(seat.tenantId);
   const delivery = {
     text,
@@ -202,7 +192,27 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     memberId: participantId,
     room: { id: seat.roomId },
   };
-  if (!text || !agentLive(env) || !shouldRespond(session, delivery, { name: seat.botName, participantId: seat.participantId })) {
+  const answer = Boolean(text) && agentLive(env) && shouldRespond(session, delivery, { name: seat.botName, participantId: seat.participantId });
+  if (!bag.committed) bag.committed = new Map();
+  const key = answer ? utteranceKey(text, speaker) : "";
+  if (key && bag.committed.get(seat.botId) === key) {
+    finish({ duplicate: true });
+    return;
+  }
+  if (requested && seenTurn(bag, seat.botId, requested)) {
+    finish({ duplicate: true });
+    return;
+  }
+  if (key) bag.committed.set(seat.botId, key);
+  if (requested) {
+    const won = await rememberAgentTurn(env, workspace.fetchImpl, seat.botId, requested);
+    markTurn(bag, seat.botId, requested);
+    if (!won) {
+      finish({ duplicate: true });
+      return;
+    }
+  }
+  if (!answer) {
     finish();
     return;
   }
