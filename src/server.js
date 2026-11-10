@@ -942,6 +942,15 @@ export function createApp(options = {}) {
       const resolved = await resolveCompanyId(workspace, req, url.searchParams.get("company") || "");
       if (resolved.denied || resolved.unauthorized) { sendCompanyDenied(res, send, resolved); return; }
       const current = await prepareWorkspace(workspace, resolved.companyId);
+      const hearingTenant = (typeof resolved.companyId === "string" && resolved.companyId.trim()) || "local";
+      // Preparing the room reads the guest again. A failed follow-up read keeps the recording closed.
+      try {
+        await readBot(workspace.botPreferences, hearingTenant);
+      } catch {
+        const denied = new Error("The hearing record could not be read.");
+        denied.status = 503;
+        throw denied;
+      }
       const principal = await consolePrincipal(workspace, req, resolved.companyId);
       const roomDecisions = (current.decisions || []).filter((row) => row.roomId === id && !row.deleted);
       const opened = (current.rooms || []).find((item) => item.id === id);
