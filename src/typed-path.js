@@ -2973,8 +2973,9 @@ function proofHints(source) {
 // One memory stays on GetObject. A reader without getObjects stays one call
 // per memory. A verified result is cached per blob. A failure is not.
 function proofReads(tatum, sources, { fresh = false } = {}) {
-  const cache = proofCache(tatum);
   const out = new Map();
+  if (!tatum || typeof tatum !== "object") return out;
+  const cache = proofCache(tatum);
   const todo = [];
   for (const source of sources) {
     const blobId = source?.blobId;
