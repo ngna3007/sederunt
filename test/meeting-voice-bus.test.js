@@ -958,6 +958,101 @@ test("a late stop does not cut a clip a newer poll started", { timeout: 30000 },
   await page.close();
 });
 
+test("a new clip waits until the current one ends, and a stop drops what is waiting", { timeout: 30000 }, async (t) => {
+  let chromium;
+  try {
+    ({ chromium } = await import("playwright"));
+  } catch {
+    t.skip("playwright is not installed");
+    return;
+  }
+  const executablePath = await browserPath(chromium);
+  if (!executablePath) {
+    t.skip("no browser binary found");
+    return;
+  }
+  const app = createApp({
+    deps: {
+      memory: null,
+      tatum: { async getObject() { throw new Error("Tatum read failed"); } },
+    },
+  });
+  app.listen(0, "127.0.0.1");
+  await once(app, "listening");
+  const port = app.address().port;
+  const browser = await chromium.launch({
+    executablePath,
+    args: ["--no-sandbox", "--disable-dev-shm-usage", "--autoplay-policy=no-user-gesture-required"],
+  });
+  t.after(async () => {
+    await browser.close();
+    await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
+  });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(String(error)));
+  await page.addInitScript(() => {
+    window.__clips = [];
+    document.addEventListener("play", (event) => {
+      if (event.target && event.target.id === "voice") window.__clips.push(event.target.currentSrc);
+    }, true);
+  });
+  let calls = 0;
+  const ear = "d5".repeat(24);
+  const first = Buffer.concat(Array.from({ length: 80 }, () => SILENT_MEETING_MP3));
+  const second = Buffer.concat(Array.from({ length: 40 }, () => SILENT_MEETING_MP3));
+  await page.route("**/meeting/voice**", async (route) => {
+    calls += 1;
+    if (calls === 1) {
+      await route.fulfill({ status: 200, contentType: "audio/mpeg", body: first });
+      return;
+    }
+    if (calls === 2) {
+      await route.fulfill({ status: 200, contentType: "audio/mpeg", body: second });
+      return;
+    }
+    await route.fulfill({ status: 204, headers: { "x-sederunt-hold": "stop" }, body: "" });
+  });
+  await page.goto(`http://127.0.0.1:${port}/meeting?name=Adam&ear=${ear}`);
+  await page.waitForFunction(() => {
+    const audio = document.querySelector("#voice");
+    return Boolean(audio && audio.paused === false && audio.currentSrc.startsWith("blob:"));
+  });
+  const started = Date.now();
+  while (calls < 2 && Date.now() - started < 2000) {
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  assert.equal(calls >= 2, true);
+  const during = await page.evaluate(() => ({
+    clips: window.__clips.length,
+    paused: document.querySelector("#voice").paused,
+    speaking: document.getElementById("guest").className,
+  }));
+  assert.equal(during.clips, 1);
+  assert.equal(during.paused, false);
+  assert.equal(during.speaking, "speaking");
+  const stopping = Date.now();
+  while (calls < 3 && Date.now() - stopping < 2000) {
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  assert.equal(calls >= 3, true);
+  await page.waitForFunction(() => {
+    const audio = document.querySelector("#voice");
+    return Boolean(audio && audio.paused === true);
+  });
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  const after = await page.evaluate(() => ({
+    clips: window.__clips.length,
+    paused: document.querySelector("#voice").paused,
+    speaking: document.getElementById("guest").className,
+  }));
+  assert.equal(after.clips, 1);
+  assert.equal(after.paused, true);
+  assert.equal(after.speaking, "");
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
 function get(port, path) {
   return new Promise((resolve, reject) => {
     const req = request({ hostname: "127.0.0.1", port, path, method: "GET" }, (res) => {

@@ -453,7 +453,7 @@ export async function speakMeetingTurn(input = {}) {
         lane.phase = "holding";
         lane.toolHold = true;
       }
-      await Promise.all(pending.map((job) => finishToolWithinBudget(job)));
+      await Promise.all(pending.map((job) => finishToolWithinBudget(job, session, botId)));
       if (!stillMine()) return { spoke: false };
       const lane = laneFor(botId);
       if (lane.phase === "holding") lane.phase = "thinking";
@@ -528,17 +528,27 @@ async function meetingTools(input) {
   const tools = [...BUILTIN_TOOLS];
   const allow = voiceToolAllowList(input.env ?? process.env);
   const cap = allow ? 16 : 6;
+  const reserved = [];
+  const rest = [];
   for (const tool of Array.isArray(extra) ? extra : []) {
     const name = typeof tool?.name === "string" ? tool.name : "";
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(name) || name === "recall" || name === "act") continue;
     if (allow && !allow.has(name)) continue;
-    tools.push({
+    const row = {
       name,
       description: String(tool.description || ""),
       parameters: tool.parameters || tool.inputSchema,
-    });
-    if (tools.length >= cap) break;
+    };
+    if (name === "linear__create_issue") reserved.push(row);
+    else rest.push(row);
   }
+  const room = Math.max(reserved.length, cap - tools.length);
+  const picked = reserved.slice(0, room);
+  for (const row of rest) {
+    if (picked.length >= room) break;
+    picked.push(row);
+  }
+  tools.push(...picked);
   return tools;
 }
 
@@ -751,11 +761,84 @@ function isInterrupt(text, hearing) {
   return residue === "wait" || residue === "stop";
 }
 
-/** How long a handed-off clip keeps playing. 128 kbps, and a tiny buffer is already over. */
-function clipTalkMs(audio) {
+/**
+ * How long the handed-off clip keeps the talking window.
+ * A real mp3 uses its frames, plus a short tail so the window outlasts playback.
+ * Anything else is biased long. A tiny buffer is already over.
+ */
+export function clipTalkMs(audio) {
   const bytes = audio?.length || 0;
   if (bytes < 32) return 0;
-  return Math.min(12000, Math.ceil(bytes / 16));
+  const parsed = mp3DurationMs(audio);
+  if (parsed > 0) return Math.min(12000, Math.ceil(parsed) + 400);
+  return Math.min(12000, Math.ceil(bytes / 8));
+}
+
+const MPEG_BITRATE = {
+  3: {
+    3: [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
+    2: [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384],
+    1: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+  },
+  2: {
+    3: [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256],
+    2: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+    1: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+  },
+};
+MPEG_BITRATE[0] = MPEG_BITRATE[2];
+
+const MPEG_RATE = {
+  3: [44100, 48000, 32000],
+  2: [22050, 24000, 16000],
+  0: [11025, 12000, 8000],
+};
+
+function mp3DurationMs(audio) {
+  const bytes = audio.length;
+  let offset = 0;
+  if (bytes >= 10 && audio[0] === 0x49 && audio[1] === 0x44 && audio[2] === 0x33) {
+    const size = ((audio[6] & 0x7f) << 21) | ((audio[7] & 0x7f) << 14) | ((audio[8] & 0x7f) << 7) | (audio[9] & 0x7f);
+    offset = Math.min(bytes, 10 + size);
+  }
+  let ms = 0;
+  let frames = 0;
+  while (offset + 4 <= bytes && ms < 12000) {
+    const frame = mpegFrame(audio, offset);
+    if (!frame || offset + frame.bytes > bytes) {
+      if (frames > 0) break;
+      offset += 1;
+      if (offset > 4096) break;
+      continue;
+    }
+    ms += frame.ms;
+    offset += frame.bytes;
+    frames += 1;
+  }
+  return frames ? ms : 0;
+}
+
+function mpegFrame(audio, offset) {
+  const b1 = audio[offset + 1];
+  if (audio[offset] !== 0xff || (b1 & 0xe0) !== 0xe0) return null;
+  const version = (b1 >> 3) & 3;
+  const layer = (b1 >> 1) & 3;
+  if (version === 1 || layer === 0) return null;
+  const b2 = audio[offset + 2];
+  const bitrateIndex = (b2 >> 4) & 0xf;
+  const rateIndex = (b2 >> 2) & 3;
+  const padding = (b2 >> 1) & 1;
+  const table = MPEG_BITRATE[version]?.[layer];
+  const rate = MPEG_RATE[version]?.[rateIndex];
+  const kbps = table?.[bitrateIndex];
+  if (!kbps || !rate || bitrateIndex === 15) return null;
+  const bits = kbps * 1000;
+  const size = layer === 3
+    ? Math.floor(((12 * bits) / rate + padding) * 4)
+    : Math.floor((version === 3 ? 144 : 72) * bits / rate + padding);
+  if (size < 4) return null;
+  const samples = layer === 3 ? 384 : (layer === 2 || version === 3 ? 1152 : 576);
+  return { bytes: size, ms: (samples / rate) * 1000 };
 }
 
 function enqueueClip(botId, run) {
@@ -768,12 +851,18 @@ function enqueueClip(botId, run) {
 const TOOL_BUDGET_MS = 8000;
 const TOOL_SLOW_LINE = "That is taking too long. I will follow up after the call.";
 
-/** Release the turn at the budget. The tool promise keeps running. */
-function finishToolWithinBudget(job) {
+/** Release the turn at the budget. The tool promise keeps running, and the call keeps a follow-up. */
+function finishToolWithinBudget(job, session, roomId) {
   let timer;
   const budget = new Promise((resolve) => {
     timer = setTimeout(() => {
+      if (job.settled) {
+        resolve();
+        return;
+      }
+      job.slow = true;
       job.resultText = TOOL_SLOW_LINE;
+      rememberSlowTool(session, job, roomId);
       resolve();
     }, TOOL_BUDGET_MS);
   });
@@ -781,6 +870,34 @@ function finishToolWithinBudget(job) {
     job.done.finally(() => clearTimeout(timer)),
     budget,
   ]);
+}
+
+function rememberSlowTool(session, job, roomId) {
+  if (!session || typeof session !== "object") return;
+  const args = job.call?.arguments && typeof job.call.arguments === "object" ? job.call.arguments : {};
+  const ask = String(args.text || args.query || args.title || args.summary || "").replace(/\s+/g, " ").trim().slice(0, 160);
+  const row = {
+    roomId: String(roomId || ""),
+    name: String(job.call?.name || "tool"),
+    ask,
+    status: "pending",
+    result: "",
+  };
+  const rows = Array.isArray(session.voiceFollowups) ? session.voiceFollowups : [];
+  rows.push(row);
+  session.voiceFollowups = rows.slice(-20);
+  job.followup = row;
+}
+
+function settleSlowTool(job, speech) {
+  if (!job.slow) {
+    job.resultText = speech;
+    return;
+  }
+  job.lateResult = speech;
+  if (!job.followup) return;
+  job.followup.status = "finished";
+  job.followup.result = speech;
 }
 
 function startMeetingTool(call, ctx) {
@@ -803,9 +920,9 @@ function startMeetingTool(call, ctx) {
         deps: ctx.deps,
         context: ctx.context,
       });
-      job.resultText = toolSpeech(result);
+      settleSlowTool(job, toolSpeech(result));
     } catch {
-      job.resultText = "The tool failed.";
+      settleSlowTool(job, "The tool failed.");
     } finally {
       job.settled = true;
       const index = lane.tasks.indexOf(task);
@@ -955,6 +1072,35 @@ export async function claimMeetingEvent(env, eventKey, fetchImpl = fetch) {
     return true;
   } catch {
     return true;
+  }
+}
+
+/** Drop a claim this instance did not finish, so a retry can speak. */
+export function releaseMeetingEventLocal(session, eventKey) {
+  const key = String(eventKey || "").trim();
+  if (!session || !key || !(session.meetingHeard instanceof Set)) return;
+  session.meetingHeard.delete(key);
+}
+
+/**
+ * Drop the cross-instance claim. A missing Redis, or a failed delete, leaves the claim in place.
+ *
+ * @param {NodeJS.ProcessEnv} env
+ * @param {string} eventKey
+ * @param {typeof fetch} [fetchImpl]
+ */
+export async function releaseMeetingEvent(env, eventKey, fetchImpl = fetch) {
+  const key = String(eventKey || "").trim();
+  if (!key) return;
+  const url = String(env?.UPSTASH_REDIS_REST_URL || env?.KV_REST_API_URL || "").trim().replace(/\/$/, "");
+  const token = String(env?.UPSTASH_REDIS_REST_TOKEN || env?.KV_REST_API_TOKEN || "").trim();
+  if (!url || !token) return;
+  try {
+    await (fetchImpl || fetch)(`${url}/del/${encodeURIComponent(`sederunt:voice:heard:${key}`)}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+  } catch {
+    // The claim stays until it expires. A retry stays quiet until then.
   }
 }
 

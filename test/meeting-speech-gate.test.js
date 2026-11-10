@@ -11,6 +11,7 @@ import {
   scheduleMeetingSpeech,
   speechBufferOpen,
   speechSpeakerKey,
+  waitForMeetingSpeech,
 } from "../src/meeting/speech-gate.js";
 import { meetingLineJoinsOpenTurn, meetingLineShouldAnswer, refreshMeetingFloor, speakMeetingTurn } from "../src/meeting/voice.js";
 
@@ -55,6 +56,34 @@ test("a partial is not scheduled and a finished line waits 1.2s", () => {
   assert.equal(claimMeetingSpeech(queue, scheduled.generation, now + 1199), null);
   const claimed = claimMeetingSpeech(queue, scheduled.generation, now + 1200);
   assert.equal(claimed.text, "hey adam what can you do");
+});
+
+test("an early speech timer still takes the line", async () => {
+  const book = meetingSpeechBook({}, "bot-early");
+  const now = Date.now();
+  const scheduled = scheduleMeetingSpeech(book, {
+    text: "hey adam what is the price",
+    name: "Adam",
+    speaker: "id:100",
+    id: "early-1",
+  }, now);
+  const slept = [];
+  const claimed = await waitForMeetingSpeech(book, scheduled.generation, scheduled.holdMs, async (ms) => {
+    slept.push(ms);
+  });
+  assert.equal(claimed.text, "hey adam what is the price");
+  assert.equal(slept.length >= 2, true);
+  assert.equal(speechBufferOpen(book, "id:100"), false);
+});
+
+test("a replaced speech slot is not taken by the earlier timer", async () => {
+  const book = meetingSpeechBook({}, "bot-replaced");
+  const now = Date.now();
+  const first = scheduleMeetingSpeech(book, { text: "hey adam the booth", name: "Adam", speaker: "id:100" }, now);
+  scheduleMeetingSpeech(book, { text: "opens at nine", name: "Adam", speaker: "id:100" }, now + 400);
+  const claimed = await waitForMeetingSpeech(book, first.generation, first.holdMs, async () => {});
+  assert.equal(claimed, null);
+  assert.equal(speechBufferOpen(book, "id:100"), true);
 });
 
 test("a line that still ends on about or and waits 2.5s", () => {

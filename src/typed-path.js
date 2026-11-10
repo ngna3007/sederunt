@@ -3177,6 +3177,23 @@ export async function warmProofs(session, tatum) {
   return out;
 }
 
+function voiceFollowupItems(session, roomId) {
+  const rows = Array.isArray(session?.voiceFollowups) ? session.voiceFollowups : [];
+  const items = [];
+  for (const row of rows) {
+    if (!row || row.roomId !== roomId) continue;
+    const name = String(row.name || "tool").replace(/\s+/g, " ").trim();
+    const ask = String(row.ask || "").replace(/\s+/g, " ").trim();
+    const subject = ask ? `${name}: ${ask}` : name;
+    const result = String(row.result || "").replace(/\s+/g, " ").trim();
+    const text = row.status === "pending" || !result
+      ? `Follow up after the call. ${subject} was still running.`
+      : `Follow up after the call. ${subject}. ${result}`;
+    items.push({ text: text.slice(0, 400), owner: "", due: "" });
+  }
+  return items;
+}
+
 function settleWithin(promise, ms) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => resolve(PROOF_PENDING), ms);
@@ -3195,7 +3212,8 @@ function settleWithin(promise, ms) {
 
 /**
  * Write minutes and action items when a meeting ends. Decisions already stored
- * are left alone. An unknown room writes nothing.
+ * are left alone. A voice tool that ran past its budget is one of the action
+ * items. An unknown room writes nothing.
  */
 export async function endMeeting(session, deps, roomId) {
   const current = ensureSession(session);
@@ -3205,7 +3223,8 @@ export async function endMeeting(session, deps, roomId) {
   const decisions = (current.decisions ?? []).filter((item) => item.roomId === id && !item.deleted);
   const actionItems = (current.actions ?? [])
     .filter((item) => item.roomId === id)
-    .map((item) => ({ text: item.statement, owner: item.memberId || item.speaker || "", due: "" }));
+    .map((item) => ({ text: item.statement, owner: item.memberId || item.speaker || "", due: "" }))
+    .concat(voiceFollowupItems(current, id));
   const visibleSources = new Set(decisions.map((decision) => decision.id));
   const memories = (current.learned ?? []).filter((record) => record.roomId === id && record.sourceDecisionId && visibleSources.has(record.sourceDecisionId));
   const minutes = draftMinutes({ room, decisions, memories });

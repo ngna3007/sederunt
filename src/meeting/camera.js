@@ -2,7 +2,8 @@
  * The meeting camera. Output Media always shows this page, so the tile is
  * the brand field with the guest's name. Cream on #081428 is the same pair
  * used for type on the dark field. White paper read as a blank avatar.
- * The page polls for a spoken clip and stops when the server says the line moved on.
+ * The page polls for a spoken clip. A new clip waits until the current one ends.
+ * A stop clears the clip that is playing and anything waiting behind it.
  * A stop from an older poll does not cut a clip a newer poll already started.
  * A clip queued after that stop still plays. The poll ticket is the time it started, so a reloaded page is not stuck behind the previous count.
  * A bare okay is not a stop. The page does not guess from loudness.
@@ -45,6 +46,7 @@ var ear = params.get("ear") || "";
 if (!/^[a-f0-9]{32,64}$/.test(ear)) ear = "";
 var playing = false;
 var objectUrl = "";
+var queue = [];
 var pollTicket = 0;
 var playedTicket = 0;
 var heardAt = 0;
@@ -61,6 +63,7 @@ function mark(on) {
 }
 
 function stopTalking() {
+  queue = [];
   voice.onended = null;
   voice.pause();
   if (objectUrl) URL.revokeObjectURL(objectUrl);
@@ -71,17 +74,32 @@ function stopTalking() {
   mark(false);
 }
 
-function playClip(blob) {
-  stopTalking();
+function startClip(blob) {
+  if (objectUrl) URL.revokeObjectURL(objectUrl);
   objectUrl = URL.createObjectURL(blob);
   voice.src = objectUrl;
   playing = true;
   mark(true);
-  voice.onended = function () { stopTalking(); };
+  voice.onended = function () {
+    if (queue.length) {
+      startClip(queue.shift());
+      return;
+    }
+    stopTalking();
+  };
   voice.play().catch(function () {
+    queue = [];
     playing = false;
     mark(false);
   });
+}
+
+function playClip(blob) {
+  if (playing) {
+    queue.push(blob);
+    return;
+  }
+  startClip(blob);
 }
 
 function poll() {

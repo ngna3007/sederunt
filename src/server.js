@@ -30,8 +30,8 @@ import { handleLinearOAuth, linearClientMetadata, tenantLinearClient } from "./l
 import { renderCameraPage } from "./meeting/camera.js";
 import { bindMeetingEar, clearPlayedFloor, meetingFloorClosedAt, offerMeetingClip, playedMeetingFloor, requestMeetingHold, stageMeetingFloor, takeMeetingVoice } from "./meeting/voice-bus.js";
 import { createMeetingAdapter, mediaFromBot, meetingCallUpdate, meetingDoorReady, meetingEnded, recallBotUrl, recallTranscriptDelivery, transcriptLines, verifyRecallRequest } from "./meeting/recall.js";
-import { applyPlayedFloor, claimMeetingEvent, claimMeetingEventLocal, meetingEventKey, meetingLineClosesFloor, meetingLineJoinsOpenTurn, meetingLineShouldAnswer, noteMeetingHeard, refreshMeetingFloor, speakMeetingTurn } from "./meeting/voice.js";
-import { claimMeetingSpeech, keepRoomTranscript, meetingSpeechBook, rememberMeetingLine, scheduleMeetingSpeech, speechSpeakerKey } from "./meeting/speech-gate.js";
+import { applyPlayedFloor, claimMeetingEvent, claimMeetingEventLocal, meetingEventKey, meetingLineClosesFloor, meetingLineJoinsOpenTurn, meetingLineShouldAnswer, noteMeetingHeard, refreshMeetingFloor, releaseMeetingEvent, releaseMeetingEventLocal, speakMeetingTurn } from "./meeting/voice.js";
+import { keepRoomTranscript, meetingSpeechBook, rememberMeetingLine, scheduleMeetingSpeech, speechSpeakerKey, waitForMeetingSpeech } from "./meeting/speech-gate.js";
 import { createMeetingFollowups, parseFollowupValue } from "./meeting/followups.js";
 import { createSupabaseFollowupStore } from "./meeting/followup-store.js";
 import { acceptMeetingEnd, buildMeetingFollowupInput, followupInteractionFields, validateFollowupEdit } from "./meeting/live-followups.js";
@@ -1640,108 +1640,130 @@ export function createApp(options = {}) {
         }
         // Signature and tenant checks are done. The index, the saved line, and the
         // joined reply follow the ack. waitUntil keeps that work alive on Vercel.
+        // The speech hold starts as soon as this instance wins the line. A throw
+        // before that reply releases the claim so a retry can still speak.
         recallWork = (async () => {
           const tasks = [];
           if (delivery && ownedTranscript) {
             tasks.push((async () => {
               const botId = typeof delivery.room?.id === "string" ? delivery.room.id : "";
-              if (eventKey) {
-                const won = await claimMeetingEvent(env, eventKey, workspace.fetchImpl);
-                if (!won) return;
-              }
               const companyId = transcriptCompany;
               let current = sessionFor(workspace, companyId);
-              const participant = payload?.data?.data?.participant || payload?.data?.participant;
-              const speakerName = typeof participant?.name === "string" ? participant.name : "";
-              const heardDelivery = speakerName ? { ...delivery, speakerName } : delivery;
-              if (!delivery.partial) {
-                noteMeetingHeard(current, heardDelivery);
-                if (botId) rememberMeetingLine(current, botId, { speaker: speakerName || "Someone", text: delivery.text });
-              }
-              if (botId) {
-                const played = await playedMeetingFloor(workspace, botId, env, workspace.fetchImpl);
-                applyPlayedFloor(current, played, botId, meetingFloorClosedAt(workspace, botId));
-              }
-              const speaker = speechSpeakerKey({ memberId: delivery.memberId, speakerName }) || "speaker";
-              const book = botId ? meetingSpeechBook(current, botId) : null;
-              const answerLine = meetingLineShouldAnswer(current, heardDelivery);
-              const joining = meetingLineJoinsOpenTurn(current, heardDelivery, book, speaker);
-              if (!delivery.partial && meetingLineClosesFloor(current, heardDelivery)) {
-                refreshMeetingFloor(current, heardDelivery);
-                if (botId) await clearPlayedFloor(workspace, botId, env, workspace.fetchImpl);
-              }
-              const seenDelivery = Boolean(
-                delivery.deliveryId
-                && current.deliveries instanceof Set
-                && current.deliveries.has(delivery.deliveryId),
-              );
+              let won = false;
+              let scheduledSpeech = false;
+              let attempted = false;
               let speak = Promise.resolve();
-              if (delivery.partial) {
-                if (answerLine && delivery.room?.id) {
-                  current.hearingArmedRooms ??= new Set();
-                  current.hearingArmedRooms.add(delivery.room.id);
+              try {
+                const wonPromise = eventKey
+                  ? claimMeetingEvent(env, eventKey, workspace.fetchImpl)
+                  : Promise.resolve(true);
+                const playedPromise = botId
+                  ? playedMeetingFloor(workspace, botId, env, workspace.fetchImpl)
+                  : Promise.resolve(null);
+                const [claimedEvent, played] = await Promise.all([wonPromise, playedPromise]);
+                won = claimedEvent;
+                if (!won) return;
+                const participant = payload?.data?.data?.participant || payload?.data?.participant;
+                const speakerName = typeof participant?.name === "string" ? participant.name : "";
+                const heardDelivery = speakerName ? { ...delivery, speakerName } : delivery;
+                if (!delivery.partial) {
+                  noteMeetingHeard(current, heardDelivery);
+                  if (botId) rememberMeetingLine(current, botId, { speaker: speakerName || "Someone", text: delivery.text });
                 }
-              } else if (book && (answerLine || joining) && !seenDelivery) {
-                const scheduled = scheduleMeetingSpeech(book, {
-                  partial: false,
-                  text: delivery.text,
-                  name: current.hearing?.name || "",
-                  speaker,
-                  id: delivery.deliveryId,
-                }, Date.now());
-                if (scheduled.release) {
-                  const generation = scheduled.generation;
-                  const holdMs = scheduled.holdMs;
-                  speak = (async () => {
-                    await new Promise((resolve) => setTimeout(resolve, holdMs));
-                    const claimed = claimMeetingSpeech(book, generation, Date.now());
-                    if (!claimed?.text) return;
-                    await speakMeetingTurn({
-                      answer: true,
-                      text: claimed.text,
-                      partial: false,
-                      speakerName,
-                      botName: current.hearing?.name || "",
-                      memberId: delivery.memberId,
-                      room: delivery.room,
-                      session: current,
-                      deliveryId: delivery.deliveryId,
-                      utteranceId: delivery.utteranceId,
-                      env,
-                      fetchImpl: workspace.fetchImpl,
-                      deliver: (audio) => offerMeetingClip(workspace, delivery.room?.id, audio, env, workspace.fetchImpl),
-                      stageFloor: (floor) => stageMeetingFloor(workspace, delivery.room?.id, floor),
-                      cutPlayback: () => requestMeetingHold(workspace, delivery.room?.id, env, workspace.fetchImpl),
-                      deps: depsFor(workspace, companyId),
-                      context: {
-                        tenantId: companyId || "",
+                if (botId) applyPlayedFloor(current, played, botId, meetingFloorClosedAt(workspace, botId));
+                const speaker = speechSpeakerKey({ memberId: delivery.memberId, speakerName }) || "speaker";
+                const book = botId ? meetingSpeechBook(current, botId) : null;
+                const answerLine = meetingLineShouldAnswer(current, heardDelivery);
+                const joining = meetingLineJoinsOpenTurn(current, heardDelivery, book, speaker);
+                if (!delivery.partial && meetingLineClosesFloor(current, heardDelivery)) {
+                  refreshMeetingFloor(current, heardDelivery);
+                  if (botId) await clearPlayedFloor(workspace, botId, env, workspace.fetchImpl);
+                }
+                const seenDelivery = Boolean(
+                  delivery.deliveryId
+                  && current.deliveries instanceof Set
+                  && current.deliveries.has(delivery.deliveryId),
+                );
+                if (delivery.partial) {
+                  if (answerLine && delivery.room?.id) {
+                    current.hearingArmedRooms ??= new Set();
+                    current.hearingArmedRooms.add(delivery.room.id);
+                  }
+                } else if (book && (answerLine || joining) && !seenDelivery) {
+                  const scheduled = scheduleMeetingSpeech(book, {
+                    partial: false,
+                    text: delivery.text,
+                    name: current.hearing?.name || "",
+                    speaker,
+                    id: delivery.deliveryId,
+                  }, Date.now());
+                  if (scheduled.release) {
+                    scheduledSpeech = true;
+                    const generation = scheduled.generation;
+                    const holdMs = scheduled.holdMs;
+                    speak = (async () => {
+                      const claimed = await waitForMeetingSpeech(book, generation, holdMs);
+                      if (!claimed?.text) return;
+                      await speakMeetingTurn({
+                        answer: true,
+                        text: claimed.text,
+                        partial: false,
+                        speakerName,
+                        botName: current.hearing?.name || "",
+                        memberId: delivery.memberId,
+                        room: delivery.room,
+                        session: current,
+                        deliveryId: delivery.deliveryId,
+                        utteranceId: delivery.utteranceId,
                         env,
-                        personId: "",
-                        googleGrants: workspace.googleGrants,
-                        forms: workspace.forms,
-                        calendarMcp: workspace.calendarMcp,
-                        calendarSave: workspace.calendarSave,
-                        fetch: workspace.fetchImpl,
-                        origin: typeof env.SEDERUNT_PUBLIC_ORIGIN === "string" ? env.SEDERUNT_PUBLIC_ORIGIN : "",
-                      },
-                    }).catch(() => {});
-                  })();
+                        fetchImpl: workspace.fetchImpl,
+                        deliver: (audio) => offerMeetingClip(workspace, delivery.room?.id, audio, env, workspace.fetchImpl),
+                        stageFloor: (floor) => stageMeetingFloor(workspace, delivery.room?.id, floor),
+                        cutPlayback: () => requestMeetingHold(workspace, delivery.room?.id, env, workspace.fetchImpl),
+                        deps: depsFor(workspace, companyId),
+                        context: {
+                          tenantId: companyId || "",
+                          env,
+                          personId: "",
+                          googleGrants: workspace.googleGrants,
+                          forms: workspace.forms,
+                          calendarMcp: workspace.calendarMcp,
+                          calendarSave: workspace.calendarSave,
+                          fetch: workspace.fetchImpl,
+                          origin: typeof env.SEDERUNT_PUBLIC_ORIGIN === "string" ? env.SEDERUNT_PUBLIC_ORIGIN : "",
+                        },
+                      }).catch(() => {});
+                    })();
+                  }
                 }
+                if (!scheduledSpeech) attempted = true;
+                const save = (async () => {
+                  if (delivery.partial) return;
+                  if (!current.readReport?.ok) current = await prepareWorkspace(workspace, companyId);
+                  await handleUtterance({ ...heardDelivery, session: current }, depsFor(workspace, companyId));
+                  if (delivery.room?.id) {
+                    await noteMeetingCall(current, depsFor(workspace, companyId), delivery.room.id, "in_call_recording").catch(() => {});
+                    keepRoomTranscript(current, delivery.room.id, { speaker: speakerName || "Someone", text: delivery.text });
+                  }
+                  if (companyId && workspace.followups && workspace.followupStore) {
+                    const outcomes = await workspace.followupStore.list(companyId, { kind: "outcome", meetingId: delivery.room.id, limit: 1 });
+                    if (outcomes.length) await persistMeetingFollowups(workspace, companyId, delivery.room.id);
+                  }
+                })();
+                await Promise.all([
+                  speak.then(() => { attempted = true; }),
+                  save,
+                ]);
+              } catch (error) {
+                if (won && scheduledSpeech && !attempted) {
+                  await speak.then(() => { attempted = true; }, () => {});
+                }
+                if (won && !attempted) {
+                  releaseMeetingEventLocal(current, eventKey);
+                  await releaseMeetingEvent(env, eventKey, workspace.fetchImpl);
+                }
+                throw error;
               }
-              const save = (async () => {
-                if (delivery.partial) return;
-                if (!current.readReport?.ok) current = await prepareWorkspace(workspace, companyId);
-                await handleUtterance({ ...heardDelivery, session: current }, depsFor(workspace, companyId));
-                if (delivery.room?.id) {
-                  await noteMeetingCall(current, depsFor(workspace, companyId), delivery.room.id, "in_call_recording").catch(() => {});
-                  keepRoomTranscript(current, delivery.room.id, { speaker: speakerName || "Someone", text: delivery.text });
-                }
-                if (companyId && workspace.followups && workspace.followupStore) {
-                  const outcomes = await workspace.followupStore.list(companyId, { kind: "outcome", meetingId: delivery.room.id, limit: 1 });
-                  if (outcomes.length) await persistMeetingFollowups(workspace, companyId, delivery.room.id);
-                }
-              })();
-              await Promise.all([speak, save]);
             })());
           }
           if (progressOpen) {
@@ -1775,10 +1797,13 @@ export function createApp(options = {}) {
         let held = false;
         if (recallWork) {
           try {
-            const { waitUntil } = await import("@vercel/functions");
-            if (typeof waitUntil === "function") {
-              waitUntil(recallWork);
-              held = true;
+            const ctx = globalThis[Symbol.for("@vercel/request-context")]?.get?.();
+            if (typeof ctx?.waitUntil === "function") {
+              const { waitUntil } = await import("@vercel/functions");
+              if (typeof waitUntil === "function") {
+                waitUntil(recallWork);
+                held = true;
+              }
             }
           } catch {
             // Outside a Vercel request the import cannot hold the invocation.

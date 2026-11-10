@@ -104,6 +104,32 @@ export function claimMeetingSpeech(queue, generation, now) {
   return mine;
 }
 
+/**
+ * Wait out this turn's hold, then take the slot.
+ * A timer that fires before the due time waits out the rest, so a cold
+ * event loop does not drop the line. A newer piece replaces the slot and
+ * this wait returns null.
+ *
+ * @param {object | null | undefined} book
+ * @param {number} generation
+ * @param {number} holdMs
+ * @param {(ms: number) => Promise<void>} [sleep]
+ */
+export async function waitForMeetingSpeech(book, generation, holdMs, sleep) {
+  const pause = typeof sleep === "function"
+    ? sleep
+    : (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  await pause(Math.max(0, Number(holdMs) || 0));
+  const claimed = claimMeetingSpeech(book, generation, Date.now());
+  if (claimed?.text) return claimed;
+  const speakers = book?.speakers && typeof book.speakers === "object" ? book.speakers : {};
+  const pending = Object.values(speakers).find((row) => row && row.generation === generation);
+  if (!pending) return null;
+  const left = Number(pending.due) - Date.now();
+  if (left > 0) await pause(left);
+  return claimMeetingSpeech(book, generation, Math.max(Date.now(), Number(pending.due) || 0));
+}
+
 function splitSentences(text) {
   const value = String(text || "")
     .replace(/…/g, ".")

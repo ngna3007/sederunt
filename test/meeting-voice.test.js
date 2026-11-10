@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyPlayedFloor, claimMeetingEvent, claimMeetingEventLocal, meetingEventKey, meetingLineClosesFloor, meetingLineShouldAnswer, meetingToolArguments, noteMeetingHeard, refreshMeetingFloor, speakMeetingTurn, spokenLine } from "../src/meeting/voice.js";
+import { SILENT_MEETING_MP3 } from "../src/meeting/silent-clip.js";
+import { applyPlayedFloor, claimMeetingEvent, claimMeetingEventLocal, clipTalkMs, meetingEventKey, meetingLineClosesFloor, meetingLineShouldAnswer, meetingToolArguments, noteMeetingHeard, refreshMeetingFloor, releaseMeetingEvent, releaseMeetingEventLocal, speakMeetingTurn, spokenLine } from "../src/meeting/voice.js";
 
 const env = {
   OPENROUTER_API_KEY: "sk-test-voice",
@@ -34,6 +35,27 @@ test("one transcript event is claimed once per session, and Redis NX blocks the 
   assert.equal(await claimMeetingEvent(redisEnv, "bot-1:evt-9", fetchImpl), false);
   assert.equal(await claimMeetingEvent(redisEnv, "bot-1:evt-9", async () => { throw new Error("down"); }), true);
   assert.equal(await claimMeetingEvent({}, "bot-1:evt-9", fetchImpl), true);
+  releaseMeetingEventLocal(here, "bot-1:evt-9");
+  assert.equal(claimMeetingEventLocal(here, "bot-1:evt-9"), true);
+  const deleted = [];
+  await releaseMeetingEvent(redisEnv, "bot-1:evt-9", async (url) => {
+    deleted.push(String(url));
+    return { ok: true, async json() { return { result: 1 }; } };
+  });
+  assert.match(deleted[0], /\/del\/sederunt%3Avoice%3Aheard%3Abot-1%3Aevt-9$/);
+  await releaseMeetingEvent({}, "bot-1:evt-9", async () => { throw new Error("unused"); });
+  await releaseMeetingEvent(redisEnv, "bot-1:evt-9", async () => { throw new Error("down"); });
+  assert.equal(deleted.length, 1);
+});
+
+test("a tiny speech buffer is not a talking window, and a real mp3 lasts its frames", () => {
+  assert.equal(clipTalkMs(Uint8Array.from([0xff, 0xfb, 0x90, 0x64])), 0);
+  const junk = new Uint8Array(24000);
+  junk[0] = 0xff;
+  assert.equal(clipTalkMs(junk), 3000);
+  const silent = clipTalkMs(SILENT_MEETING_MP3);
+  assert.equal(silent > Math.ceil(SILENT_MEETING_MP3.length / 16), true);
+  assert.equal(silent < 1200, true);
 });
 
 function chat(message) {
@@ -1837,6 +1859,7 @@ test("a connector that passes the tool budget still speaks, and the write can fi
     if (url.includes("/output_audio/")) return { ok: true, async text() { return ""; } };
     throw new Error(`unexpected ${url}`);
   });
+  const session = { hearing: { name: "Adam" } };
   const started = Date.now();
   const turn = await speakMeetingTurn({
     answer: true,
@@ -1845,7 +1868,7 @@ test("a connector that passes the tool budget still speaks, and the write can fi
     botName: "Adam",
     memberId: "100",
     room: { id: "bot-tool-budget" },
-    session: { hearing: { name: "Adam" } },
+    session,
     deliveryId: "tool-budget",
     env,
     fetchImpl: http.fetch,
@@ -1864,9 +1887,20 @@ test("a connector that passes the tool budget still speaks, and the write can fi
     .filter((call) => call.url.includes("/audio/speech"))
     .map((call) => JSON.parse(call.init.body).input);
   assert.deepEqual(said, ["One moment.", "That is taking too long. I will follow up after the call."]);
+  assert.equal(said.some((line) => /done/i.test(line)), false);
+  assert.deepEqual(session.voiceFollowups, [{
+    roomId: "bot-tool-budget",
+    name: "notes__search",
+    ask: "launch",
+    status: "pending",
+    result: "",
+  }]);
   release();
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(finished, true);
+  assert.equal(session.voiceFollowups[0].status, "finished");
+  assert.equal(session.voiceFollowups[0].result, "Thursday");
+  assert.equal(session.voiceFollowups[0].result.includes("Done"), false);
 });
 
 test("voice tools keep recall and act, follow the allow list, and shorten a long schema", async () => {
@@ -1924,6 +1958,15 @@ test("voice tools keep recall and act, follow the allow list, and shorten a long
     room: { id: "bot-tools-cap" },
     deliveryId: "tools-cap",
   });
+  await speakMeetingTurn({
+    ...base,
+    room: { id: "bot-tools-linear" },
+    deliveryId: "tools-linear",
+    listTools: async () => [
+      ...connectors.map((name) => ({ name, description: name, inputSchema: shortSchema })),
+      { name: "linear__create_issue", description: "File a Linear issue", inputSchema: shortSchema },
+    ],
+  });
   assert.deepEqual(sent[0].map((tool) => tool.name), ["recall", "act", "notes__search", "calendar__list"]);
   assert.equal(sent[0][2].parameters.properties.query.type, "string");
   assert.deepEqual(sent[0][3].parameters, { type: "object", additionalProperties: true });
@@ -1934,5 +1977,13 @@ test("voice tools keep recall and act, follow the allow list, and shorten a long
     "calendar__list",
     "slack__post",
     "linear__issues",
+  ]);
+  assert.deepEqual(sent[2].map((tool) => tool.name), [
+    "recall",
+    "act",
+    "linear__create_issue",
+    "notes__search",
+    "calendar__list",
+    "slack__post",
   ]);
 });
