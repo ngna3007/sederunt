@@ -1,4 +1,4 @@
-import { listExposedTools } from "../connectors/expose.js";
+import { meetingTools } from "./agent.js";
 import { redact } from "../domain/redact.js";
 import { addressesHearing, DEFAULT_HEARING_ALIASES, normalizeHearing } from "../hearing.js";
 import { handleMcpRequest } from "../mcp.js";
@@ -15,25 +15,6 @@ import {
   rememberMeetingExchange,
   speechBufferOpen,
 } from "./speech-gate.js";
-
-const TEXT_SCHEMA = {
-  type: "object",
-  properties: { text: { type: "string" } },
-  required: ["text"],
-};
-
-const BUILTIN_TOOLS = [
-  {
-    name: "recall",
-    description: "Read what this person is allowed to see. Pass their question as text.",
-    parameters: TEXT_SCHEMA,
-  },
-  {
-    name: "act",
-    description: "Submit one write. It is not done unless the tool result says it ran. Pass the request as text.",
-    parameters: TEXT_SCHEMA,
-  },
-];
 
 const claimedLines = new Set();
 const spokenLines = new Set();
@@ -515,49 +496,6 @@ function meetingSystem(botName, kept, tasks, heard, saved) {
 
 function heardLines(session) {
   return Array.isArray(session?.roomHeard) ? session.roomHeard.slice(-8) : [];
-}
-
-async function meetingTools(input) {
-  const tenantId = String(input.context?.tenantId || input.deps?.tenantId || "");
-  let extra = [];
-  try {
-    const list = input.listTools || listExposedTools;
-    extra = await list(input.deps?.connectors, tenantId);
-  } catch {
-    extra = [];
-  }
-  const tools = [...BUILTIN_TOOLS];
-  const allow = voiceToolAllowList(input.env ?? process.env);
-  const cap = allow ? 16 : 6;
-  const reserved = [];
-  const rest = [];
-  for (const tool of Array.isArray(extra) ? extra : []) {
-    const name = typeof tool?.name === "string" ? tool.name : "";
-    if (!/^[A-Za-z0-9_-]{1,64}$/.test(name) || name === "recall" || name === "act") continue;
-    if (allow && !allow.has(name)) continue;
-    const row = {
-      name,
-      description: String(tool.description || ""),
-      parameters: tool.parameters || tool.inputSchema,
-    };
-    if (name === "linear__create_issue") reserved.push(row);
-    else rest.push(row);
-  }
-  const room = Math.max(reserved.length, cap - tools.length);
-  const picked = reserved.slice(0, room);
-  for (const row of rest) {
-    if (picked.length >= room) break;
-    picked.push(row);
-  }
-  tools.push(...picked);
-  return tools;
-}
-
-/** Comma-separated slug__tool names. A blank value leaves the list unset. */
-function voiceToolAllowList(env) {
-  const raw = typeof env?.SEDERUNT_VOICE_TOOLS === "string" ? env.SEDERUNT_VOICE_TOOLS : "";
-  const names = raw.split(",").map((name) => name.trim()).filter(Boolean);
-  return names.length ? new Set(names) : null;
 }
 
 async function defaultRunTool(input) {

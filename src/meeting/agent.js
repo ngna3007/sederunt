@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { meetingLineShouldAnswer } from "./voice.js";
 import { clipSpoken, isEnglishSentence, lineHoldMs } from "./speech-gate.js";
 import { voiceModels } from "./voice-models.js";
+import { canonicalClaimArgs } from "../domain/action-claims.js";
 
 export { voiceModels };
 
@@ -11,7 +12,7 @@ export function agentLive(env = process.env) {
 }
 
 const CANNED = /^(one moment|sure|right,? so)\.?$/i;
-const WRITE_DONE = /^done\. the write ran\.?$/i;
+const WRITE_DONE = /^(?:done\.?|the write ran\.?|done\. the write ran\.?)$/i;
 
 /**
  * Quiet long enough for this line to be a turn.
@@ -143,4 +144,198 @@ export function withoutBotSpeech(words, bot = {}) {
     if (name && letters(word?.speaker) === name) return false;
     return true;
   });
+}
+
+const TEXT_SCHEMA = {
+  type: "object",
+  properties: { text: { type: "string" } },
+  required: ["text"],
+};
+
+const BUILTIN_TOOLS = [
+  {
+    name: "recall",
+    description: "Read what this person is allowed to see in this room. Pass their question as text.",
+    parameters: TEXT_SCHEMA,
+    actionClass: "read",
+  },
+  {
+    name: "act",
+    description: "Submit one write for approval. It is not done until a person allows it. Pass the request as text.",
+    parameters: TEXT_SCHEMA,
+    actionClass: "write",
+  },
+];
+
+const RESERVED_TOOLS = ["linear__create_issue", "linear__update_issue"];
+const VOICE_SCHEMA_CHARS = 1500;
+const TOOL_RESULT_CHARS = 4096;
+const ROLE_MARK = /(?:^|\n)\s*(?:system|assistant|user|tool)\s*:/gi;
+
+export function agentToolBudgetMs(env = process.env) {
+  const raw = Number(env?.SEDERUNT_AGENT_TOOL_MS);
+  if (Number.isFinite(raw) && raw >= 20 && raw <= 8000) return raw;
+  return 8000;
+}
+
+export function voiceToolSchema(schema) {
+  const open = { type: "object", additionalProperties: true };
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return open;
+  const object = schema.type === "object" ? schema : { type: "object", ...schema };
+  try {
+    if (JSON.stringify(object).length > VOICE_SCHEMA_CHARS) return open;
+  } catch {
+    return open;
+  }
+  return object;
+}
+
+function voiceToolAllowList(env, tenantTools) {
+  const raw = typeof tenantTools === "string"
+    ? tenantTools
+    : (typeof env?.SEDERUNT_VOICE_TOOLS === "string" ? env.SEDERUNT_VOICE_TOOLS : "");
+  const names = raw.split(",").map((name) => name.trim()).filter(Boolean);
+  return names.length ? new Set(names) : null;
+}
+
+/**
+ * recall, act, and the allow-listed connectors.
+ * Linear create and update stay inside the cap. A tenant list replaces the env default.
+ */
+export async function meetingTools(input) {
+  const tenantId = String(input.context?.tenantId || input.deps?.tenantId || "");
+  let extra = [];
+  try {
+    const list = input.listTools || (await import("../connectors/expose.js")).listExposedTools;
+    extra = await list(input.deps?.connectors, tenantId);
+  } catch {
+    extra = [];
+  }
+  const tools = BUILTIN_TOOLS.map((tool) => ({ ...tool }));
+  const allow = voiceToolAllowList(input.env ?? process.env, input.tenantTools);
+  const cap = allow ? 16 : 6;
+  const reserved = [];
+  const rest = [];
+  for (const tool of Array.isArray(extra) ? extra : []) {
+    const name = typeof tool?.name === "string" ? tool.name : "";
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(name) || name === "recall" || name === "act") continue;
+    if (allow && !allow.has(name)) continue;
+    const row = {
+      name,
+      description: String(tool.description || ""),
+      parameters: voiceToolSchema(tool.parameters || tool.inputSchema),
+      actionClass: tool.actionClass || "",
+    };
+    if (RESERVED_TOOLS.includes(name)) reserved.push(row);
+    else rest.push(row);
+  }
+  const room = Math.max(reserved.length, cap - tools.length);
+  const picked = [];
+  for (const name of RESERVED_TOOLS) {
+    const row = reserved.find((tool) => tool.name === name);
+    if (row && picked.length < room) picked.push(row);
+  }
+  for (const row of rest) {
+    if (picked.length >= room) break;
+    picked.push(row);
+  }
+  tools.push(...picked);
+  return tools;
+}
+
+export function toolIsWrite(tool) {
+  const name = typeof tool === "string" ? tool : tool?.name;
+  const klass = typeof tool === "object" ? String(tool?.actionClass || "") : "";
+  if (klass === "read") return false;
+  if (klass === "write" || klass === "delete") return true;
+  if (name === "recall") return false;
+  if (name === "act") return true;
+  const leaf = String(name || "").split("__").pop() || "";
+  if (/^(list_|get_|search_|suggest_)/.test(leaf)) return false;
+  return true;
+}
+
+const BLOCKED_ARG = new Set([
+  "memberId", "session", "token", "authorization", "confirmActionId", "confirmed",
+  "channel", "channelId", "roomId", "tenantId", "room", "botId",
+]);
+
+/** Model arguments, with identity and channel fields removed. */
+export function scopedToolArgs(name, args, bound = {}) {
+  if (name === "recall" || name === "act") {
+    const member = String(bound.memberId || "").trim();
+    return {
+      text: String(args?.text || "").slice(0, 2000),
+      memberId: member,
+      room: bound.room,
+      participants: member ? [member] : [],
+    };
+  }
+  const safe = {};
+  if (args && typeof args === "object") {
+    for (const [key, value] of Object.entries(args)) {
+      if (BLOCKED_ARG.has(key)) continue;
+      safe[key] = value;
+    }
+  }
+  if (typeof bound.slackChannel === "string" && bound.slackChannel && String(name || "").startsWith("slack__")) {
+    safe.channel = bound.slackChannel;
+  }
+  return safe;
+}
+
+export function claimArgsFor(name, args) {
+  const source = args && typeof args === "object" ? args : {};
+  if (name === "recall" || name === "act") return canonicalClaimArgs({ text: String(source.text || "") });
+  return canonicalClaimArgs(source);
+}
+
+function stripRoles(value) {
+  if (typeof value === "string") return value.replace(ROLE_MARK, " ").replace(/\s+/g, " ").trim();
+  if (Array.isArray(value)) return value.map((item) => stripRoles(item));
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const [key, item] of Object.entries(value)) out[key] = stripRoles(item);
+    return out;
+  }
+  return value ?? null;
+}
+
+/** Tool output is data. Role lines are stripped and the JSON stays within 4 KB. */
+export function wrapToolResult(result, source) {
+  const raw = result && typeof result === "object" ? result : { text: String(result ?? "") };
+  const data = stripRoles(raw);
+  const body = {
+    ok: data.ok !== false && data.reason !== "slow" && data.reason !== "not-member" && data.reason !== "claimed",
+    untrusted: true,
+    source: String(source || ""),
+  };
+  if (data.reason) body.reason = data.reason;
+  if (data.held === true) body.held = true;
+  else if (data.held === false) body.held = false;
+  body.data = data;
+  let encoded = "";
+  try { encoded = JSON.stringify(body); } catch { encoded = ""; }
+  if (encoded.length > TOOL_RESULT_CHARS) {
+    return { ok: body.ok, untrusted: true, source: body.source, reason: body.reason, held: body.held, data: { truncated: true } };
+  }
+  return body;
+}
+
+/**
+ * Spoken lines after tools. A follow-up is promised only when a hold was saved.
+ * @param {string} text
+ * @param {Array<{ reason?: string, held?: boolean }>} [results]
+ * @param {{ done?: boolean }} [options]
+ */
+export function linesForSpeech(text, results = [], options = {}) {
+  const slow = (Array.isArray(results) ? results : []).find((row) => row?.reason === "slow");
+  let lines = spokenLines(text);
+  if (slow && slow.held !== true) lines = lines.filter((line) => !/follow up/i.test(line));
+  if (options.done === true && slow && lines.length === 0) {
+    lines = [slow.held === true
+      ? "That is taking too long. I will follow up once it is saved."
+      : "That is taking too long."];
+  }
+  return lines.slice(0, 2);
 }

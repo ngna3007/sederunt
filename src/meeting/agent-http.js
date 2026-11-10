@@ -1,8 +1,23 @@
-import { agentLive, agentPersona, freshTurnId, sentenceHash, shouldRespond, spokenLines } from "./agent.js";
+import {
+  agentLive,
+  agentPersona,
+  agentToolBudgetMs,
+  claimArgsFor,
+  freshTurnId,
+  linesForSpeech,
+  meetingTools,
+  scopedToolArgs,
+  sentenceHash,
+  shouldRespond,
+  toolIsWrite,
+  wrapToolResult,
+} from "./agent.js";
 import { meetingContext, rememberMeetingExchange } from "./speech-gate.js";
 import { voiceModels } from "./voice-models.js";
 import { refreshMeetingFloor } from "./voice.js";
+import { handleMcpRequest } from "../mcp.js";
 import {
+  agentMember,
   agentTurnCurrent,
   holdAgentTurn,
   releaseAgentTurn,
@@ -62,7 +77,7 @@ function rememberLine(bag, botId, turn, text) {
  * @param {{ req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse, url: URL, env: NodeJS.ProcessEnv, workspace: object, sessionFor: (tenantId: string) => object, headerValue: (value: unknown) => string, readJson: (req: import("node:http").IncomingMessage) => Promise<object> }} input
  */
 export async function handleMeetingAgent(input) {
-  const { req, res, url, env, workspace, sessionFor, headerValue, readJson, send } = input;
+  const { req, res, url, env, workspace, sessionFor, depsFor, headerValue, readJson, send } = input;
   const path = url.pathname;
   if (!path.startsWith("/api/meeting/agent/")) return false;
   if (req.method !== "POST") {
@@ -107,7 +122,7 @@ export async function handleMeetingAgent(input) {
     return true;
   }
   if (path === "/api/meeting/agent/turn") {
-    await streamTurn(req, res, env, workspace, sessionFor, seat, body);
+    await streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, body);
     return true;
   }
   send(res, 404, "text/plain; charset=utf-8", "");
@@ -145,7 +160,7 @@ async function cancelTurn(workspace, env, botId) {
   await releaseAgentTurn(env, workspace.fetchImpl, botId, live?.turnId || "cancel");
 }
 
-async function streamTurn(req, res, env, workspace, sessionFor, seat, body) {
+async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, body) {
   const bag = runtime(workspace);
   const text = String(body?.text || "").replace(/\s+/g, " ").trim().slice(0, 4000);
   const speaker = String(body?.speaker || body?.speakerName || "").trim().slice(0, 80);
@@ -203,9 +218,10 @@ async function streamTurn(req, res, env, workspace, sessionFor, seat, body) {
   });
   await holdAgentTurn(env, workspace.fetchImpl, seat.botId, turn);
   const sent = new Set();
-  const emit = (full) => {
+  const toolResults = [];
+  const emit = (full, done = false) => {
     if (abort.signal.aborted) return;
-    for (const line of spokenLines(full)) {
+    for (const line of linesForSpeech(full, toolResults, { done })) {
       if (sent.has(line) || sent.size >= 2) continue;
       sent.add(line);
       const hash = rememberLine(bag, seat.botId, turn, line);
@@ -219,9 +235,19 @@ async function streamTurn(req, res, env, workspace, sessionFor, seat, body) {
       signal: abort.signal,
       botId: seat.botId,
       turnId: turn,
+      workspace,
+      session,
+      seat,
+      speaker,
+      participantId,
+      deps: typeof depsFor === "function" ? depsFor(seat.tenantId) : {},
       system: agentPersona(seat.botName),
       messages: [{ role: "user", content: userTurn(session, seat, speaker, text) }],
       onText: emit,
+      toolResults,
+      writeEvent: (name, data) => {
+        if (!res.writableEnded) writeEvent(res, name, data);
+      },
     });
   } catch {
     if (!res.writableEnded) writeEvent(res, "error", { reason: "unavailable" });
@@ -254,41 +280,251 @@ function markTurn(bag, botId, turnId) {
 
 async function streamVoice(input) {
   const models = voiceModels(input.env);
+  const listed = await meetingTools({
+    env: input.env,
+    deps: input.deps,
+    context: { tenantId: input.seat.tenantId },
+    tenantTools: input.seat.voiceTools,
+  });
+  const allowed = new Map(listed.map((tool) => [tool.name, tool]));
+  const tools = listed.map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: String(tool.description || "").slice(0, 300),
+      parameters: tool.parameters,
+    },
+  }));
+  const messages = input.messages.slice();
   let full = "";
-  for (const model of models) {
-    if (input.signal.aborted) return;
+  for (let round = 0; round < 2; round += 1) {
+    const result = await streamOneRound({ ...input, messages, tools, models, full, round });
+    full = result.full;
+    if (input.signal.aborted || !result.toolCalls.length || round === 1) {
+      input.onText(full, true);
+      return;
+    }
+    messages.push({
+      role: "assistant",
+      content: result.text || null,
+      tool_calls: result.toolCalls.map((call) => ({
+        id: call.id,
+        type: "function",
+        function: { name: call.name, arguments: JSON.stringify(call.arguments || {}) },
+      })),
+    });
+    for (const call of result.toolCalls) {
+      if (input.signal.aborted && !toolIsWrite(allowed.get(call.name) || call.name)) break;
+      const tool = allowed.get(call.name);
+      input.writeEvent("tool_started", { name: call.name });
+      const outcome = await runAgentTool({ ...input, call, tool, allowed });
+      input.toolResults.push(outcome.raw);
+      messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(outcome.wrapped) });
+    }
+    full = "";
+  }
+}
+
+async function streamOneRound(input) {
+  let full = input.full || "";
+  for (const model of input.models) {
+    if (input.signal.aborted) return { full, text: "", toolCalls: [] };
     const remote = await agentTurnCurrent(input.env, input.fetchImpl, input.botId);
-    if (remote && remote !== input.turnId) return;
+    if (remote && remote !== input.turnId) return { full, text: "", toolCalls: [] };
     const first = new AbortController();
     const timer = setTimeout(() => first.abort(), FIRST_TOKEN_MS);
     const signal = AbortSignal.any([input.signal, first.signal, AbortSignal.timeout(ROUND_MS)]);
     let saw = false;
+    const mark = () => {
+      if (saw) return;
+      saw = true;
+      clearTimeout(timer);
+    };
     const result = await openRouterStream({
       env: input.env,
       fetchImpl: input.fetchImpl,
       system: input.system,
       messages: input.messages,
+      tools: input.tools,
       models: [model],
-      maxTokens: 200,
+      maxTokens: 400,
       signal,
+      onActivity: mark,
       onDelta(delta) {
-        if (!saw && String(delta || "").trim()) {
-          saw = true;
-          clearTimeout(timer);
-        }
+        if (String(delta || "").trim()) mark();
         full += String(delta || "");
-        input.onText(full);
+        input.onText(full, false);
       },
     });
     clearTimeout(timer);
-    if (input.signal.aborted) return;
+    const toolCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
+    if (input.signal.aborted && !saw) return { full: "", text: "", toolCalls: [] };
     if (result?.error === "aborted" && !saw) {
       full = "";
       continue;
     }
-    if (saw || result?.used) return;
+    if (saw || result?.used) return { full, text: result?.text || "", toolCalls: toolCalls.filter((call) => input.tools.some((tool) => tool.function.name === call.name)) };
     full = "";
   }
+  return { full, text: "", toolCalls: [] };
+}
+
+async function runAgentTool(input) {
+  const name = input.call.name;
+  const write = toolIsWrite(input.tool || name);
+  const member = await agentMember(input.workspace, input.seat.botId, {
+    participantId: input.participantId,
+    name: input.speaker,
+  }, input.env, input.fetchImpl);
+  const room = {
+    id: input.seat.roomId,
+    botPresent: true,
+    source: "recall",
+    kind: "meeting",
+    memberIds: member ? [member.memberId] : [],
+  };
+  const slackChannel = typeof input.deps?.app?.slackChannel === "string" ? input.deps.app.slackChannel : "";
+  const args = scopedToolArgs(name, input.call.arguments, {
+    memberId: member?.memberId || "",
+    room,
+    slackChannel,
+  });
+  if (!member && name !== "recall") {
+    const raw = { ok: false, reason: "not-member", held: false };
+    return { raw, wrapped: wrapToolResult(raw, name) };
+  }
+  if (write) {
+    const claimed = await claimWrite(input, name, args);
+    if (!claimed) {
+      const raw = { ok: false, reason: "claimed", held: false };
+      return { raw, wrapped: wrapToolResult(raw, name) };
+    }
+    rememberHold(input, name, args, member.memberId);
+  }
+  const child = new AbortController();
+  const stopRead = () => {
+    if (!write) child.abort();
+  };
+  if (input.signal.aborted) stopRead();
+  else input.signal.addEventListener("abort", stopRead, { once: true });
+  const budgetMs = agentToolBudgetMs(input.env);
+  let timer;
+  const slow = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ slow: true }), budgetMs);
+  });
+  const cancelRead = write ? null : new Promise((resolve) => {
+    if (input.signal.aborted) resolve({ aborted: true });
+    else input.signal.addEventListener("abort", () => resolve({ aborted: true }), { once: true });
+  });
+  try {
+    const raced = await Promise.race([
+      invokeTool(input, name, args, child.signal),
+      slow,
+      ...(cancelRead ? [cancelRead] : []),
+    ]);
+    if (raced?.aborted && !write) {
+      const raw = { ok: false, reason: "aborted", held: false };
+      return { raw, wrapped: wrapToolResult(raw, name) };
+    }
+    if (raced?.slow) {
+      const raw = { ok: false, reason: "slow", held: write };
+      return { raw, wrapped: wrapToolResult(raw, name) };
+    }
+    if (child.signal.aborted && !write) {
+      const raw = { ok: false, reason: "aborted", held: false };
+      return { raw, wrapped: wrapToolResult(raw, name) };
+    }
+    const raw = write ? { ...(raced && typeof raced === "object" ? raced : {}), held: true, ok: false } : raced;
+    const scoped = name === "recall" ? recallForRoom(raw) : raw;
+    return { raw: scoped, wrapped: wrapToolResult(scoped, name) };
+  } catch {
+    const raw = { ok: false, reason: child.signal.aborted ? "aborted" : "failed", held: write };
+    return { raw, wrapped: wrapToolResult(raw, name) };
+  } finally {
+    clearTimeout(timer);
+    input.signal.removeEventListener("abort", stopRead);
+  }
+}
+
+function recallForRoom(result) {
+  if (!result || typeof result !== "object") return result;
+  const visible = new Set((Array.isArray(result.visible) ? result.visible : [])
+    .map((row) => String(row?.text || "").trim())
+    .filter(Boolean));
+  if (!Array.isArray(result.why)) return result;
+  return {
+    ...result,
+    why: result.why.filter((row) => visible.has(String(row?.text || "").trim())),
+  };
+}
+
+function rememberHold(input, name, args, memberId) {
+  const row = {
+    tenantId: input.seat.tenantId,
+    roomId: input.seat.roomId,
+    tool: name,
+    args: claimArgsFor(name, args),
+    speaker: input.speaker,
+    memberId,
+    turnId: input.turnId,
+    status: "held",
+  };
+  const session = input.session;
+  if (session && typeof session === "object") {
+    session.agentHolds = Array.isArray(session.agentHolds) ? session.agentHolds : [];
+    session.agentHolds.push(row);
+  }
+  const bag = input.workspace.meetingVoice;
+  if (bag && typeof bag === "object") {
+    bag.agentHolds = Array.isArray(bag.agentHolds) ? bag.agentHolds : [];
+    bag.agentHolds.push(row);
+  }
+  return row;
+}
+
+async function claimWrite(input, name, args) {
+  const scope = {
+    tenantId: input.seat.tenantId,
+    roomId: input.seat.roomId,
+    toolName: name,
+    args: claimArgsFor(name, args),
+  };
+  const store = input.workspace.actionClaims;
+  if (!store || typeof store.claim !== "function") return true;
+  try {
+    return await store.claim(scope);
+  } catch {
+    return false;
+  }
+}
+
+async function invokeTool(input, name, args, signal) {
+  const bag = input.workspace.meetingVoice;
+  if (bag && typeof bag === "object") {
+    bag.toolRuns = Array.isArray(bag.toolRuns) ? bag.toolRuns : [];
+    bag.toolRuns.push({
+      name,
+      tenantId: input.seat.tenantId,
+      roomId: input.seat.roomId,
+      args,
+    });
+  }
+  if (signal.aborted && !toolIsWrite(input.tool || name)) {
+    return { ok: false, reason: "aborted", held: false };
+  }
+  const context = {
+    ...(input.deps || {}),
+    tenantId: input.seat.tenantId,
+    env: input.env,
+    fetch: (url, init = {}) => input.fetchImpl(url, {
+      ...init,
+      signal: signal.aborted ? signal : AbortSignal.any([signal, init.signal].filter(Boolean)),
+    }),
+  };
+  return handleMcpRequest({
+    name,
+    arguments: { ...args, session: input.session },
+  }, { ...input.deps, connectors: input.deps?.connectors, tenantId: input.seat.tenantId }, context);
 }
 
 async function speakSentence(req, res, env, workspace, seat, body) {

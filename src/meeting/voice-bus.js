@@ -292,6 +292,62 @@ export async function finishAgentSeat(workspace, botId, env = process.env, fetch
   return true;
 }
 
+/** A verified participant on this bot, from a final transcript. */
+export function noteAgentMember(workspace, botId, row) {
+  const bag = seatBag(workspace);
+  const id = cleanBotId(botId);
+  const participantId = String(row?.participantId || "").trim().slice(0, 40);
+  const memberId = String(row?.memberId || participantId).trim().slice(0, 80);
+  if (!bag || !id || !participantId || !memberId) return false;
+  if (!(bag.members instanceof Map)) bag.members = new Map();
+  bag.members.set(`${id}:${participantId}`, {
+    participantId,
+    name: String(row?.name || "").slice(0, 80),
+    memberId,
+  });
+  return true;
+}
+
+export async function rememberAgentMember(workspace, botId, row, env = process.env, fetchImpl = fetch) {
+  if (!noteAgentMember(workspace, botId, row)) return false;
+  const id = cleanBotId(botId);
+  const participantId = String(row.participantId).trim();
+  await redisCommand(env, fetchImpl, [
+    "SET",
+    `sederunt:voice:member:${id}:${participantId}`,
+    JSON.stringify({ name: String(row?.name || ""), memberId: String(row?.memberId || participantId) }),
+    "EX",
+    String(EAR_SECONDS),
+  ]);
+  return true;
+}
+
+/** The member recorded for this participant. A mismatched name is not that member. */
+export async function agentMember(workspace, botId, query = {}, env = process.env, fetchImpl = fetch) {
+  const bag = seatBag(workspace);
+  const id = cleanBotId(botId);
+  const participantId = String(query.participantId || "").trim();
+  if (!bag || !id || !participantId) return null;
+  if (!(bag.members instanceof Map)) bag.members = new Map();
+  let row = bag.members.get(`${id}:${participantId}`) || null;
+  if (!row && redisConfigured(env)) {
+    const loaded = await redisCommand(env, fetchImpl, ["GET", `sederunt:voice:member:${id}:${participantId}`]);
+    if (typeof loaded.result === "string" && loaded.result.startsWith("{")) {
+      try {
+        const parsed = JSON.parse(loaded.result);
+        if (noteAgentMember(workspace, id, { participantId, name: parsed.name, memberId: parsed.memberId })) {
+          row = bag.members.get(`${id}:${participantId}`) || null;
+        }
+      } catch {
+        row = null;
+      }
+    }
+  }
+  if (!row) return null;
+  if (query.name && row.name && !namesMatch(query.name, row.name)) return null;
+  return row;
+}
+
 /** The bot's own participant, from a final whose speaker is the bot. */
 export function noteAgentSpeaker(workspace, botId, participantId, speakerName = "") {
   const seat = agentSeatForBot(workspace, botId);

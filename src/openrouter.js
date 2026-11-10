@@ -209,18 +209,37 @@ export async function openRouterStream(input = {}) {
   const messages = [];
   if (typeof input.system === "string" && input.system.trim()) messages.push({ role: "system", content: input.system.trim() });
   for (const turn of input.messages ?? []) {
-    if (!turn || typeof turn.content !== "string" || !turn.content.trim()) continue;
+    if (!turn || typeof turn !== "object") continue;
+    if (turn.role === "tool" && typeof turn.content === "string") {
+      messages.push({ role: "tool", tool_call_id: String(turn.tool_call_id || ""), content: turn.content });
+      continue;
+    }
+    if (turn.role === "assistant" && Array.isArray(turn.tool_calls)) {
+      messages.push({
+        role: "assistant",
+        content: typeof turn.content === "string" ? turn.content : null,
+        tool_calls: turn.tool_calls,
+      });
+      continue;
+    }
+    if (typeof turn.content !== "string" || !turn.content.trim()) continue;
     messages.push({ role: turn.role === "assistant" ? "assistant" : "user", content: turn.content.trim() });
   }
   if (!messages.length) return { text: "", used: false, model: models[0], error: "empty", tried: [] };
 
+  const tools = Array.isArray(input.tools) ? input.tools : [];
   const tried = [];
   let lastError = "unavailable";
   for (const model of models) {
     tried.push(model);
     let text = "";
+    const toolDeltas = [];
     try {
       const body = completionBody(model, messages, { stream: true, maxTokens: input.maxTokens });
+      if (tools.length) {
+        body.tools = tools;
+        body.tool_choice = "auto";
+      }
       const response = await fetchImpl(CHAT_URL, {
         method: "POST",
         headers: {
@@ -251,7 +270,11 @@ export async function openRouterStream(input = {}) {
           lastError = "stream-error";
           return;
         }
-        const delta = choiceText(event?.choices?.[0]);
+        const choice = event?.choices?.[0];
+        if (absorbToolDelta(toolDeltas, choice?.delta?.tool_calls) && typeof input.onActivity === "function") {
+          await input.onActivity();
+        }
+        const delta = choiceText(choice);
         if (!delta) return;
         text += delta;
         // Leading padding from a reasoning model is not an answer and must not be shown.
@@ -283,19 +306,21 @@ export async function openRouterStream(input = {}) {
         buffer += decoder.decode();
         await consume(buffer, true);
       }
-      if (streamError && !text.trim()) continue;
+      if (streamError && !text.trim() && !toolDeltas.length) continue;
+      const toolCalls = finishToolDeltas(toolDeltas);
       const trimmed = text.trim();
-      if (!trimmed) {
+      if (!trimmed && !toolCalls.length) {
         lastError = "empty";
         continue;
       }
-      return { text: trimmed, used: true, model, tried };
+      return { text: trimmed, toolCalls, used: true, model, tried };
     } catch {
+      const toolCalls = finishToolDeltas(toolDeltas);
       if (input.signal?.aborted) {
-        if (text.trim()) return { text: text.trim(), used: true, model, error: "aborted", tried };
-        return { text: "", used: false, model, error: "aborted", tried };
+        if (text.trim() || toolCalls.length) return { text: text.trim(), toolCalls, used: true, model, error: "aborted", tried };
+        return { text: "", toolCalls: [], used: false, model, error: "aborted", tried };
       }
-      if (text.trim()) return { text: text.trim(), used: true, model, error: "network", tried };
+      if (text.trim() || toolCalls.length) return { text: text.trim(), toolCalls, used: true, model, error: "network", tried };
       lastError = "network";
       continue;
     }
@@ -306,6 +331,28 @@ export async function openRouterStream(input = {}) {
 const SPEECH_URL = "https://openrouter.ai/api/v1/audio/speech";
 const DEFAULT_TTS_MODEL = "mistralai/voxtral-mini-tts-2603";
 const DEFAULT_TTS_VOICE = "en_paul_neutral";
+
+function absorbToolDelta(calls, deltas) {
+  if (!Array.isArray(deltas) || !deltas.length) return false;
+  for (const part of deltas) {
+    const index = Number.isInteger(part?.index) ? part.index : calls.length;
+    if (!calls[index]) calls[index] = { id: "", name: "", arguments: "" };
+    if (typeof part.id === "string" && part.id) calls[index].id = part.id;
+    const fn = part.function || {};
+    if (typeof fn.name === "string") calls[index].name += fn.name;
+    if (typeof fn.arguments === "string") calls[index].arguments += fn.arguments;
+  }
+  return true;
+}
+
+function finishToolDeltas(calls) {
+  return readToolCalls({
+    tool_calls: calls.filter(Boolean).map((call) => ({
+      id: call.id,
+      function: { name: call.name, arguments: call.arguments },
+    })),
+  });
+}
 
 function readToolCalls(message) {
   const raw = message?.tool_calls;

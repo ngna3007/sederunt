@@ -30,7 +30,7 @@ import { handleLinearOAuth, linearClientMetadata, tenantLinearClient } from "./l
 import { renderCameraPage } from "./meeting/camera.js";
 import { handleMeetingAgent } from "./meeting/agent-http.js";
 import { loadSpikeShapes, measureSpeechProbe, pushSpikeShape, readSpikeShapes, saveSpikeShape, spikeAuthorized, spikeEnabled, transcriptEventShape } from "./meeting/spike.js";
-import { bindAgentSeat, bindMeetingEar, clearPlayedFloor, finishAgentSeat, meetingFloorClosedAt, offerMeetingClip, playedMeetingFloor, rememberAgentSeat, rememberAgentSpeaker, requestMeetingHold, stageMeetingFloor, takeMeetingVoice, validMeetingEar } from "./meeting/voice-bus.js";
+import { bindAgentSeat, bindMeetingEar, clearPlayedFloor, finishAgentSeat, meetingFloorClosedAt, offerMeetingClip, playedMeetingFloor, rememberAgentMember, rememberAgentSeat, rememberAgentSpeaker, requestMeetingHold, stageMeetingFloor, takeMeetingVoice, validMeetingEar } from "./meeting/voice-bus.js";
 import { createMeetingAdapter, mediaFromBot, meetingCallUpdate, meetingDoorReady, meetingEnded, recallBotUrl, recallTranscriptDelivery, transcriptLines, verifyRecallRequest } from "./meeting/recall.js";
 import { applyPlayedFloor, claimMeetingEvent, claimMeetingEventLocal, meetingEventKey, meetingLineClosesFloor, meetingLineJoinsOpenTurn, meetingLineShouldAnswer, noteMeetingHeard, refreshMeetingFloor, releaseMeetingEvent, releaseMeetingEventLocal, speakMeetingTurn } from "./meeting/voice.js";
 import { keepRoomTranscript, meetingSpeechBook, rememberMeetingLine, scheduleMeetingSpeech, speechSpeakerKey, waitForMeetingSpeech } from "./meeting/speech-gate.js";
@@ -1315,6 +1315,7 @@ export function createApp(options = {}) {
         env,
         workspace,
         sessionFor: (tenantId) => sessionFor(workspace, tenantId),
+        depsFor: (tenantId) => depsFor(workspace, tenantId),
         headerValue,
         readJson,
         send,
@@ -1750,8 +1751,15 @@ export function createApp(options = {}) {
                 const participant = payload?.data?.data?.participant || payload?.data?.participant;
                 const speakerName = typeof participant?.name === "string" ? participant.name : "";
                 const heardDelivery = speakerName ? { ...delivery, speakerName } : delivery;
-                if (!delivery.partial && botId && speakerName && delivery.memberId) {
-                  await rememberAgentSpeaker(workspace, botId, delivery.memberId, speakerName, env, workspace.fetchImpl).catch(() => {});
+                if (!delivery.partial && botId && delivery.memberId) {
+                  await rememberAgentMember(workspace, botId, {
+                    participantId: delivery.memberId,
+                    name: speakerName,
+                    memberId: delivery.memberId,
+                  }, env, workspace.fetchImpl).catch(() => {});
+                  if (speakerName) {
+                    await rememberAgentSpeaker(workspace, botId, delivery.memberId, speakerName, env, workspace.fetchImpl).catch(() => {});
+                  }
                 }
                 if (!delivery.partial) {
                   noteMeetingHeard(current, heardDelivery);

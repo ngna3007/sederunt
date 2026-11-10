@@ -34,6 +34,54 @@ test("hosted claims fail closed and send only hashed source information", async 
 });
 
 
+test("a tool claim hashes tenant, room, tool and canonical args once", async () => {
+  const tenant = "11111111-1111-4111-8111-111111111111";
+  const other = "22222222-2222-4222-8222-222222222222";
+  const tool = { tenantId: tenant, roomId: "bot-1", toolName: "notes__create_note", args: { title: " Launch ", note: "Thursday" } };
+  const same = { tenantId: tenant.toUpperCase(), roomId: " bot-1 ", toolName: " notes__create_note ", args: { note: "Thursday", title: "Launch" } };
+  assert.equal(actionClaimKey(tool), actionClaimKey(same));
+  assert.notEqual(actionClaimKey(tool), actionClaimKey({ ...tool, tenantId: other }));
+  assert.notEqual(actionClaimKey(tool), actionClaimKey({ ...tool, roomId: "bot-2" }));
+  assert.notEqual(actionClaimKey(tool), actionClaimKey({ ...tool, toolName: "notes__update_note" }));
+  assert.notEqual(actionClaimKey(tool), actionClaimKey({ ...tool, args: { title: "Friday" } }));
+  assert.notEqual(actionClaimKey(tool), actionClaimKey(scope));
+  const store = createMemoryActionClaims();
+  assert.equal(await store.claim(tool), true);
+  assert.equal(await store.claim(same), false);
+  assert.equal(await store.claim({ ...tool, tenantId: other }), true);
+  const legacy = createMemoryActionClaims();
+  assert.equal(await legacy.claim(scope), true);
+  const both = { ...scope, toolName: "act", args: { text: "file the launch" } };
+  assert.equal(await legacy.claim(both), false);
+});
+
+test("hosted claims read a legacy digest before inserting a tool digest", async () => {
+  const both = { ...scope, toolName: "act", args: { text: "file the launch" } };
+  const blocked = [];
+  const taken = createActionClaims({ SUPABASE_URL: "https://example.test", SUPABASE_SECRET_KEY: "fixture" }, { fetchImpl: async (url, init) => {
+    blocked.push({ method: init.method, url: String(url), body: init.body ? JSON.parse(init.body) : null });
+    if (init.method === "GET") return new Response(JSON.stringify([{ claim_key: "present" }]), { status: 200 });
+    return new Response("true", { status: 200 });
+  } });
+  assert.equal(await taken.claim(both), false);
+  assert.equal(blocked.length, 1);
+  assert.equal(blocked[0].method, "GET");
+  assert.match(blocked[0].url, new RegExp(actionClaimKey(scope)));
+  assert.doesNotMatch(blocked[0].url, /private-room|private-source|create issue|file the launch/);
+  const calls = [];
+  const open = createActionClaims({ SUPABASE_URL: "https://example.test", SUPABASE_SECRET_KEY: "fixture" }, { fetchImpl: async (url, init) => {
+    calls.push({ method: init.method, url: String(url), body: init.body ? JSON.parse(init.body) : null });
+    if (init.method === "GET") return new Response("[]", { status: 200 });
+    return new Response("true", { status: 200 });
+  } });
+  assert.equal(await open.claim(both), true);
+  assert.equal(calls[0].method, "GET");
+  assert.equal(calls[1].method, "POST");
+  assert.equal(calls[1].body.p_key, actionClaimKey(both));
+  assert.notEqual(calls[1].body.p_key, actionClaimKey(scope));
+  assert.doesNotMatch(JSON.stringify(calls[1].body), /private-room|private-source|create issue|file the launch/);
+});
+
 test("local claims survive separate processes and reopening", async (t) => {
   const root = resolve(".local/tmp");
   await mkdir(root, { recursive: true });

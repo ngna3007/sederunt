@@ -43,6 +43,7 @@ export async function listExposedTools(store, tenantId) {
         name: `${connector.slug}__${tool.name}`,
         description: String(tool.description || ""),
         inputSchema: tool.inputSchema && typeof tool.inputSchema === "object" ? tool.inputSchema : { type: "object" },
+        actionClass: typeof tool.actionClass === "string" ? tool.actionClass : "",
       });
     }
   }
