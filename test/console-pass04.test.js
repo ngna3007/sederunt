@@ -352,7 +352,7 @@ test("home and rooms columns line up, and the pass 04 fixes hold in the browser"
 
   for (const width of [1920, 1024]) {
     await page.setViewportSize({ width, height: 900 });
-    // Home only previews a few rooms and hides the explorer head; measure columns on Rooms.
+    // Home hides the explorer head, so column alignment is measured on Rooms.
     for (const path of ["/console/rooms"]) {
       await page.goto(`http://127.0.0.1:${port}${path}`, { waitUntil: "networkidle" });
       await page.waitForSelector("#room-list a.room", { timeout: 45000 });
@@ -428,10 +428,13 @@ test("home and rooms columns line up, and the pass 04 fixes hold in the browser"
   const homePreview = await page.evaluate(() => ({
     count: document.querySelectorAll("#room-list a.room").length,
     headHidden: !!document.querySelector("#rooms .explorer-head")?.hidden,
+    titles: [...document.querySelectorAll("#room-list a.room strong")].map((node) => node.textContent || ""),
     allRooms: !!document.getElementById("home-all-rooms") && !document.getElementById("home-all-rooms").hidden,
   }));
-  assert.ok(homePreview.count >= 2 && homePreview.count <= 3, JSON.stringify(homePreview));
+  assert.equal(homePreview.count, 5, JSON.stringify(homePreview));
   assert.equal(homePreview.headHidden, true);
+  assert.deepEqual(homePreview.titles, ["Booth planning", "Launch review", "#ops", "Infra sync", "Quiet room"]);
+  assert.equal(homePreview.allRooms, false);
 
   await page.goto(`http://127.0.0.1:${port}/console/rooms`, { waitUntil: "networkidle" });
   await page.waitForSelector("#room-list a.room", { timeout: 45000 });
@@ -452,7 +455,9 @@ test("home and rooms columns line up, and the pass 04 fixes hold in the browser"
       card: card ? getComputedStyle(card).backgroundColor : "",
     };
   });
-  assert.ok(rooms.rows.length >= 2);
+  assert.equal(rooms.rows.length, 5);
+  assert.equal(rooms.rows[0].title, "Booth planning");
+  assert.deepEqual(rooms.rows.map((row) => row.title), ["Booth planning", "Launch review", "#ops", "Infra sync", "Quiet room"]);
   assert.ok(rooms.rows.every((row) => row.status !== "Failed"), JSON.stringify(rooms.rows));
   assert.ok(rooms.rows.some((row) => row.status === "Done"));
   assert.ok(rooms.rows.some((row) => row.status === "No recording"));

@@ -5,6 +5,8 @@
  * A bot with no ear returns false so Output Audio can still play.
  */
 
+import { CONVERSATION_MS } from "./speech-gate.js";
+
 const CLIP_BYTES = 700000;
 const QUEUE_SECONDS = 120;
 const EAR_SECONDS = 6 * 60 * 60;
@@ -646,17 +648,17 @@ async function promoteTaken(workspace, floor, env, fetchImpl) {
   const record = {
     roomId: floor.roomId,
     speaker: floor.speaker,
-    until: Date.now() + 90_000,
+    until: Date.now() + CONVERSATION_MS,
     at: at || Date.now(),
   };
   if (await playedFloorAt(bag, floor.botId, env, fetchImpl) > at) return false;
   if (openedFloorAt(bag.played.get(floor.botId)) > at) return false;
   bag.played.set(floor.botId, record);
   if (!redisConfigured(env)) return true;
-  await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:floor:${floor.botId}`, JSON.stringify(record), "EX", "90"]);
+  await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:floor:${floor.botId}`, JSON.stringify(record), "EX", String(Math.round(CONVERSATION_MS / 1000))]);
   const latest = bag.played.get(floor.botId);
   if (latest && latest !== record && openedFloorAt(latest) > at) {
-    await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:floor:${floor.botId}`, JSON.stringify(latest), "EX", "90"]);
+    await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:floor:${floor.botId}`, JSON.stringify(latest), "EX", String(Math.round(CONVERSATION_MS / 1000))]);
   }
   return true;
 }

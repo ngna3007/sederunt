@@ -321,6 +321,7 @@ test("list columns share a gap and history rows stay compact", async (t) => {
           const box = item.getBoundingClientRect();
           return box.width > 0 && (box.right > window.innerWidth + 1 || box.left < -1);
         }).length;
+        const rowCut = rows.filter((item) => item.scrollWidth > item.clientWidth + 1 || item.scrollHeight > item.clientHeight + 1).length;
         const clips = [...document.querySelectorAll("#history-list .entity-id, #history-list .label-pill")].filter((node) => {
           const box = node.getBoundingClientRect();
           const line = node.closest(".activity-row");
@@ -342,13 +343,18 @@ test("list columns share a gap and history rows stay compact", async (t) => {
           actions,
           headShown,
           rowClip,
+          rowCut,
         };
       }, surface);
       assert.equal(measured.overflow, false, `${surface.path} ${width} overflows`);
       assert.equal(measured.rowClip, 0, `${surface.path} ${width} clips a row`);
       const uniqueHeights = [...new Set(measured.heights)];
-      if (!measured.stacked) {
+      if (!measured.stacked && surface.path !== "/console/setup") {
         assert.deepEqual(uniqueHeights, [measured.heights[0]], `${surface.path} ${width} heights ${measured.heights.join(",")}`);
+      }
+      if (surface.path === "/console/setup") {
+        assert.ok(measured.heights.every((height) => height >= 64), `${surface.path} ${width} heights ${measured.heights.join(",")}`);
+        assert.equal(measured.rowCut, 0, `${surface.path} ${width} cuts a tool row`);
       }
       if (surface.history && width >= 1024) {
         assert.ok(measured.heights.every((height) => height >= 44 && height <= 48), `history ${width} heights ${measured.heights.join(",")}`);

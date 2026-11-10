@@ -30,6 +30,7 @@ import { renderCameraPage } from "./meeting/camera.js";
 import { bindMeetingEar, clearPlayedFloor, meetingFloorClosedAt, offerMeetingClip, playedMeetingFloor, requestMeetingHold, stageMeetingFloor, takeMeetingVoice } from "./meeting/voice-bus.js";
 import { createMeetingAdapter, mediaFromBot, meetingCallUpdate, meetingDoorReady, meetingEnded, recallBotUrl, recallTranscriptDelivery, transcriptLines, verifyRecallRequest } from "./meeting/recall.js";
 import { applyPlayedFloor, meetingLineClosesFloor, meetingLineShouldAnswer, meetingPresenceLine, noteMeetingHeard, refreshMeetingFloor, speakMeetingTurn } from "./meeting/voice.js";
+import { claimMeetingSpeech, keepRoomTranscript, rememberMeetingLine, scheduleMeetingSpeech } from "./meeting/speech-gate.js";
 import { createMeetingFollowups, parseFollowupValue } from "./meeting/followups.js";
 import { createSupabaseFollowupStore } from "./meeting/followup-store.js";
 import { acceptMeetingEnd, buildMeetingFollowupInput, followupInteractionFields, validateFollowupEdit } from "./meeting/live-followups.js";
@@ -82,7 +83,7 @@ import { ASK_UNAVAILABLE, askSpendsQuota, humanAskText, runAsk } from "./ask/run
 import { openRouterConfig } from "./openrouter.js";
 import { answerSlackQuestion, claimSlackAsk, findReplyFile, invitedFileRows, postSlackReply, prepareSlackCaption, slackChannelMembers, slackFileBytes } from "./slack/reply.js";
 import { slackBotUserIds, slackDelivery, slackEventHasFiles, verifySlackRequest } from "./slack/sign.js";
-import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, noteMeetingCall, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded, warmProofs } from "./typed-path.js";
+import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, noteMeetingCall, noteMeetingLines, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded, warmProofs } from "./typed-path.js";
 import { wireCalls } from "./tatum/client.js";
 import { createTenantBind, requiresDurableBind } from "./tenant-bind.js";
 import { createAdminStore } from "./admin-store.js";
@@ -1606,7 +1607,10 @@ export function createApp(options = {}) {
             }
             const speakerName = typeof participant?.name === "string" ? participant.name : "";
             const heardDelivery = speakerName ? { ...delivery, speakerName } : delivery;
-            if (!delivery.partial) noteMeetingHeard(current, heardDelivery);
+            if (!delivery.partial) {
+              noteMeetingHeard(current, heardDelivery);
+              if (botId) rememberMeetingLine(current, botId, { speaker: speakerName || "Someone", text: delivery.text });
+            }
             if (botId) {
               const played = await playedMeetingFloor(workspace, botId, env, workspace.fetchImpl);
               applyPlayedFloor(current, played, botId, meetingFloorClosedAt(workspace, botId));
@@ -1652,21 +1656,36 @@ export function createApp(options = {}) {
                 },
               }).catch(() => {});
             };
-            // A partial is an intermediate. It can answer a check early. It is not a keep.
+            // A partial is an intermediate. It does not speak. A finished line waits, then speaks once.
             if (delivery.partial) {
               if (answerLine && delivery.room?.id) {
                 current.hearingArmedRooms ??= new Set();
                 current.hearingArmedRooms.add(delivery.room.id);
               }
-              if (answerLine && presence && !seenDelivery) startSpeech();
             } else if (answerLine && !seenDelivery) {
-              startSpeech();
+              const queue = current.meetingSpeech || (current.meetingSpeech = { items: [], seq: 0 });
+              const scheduled = scheduleMeetingSpeech(queue, {
+                partial: false,
+                text: delivery.text,
+                name: current.hearing?.name || "",
+                id: delivery.deliveryId,
+              }, Date.now());
+              if (scheduled.release) {
+                const generation = scheduled.generation;
+                voiceWork = (async () => {
+                  await new Promise((resolve) => setTimeout(resolve, scheduled.holdMs));
+                  if (!claimMeetingSpeech(queue, generation, Date.now())) return;
+                  startSpeech();
+                  await voiceWork;
+                })().catch(() => {});
+              }
             }
             if (!delivery.partial) {
               if (!current.readReport?.ok) current = await prepareWorkspace(workspace, companyId);
               await handleUtterance({ ...heardDelivery, session: current }, depsFor(workspace, companyId));
               if (delivery.room?.id) {
                 await noteMeetingCall(current, depsFor(workspace, companyId), delivery.room.id, "in_call_recording").catch(() => {});
+                keepRoomTranscript(current, delivery.room.id, { speaker: speakerName || "Someone", text: delivery.text });
               }
             }
             if (!delivery.partial && companyId && workspace.followups && workspace.followupStore) {
@@ -3650,14 +3669,19 @@ async function loadRoomMedia(workspace, id, current, empty) {
       body.lines = await recallSpokenLines(workspace, body.transcriptUrl);
     }
   }
+  const tenant = typeof workspace.mediaTenantId === "string" ? workspace.mediaTenantId : "";
   if (body.call) {
-    const tenant = typeof workspace.mediaTenantId === "string" ? workspace.mediaTenantId : "";
     await noteMeetingCall(current, depsFor(workspace, tenant), id, body.call).catch(() => {});
+  }
+  const room = (current.rooms || []).find((item) => item.id === id);
+  if (Array.isArray(body.lines) && body.lines.length) {
+    await noteMeetingLines(current, depsFor(workspace, tenant), id, body.lines).catch(() => {});
+  } else if (Array.isArray(room?.lines) && room.lines.length) {
+    body.lines = room.lines;
   }
   if (body.startedAt || body.duration > 0) {
     await persistRecordingSpan(workspace, current, id, body.startedAt, body.duration);
   }
-  const room = (current.rooms || []).find((item) => item.id === id);
   if (body.title) {
     current.roomNames ??= {};
     if (!current.roomNames[id]) current.roomNames[id] = body.title;

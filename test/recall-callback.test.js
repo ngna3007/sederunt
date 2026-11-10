@@ -607,7 +607,7 @@ test("a presence line is spoken while the company index is still reading", async
     });
     const hit = await Promise.race([
       playedGate.then(() => "played"),
-      new Promise((resolve) => setTimeout(() => resolve("timeout"), 1000)),
+      new Promise((resolve) => setTimeout(() => resolve("timeout"), 2500)),
     ]);
     assert.equal(hit, "played");
     assert.equal(sawChat, false);
@@ -675,12 +675,21 @@ test("a partial transcript answers a check and is not kept", async () => {
     });
   };
   try {
+    const waitPlays = async (count) => {
+      const start = Date.now();
+      while (plays < count && Date.now() - start < 2500) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    };
     assert.equal((await deliver("transcript.partial_data", ["hey", "adam", "can", "you", "hear", "me"], "msg-partial")).status, 204);
-    assert.equal(plays, 1);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(plays, 0);
     assert.equal(remembered.some((row) => JSON.stringify(row).includes("hear me")), false);
     assert.equal((await deliver("transcript.data", ["hey", "adam", "can", "you", "hear", "me"], "msg-final-check")).status, 204);
+    await waitPlays(1);
     assert.equal(plays, 1);
     assert.equal((await deliver("transcript.data", ["what", "time", "is", "the", "launch"], "msg-follow")).status, 204);
+    await waitPlays(2);
     assert.equal(plays, 2);
   } finally {
     await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));

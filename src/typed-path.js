@@ -2295,6 +2295,33 @@ function absorbPreference(session, pref) {
   if (pref.replacedBy && !existing.replacedBy) existing.replacedBy = pref.replacedBy;
 }
 
+function copySpokenLines(lines) {
+  if (!Array.isArray(lines)) return [];
+  const out = [];
+  for (const line of lines) {
+    const text = typeof line?.text === "string" ? line.text.replace(/\s+/g, " ").trim().slice(0, 2000) : "";
+    if (!text) continue;
+    const speaker = typeof line?.speaker === "string" && line.speaker.trim() ? line.speaker.trim().slice(0, 80) : "Someone";
+    const start = Number.isFinite(line?.start) ? line.start : 0;
+    const end = Number.isFinite(line?.end) && line.end >= start ? line.end : start;
+    out.push({ speaker, text, start, end });
+    if (out.length >= 400) break;
+  }
+  return out;
+}
+
+function copyExchanges(rows) {
+  if (!Array.isArray(rows)) return [];
+  const out = [];
+  for (const row of rows) {
+    const user = typeof row?.user === "string" ? row.user.replace(/\s+/g, " ").trim().slice(0, 1000) : "";
+    const assistant = typeof row?.assistant === "string" ? row.assistant.replace(/\s+/g, " ").trim().slice(0, 500) : "";
+    if (!user && !assistant) continue;
+    out.push({ user, assistant });
+  }
+  return out.slice(-3);
+}
+
 function copyOpenedRoom(doc) {
   const room = doc?.room;
   if (!room || typeof room.id !== "string" || !room.id) return null;
@@ -2304,6 +2331,8 @@ function copyOpenedRoom(doc) {
   if (!platform && !call) return null;
   const startedAt = typeof room.startedAt === "string" ? room.startedAt : "";
   const duration = Number.isFinite(room.duration) && room.duration > 0 ? Math.round(room.duration) : 0;
+  const lines = copySpokenLines(room.lines);
+  const exchanges = copyExchanges(room.exchanges);
   return {
     id: room.id,
     kind: "meeting",
@@ -2312,6 +2341,8 @@ function copyOpenedRoom(doc) {
     ...(call ? { call } : {}),
     ...(startedAt ? { startedAt } : {}),
     ...(duration ? { duration } : {}),
+    ...(lines.length ? { lines } : {}),
+    ...(exchanges.length ? { exchanges } : {}),
   };
 }
 
@@ -2325,6 +2356,10 @@ function absorbOpenedRoom(session, room) {
     if (!existing.startedAt && typeof room.startedAt === "string" && room.startedAt) existing.startedAt = room.startedAt;
     if (room.duration > 0 && !(existing.duration > 0)) existing.duration = Math.round(room.duration);
     if (meetingCallRank(room.call) > meetingCallRank(existing.call)) existing.call = room.call;
+    if (Array.isArray(room.lines) && room.lines.length > (Array.isArray(existing.lines) ? existing.lines.length : 0)) {
+      existing.lines = room.lines;
+    }
+    if (Array.isArray(room.exchanges) && room.exchanges.length) existing.exchanges = room.exchanges.slice(-3);
     return;
   }
   session.rooms.push(room);
@@ -2365,6 +2400,47 @@ export async function noteMeetingCall(session, deps, roomId, code) {
       call: code,
       ...(typeof room.startedAt === "string" && room.startedAt ? { startedAt: room.startedAt } : {}),
       ...(room.duration > 0 ? { duration: Math.round(room.duration) } : {}),
+    },
+  });
+  return true;
+}
+
+/**
+ * Keep the spoken lines on the meeting. A later, longer transcript replaces
+ * a shorter one. The remember text does not repeat the words.
+ *
+ * @param {ReturnType<import("./session.js").createSession>} session
+ * @param {{ memory?: { remember?: Function }, tenantId?: string }} deps
+ * @param {string} roomId
+ * @param {Array<{ speaker?: string, text?: string, start?: number, end?: number }>} lines
+ */
+export async function noteMeetingLines(session, deps, roomId, lines) {
+  const id = typeof roomId === "string" ? roomId.trim() : "";
+  const spoken = copySpokenLines(lines);
+  if (!id || !spoken.length) return false;
+  const current = ensureSession(session);
+  const room = current.rooms.find((item) => item.id === id);
+  if (!room) return false;
+  const previous = Array.isArray(room.lines) ? room.lines.length : 0;
+  if (spoken.length > previous) room.lines = spoken;
+  const platform = MEETING_PLATFORMS.has(room.platform) ? room.platform : "";
+  const call = meetingCallRank(room.call) ? room.call : "";
+  if ((!platform && !call) || previous >= spoken.length) return spoken.length > previous;
+  const exchanges = copyExchanges(room.exchanges);
+  await remember(deps, {
+    account: "company",
+    kind: "room",
+    text: `${id} meeting transcript`,
+    idempotencyKey: `${id}:transcript:${room.lines.length}`,
+    room: {
+      id,
+      kind: "meeting",
+      ...(platform ? { platform } : {}),
+      ...(call ? { call } : {}),
+      ...(typeof room.startedAt === "string" && room.startedAt ? { startedAt: room.startedAt } : {}),
+      ...(room.duration > 0 ? { duration: Math.round(room.duration) } : {}),
+      lines: room.lines,
+      ...(exchanges.length ? { exchanges } : {}),
     },
   });
   return true;

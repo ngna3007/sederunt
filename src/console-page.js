@@ -1105,7 +1105,7 @@ ${inviteDialog}
 <script type="module">
 import { formatActivitySentence, formatConsoleWhen, groupActivity, recordingLength, relativeTime, selectActivity, undoPrompt, zoneShortName } from "/console/activity.js";
 import { wireBotCard } from "/console/bot-card.js";
-import { rankDecisions } from "/console/room-match.js";
+import { compareRoomsNewestFirst, mergeRoomLists, rankDecisions } from "/console/room-match.js";
 wireBotCard();
 var sessionWhen = document.getElementById("account-detail-expiry");
 if (sessionWhen && sessionWhen.dataset.at) {
@@ -1997,7 +1997,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     }
     if (explorer) explorer.hidden = false;
     if (notes) notes.hidden = true;
-    var rooms = (state && state.rooms) || [];
+    var rooms = ((state && state.rooms) || []).slice().sort(compareRoomsNewestFirst);
     var specs = [];
     var usedTitle = {};
     waiting.forEach(function (item) {
@@ -2035,11 +2035,11 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
     var shown = specs.length;
     var onHome = sectionName === "home";
-    var pages = onHome ? 1 : Math.max(1, Math.ceil(shown / roomPageSize));
+    var start = 0;
+    var pageSize = shown;
+    var pages = 1;
     if (roomPage > pages - 1) roomPage = pages - 1;
     if (roomPage < 0) roomPage = 0;
-    var start = onHome ? 0 : roomPage * roomPageSize;
-    var pageSize = onHome ? 3 : roomPageSize;
     var explorerHead = document.querySelector("#rooms .explorer-head");
     if (explorerHead) explorerHead.hidden = onHome;
     // Home: a label so the recent rooms read as their own block under the meetings list.
@@ -2067,7 +2067,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var roomList = document.getElementById("room-list");
       if (roomList && roomList.parentNode) roomList.parentNode.insertBefore(allRooms, roomList.nextSibling);
     }
-    allRooms.hidden = !(onHome && shown > 3);
+    allRooms.hidden = !(onHome && shown > pageSize);
     var total = rooms.length + waiting.length;
     var empty = document.getElementById("room-empty");
     var emptyLine = document.getElementById("room-empty-line");
@@ -2771,6 +2771,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function paint(next) {
     var shell = next.reading === true && next.shell === true;
     var keepRooms = shell && state && state.rooms && state.rooms.length > 0;
+    if (!keepRooms && state && state.workspace && next && state.workspace === next.workspace && (next.read === "ok" || next.read === "empty") && Array.isArray(state.rooms) && Array.isArray(next.rooms)) {
+      next = Object.assign({}, next, { rooms: mergeRoomLists(state.rooms, next.rooms) });
+    }
     if (keepRooms) {
       if (next.meetings && next.meetings.length) state.meetings = next.meetings;
     } else {
@@ -3281,6 +3284,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     placeRoomChrome();
     syncCalendarAsk();
     if (name === "mcp") loadMcp();
+    if (name === "home" || name === "rooms") paintRooms();
   }
 
   function closeNav() {
@@ -4025,6 +4029,47 @@ if (sessionWhen && sessionWhen.dataset.at) {
     openDialog("decision-dialog");
   }
 
+  function paintRoomHistory() {
+    var box = document.getElementById("file-history");
+    if (!box) return;
+    clear("file-history");
+    var roomActivity = activityRows(fileRoom).filter(function (row) { return row.kind !== "resolve" && row.kind !== "supersede"; });
+    if (roomActivity.length) {
+      paintActivity(box, roomActivity, { showRoom: false, viewRoom: fileRoom });
+      return;
+    }
+    var lines = roomMediaState && roomMediaState.forRoom === fileRoom && Array.isArray(roomMediaState.lines)
+      ? roomMediaState.lines
+      : [];
+    if (!lines.length) {
+      var quiet = document.createElement("p");
+      quiet.className = "empty-title";
+      quiet.textContent = "No activity for this room yet.";
+      var quietAside = document.createElement("p");
+      quietAside.className = "meta";
+      quietAside.textContent = "Requests, changes and failures show up here.";
+      box.append(quiet, quietAside);
+      return;
+    }
+    lines.forEach(function (line) {
+      if (!line || !line.text) return;
+      var row = document.createElement("div");
+      row.className = "activity-row";
+      var copy = document.createElement("p");
+      var who = document.createElement("strong");
+      who.textContent = line.speaker || "Someone";
+      copy.append(who);
+      copy.append(document.createTextNode(" " + line.text));
+      var meta = document.createElement("div");
+      meta.className = "activity-meta";
+      var time = document.createElement("time");
+      time.textContent = clockText(line.start);
+      meta.append(time);
+      row.append(copy, meta);
+      box.append(row);
+    });
+  }
+
   function renderFile() {
     var people = fileRoom ? peopleFor(fileRoom) : [];
     var room = (state && state.rooms || []).filter(function (item) { return item.id === fileRoom; })[0];
@@ -4159,19 +4204,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       }
       document.getElementById("file-decisions").append(line);
     });
-    clear("file-history");
-    var roomActivity = activityRows(fileRoom).filter(function (row) { return row.kind !== "resolve" && row.kind !== "supersede"; });
-    if (!roomActivity.length) {
-      var quiet = document.createElement("p");
-      quiet.className = "empty-title";
-      quiet.textContent = "No activity for this room yet.";
-      var quietAside = document.createElement("p");
-      quietAside.className = "meta";
-      quietAside.textContent = "Requests, changes and failures show up here.";
-      document.getElementById("file-history").append(quiet, quietAside);
-    } else {
-      paintActivity(document.getElementById("file-history"), roomActivity, { showRoom: false, viewRoom: fileRoom });
-    }
+    paintRoomHistory();
     renderWaiting();
     renderFiles();
     renderOutside();
@@ -5172,6 +5205,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       paintFactsMedia(roomMediaState);
       paintPresent(roomMediaState);
       renderTranscript(transcriptSource());
+      paintRoomHistory();
       loadSpeakerLanes().then(function () { paintTimeline(); });
       return;
     }
@@ -5216,6 +5250,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
         renderFacts(roomLive || room || {}, { when: media.startedAt }, fileRoom ? decisionsFor(fileRoom) : []);
       }
       renderTranscript(transcriptSource());
+      paintRoomHistory();
       loadSpeakerLanes().then(function () { paintTimeline(); });
     }).catch(function () {
       roomMediaState = { state: "novideo", forRoom: asked, duration: 0, lines: [], segments: [], events: [], videoUrl: "", transcriptUrl: "", call: "" };

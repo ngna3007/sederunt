@@ -62,6 +62,78 @@ export function decisionRoomIds(text, decisions) {
   return ids;
 }
 
+const LIVE_ROOM_CALLS = new Set([
+  "joining_call",
+  "in_waiting_room",
+  "in_call_not_recording",
+  "in_call_recording",
+]);
+
+const ROOM_TEXT_FIELDS = ["startedAt", "recordingStart", "platform", "name", "call", "channel"];
+
+function roomText(value) {
+  return typeof value === "string" && value.trim() ? value : "";
+}
+
+function roomRecency(room) {
+  const when = Date.parse(room?.startedAt || room?.recordingStart || "");
+  if (Number.isFinite(when)) return when;
+  if (LIVE_ROOM_CALLS.has(room?.call)) return Number.MAX_SAFE_INTEGER;
+  return 0;
+}
+
+/** Newest start first. A live call with no start ranks as now. Undated finished rooms stay put. */
+export function compareRoomsNewestFirst(left, right) {
+  return roomRecency(right) - roomRecency(left);
+}
+
+function mergeRoomRecord(prior, incoming) {
+  const room = { ...prior, ...incoming };
+  for (const key of ROOM_TEXT_FIELDS) {
+    const nextValue = roomText(incoming?.[key]);
+    if (nextValue) room[key] = nextValue;
+    else {
+      const prevValue = roomText(prior?.[key]);
+      if (prevValue) room[key] = prevValue;
+    }
+  }
+  const nextDuration = Number(incoming?.duration);
+  const prevDuration = Number(prior?.duration);
+  if (nextDuration > 0) room.duration = nextDuration;
+  else if (prevDuration > 0) room.duration = prevDuration;
+  const nextLines = Array.isArray(incoming?.lines) ? incoming.lines : null;
+  const prevLines = Array.isArray(prior?.lines) ? prior.lines : null;
+  if (prevLines && (!nextLines || prevLines.length > nextLines.length)) room.lines = prevLines;
+  else if (nextLines) room.lines = nextLines;
+  return room;
+}
+
+/** Incoming rows win field-by-field. A room missing from the later list stays. */
+export function mergeRoomLists(prior, incoming) {
+  const previous = Array.isArray(prior) ? prior : [];
+  const next = Array.isArray(incoming) ? incoming : [];
+  const byId = new Map();
+  for (const room of previous) {
+    if (!room?.id || byId.has(room.id)) continue;
+    byId.set(room.id, room);
+  }
+  const order = [];
+  const seen = new Set();
+  for (const room of next) {
+    if (!room?.id || seen.has(room.id)) continue;
+    seen.add(room.id);
+    order.push(room.id);
+    const old = byId.get(room.id);
+    byId.set(room.id, old ? mergeRoomRecord(old, room) : { ...room });
+  }
+  for (const room of previous) {
+    if (!room?.id || seen.has(room.id)) continue;
+    seen.add(room.id);
+    order.push(room.id);
+  }
+  return order.map((id) => byId.get(id));
+}
+
 export function roomsMatching(text, rooms) {
   const ranked = (rooms || []).map((room) => ({ id: room?.id, score: scoreRoom(text, room) })).filter((room) => room.id && room.score > 0);
   if (!ranked.length) return [];

@@ -630,6 +630,11 @@ button.account:hover, button.account.open { background: var(--sidebar-accent); }
   background: var(--background);
 }
 #home, #onboard { flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; }
+#overview { min-width: 0; max-width: 100%; overflow: visible; }
+#overview .settings-card { overflow: visible; }
+#overview .card-help,
+#overview #hearing-help,
+#members-card .card-help { white-space: normal; overflow-wrap: anywhere; }
 #read-error { flex: none; width: 100%; margin: 0 0 16px; }
 #read-error.state-info { background: var(--muted); border-color: var(--border); }
 body.is-reading #home-empty, body.is-reading .explorer, body.is-reading #room-empty { display: none !important; }
@@ -4556,10 +4561,10 @@ body.is-reading #rooms .explorer { display: none !important; }
   padding: 0 !important;
   width: auto !important;
   min-height: 64px;
-  height: 64px;
+  height: auto;
   box-sizing: border-box;
 }
-.settings-card .connectors > .status-head { height: 40px; min-height: 40px; }
+.settings-card .connectors > .status-head { height: auto; min-height: 40px; }
 
 @media (min-width: 701px) {
   #rooms .row-view,

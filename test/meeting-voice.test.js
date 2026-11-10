@@ -559,10 +559,10 @@ test("a presence partial does not open the floor, and the final does", async () 
     fetchImpl: http.fetch,
   };
   const early = await speakMeetingTurn({ ...base, partial: true, deliveryId: "partial-floor" });
-  assert.equal(early.spoke, true);
+  assert.equal(early.spoke, false);
   assert.equal(session.meetingFloor, undefined);
   const finalLine = await speakMeetingTurn({ ...base, deliveryId: "final-floor" });
-  assert.equal(finalLine.spoke, false);
+  assert.equal(finalLine.spoke, true);
   assert.equal(session.meetingFloor.speaker, "id:100");
   const again = { hearing: { name: "Adam" } };
   const repeated = {
@@ -572,10 +572,11 @@ test("a presence partial does not open the floor, and the final does", async () 
     utteranceId: "tr-same",
     deliveryId: "same-line",
   };
-  assert.equal((await speakMeetingTurn({ ...repeated, partial: true })).spoke, true);
+  assert.equal((await speakMeetingTurn({ ...repeated, partial: true })).spoke, false);
   assert.equal(again.meetingFloor, undefined);
-  assert.equal((await speakMeetingTurn(repeated)).spoke, false);
+  assert.equal((await speakMeetingTurn(repeated)).spoke, true);
   assert.equal(again.meetingFloor.speaker, "id:100");
+  assert.equal((await speakMeetingTurn(repeated)).spoke, false);
 });
 
 test("a final does not open the floor when the answer never played", async () => {
@@ -634,13 +635,13 @@ test("a presence final during playback still lets the check finish", async () =>
     env,
     fetchImpl: http.fetch,
   };
-  const partial = speakMeetingTurn({ ...base, partial: true, deliveryId: "during-partial" });
+  const partial = await speakMeetingTurn({ ...base, partial: true, deliveryId: "during-partial" });
+  assert.equal(partial.spoke, false);
+  const finalLine = speakMeetingTurn({ ...base, deliveryId: "during-final" });
   await ready;
-  const finalLine = await speakMeetingTurn({ ...base, deliveryId: "during-final" });
-  assert.equal(finalLine.spoke, false);
   assert.equal(session.meetingFloor, undefined);
   release();
-  assert.equal((await partial).spoke, true);
+  assert.equal((await finalLine).spoke, true);
   assert.equal(session.meetingFloor.speaker, "id:100");
   const said = http.calls.filter((call) => call.url.includes("/audio/speech")).map((call) => JSON.parse(call.init.body).input);
   assert.deepEqual(said, ["Yes, I can hear you."]);
@@ -1208,7 +1209,7 @@ test("okay while the reply is playing does not replace it", async () => {
   releasePlay();
   assert.equal((await first).spoke, true);
   const said = http.calls.filter((call) => call.url.includes("/audio/speech")).map((call) => JSON.parse(call.init.body).input);
-  assert.deepEqual(said, ["Yes, I can hear you."]);
+  assert.deepEqual(said, ["Hey! What do you need?"]);
 });
 
 test("okay on an open floor does not start a reply, and thanks does not either", async () => {
