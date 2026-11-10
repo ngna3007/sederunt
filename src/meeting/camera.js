@@ -133,9 +133,43 @@ if (ear) setInterval(poll, 300);
 </html>
 `;
 
-/** The camera page. The product title stays Sederunt. The script reads the guest name. */
-export function renderCameraPage() {
-  return CAMERA_TEMPLATE;
+const SPIKE_SCRIPT = `<script>
+(function () {
+  var params = new URLSearchParams(location.search);
+  var ear = params.get("ear") || "";
+  if (!/^[a-f0-9]{32,64}$/.test(ear)) return;
+  function post(message) {
+    var body;
+    try { body = JSON.stringify(message).slice(0, 60000); }
+    catch (error) { return; }
+    fetch("/api/meeting/spike/transcript", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-meeting-ear": ear },
+      body: body
+    }).catch(function () {});
+  }
+  post({ event: "spike-page" });
+  var ws;
+  try { ws = new WebSocket("wss://meeting-data.bot.recall.ai/api/v1/transcript"); }
+  catch (error) { post({ event: "ws-error" }); return; }
+  ws.onopen = function () { post({ event: "ws-open" }); };
+  ws.onclose = function (ev) { post({ event: "ws-close", code: ev && ev.code }); };
+  ws.onerror = function () { post({ event: "ws-error" }); };
+  ws.onmessage = function (ev) {
+    var message;
+    try { message = JSON.parse(ev.data); }
+    catch (error) { post({ event: "ws-parse" }); return; }
+    post(message);
+  };
+})();
+</script>`;
+
+/** The camera page. The product title stays Sederunt. The script reads the guest name. A spike page also opens the in-page transcript socket. */
+export function renderCameraPage(_name, options = {}) {
+  if (options?.spike !== true) return CAMERA_TEMPLATE;
+  return CAMERA_TEMPLATE
+    .replace("</head>", "<meta http-equiv=\"Content-Security-Policy\" content=\"connect-src 'self' wss://meeting-data.bot.recall.ai\">\n</head>")
+    .replace("</body>", `${SPIKE_SCRIPT}\n</body>`);
 }
 
 export const CAMERA_PAGE = renderCameraPage();

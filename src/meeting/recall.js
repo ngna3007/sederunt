@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { DEFAULT_BOT_NAME, normalizeBotName } from "../bot/identity.js";
 import { addressesHearing, normalizeHearing } from "../hearing.js";
+import { spikeCameraOrigin, spikeEnabled } from "./spike.js";
 
 /**
  * Recall signs the raw body as id.timestamp.payload with the workspace secret.
@@ -69,7 +70,7 @@ export function createMeetingAdapter(env = process.env, options = {}) {
       const guest = normalizeHearing({ name: input?.name }).name;
       const botName = normalizeBotName(input?.botName) || DEFAULT_BOT_NAME;
       const ear = randomBytes(24).toString("hex");
-      const cameraUrl = cameraPage(env.SEDERUNT_PUBLIC_ORIGIN, guest, ear);
+      const cameraUrl = cameraPage(spikeCameraOrigin(env), guest, ear, spikeEnabled(env));
       if (!key || !env.RECALL_WEBHOOK_SECRET || !meetingUrl || !cameraUrl) throw new Error("Meeting join is not configured");
       let response;
       try {
@@ -501,7 +502,7 @@ function httpsUrl(value) {
   }
 }
 
-function cameraPage(origin, name, ear) {
+function cameraPage(origin, name, ear, spike = false) {
   const url = httpsUrl(origin);
   if (!url) return "";
   const host = new URL(url).hostname;
@@ -510,5 +511,6 @@ function cameraPage(origin, name, ear) {
   const page = new URL("/meeting", new URL(url).origin);
   page.searchParams.set("name", guest);
   if (typeof ear === "string" && /^[a-f0-9]{32,64}$/.test(ear)) page.searchParams.set("ear", ear);
+  if (spike) page.searchParams.set("spike", "1");
   return page.toString();
 }

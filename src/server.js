@@ -28,7 +28,8 @@ import { loadLinearToken } from "./linear/token.js";
 import { createLinearInstallationStore } from "./linear/installations.js";
 import { handleLinearOAuth, linearClientMetadata, tenantLinearClient } from "./linear/oauth.js";
 import { renderCameraPage } from "./meeting/camera.js";
-import { bindMeetingEar, clearPlayedFloor, meetingFloorClosedAt, offerMeetingClip, playedMeetingFloor, requestMeetingHold, stageMeetingFloor, takeMeetingVoice } from "./meeting/voice-bus.js";
+import { loadSpikeShapes, measureSpeechProbe, pushSpikeShape, readSpikeShapes, saveSpikeShape, spikeAuthorized, spikeEnabled, transcriptEventShape } from "./meeting/spike.js";
+import { bindMeetingEar, clearPlayedFloor, meetingFloorClosedAt, offerMeetingClip, playedMeetingFloor, requestMeetingHold, stageMeetingFloor, takeMeetingVoice, validMeetingEar } from "./meeting/voice-bus.js";
 import { createMeetingAdapter, mediaFromBot, meetingCallUpdate, meetingDoorReady, meetingEnded, recallBotUrl, recallTranscriptDelivery, transcriptLines, verifyRecallRequest } from "./meeting/recall.js";
 import { applyPlayedFloor, claimMeetingEvent, claimMeetingEventLocal, meetingEventKey, meetingLineClosesFloor, meetingLineJoinsOpenTurn, meetingLineShouldAnswer, noteMeetingHeard, refreshMeetingFloor, releaseMeetingEvent, releaseMeetingEventLocal, speakMeetingTurn } from "./meeting/voice.js";
 import { keepRoomTranscript, meetingSpeechBook, rememberMeetingLine, scheduleMeetingSpeech, speechSpeakerKey, waitForMeetingSpeech } from "./meeting/speech-gate.js";
@@ -1298,7 +1299,65 @@ export function createApp(options = {}) {
       return;
     }
     if (req.method === "GET" && url.pathname === "/meeting") {
-      send(res, 200, "text/html; charset=utf-8", renderCameraPage(url.searchParams.get("name") || ""));
+      const spike = url.searchParams.get("spike") === "1" && spikeEnabled(env);
+      send(res, 200, "text/html; charset=utf-8", renderCameraPage(url.searchParams.get("name") || "", { spike }));
+      return;
+    }
+    if (url.pathname === "/api/meeting/spike/tts" || url.pathname === "/api/meeting/spike/transcript") {
+      if (!spikeEnabled(env)) {
+        send(res, 404, "text/plain; charset=utf-8", "");
+        return;
+      }
+      const ear = headerValue(req.headers["x-meeting-ear"]);
+      if (req.method === "POST" && url.pathname === "/api/meeting/spike/transcript") {
+        if (!validMeetingEar(ear)) {
+          send(res, 401, "text/plain; charset=utf-8", "");
+          return;
+        }
+        let message = null;
+        try {
+          const raw = await readBody(req);
+          if (raw.length > 60000) {
+            send(res, 413, "text/plain; charset=utf-8", "");
+            return;
+          }
+          message = raw.trim() ? JSON.parse(raw) : {};
+        } catch {
+          send(res, 400, "text/plain; charset=utf-8", "");
+          return;
+        }
+        const shape = transcriptEventShape(message, Date.now());
+        pushSpikeShape(workspace, ear, shape);
+        await saveSpikeShape(env, workspace.fetchImpl, ear, shape);
+        send(res, 204, "text/plain; charset=utf-8", "");
+        return;
+      }
+      if (!spikeAuthorized(env, headerValue(req.headers["x-sederunt-spike"]))) {
+        send(res, 404, "text/plain; charset=utf-8", "");
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/meeting/spike/transcript") {
+        if (!validMeetingEar(ear)) {
+          send(res, 401, "text/plain; charset=utf-8", "");
+          return;
+        }
+        const local = readSpikeShapes(workspace, ear);
+        const remote = local.length ? [] : await loadSpikeShapes(env, workspace.fetchImpl, ear);
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify({ events: local.length ? local : remote }));
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/meeting/spike/tts") {
+        const { key } = openRouterConfig(env);
+        const report = await measureSpeechProbe({ fetchImpl: workspace.fetchImpl, key });
+        const body = JSON.stringify(report);
+        if (key && body.includes(key)) {
+          send(res, 500, "application/json; charset=utf-8", JSON.stringify({ error: "redacted" }));
+          return;
+        }
+        send(res, 200, "application/json; charset=utf-8", body);
+        return;
+      }
+      send(res, 404, "text/plain; charset=utf-8", "");
       return;
     }
     if (req.method === "GET" && url.pathname === "/meeting/voice") {
