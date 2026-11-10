@@ -82,11 +82,9 @@ export function parseActionJson(text) {
 /**
  * @param {{ transcript: string, llm: { complete: Function } }} input
  */
-export async function extractActions({ transcript, llm }) {
-  const completed = await llm.complete({
-    messages: [{ role: "user", text: String(transcript || "") }],
-    responseFormat: "json",
-  });
+export async function extractActions({ transcript, llm, timeoutMs, signal } = {}) {
+  const completed = await completeWithin(llm, transcript, timeoutMs, signal);
+  if (completed?.timeout) return { ok: false, errors: ["timeout"], items: [] };
   const text = typeof completed === "string" ? completed : completed?.text || "";
   let parsed;
   try {
@@ -146,6 +144,36 @@ export function editModal(item) {
       },
     ],
   };
+}
+
+async function completeWithin(llm, transcript, timeoutMs, signal) {
+  const number = Number(timeoutMs);
+  const ms = Number.isFinite(number) && number > 0 ? number : 10000;
+  let timer;
+  let onAbort;
+  try {
+    return await new Promise((resolve, reject) => {
+      const fail = () => reject(Object.assign(new Error("timeout"), { code: "timeout" }));
+      timer = setTimeout(fail, ms);
+      if (signal) {
+        if (signal.aborted) fail();
+        else {
+          onAbort = fail;
+          signal.addEventListener("abort", onAbort, { once: true });
+        }
+      }
+      Promise.resolve(llm.complete({
+        messages: [{ role: "user", text: String(transcript || "") }],
+        responseFormat: "json",
+      })).then(resolve, reject);
+    });
+  } catch (error) {
+    if (error?.code === "timeout") return { timeout: true };
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+  }
 }
 
 function groupByRequester(items) {

@@ -12,15 +12,41 @@ const toolParameters = {
   required: ["memberId", "text"],
 };
 
+const factOutput = {
+  type: "object",
+  properties: {
+    facts: {
+      type: "array",
+      maxItems: 3,
+      items: {
+        type: "object",
+        properties: {
+          text: { type: "string" },
+          sourceId: { type: "string" },
+        },
+        required: ["text", "sourceId"],
+      },
+    },
+  },
+  required: ["facts"],
+};
+
 /** Tool list shared by stdio and the HTTP MCP endpoint. */
 export function mcpToolList() {
-  return mcpTools.map((name) => ({
-    name,
-    description: name === "recall"
-      ? "Answer a question about a room the caller was in. Same answer as the dashboard chat and the Slack bot."
-      : "Submit one requested action, such as a Linear ticket. A write waits until Ask allows it.",
-    inputSchema: toolParameters,
-  }));
+  return [
+    {
+      name: "recall",
+      description: "Use when someone asks what was decided or said in this room. Pass the question as text. Example: what did we decide about the launch. Returns at most three facts, each with a source id.",
+      inputSchema: toolParameters,
+      outputSchema: factOutput,
+    },
+    {
+      name: "act",
+      description: "Use when someone asks to file or change something, such as a Linear ticket. Pass the request as text. Example: create a Linear issue for the onboarding email. A write waits for approval and is not done yet.",
+      inputSchema: toolParameters,
+      outputSchema: factOutput,
+    },
+  ];
 }
 
 /**
@@ -52,7 +78,7 @@ export async function dispatchMcp(message, session, deps, context) {
     if (typeof name === "string" && name.includes("__")) return presentCustomToolResult(result);
     return {
       content: [{ type: "text", text: JSON.stringify(result) }],
-      structuredContent: result,
+      structuredContent: structuredFacts(result),
     };
   }
   return null;
@@ -157,6 +183,33 @@ export function bindToolMember(message, configured) {
   };
 }
 
+/**
+ * At most three facts. Each fact is a sentence plus the decision id it came from.
+ * The text content of the tool result stays the full record.
+ *
+ * @param {object | null | undefined} result
+ */
+export function structuredFacts(result) {
+  const facts = [];
+  const seen = new Set();
+  const push = (text, sourceId) => {
+    if (facts.length >= 3) return;
+    const line = String(text || "").replace(/\s+/g, " ").trim();
+    const id = String(sourceId || "").trim();
+    if (!line || !id || seen.has(id)) return;
+    seen.add(id);
+    facts.push({ text: line.slice(0, 240), sourceId: id });
+  };
+  for (const row of Array.isArray(result?.visible) ? result.visible : []) {
+    push(row?.text, row?.id || row?.sourceId);
+  }
+  if (!facts.length) {
+    const line = String(result?.body || "").split("\n").map((part) => part.trim()).find(Boolean) || "";
+    push(line, result?.decisionId || result?.actionId || "");
+  }
+  return { facts };
+}
+
 export function memberRefusal(reason) {
   return {
     status: "recorded",
@@ -213,6 +266,8 @@ export async function handleMcpRequest(message, deps, context) {
       calendarSave: context?.calendarSave,
       fetch: context?.fetch,
       origin: context?.origin,
+      signal: context?.signal,
+      timeoutMs: context?.toolTimeoutMs,
     });
   }
   return {

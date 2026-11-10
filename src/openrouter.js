@@ -153,6 +153,7 @@ export async function openRouterComplete(input = {}) {
   const tried = [];
   for (const model of models) {
     tried.push(model);
+    const bound = boundSignal(input.signal, roundMs(input.timeoutMs, 10000));
     try {
       const response = await fetchImpl(CHAT_URL, {
         method: "POST",
@@ -163,6 +164,7 @@ export async function openRouterComplete(input = {}) {
           "X-Title": "Sederunt",
         },
         body: JSON.stringify(completionBody(model, messages, { maxTokens: input.maxTokens })),
+        signal: bound.signal,
       });
       if (!response?.ok) {
         dropBody(response);
@@ -175,7 +177,10 @@ export async function openRouterComplete(input = {}) {
       if (!text) continue;
       return { text, used: true, model, tried };
     } catch {
+      if (input.signal?.aborted) return { text: "", used: false, model, tried };
       continue;
+    } finally {
+      bound.cancel();
     }
   }
   return { text: "", used: false, model: tried.at(-1) || models[0], tried };
@@ -230,6 +235,8 @@ export async function openRouterStream(input = {}) {
   const tools = Array.isArray(input.tools) ? input.tools : [];
   const tried = [];
   let lastError = "unavailable";
+  const bound = boundSignal(input.signal, roundMs(input.timeoutMs, 60000));
+  try {
   for (const model of models) {
     tried.push(model);
     let text = "";
@@ -250,7 +257,7 @@ export async function openRouterStream(input = {}) {
           "X-Title": "Sederunt",
         },
         body: JSON.stringify(body),
-        signal: input.signal,
+        signal: bound.signal,
       });
       if (!response?.ok || !response.body) {
         lastError = `http-${response?.status ?? 0}`;
@@ -316,9 +323,11 @@ export async function openRouterStream(input = {}) {
       return { text: trimmed, toolCalls, used: true, model, tried };
     } catch {
       const toolCalls = finishToolDeltas(toolDeltas);
-      if (input.signal?.aborted) {
+      if (input.signal?.aborted || bound.signal.aborted) {
         if (text.trim() || toolCalls.length) return { text: text.trim(), toolCalls, used: true, model, error: "aborted", tried };
-        return { text: "", toolCalls: [], used: false, model, error: "aborted", tried };
+        if (input.signal?.aborted) return { text: "", toolCalls: [], used: false, model, error: "aborted", tried };
+        lastError = "aborted";
+        break;
       }
       if (text.trim() || toolCalls.length) return { text: text.trim(), toolCalls, used: true, model, error: "network", tried };
       lastError = "network";
@@ -326,6 +335,26 @@ export async function openRouterStream(input = {}) {
     }
   }
   return { text: "", used: false, model: tried.at(-1) || models[0], error: lastError, tried };
+  } finally {
+    bound.cancel();
+  }
+}
+
+function roundMs(value, fallback) {
+  const number = Number(value);
+  if (Number.isFinite(number) && number > 0) return number;
+  return fallback;
+}
+
+function boundSignal(external, ms) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  timer.unref?.();
+  const signal = external ? AbortSignal.any([external, controller.signal]) : controller.signal;
+  return {
+    signal,
+    cancel() { clearTimeout(timer); },
+  };
 }
 
 const SPEECH_URL = "https://openrouter.ai/api/v1/audio/speech";

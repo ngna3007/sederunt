@@ -155,13 +155,13 @@ const TEXT_SCHEMA = {
 const BUILTIN_TOOLS = [
   {
     name: "recall",
-    description: "Read what this person is allowed to see in this room. Pass their question as text.",
+    description: "Use when someone asks what was decided in this room. Pass the question as text. Example: what did we decide about the launch.",
     parameters: TEXT_SCHEMA,
     actionClass: "read",
   },
   {
     name: "act",
-    description: "Submit one write for approval. It is not done until a person allows it. Pass the request as text.",
+    description: "Use when someone asks to file or change something. Pass the request as text. Example: create a Linear issue for the onboarding email. A write waits for approval and is not done yet.",
     parameters: TEXT_SCHEMA,
     actionClass: "write",
   },

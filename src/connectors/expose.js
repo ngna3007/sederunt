@@ -11,6 +11,8 @@ import { callTool } from "./client.js";
 const SECRET_FIELD = /token|secret|password|authorization|api[_-]?key|cookie|bearer/i;
 const RAW_ID = /^(?:U[A-Z0-9_]{4,}|0x[0-9a-fA-F]{6,}|[0-9a-f]{16,})$/;
 const TEXT_CAP = 8000;
+const TOOL_LIST_MS = 10 * 60 * 1000;
+const exposedCache = new Map();
 
 /**
  * @param {string} name
@@ -31,9 +33,40 @@ export function splitExposedName(name) {
  * @param {{ list: Function } | null | undefined} store
  * @param {string} tenantId
  */
-export async function listExposedTools(store, tenantId) {
+export async function listExposedTools(store, tenantId, options = {}) {
   if (!store || !tenantId) return [];
   const connectors = await store.list(tenantId);
+  const fingerprint = exposedFingerprint(connectors);
+  const clock = typeof options.now === "function" ? options.now : Date.now;
+  const hit = exposedCache.get(tenantId);
+  if (hit && hit.fingerprint === fingerprint && clock() - hit.at < TOOL_LIST_MS) return hit.tools;
+  const tools = shapeExposedTools(connectors);
+  exposedCache.set(tenantId, { at: Date.now(), fingerprint, tools });
+  return tools;
+}
+
+/** Drop one tenant's tool list, or every list when the id is omitted. */
+export function dropExposedTools(tenantId) {
+  if (tenantId) exposedCache.delete(tenantId);
+  else exposedCache.clear();
+}
+
+function exposedFingerprint(connectors) {
+  return JSON.stringify((connectors || []).map((connector) => ({
+    id: connector?.id || "",
+    slug: connector?.slug || "",
+    status: connector?.status || "",
+    enabled: connector?.enabled !== false,
+    tools: (connector?.tools || []).map((tool) => ({
+      name: tool?.name || "",
+      enabled: tool?.enabled === true,
+      changed: tool?.changed === true,
+      description: String(tool?.description || ""),
+    })),
+  })));
+}
+
+function shapeExposedTools(connectors) {
   const tools = [];
   for (const connector of connectors) {
     if (!connector || connector.status !== "connected" || connector.enabled === false) continue;
@@ -159,7 +192,14 @@ export async function callCustomTool(input) {
     forms: input.forms,
     calendarMcp: input.calendarMcp,
     origin: input.origin,
-  }, tool.name, cleanArgs(input.args), { env: input.env, timeoutMs: 10000, fetch: input.fetch, calendarMcp: input.calendarMcp });
+  }, tool.name, cleanArgs(input.args), {
+    env: input.env,
+    timeoutMs: toolTimeout(input.timeoutMs),
+    fetch: input.fetch,
+    calendarMcp: input.calendarMcp,
+    signal: input.signal,
+    poolKey: poolKeyFor(tenantId, connector),
+  });
   let bearer = token;
   let called = await invoke(bearer);
   if (!fakeForms && !fakeCalendar && connector.authType === "google_oauth" && unauthorizedTool(called)) {
@@ -386,6 +426,18 @@ function failed(name, text, code) {
     text,
     code: code || "",
   };
+}
+
+function poolKeyFor(tenantId, connector) {
+  const id = connector?.id || connector?.slug || "";
+  if (!tenantId || !id) return "";
+  return `${tenantId}:${id}`;
+}
+
+function toolTimeout(value) {
+  const number = Number(value);
+  if (Number.isFinite(number) && number > 0) return number;
+  return 10000;
 }
 
 function cleanArgs(args) {

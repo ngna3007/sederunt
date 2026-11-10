@@ -301,6 +301,7 @@ const AGENT_PAGE = `<!doctype html>
           next();
         };
         source.start();
+        if (window.__sederunt) window.__sederunt.playbackAt = Date.now();
       }).catch(function () { next(); });
     }
     if (window.MediaSource && MediaSource.isTypeSupported("audio/mpeg")) {
@@ -316,6 +317,7 @@ const AGENT_PAGE = `<!doctype html>
         });
         setState("speaking");
         playStarted = Date.now();
+        if (window.__sederunt) window.__sederunt.playbackAt = playStarted;
         stopAudio = function () {
           voice.pause();
           playStarted = 0;

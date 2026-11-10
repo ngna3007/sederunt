@@ -25,6 +25,7 @@ import {
   resolveAgentSeat,
 } from "./voice-bus.js";
 import { openRouterSpeechStream, openRouterStream } from "../openrouter.js";
+import { noteStageMetric, noteToolMetric } from "./metrics.js";
 
 const FIRST_TOKEN_MS = 2500;
 const ROUND_MS = 10_000;
@@ -243,6 +244,7 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
       deps: typeof depsFor === "function" ? depsFor(seat.tenantId) : {},
       system: agentPersona(seat.botName),
       messages: [{ role: "user", content: userTurn(session, seat, speaker, text) }],
+      startedAt: Date.now(),
       onText: emit,
       toolResults,
       writeEvent: (name, data) => {
@@ -363,13 +365,34 @@ async function streamOneRound(input) {
       full = "";
       continue;
     }
-    if (saw || result?.used) return { full, text: result?.text || "", toolCalls: toolCalls.filter((call) => input.tools.some((tool) => tool.function.name === call.name)) };
+    if (saw || result?.used) {
+      if (saw && !input.tokenNoted) {
+        input.tokenNoted = true;
+        noteStageMetric("first-token", Date.now() - (input.startedAt || Date.now()));
+      }
+      return { full, text: result?.text || "", toolCalls: toolCalls.filter((call) => input.tools.some((tool) => tool.function.name === call.name)) };
+    }
     full = "";
   }
   return { full, text: "", toolCalls: [] };
 }
 
 async function runAgentTool(input) {
+  const started = Date.now();
+  const outcome = await executeAgentTool(input);
+  noteToolMetric(input.call?.name, { ms: Date.now() - started, outcome: toolOutcome(outcome?.wrapped) });
+  return outcome;
+}
+
+function toolOutcome(wrapped) {
+  if (wrapped?.reason === "slow") return "timeout";
+  if (wrapped?.reason === "aborted") return "cancel";
+  if (wrapped?.held === true) return "held";
+  if (wrapped?.ok === false) return "failed";
+  return "ok";
+}
+
+async function executeAgentTool(input) {
   const name = input.call.name;
   const write = toolIsWrite(input.tool || name);
   const member = await agentMember(input.workspace, input.seat.botId, {
@@ -516,6 +539,8 @@ async function invokeTool(input, name, args, signal) {
     ...(input.deps || {}),
     tenantId: input.seat.tenantId,
     env: input.env,
+    signal,
+    toolTimeoutMs: agentToolBudgetMs(input.env),
     fetch: (url, init = {}) => input.fetchImpl(url, {
       ...init,
       signal: signal.aborted ? signal : AbortSignal.any([signal, init.signal].filter(Boolean)),
@@ -563,9 +588,15 @@ async function speakSentence(req, res, env, workspace, seat, body) {
     return;
   }
   res.writeHead(200, { "content-type": "audio/mpeg", "cache-control": "no-store" });
+  const speakStarted = Date.now();
+  let heardAudio = false;
   try {
     for await (const chunk of spoken.chunks()) {
       if (!chunk?.length) continue;
+      if (!heardAudio) {
+        heardAudio = true;
+        noteStageMetric("first-audio", Date.now() - speakStarted);
+      }
       res.write(chunk);
     }
   } catch {
