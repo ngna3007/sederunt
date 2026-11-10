@@ -8,7 +8,7 @@ import { callCustomTool, dropExposedTools, listExposedTools } from "../src/conne
 import { meetingTools } from "../src/meeting/agent.js";
 import { extractActions } from "../src/meeting/actions.js";
 import { meetingMetrics, resetMeetingMetrics } from "../src/meeting/metrics.js";
-import { noteAgentMember } from "../src/meeting/voice-bus.js";
+import { noteAgentMember } from "../src/meeting/seat.js";
 import { dispatchMcp, mcpToolList } from "../src/mcp.js";
 import { openRouterComplete, openRouterSpeechStream, openRouterStream } from "../src/openrouter.js";
 import { createSession } from "../src/session.js";

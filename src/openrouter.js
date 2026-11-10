@@ -465,54 +465,6 @@ export async function openRouterTurn(input = {}) {
   return { text: "", toolCalls: [], used: false, model: tried.at(-1) || modelName, tried };
 }
 
-/**
- * Mp3 bytes for one spoken line. The response is audio, not JSON.
- * A pinned model is not replaced. Never throws, and the key is not returned.
- *
- * @param {{ env?: NodeJS.ProcessEnv, text?: string, fetchImpl?: typeof fetch }} [input]
- * @returns {Promise<{ audio: Buffer | null, used: boolean, model: string }>}
- */
-export async function openRouterSpeech(input = {}) {
-  const env = input.env ?? process.env;
-  const { key, enabled } = openRouterConfig(env);
-  const text = String(input.text ?? "").trim();
-  const pinnedModel = typeof env.OPENROUTER_TTS_MODEL === "string" ? env.OPENROUTER_TTS_MODEL.trim() : "";
-  const pinnedVoice = typeof env.OPENROUTER_TTS_VOICE === "string" ? env.OPENROUTER_TTS_VOICE.trim() : "";
-  const attempts = [{ model: pinnedModel || DEFAULT_TTS_MODEL, voice: pinnedVoice || DEFAULT_TTS_VOICE }];
-  if (!enabled || !text) return { audio: null, used: false, model: attempts[0].model };
-  const fetchImpl = input.fetchImpl || fetch;
-  for (const attempt of attempts) {
-    try {
-      const response = await fetchImpl(SPEECH_URL, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${key}`,
-          "content-type": "application/json",
-          "HTTP-Referer": "https://sederunt.app",
-          "X-Title": "Sederunt",
-        },
-        body: JSON.stringify({
-          model: attempt.model,
-          input: text,
-          voice: attempt.voice,
-          response_format: "mp3",
-        }),
-        signal: AbortSignal.timeout(5000),
-      });
-      if (!response?.ok) {
-        dropBody(response);
-        continue;
-      }
-      const bytes = typeof response.arrayBuffer === "function" ? Buffer.from(await response.arrayBuffer()) : null;
-      if (!bytes?.length || bytes[0] === 0x7b) continue;
-      return { audio: bytes, used: true, model: attempt.model };
-    } catch {
-      continue;
-    }
-  }
-  return { audio: null, used: false, model: attempts[0].model };
-}
-
 function speechChoices(env) {
   const pinnedModel = typeof env.OPENROUTER_TTS_MODEL === "string" ? env.OPENROUTER_TTS_MODEL.trim() : "";
   const pinnedVoice = typeof env.OPENROUTER_TTS_VOICE === "string" ? env.OPENROUTER_TTS_VOICE.trim() : "";

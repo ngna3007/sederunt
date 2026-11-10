@@ -5,9 +5,6 @@ export const UNFINISHED_HOLD_MS = 2500;
 /** How long the same person can continue without saying the name again. */
 export const CONVERSATION_MS = 20_000;
 
-export const WAKE_ACK = "Hey! What do you need?";
-export const HEAR_LINE = "Yes, I can hear you.";
-
 const UNFINISHED_TAIL = new Set(["about", "the", "and", "what", "who", "when", "where", "why", "how", "which"]);
 
 const ANCHORS = new Set(
@@ -34,100 +31,6 @@ export function lineLooksUnfinished(text) {
 
 export function lineHoldMs(text) {
   return lineLooksUnfinished(text) ? UNFINISHED_HOLD_MS : FINISHED_HOLD_MS;
-}
-
-export function isBareWake(text, name = "") {
-  const bare = String(text || "").toLowerCase().replace(/[^a-z\s]/g, " ").replace(/\s+/g, " ").trim();
-  const who = String(name || "").toLowerCase().replace(/[^a-z]/g, "") || "adam";
-  if (!bare || bare.length > 40) return false;
-  return new RegExp(`^(hey |hi |hello )?${who}$`).test(bare);
-}
-
-/** Stable speaker slot. A participant id stays apart from a display name. */
-export function speechSpeakerKey(line) {
-  const id = String(line?.memberId ?? "").trim();
-  if (id) return `id:${id}`;
-  const name = String(line?.speakerName || line?.speaker || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
-  return name ? `name:${name}` : "";
-}
-
-/** One book per bot. Two meetings on the same team do not share a buffer. */
-export function meetingSpeechBook(session, botId) {
-  const id = String(botId || "").trim();
-  if (!session || typeof session !== "object" || !id) return null;
-  if (!session.meetingSpeechBooks || typeof session.meetingSpeechBooks !== "object" || Array.isArray(session.meetingSpeechBooks)) {
-    session.meetingSpeechBooks = {};
-  }
-  if (!session.meetingSpeechBooks[id] || typeof session.meetingSpeechBooks[id] !== "object") {
-    session.meetingSpeechBooks[id] = { seq: 0, speakers: {} };
-  }
-  const book = session.meetingSpeechBooks[id];
-  if (!book.speakers || typeof book.speakers !== "object" || Array.isArray(book.speakers)) book.speakers = {};
-  return book;
-}
-
-/** True while this speaker still has pieces waiting to be claimed. */
-export function speechBufferOpen(book, speaker) {
-  return Boolean(speaker && book?.speakers?.[speaker]);
-}
-
-export function scheduleMeetingSpeech(queue, line, now) {
-  const clock = Number(now) || 0;
-  if (!queue || line?.partial) return { release: false, holdMs: 0, generation: 0 };
-  const text = String(line?.text || "").replace(/\s+/g, " ").trim();
-  const speaker = String(line?.speaker || "").trim() || speechSpeakerKey(line);
-  if (!text || !speaker) return { release: false, holdMs: 0, generation: 0 };
-  const holdMs = lineHoldMs(text);
-  if (!queue.speakers || typeof queue.speakers !== "object" || Array.isArray(queue.speakers)) queue.speakers = {};
-  queue.seq = (queue.seq || 0) + 1;
-  const prior = queue.speakers[speaker];
-  const joined = prior ? `${prior.text} ${text}`.replace(/\s+/g, " ").trim().slice(0, 4000) : text;
-  const item = {
-    id: String(line?.id || queue.seq),
-    text: joined,
-    due: clock + holdMs,
-    wake: isBareWake(joined, line?.name),
-    generation: queue.seq,
-    speaker,
-  };
-  queue.speakers[speaker] = item;
-  return { release: true, holdMs, generation: item.generation, text: joined };
-}
-
-export function claimMeetingSpeech(queue, generation, now) {
-  if (!queue || !generation) return null;
-  const clock = Number(now) || 0;
-  const speakers = queue.speakers && typeof queue.speakers === "object" ? queue.speakers : {};
-  const mine = Object.values(speakers).find((row) => row && row.generation === generation && row.due <= clock) || null;
-  if (!mine) return null;
-  if (speakers[mine.speaker] === mine) delete speakers[mine.speaker];
-  return mine;
-}
-
-/**
- * Wait out this turn's hold, then take the slot.
- * A timer that fires before the due time waits out the rest, so a cold
- * event loop does not drop the line. A newer piece replaces the slot and
- * this wait returns null.
- *
- * @param {object | null | undefined} book
- * @param {number} generation
- * @param {number} holdMs
- * @param {(ms: number) => Promise<void>} [sleep]
- */
-export async function waitForMeetingSpeech(book, generation, holdMs, sleep) {
-  const pause = typeof sleep === "function"
-    ? sleep
-    : (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  await pause(Math.max(0, Number(holdMs) || 0));
-  const claimed = claimMeetingSpeech(book, generation, Date.now());
-  if (claimed?.text) return claimed;
-  const speakers = book?.speakers && typeof book.speakers === "object" ? book.speakers : {};
-  const pending = Object.values(speakers).find((row) => row && row.generation === generation);
-  if (!pending) return null;
-  const left = Number(pending.due) - Date.now();
-  if (left > 0) await pause(left);
-  return claimMeetingSpeech(book, generation, Math.max(Date.now(), Number(pending.due) || 0));
 }
 
 function splitSentences(text) {
@@ -173,8 +76,6 @@ function withoutHearPhrase(sentence) {
 }
 
 export function clipSpoken(text, options = {}) {
-  if (options.presence === "wake") return WAKE_ACK;
-  if (options.presence === "hear") return HEAR_LINE;
   const sentences = splitSentences(text);
   const kept = [];
   for (const sentence of sentences) {

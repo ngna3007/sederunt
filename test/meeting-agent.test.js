@@ -4,7 +4,7 @@ import { request } from "node:http";
 import test from "node:test";
 import { createSession } from "../src/session.js";
 import { endOfTurn, spokenLines, wordsFromTranscript, withoutBotSpeech } from "../src/meeting/agent.js";
-import { endAgentSeat, noteAgentMember, noteAgentSpeaker } from "../src/meeting/voice-bus.js";
+import { endAgentSeat, noteAgentMember, noteAgentSpeaker } from "../src/meeting/seat.js";
 import { openRouterSpeechStream } from "../src/openrouter.js";
 import { createApp } from "../src/server.js";
 

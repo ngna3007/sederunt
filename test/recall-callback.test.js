@@ -546,12 +546,11 @@ test("verified Google attendance binds a Recall speaker only in its meeting, eve
   } finally { await new Promise((resolve, reject) => app.close((error) => error ? reject(error) : resolve())); }
 });
 
-test("a presence line is spoken while the company index is still reading", async () => {
+test("a presence line does not speak while the company index is still reading", async () => {
   let releaseIndex = () => {};
   const indexGate = new Promise((resolve) => { releaseIndex = resolve; });
-  let played;
-  const playedGate = new Promise((resolve) => { played = resolve; });
-  let sawChat = false;
+  let speech = 0;
+  let chat = 0;
   const app = createApp({
     companyLoaded: true,
     env: {
@@ -572,15 +571,12 @@ test("a presence line is spoken while the company index is still reading", async
     fetch: async (url) => {
       const href = String(url);
       if (href.includes("/chat/completions")) {
-        sawChat = true;
+        chat += 1;
         return { ok: true, async json() { return { choices: [{ message: { content: "too late" } }] }; }, async text() { return ""; } };
       }
-      if (href.includes("/audio/speech")) {
-        return { ok: true, async arrayBuffer() { return Uint8Array.from([0xff, 0xfb, 0x10, 0x00]); }, async text() { return ""; } };
-      }
-      if (href.includes("/output_audio/")) {
-        played();
-        return { ok: true, async text() { return ""; }, async json() { return {}; } };
+      if (href.includes("/audio/speech") || href.includes("/output_audio/")) {
+        speech += 1;
+        return { ok: true, async arrayBuffer() { return Uint8Array.from([0xff, 0xfb, 0x10, 0x00]); }, async text() { return ""; }, async json() { return {}; } };
       }
       return { ok: false, async text() { return ""; }, async json() { return {}; } };
     },
@@ -605,23 +601,27 @@ test("a presence line is spoken while the company index is still reading", async
       "webhook-timestamp": "1731705121",
       "webhook-signature": `v1,${sign(secret, "msg-fast", "1731705121", payload)}`,
     });
-    const hit = await Promise.race([
-      playedGate.then(() => "played"),
-      new Promise((resolve) => setTimeout(() => resolve("timeout"), 2500)),
+    const early = await Promise.race([
+      pending.then((result) => result),
+      new Promise((resolve) => setTimeout(() => resolve(null), 200)),
     ]);
-    assert.equal(hit, "played");
-    assert.equal(sawChat, false);
+    assert.equal(speech, 0);
+    assert.equal(chat, 0);
     releaseIndex();
-    assert.equal((await pending).status, 204);
+    const accepted = early || await pending;
+    assert.equal(accepted.status, 204);
+    assert.equal(speech, 0);
+    assert.equal(chat, 0);
   } finally {
     releaseIndex();
     await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
   }
 });
 
-test("a partial transcript answers a check and is not kept", async () => {
+test("a partial transcript is not kept and the webhook does not speak", async () => {
   const remembered = [];
-  let plays = 0;
+  let speech = 0;
+  let chat = 0;
   const app = createApp({
     companyLoaded: true,
     env: {
@@ -640,15 +640,13 @@ test("a partial transcript answers a check and is not kept", async () => {
     },
     fetch: async (url) => {
       const href = String(url);
-      if (href.includes("/audio/speech")) {
-        return { ok: true, async arrayBuffer() { return Uint8Array.from([0xff, 0xfb, 0x10, 0x00]); }, async text() { return ""; } };
-      }
-      if (href.includes("/output_audio/")) {
-        plays += 1;
-        return { ok: true, async text() { return ""; }, async json() { return {}; } };
-      }
       if (href.includes("/chat/completions")) {
+        chat += 1;
         return { ok: true, async json() { return { choices: [{ message: { content: "The launch is Thursday." } }] }; }, async text() { return ""; } };
+      }
+      if (href.includes("/audio/speech") || href.includes("/output_audio/")) {
+        speech += 1;
+        return { ok: true, async arrayBuffer() { return Uint8Array.from([0xff, 0xfb, 0x10, 0x00]); }, async text() { return ""; }, async json() { return {}; } };
       }
       return { ok: false, async text() { return ""; }, async json() { return {}; } };
     },
@@ -675,30 +673,26 @@ test("a partial transcript answers a check and is not kept", async () => {
     });
   };
   try {
-    const waitPlays = async (count) => {
-      const start = Date.now();
-      while (plays < count && Date.now() - start < 2500) {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-    };
     assert.equal((await deliver("transcript.partial_data", ["hey", "adam", "can", "you", "hear", "me"], "msg-partial")).status, 204);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    assert.equal(plays, 0);
+    assert.equal(speech, 0);
+    assert.equal(chat, 0);
     assert.equal(remembered.some((row) => JSON.stringify(row).includes("hear me")), false);
-    assert.equal((await deliver("transcript.data", ["hey", "adam", "can", "you", "hear", "me"], "msg-final-check")).status, 204);
-    await waitPlays(1);
-    assert.equal(plays, 1);
+    assert.equal((await deliver("transcript.data", ["Hey", "Maple", "the", "booth", "opens", "at", "nine."], "msg-final-check")).status, 204);
+    assert.equal(speech, 0);
+    assert.equal(chat, 0);
+    assert.match(JSON.stringify(remembered), /booth opens at nine/);
     assert.equal((await deliver("transcript.data", ["what", "time", "is", "the", "launch"], "msg-follow")).status, 204);
-    await waitPlays(2);
-    assert.equal(plays, 2);
+    assert.equal(speech, 0);
+    assert.equal(chat, 0);
+    assert.equal(remembered.some((row) => JSON.stringify(row).includes("hear me")), false);
   } finally {
     await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
   }
 });
 
-test("two finals from one speaker are spoken once", async () => {
-  const users = [];
-  let speeches = 0;
+test("two finals from one speaker are not spoken", async () => {
+  let speech = 0;
+  let chat = 0;
   const app = createApp({
     companyLoaded: true,
     env: {
@@ -716,19 +710,15 @@ test("two finals from one speaker are spoken once", async () => {
       },
       tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
     },
-    fetch: async (url, init) => {
+    fetch: async (url) => {
       const href = String(url);
       if (href.includes("/chat/completions")) {
-        const body = JSON.parse(init.body);
-        users.push(body.messages.filter((row) => row.role === "user").map((row) => row.content).join("\n"));
+        chat += 1;
         return { ok: true, async json() { return { choices: [{ message: { content: "The billing service moves to Postgres." } }] }; }, async text() { return ""; } };
       }
-      if (href.includes("/audio/speech")) {
-        speeches += 1;
-        return { ok: true, async arrayBuffer() { return Uint8Array.from([0xff, 0xfb, 0x10, 0x00]); }, async text() { return ""; } };
-      }
-      if (href.includes("/output_audio/")) {
-        return { ok: true, async text() { return ""; }, async json() { return {}; } };
+      if (href.includes("/audio/speech") || href.includes("/output_audio/")) {
+        speech += 1;
+        return { ok: true, async arrayBuffer() { return Uint8Array.from([0xff, 0xfb, 0x10, 0x00]); }, async text() { return ""; }, async json() { return {}; } };
       }
       return { ok: false, async text() { return ""; }, async json() { return {}; } };
     },
@@ -756,32 +746,21 @@ test("two finals from one speaker are spoken once", async () => {
   };
   try {
     const first = deliver(["hey", "adam", "the", "billing", "service"], "msg-join-1");
-    await new Promise((resolve) => setTimeout(resolve, 150));
     const second = deliver(["moves", "to", "postgres"], "msg-join-2");
     const [opened, followed] = await Promise.all([first, second]);
     assert.equal(opened.status, 204);
     assert.equal(followed.status, 204);
-    const start = Date.now();
-    while (speeches < 1 && Date.now() - start < 3000) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    assert.equal(speeches, 1);
-    assert.equal(users.length, 1);
-    assert.match(users[0], /billing service/);
-    assert.match(users[0], /moves to postgres/);
+    assert.equal(speech, 0);
+    assert.equal(chat, 0);
   } finally {
     await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
   }
 });
 
-test("hey adam can you hear me is spoken before the keep finishes", async () => {
-  let rememberFinished = false;
-  let releaseRemember = () => {};
-  const gate = new Promise((resolve) => { releaseRemember = resolve; });
-  let keepFinishedAtPlay = true;
-  let played;
-  const playedGate = new Promise((resolve) => { played = resolve; });
+test("hey adam can you hear me is not spoken", async () => {
+  const remembered = [];
+  let speech = 0;
+  let chat = 0;
   const app = createApp({
     companyLoaded: true,
     env: {
@@ -793,11 +772,7 @@ test("hey adam can you hear me is spoken before the keep finishes", async () => 
     },
     deps: {
       memory: {
-        async remember() {
-          await gate;
-          rememberFinished = true;
-          return { blobId: null };
-        },
+        async remember(row) { remembered.push(row); return { blobId: null }; },
         async index() { return []; },
         async recall() { return []; },
       },
@@ -805,16 +780,13 @@ test("hey adam can you hear me is spoken before the keep finishes", async () => 
     },
     fetch: async (url) => {
       const href = String(url);
-      if (href.includes("/output_audio/")) {
-        keepFinishedAtPlay = rememberFinished;
-        played();
-        return { ok: true, async text() { return ""; }, async json() { return {}; } };
-      }
-      if (href.includes("/audio/speech")) {
-        return { ok: true, async arrayBuffer() { return Uint8Array.from([0xff, 0xfb, 0x10, 0x00]); }, async text() { return ""; } };
-      }
       if (href.includes("/chat/completions")) {
+        chat += 1;
         return { ok: true, async json() { return { choices: [{ message: { content: "Yes, I can hear you." } }] }; }, async text() { return ""; } };
+      }
+      if (href.includes("/audio/speech") || href.includes("/output_audio/")) {
+        speech += 1;
+        return { ok: true, async arrayBuffer() { return Uint8Array.from([0xff, 0xfb, 0x10, 0x00]); }, async text() { return ""; }, async json() { return {}; } };
       }
       return { ok: false, async text() { return ""; }, async json() { return {}; } };
     },
@@ -834,21 +806,16 @@ test("hey adam can you hear me is spoken before the keep finishes", async () => 
     },
   });
   try {
-    const pending = post(port, "/api/recall", payload, {
+    const accepted = await post(port, "/api/recall", payload, {
       "webhook-id": "msg-hear",
       "webhook-timestamp": "1731705121",
       "webhook-signature": `v1,${sign(secret, "msg-hear", "1731705121", payload)}`,
     });
-    const hit = await Promise.race([
-      playedGate.then(() => "played"),
-      new Promise((resolve) => setTimeout(() => resolve("timeout"), 3000)),
-    ]);
-    assert.equal(hit, "played");
-    assert.equal(keepFinishedAtPlay, false);
-    releaseRemember();
-    assert.equal((await pending).status, 204);
+    assert.equal(accepted.status, 204);
+    assert.equal(speech, 0);
+    assert.equal(chat, 0);
+    assert.equal(remembered.some((row) => JSON.stringify(row).includes("hear me")), false);
   } finally {
-    releaseRemember();
     await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
   }
 });
@@ -914,9 +881,11 @@ test("a transcript ack returns before the company index finishes", async () => {
   }
 });
 
-test("a retried transcript on another instance is spoken once", async () => {
+test("a retried transcript on another instance is recorded once", async () => {
   const redis = new Set();
-  let speeches = 0;
+  const remembered = [];
+  let speech = 0;
+  let chat = 0;
   const fetchImpl = async (url) => {
     const href = String(url);
     if (href.includes("redis.test/set/")) {
@@ -926,13 +895,13 @@ test("a retried transcript on another instance is spoken once", async () => {
       return { ok: true, async json() { return { result: "OK" }; }, async text() { return ""; } };
     }
     if (href.includes("/chat/completions")) {
+      chat += 1;
       return { ok: true, async json() { return { choices: [{ message: { content: "Pricing is on the sheet." } }] }; }, async text() { return ""; } };
     }
-    if (href.includes("/audio/speech")) {
-      speeches += 1;
-      return { ok: true, async arrayBuffer() { return Uint8Array.from([0xff, 0xfb, 0x90, 0x64]).buffer; }, async text() { return ""; } };
+    if (href.includes("/audio/speech") || href.includes("/output_audio/")) {
+      speech += 1;
+      return { ok: true, async arrayBuffer() { return Uint8Array.from([0xff, 0xfb, 0x90, 0x64]).buffer; }, async text() { return ""; }, async json() { return {}; } };
     }
-    if (href.includes("/output_audio/")) return { ok: true, async text() { return ""; }, async json() { return {}; } };
     return { ok: false, async text() { return ""; }, async json() { return {}; } };
   };
   const env = {
@@ -945,7 +914,7 @@ test("a retried transcript on another instance is spoken once", async () => {
     UPSTASH_REDIS_REST_TOKEN: "token",
   };
   const memory = {
-    async remember() { return { blobId: null }; },
+    async remember(row) { remembered.push(row); return { blobId: null }; },
     async index() { return []; },
     async recall() { return []; },
   };
@@ -970,7 +939,7 @@ test("a retried transcript on another instance is spoken once", async () => {
       transcript: { id: "tr-once" },
       data: {
         participant: { id: 100, name: "Anh" },
-        words: ["hey", "adam", "what", "is", "the", "price"].map((text, index) => ({ text, start_timestamp: { relative: index } })),
+        words: ["Hey", "Maple", "the", "booth", "opens", "at", "nine."].map((text, index) => ({ text, start_timestamp: { relative: index } })),
       },
     },
   });
@@ -987,7 +956,12 @@ test("a retried transcript on another instance is spoken once", async () => {
     assert.equal(opened.status, 204);
     assert.equal(retried.status, 204);
     assert.equal(redis.size, 1);
-    assert.equal(speeches, 1);
+    assert.equal(speech, 0);
+    assert.equal(chat, 0);
+    const decisions = remembered.filter((row) => row.kind === "decision");
+    assert.equal(decisions.length, 1);
+    assert.match(decisions[0].text, /booth opens at nine/);
+    assert.equal(remembered.filter((row) => row.kind === "room").length, 1);
   } finally {
     await Promise.all([first, second].map((app) => new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())))));
   }

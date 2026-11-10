@@ -23,7 +23,7 @@ import {
   releaseAgentTurn,
   rememberAgentTurn,
   resolveAgentSeat,
-} from "./voice-bus.js";
+} from "./seat.js";
 import { openRouterSpeechStream, openRouterStream } from "../openrouter.js";
 import { noteStageMetric, noteToolMetric } from "./metrics.js";
 
