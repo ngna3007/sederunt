@@ -26,6 +26,16 @@ test("missing room copy is a card and the shell stays hidden", () => {
   assert.match(block, /#room-missing \.empty-title \{\s*color: var\(--foreground\)/);
 });
 
+test("a later rooms shell keeps rows that are already on screen", () => {
+  const page = renderConsolePage({ signedIn: true });
+  assert.match(page, /var keepRooms = shell && state && state\.rooms && state\.rooms\.length > 0/);
+  assert.match(page, /if \(hasRows\) \{\s*if \(empty\) empty\.hidden = true;/);
+  assert.match(page, /listed\.setAttribute\("aria-busy", "true"\)/);
+  assert.match(page, /emptyLine\.textContent = "Loading\.\.\."/);
+  assert.match(page, /listedBusy\.removeAttribute\("aria-busy"\)/);
+  assert.match(page, /shellTries <= 2 \? 200 : shellTries === 3 \? 500 : 1500/);
+});
+
 test("focus rings and a skip link are in the console", () => {
   const page = renderConsolePage({ signedIn: true });
   const css = readFileSync(new URL("../src/console.css", import.meta.url), "utf8");

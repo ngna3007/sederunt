@@ -2829,7 +2829,9 @@ export async function rebuildCompanyIndex(session, deps = {}) {
   if (!Array.isArray(docs)) return { ok: false, empty: false };
   try {
     applyIndexedDocuments(current, docs, false);
-    if (deps.memory.index && deps.memory.recall) {
+    // A successful index already searched this mark. One more recall is only
+    // the fallback when that search came back empty.
+    if (docs.length === 0 && deps.memory.index && deps.memory.recall) {
       try {
         const full = await deps.memory.recall();
         if (Array.isArray(full)) applyIndexedDocuments(current, full, false);

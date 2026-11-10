@@ -207,6 +207,56 @@ test("company index searches run together and a failed search stays out", async 
   assert.equal(rows.length, 6);
 });
 
+test("a company index with rows does not search again", async () => {
+  let recalls = 0;
+  const doc = {
+    kind: "decision",
+    decision: {
+      id: "decision-booth",
+      text: "Keep the booth",
+      speakerMemberId: "mina",
+      inviteMemberIds: ["mina"],
+      roomId: "room-1",
+      kind: "decision",
+    },
+  };
+  const session = createSession();
+  const report = await rebuildCompanyIndex(session, {
+    memory: {
+      async index() { return [doc]; },
+      async recall() { recalls += 1; return []; },
+    },
+  });
+  assert.equal(report.ok, true);
+  assert.equal(recalls, 0);
+  assert.equal(session.decisions[0].text, "Keep the booth");
+});
+
+test("an empty company index still tries one recall", async () => {
+  let recalls = 0;
+  const doc = {
+    kind: "decision",
+    decision: {
+      id: "decision-fallback",
+      text: "Kept on the fallback read",
+      speakerMemberId: "mina",
+      inviteMemberIds: ["mina"],
+      roomId: "room-1",
+      kind: "decision",
+    },
+  };
+  const session = createSession();
+  const report = await rebuildCompanyIndex(session, {
+    memory: {
+      async index() { return []; },
+      async recall() { recalls += 1; return [doc]; },
+    },
+  });
+  assert.equal(report.ok, true);
+  assert.equal(recalls, 1);
+  assert.equal(session.decisions[0].text, "Kept on the fallback read");
+});
+
 test("raw Slack channel ids are treated as non-display names", () => {
   function looksLikeRawRoomId(value) {
     const s = String(value || "").replace(/^#/, "").trim();

@@ -3270,13 +3270,24 @@ async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0,
     await applyHearing();
     return current;
   }
+  const holdIndex = workspace.env?.VERCEL
+    ? import("@vercel/functions").catch(() => null)
+    : null;
   await Promise.race([
     pending,
     new Promise((resolve) => setTimeout(resolve, waitMs)),
   ]);
   if (!current.readReport) {
     // Home paints from the shell. Hearing waits until the index has rows.
+    // The shell returns before the search finishes. waitUntil keeps that
+    // search alive on this server so the next poll can use it.
     pending.then(() => applyHearing(), () => {}).catch(() => {});
+    if (holdIndex) {
+      const loaded = await holdIndex;
+      if (typeof loaded?.waitUntil === "function") {
+        try { loaded.waitUntil(pending); } catch { /* no request context */ }
+      }
+    }
     return current;
   }
   await applyHearing();

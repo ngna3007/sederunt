@@ -453,6 +453,31 @@ test("a slow memory index does not hold the home board", async () => {
   }
 });
 
+test("a cold rooms shell keeps the company index running", async () => {
+  const symbol = Symbol.for("@vercel/request-context");
+  const previous = globalThis[symbol];
+  const held = [];
+  globalThis[symbol] = { get: () => ({ waitUntil(work) { held.push(work); } }) };
+  const memory = { index() { return new Promise(() => {}); } };
+  const app = createApp({
+    deps: { memory, tatum: quietTatum() },
+    env: { ...cleanEnv(), VERCEL: "1" },
+    companyLoaded: true,
+  });
+  const port = await listen(app);
+  try {
+    const body = JSON.parse((await get(port, "/api/console?member=mina")).raw);
+    assert.equal(body.shell, true);
+    assert.equal(body.rooms.length, 0);
+    assert.equal(held.length, 1);
+    assert.equal(typeof held[0].then, "function");
+  } finally {
+    await close(app);
+    if (previous === undefined) delete globalThis[symbol];
+    else globalThis[symbol] = previous;
+  }
+});
+
 test("an empty company home paints its card before Slack or memory", async () => {
   const home = renderConsolePage({ section: "home" });
   assert.match(home, /<div id="home">/);

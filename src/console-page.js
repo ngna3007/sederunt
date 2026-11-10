@@ -1103,6 +1103,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
   var fileWait = null;
   var readingTimer = null;
   var readingTries = 0;
+  var shellTries = 0;
   var waitingVoice = "plain";
   var waitingClash = false;
   var historyScope = "group";
@@ -2750,7 +2751,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function paint(next) {
-    state = next;
+    var shell = next.reading === true && next.shell === true;
+    var keepRooms = shell && state && state.rooms && state.rooms.length > 0;
+    if (keepRooms) {
+      if (next.meetings && next.meetings.length) state.meetings = next.meetings;
+    } else {
+      state = next;
+    }
     text("status", "");
     if (consoleSpaces && consoleSpaces.oauth) {
       workspaceKind = consoleSpaces.activeKind === "personal" ? "personal" : "company";
@@ -2758,7 +2765,6 @@ if (sessionWhen && sessionWhen.dataset.at) {
       workspaceKind = next.workspace;
     }
     paintChip();
-    var shell = next.reading === true && next.shell === true;
     showHomeSkeleton(next.reading === true && !shell);
     document.body.classList.toggle("read-failed", next.read === "failed");
     document.body.classList.toggle("is-reading", next.reading === true && !shell);
@@ -2780,15 +2786,34 @@ if (sessionWhen && sessionWhen.dataset.at) {
           var empty = document.getElementById("room-empty");
           var emptyLine = document.getElementById("room-empty-line");
           var aside = document.getElementById("room-empty-aside");
-          if (empty) empty.hidden = false;
-          if (emptyLine) emptyLine.textContent = "Loading...";
-          if (aside) aside.textContent = "Rooms will show here.";
+          var listed = document.getElementById("room-list");
+          var hasRows = !!(listed && listed.children.length);
+          if (listed) listed.setAttribute("aria-busy", "true");
+          if (hasRows) {
+            if (empty) empty.hidden = true;
+          } else {
+            if (empty) empty.hidden = false;
+            if (emptyLine) emptyLine.textContent = "Loading...";
+            if (aside) aside.textContent = "Rooms will show here.";
+          }
         }
       }
-      if (!readingTimer) readingTimer = setTimeout(function () { readingTimer = null; load(); }, shell ? 200 : 1500);
+      if (!readingTimer) {
+        var shellWait = 1500;
+        if (shell) {
+          shellTries += 1;
+          shellWait = shellTries <= 2 ? 200 : shellTries === 3 ? 500 : 1500;
+        } else {
+          shellTries = 0;
+        }
+        readingTimer = setTimeout(function () { readingTimer = null; load(); }, shellWait);
+      }
       return;
     }
     readingTries = 0;
+    shellTries = 0;
+    var listedBusy = document.getElementById("room-list");
+    if (listedBusy) listedBusy.removeAttribute("aria-busy");
     if (readingTimer) {
       clearTimeout(readingTimer);
       readingTimer = null;
