@@ -109,6 +109,19 @@ test("spoken text is at most two English sentences, and the garbage lines are si
   );
   assert.equal(clipSpoken("Set a reminder."), "Set a reminder.");
   assert.equal(clipSpoken("Booked for tonight."), "Booked for tonight.");
+  assert.equal(
+    clipSpoken("You picked Postgres for the billing service."),
+    "You picked Postgres for the billing service.",
+  );
+  assert.equal(clipSpoken("Assigned to Rowan."), "Assigned to Rowan.");
+  assert.equal(
+    clipSpoken("Mina said the billing service moves to Postgres."),
+    "Mina said the billing service moves to Postgres.",
+  );
+  assert.equal(clipSpoken("The Saturn demo stays on the calendar."), "The Saturn demo stays on the calendar.");
+  assert.equal(clipSpoken("I'm here."), "I'm here.");
+  assert.equal(clipSpoken("I could not answer that just now."), "I could not answer that just now.");
+  assert.equal(clipSpoken("Bạn muốn họp lúc mấy giờ?"), "");
   const breath = clipSpoken("got it amy… ready to help… yes i can hear you… I can take notes, summarize, set reminders…");
   assert.equal(/hear you/i.test(breath), false);
   assert.match(breath, /got it amy/i);

@@ -465,7 +465,7 @@ function meetingSystem(botName, kept, tasks, heard, saved) {
     ? `Still working, do not start these again:\n${tasks.map((task) => `${task.name}: ${task.text || "in progress"}`).join("\n")}`
     : "";
   return [
-    buildSystemPrompt({ mode: "live_voice", botName }),
+    buildSystemPrompt({ mode: "live_voice", botName, language: "en" }),
     "Speak at most two sentences, in English. Do not repeat that you can hear them.",
     "If the lines already include a time and who to invite, do not ask for either again. A write still needs approval. Do not say it is done during the call.",
     "You can call tools. recall reads what this person is allowed to see. act submits one write. Other tools are the connected connectors. Never send a member id, a token, or a session.",

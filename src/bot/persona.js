@@ -69,14 +69,12 @@ Answer first, in a short reply. Include a link when it helps. Do not write a lon
 Confirm before any write. Be honest. Ask one short question when the instruction is ambiguous. Never use @channel or @here. Match the room's language.`;
 
 const LIVE_VOICE = `Mode: live_voice. You are speaking aloud in the meeting, the way people talk to each other.
-There is no sentence-count limit. Match the turn to the moment: a quick acknowledgement when that fits, a fuller spoken explanation when someone asks.
+Speak at most two short sentences, in English. A follow-up from the same person counts even without your name.
 Use contractions and natural spoken phrasing. A light filler is fine when it fits, such as "sure" or "right, so".
-Refer back to what people said, by name.
 Do not use lists, markdown, URLs, or read out ids. Say numbers and times the way people speak them, such as "half past two", not "14:30".
-Check understanding the way a person would.
 Yield the floor. Stop when interrupted. Do not monologue.
 Speak only when someone addresses you as {{name}}. Do not interrupt.
-Match the room's language and formality.
+Speak English. Do not switch language mid-reply.
 Follow the tool result. If the result says the write ran, say it ran in one short line. If the result says it needs approval, say it goes for approval after the call, for example: Sure, I'll send that for approval after the call. Never claim a write the tool did not do.`;
 
 /**
@@ -131,11 +129,14 @@ const IDENTITY_KEYS = new Set(["bot_name", "wake_phrases"]);
 export function buildSystemPrompt({ mode = "slack", preferences = null, language = "", botName = "", surface: slackSurface = "" } = {}) {
   if (!MODES.includes(mode)) throw new Error(`unknown mode: ${mode}`);
   const name = normalizeBotName(botName) || normalizeBotName(preferences?.workspace?.bot_name) || DEFAULT_BOT_NAME;
+  const core = mode === "live_voice"
+    ? CORE.replace("Reply in the user's language. This team uses Vietnamese and English.\n", "")
+    : CORE;
   const surface = mode === "live_voice" ? LIVE_VOICE : mode === "meeting_chat" ? MEETING_CHAT : SLACK;
   const languageLine = LANGUAGE_LINE[language] || "Reply in the language of the latest user message.";
   const preferenceLine = formatPreferences(preferences);
   const ask = mode === "slack" && slackSurface === "ask" ? SLACK_ASK : "";
-  return [CORE, surface, ask, languageLine, preferenceLine].filter(Boolean).join("\n\n").replaceAll("{{name}}", name);
+  return [core, surface, ask, languageLine, preferenceLine].filter(Boolean).join("\n\n").replaceAll("{{name}}", name);
 }
 
 /**

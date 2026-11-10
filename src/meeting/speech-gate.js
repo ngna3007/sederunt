@@ -10,13 +10,12 @@ export const HEAR_LINE = "Yes, I can hear you.";
 
 const UNFINISHED_TAIL = new Set(["about", "the", "what", "who", "when", "where", "why", "how", "which"]);
 
-const KNOWN_WORDS = new Set(
-  `a an the i you we they he she it my your our me us is am are was were be been being do does did not no yes can could should would will to of in on for at and or but if so this that with from just now what who when where why how which got ready help take hear hey need needs done write ran approval before ill send okay waiting answer launch thursday booth im here
-  set sets reminder reminders booked book booking tonight today tomorrow noon midnight morning afternoon evening note notes noted summarize summary meeting meetings calendar invite invited demo stay stays stayed saturn nine open opens opened check recording sent see seen tell told ask asked put keep made make give gave look looked call called share move moved start started stop stopped record please thanks thank sound sounds good great sure change changes then there back over again still also very time times people person team only high deck email run runs about all come day get go know like long more new one out say some than them these think two up use want way well work after any both first last many other same week next room`
-    .split(/\s+/)
-    .filter(Boolean)
-    .concat(["i'll", "ill"]),
+const ANCHORS = new Set(
+  "a an the i you we they he she it my your our me us is am are was were be been being do does did not no yes can could should would will to of in on for at and or but if so this that with from just now what who when where why how which im ill ok okay here done sure got it"
+    .split(/\s+/),
 );
+
+const VIETNAMESE_MARK = /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i;
 
 function wordsOf(text) {
   return String(text || "")
@@ -86,19 +85,19 @@ function splitSentences(text) {
   return parts.map((part) => part.trim()).filter(Boolean);
 }
 
-function knownCount(sentence) {
-  const words = wordsOf(sentence);
-  let known = 0;
-  for (const word of words) if (KNOWN_WORDS.has(word)) known += 1;
-  return { words, known };
+function hasForeignScript(text) {
+  return /[^\p{Script=Latin}\p{N}\s.,!?;:'’"()\-–—/]/u.test(String(text || ""));
 }
 
 export function isEnglishSentence(sentence) {
-  const { words, known } = knownCount(sentence);
-  if (!words.length || known === 0) return false;
-  if (words.length === 1) return known === 1 && words[0].length >= 3;
-  if (known === words.length) return true;
-  return known >= 2 && known * 2 >= words.length;
+  const value = String(sentence || "").trim();
+  if (!value || VIETNAMESE_MARK.test(value) || hasForeignScript(value)) return false;
+  const words = wordsOf(value);
+  if (!words.length) return false;
+  if (words.length === 1) return words[0].length >= 2;
+  const anchors = words.filter((word) => ANCHORS.has(word)).length;
+  if (words.length <= 5 && anchors >= 1) return true;
+  return anchors >= 2;
 }
 
 function isHearSentence(sentence) {

@@ -295,9 +295,8 @@ export async function openRouterStream(input = {}) {
 }
 
 const SPEECH_URL = "https://openrouter.ai/api/v1/audio/speech";
-const DEFAULT_TTS_MODEL = "openai/gpt-4o-mini-tts-2025-12-15";
-const DEFAULT_TTS_VOICE = "alloy";
-const TTS_FALLBACK = { model: "mistralai/voxtral-mini-tts-2603", voice: "en_paul_neutral" };
+const DEFAULT_TTS_MODEL = "mistralai/voxtral-mini-tts-2603";
+const DEFAULT_TTS_VOICE = "en_paul_neutral";
 
 function readToolCalls(message) {
   const raw = message?.tool_calls;
@@ -362,6 +361,7 @@ export async function openRouterTurn(input = {}) {
           "X-Title": "Sederunt",
         },
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(4000),
       });
       if (!response?.ok) {
         dropBody(response);
@@ -393,12 +393,7 @@ export async function openRouterSpeech(input = {}) {
   const text = String(input.text ?? "").trim();
   const pinnedModel = typeof env.OPENROUTER_TTS_MODEL === "string" ? env.OPENROUTER_TTS_MODEL.trim() : "";
   const pinnedVoice = typeof env.OPENROUTER_TTS_VOICE === "string" ? env.OPENROUTER_TTS_VOICE.trim() : "";
-  const attempts = pinnedModel
-    ? [{ model: pinnedModel, voice: pinnedVoice || DEFAULT_TTS_VOICE }]
-    : [
-      { model: DEFAULT_TTS_MODEL, voice: pinnedVoice || DEFAULT_TTS_VOICE },
-      { model: TTS_FALLBACK.model, voice: pinnedVoice || TTS_FALLBACK.voice },
-    ];
+  const attempts = [{ model: pinnedModel || DEFAULT_TTS_MODEL, voice: pinnedVoice || DEFAULT_TTS_VOICE }];
   if (!enabled || !text) return { audio: null, used: false, model: attempts[0].model };
   const fetchImpl = input.fetchImpl || fetch;
   for (const attempt of attempts) {
@@ -417,6 +412,7 @@ export async function openRouterSpeech(input = {}) {
           voice: attempt.voice,
           response_format: "mp3",
         }),
+        signal: AbortSignal.timeout(5000),
       });
       if (!response?.ok) {
         dropBody(response);
