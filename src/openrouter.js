@@ -198,7 +198,12 @@ export async function openRouterComplete(input = {}) {
  */
 export async function openRouterStream(input = {}) {
   const env = input.env ?? process.env;
-  const { key, models, enabled } = openRouterConfig(env);
+  const configured = openRouterConfig(env);
+  const key = configured.key;
+  const enabled = configured.enabled;
+  const models = Array.isArray(input.models) && input.models.length
+    ? input.models.filter((model) => typeof model === "string" && model.trim())
+    : configured.models;
   if (!enabled) return { text: "", used: false, model: models[0], error: "no-key", tried: [] };
   const fetchImpl = input.fetchImpl || fetch;
   const messages = [];
@@ -286,6 +291,10 @@ export async function openRouterStream(input = {}) {
       }
       return { text: trimmed, used: true, model, tried };
     } catch {
+      if (input.signal?.aborted) {
+        if (text.trim()) return { text: text.trim(), used: true, model, error: "aborted", tried };
+        return { text: "", used: false, model, error: "aborted", tried };
+      }
       if (text.trim()) return { text: text.trim(), used: true, model, error: "network", tried };
       lastError = "network";
       continue;
@@ -426,4 +435,116 @@ export async function openRouterSpeech(input = {}) {
     }
   }
   return { audio: null, used: false, model: attempts[0].model };
+}
+
+function speechChoices(env) {
+  const pinnedModel = typeof env.OPENROUTER_TTS_MODEL === "string" ? env.OPENROUTER_TTS_MODEL.trim() : "";
+  const pinnedVoice = typeof env.OPENROUTER_TTS_VOICE === "string" ? env.OPENROUTER_TTS_VOICE.trim() : "";
+  const primary = { model: pinnedModel || DEFAULT_TTS_MODEL, voice: pinnedVoice || DEFAULT_TTS_VOICE };
+  const attempts = [primary];
+  if (primary.model !== DEFAULT_TTS_MODEL || primary.voice !== DEFAULT_TTS_VOICE) {
+    attempts.push({ model: DEFAULT_TTS_MODEL, voice: DEFAULT_TTS_VOICE });
+  }
+  return attempts;
+}
+
+function readerOf(body) {
+  if (body && typeof body.getReader === "function") return body.getReader();
+  if (body && typeof body[Symbol.asyncIterator] === "function") {
+    const iterator = body[Symbol.asyncIterator]();
+    return {
+      async read() {
+        const next = await iterator.next();
+        return next.done ? { done: true } : { done: false, value: next.value };
+      },
+    };
+  }
+  return null;
+}
+
+/**
+ * Pipe mp3 bytes. The pinned voice is tried first. If the first byte is not
+ * here within firstByteMs, the next attempt is the Voxtral fallback.
+ * The key is not returned. Never throws.
+ *
+ * @param {{ env?: NodeJS.ProcessEnv, text?: string, fetchImpl?: typeof fetch, signal?: AbortSignal, firstByteMs?: number }} [input]
+ */
+export async function openRouterSpeechStream(input = {}) {
+  const env = input.env ?? process.env;
+  const { key, enabled } = openRouterConfig(env);
+  const text = String(input.text ?? "").trim();
+  const attempts = speechChoices(env);
+  const firstByteMs = Number(input.firstByteMs) > 0 ? Number(input.firstByteMs) : 3000;
+  if (!enabled || !text) return { used: false, model: attempts[0].model, chunks: null };
+  const fetchImpl = input.fetchImpl || fetch;
+  for (const attempt of attempts) {
+    if (input.signal?.aborted) break;
+    const controller = new AbortController();
+    const signal = input.signal ? AbortSignal.any([input.signal, controller.signal]) : controller.signal;
+    const abortTimer = setTimeout(() => controller.abort(), firstByteMs);
+    abortTimer.unref?.();
+    try {
+      const response = await fetchImpl(SPEECH_URL, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${key}`,
+          "content-type": "application/json",
+          "HTTP-Referer": "https://sederunt.app",
+          "X-Title": "Sederunt",
+        },
+        body: JSON.stringify({
+          model: attempt.model,
+          input: text,
+          voice: attempt.voice,
+          response_format: "mp3",
+        }),
+        signal,
+      });
+      if (!response?.ok || !response.body) {
+        clearTimeout(abortTimer);
+        dropBody(response);
+        continue;
+      }
+      const reader = readerOf(response.body);
+      if (!reader) {
+        clearTimeout(abortTimer);
+        continue;
+      }
+      let waitTimer;
+      const first = await Promise.race([
+        reader.read(),
+        new Promise((resolve) => {
+          waitTimer = setTimeout(() => resolve({ timeout: true }), firstByteMs);
+          waitTimer.unref?.();
+        }),
+      ]);
+      clearTimeout(abortTimer);
+      clearTimeout(waitTimer);
+      const bytes = first && !first.timeout && !first.done ? Buffer.from(first.value || []) : null;
+      if (!bytes?.length || bytes[0] === 0x7b) {
+        controller.abort();
+        continue;
+      }
+      return {
+        used: true,
+        model: attempt.model,
+        chunks() {
+          return readRest(bytes, reader);
+        },
+      };
+    } catch {
+      clearTimeout(abortTimer);
+      if (input.signal?.aborted) break;
+    }
+  }
+  return { used: false, model: attempts.at(-1)?.model || attempts[0].model, chunks: null };
+}
+
+async function* readRest(first, reader) {
+  yield first;
+  while (true) {
+    const next = await reader.read();
+    if (next.done) break;
+    if (next.value) yield Buffer.from(next.value);
+  }
 }

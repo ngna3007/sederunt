@@ -5,6 +5,7 @@
  * A bot with no ear returns false so Output Audio can still play.
  */
 
+import { timingSafeEqual } from "node:crypto";
 import { CONVERSATION_MS } from "./speech-gate.js";
 
 const CLIP_BYTES = 700000;
@@ -178,6 +179,166 @@ export async function bindMeetingEar(workspace, ear, botId, env = process.env, f
   bag.ears.set(id, token);
   await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:bot:${id}`, token, "EX", String(EAR_SECONDS)]);
   return true;
+}
+
+const SPEAKER_SECONDS = 120;
+const TURN_SECONDS = 30;
+const SEEN_SECONDS = 600;
+
+function seatBag(workspace) {
+  const bag = bagOf(workspace);
+  if (!bag) return null;
+  if (!(bag.seats instanceof Map)) bag.seats = new Map();
+  if (!(bag.seatByBot instanceof Map)) bag.seatByBot = new Map();
+  return bag;
+}
+
+function earMatches(left, right) {
+  const a = Buffer.from(String(left));
+  const b = Buffer.from(String(right));
+  if (a.length !== b.length || a.length === 0) return false;
+  return timingSafeEqual(a, b);
+}
+
+function seatFrom(input) {
+  const ear = String(input?.ear || "");
+  const botId = cleanBotId(input?.botId);
+  if (!validMeetingEar(ear) || !botId) return null;
+  const botName = String(input?.botName || "Adam").trim().slice(0, 40) || "Adam";
+  return {
+    ear,
+    botId,
+    tenantId: String(input?.tenantId || ""),
+    roomId: cleanBotId(input?.roomId) || botId,
+    botName,
+    participantId: input?.participantId == null || input.participantId === "" ? null : String(input.participantId).slice(0, 40),
+    ended: input?.ended === true,
+  };
+}
+
+function namesMatch(left, right) {
+  const a = String(left || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  const b = String(right || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  return Boolean(a) && a === b;
+}
+
+/** Remember which bot, tenant, and room this page ear may speak for. */
+export function rememberAgentSeat(workspace, input) {
+  const bag = seatBag(workspace);
+  const seat = seatFrom(input);
+  if (!bag || !seat) return false;
+  bag.seats.set(seat.ear, seat);
+  bag.seatByBot.set(seat.botId, seat.ear);
+  return true;
+}
+
+export function agentSeatForBot(workspace, botId) {
+  const bag = seatBag(workspace);
+  const id = cleanBotId(botId);
+  if (!bag || !id) return null;
+  const ear = bag.seatByBot.get(id);
+  return ear ? bag.seats.get(ear) || null : null;
+}
+
+export async function bindAgentSeat(workspace, input, env = process.env, fetchImpl = fetch) {
+  const seat = seatFrom(input);
+  if (!rememberAgentSeat(workspace, seat)) return false;
+  await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:seat:${seat.ear}`, JSON.stringify(seat), "EX", String(EAR_SECONDS)]);
+  return true;
+}
+
+/**
+ * The ear is the only credential. A bad shape is unauthorized.
+ * A well-formed ear for an unknown or ended bot is forbidden.
+ * The compare does not throw when the stored ear is absent.
+ */
+export async function resolveAgentSeat(workspace, ear, env = process.env, fetchImpl = fetch) {
+  const token = String(ear || "");
+  if (!validMeetingEar(token)) return { ok: false, status: 401 };
+  const bag = seatBag(workspace);
+  let seat = bag?.seats.get(token) || null;
+  if (!seat && redisConfigured(env)) {
+    const loaded = await redisCommand(env, fetchImpl, ["GET", `sederunt:voice:seat:${token}`]);
+    if (typeof loaded.result === "string" && loaded.result.startsWith("{")) {
+      try {
+        const parsed = JSON.parse(loaded.result);
+        if (rememberAgentSeat(workspace, { ...parsed, ear: token })) seat = bag.seats.get(token) || null;
+      } catch {
+        seat = null;
+      }
+    }
+  }
+  const stored = seat?.ear || "0".repeat(token.length);
+  const match = earMatches(token, stored);
+  if (!seat || !match || seat.ended) return { ok: false, status: 403 };
+  if (!seat.participantId && redisConfigured(env)) {
+    const speaker = await redisCommand(env, fetchImpl, ["GET", `sederunt:voice:speaker:${seat.botId}`]);
+    if (typeof speaker.result === "string" && speaker.result.trim()) seat.participantId = speaker.result.trim();
+  }
+  return { ok: true, seat };
+}
+
+export function endAgentSeat(workspace, botId) {
+  const seat = agentSeatForBot(workspace, botId);
+  if (!seat) return false;
+  seat.ended = true;
+  return true;
+}
+
+export async function finishAgentSeat(workspace, botId, env = process.env, fetchImpl = fetch) {
+  const seat = agentSeatForBot(workspace, botId);
+  if (!endAgentSeat(workspace, botId) || !seat) return false;
+  await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:seat:${seat.ear}`, JSON.stringify(seat), "EX", String(EAR_SECONDS)]);
+  return true;
+}
+
+/** The bot's own participant, from a final whose speaker is the bot. */
+export function noteAgentSpeaker(workspace, botId, participantId, speakerName = "") {
+  const seat = agentSeatForBot(workspace, botId);
+  const id = String(participantId || "").trim().slice(0, 40);
+  if (!seat || !id) return false;
+  if (speakerName && !namesMatch(speakerName, seat.botName)) return false;
+  seat.participantId = id;
+  return true;
+}
+
+export async function rememberAgentSpeaker(workspace, botId, participantId, speakerName, env = process.env, fetchImpl = fetch) {
+  if (!noteAgentSpeaker(workspace, botId, participantId, speakerName)) return false;
+  const id = cleanBotId(botId);
+  await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:speaker:${id}`, String(participantId).trim(), "EX", String(SPEAKER_SECONDS)]);
+  return true;
+}
+
+export async function holdAgentTurn(env, fetchImpl, botId, turnId) {
+  const id = cleanBotId(botId);
+  const token = String(turnId || "").slice(0, 80);
+  if (!id || !token) return false;
+  await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:turn:${id}`, token, "EX", String(TURN_SECONDS)]);
+  return true;
+}
+
+export async function agentTurnCurrent(env, fetchImpl, botId) {
+  const id = cleanBotId(botId);
+  if (!id || !redisConfigured(env)) return "";
+  const loaded = await redisCommand(env, fetchImpl, ["GET", `sederunt:voice:turn:${id}`]);
+  return typeof loaded.result === "string" ? loaded.result : "";
+}
+
+export async function releaseAgentTurn(env, fetchImpl, botId, turnId) {
+  const id = cleanBotId(botId);
+  if (!id) return false;
+  await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:turn:${id}`, `cancel:${String(turnId || "").slice(0, 80)}`, "EX", String(TURN_SECONDS)]);
+  return true;
+}
+
+/** True when this turn id is the first claim. No Redis means the caller decides locally. */
+export async function rememberAgentTurn(env, fetchImpl, botId, turnId) {
+  const id = cleanBotId(botId);
+  const token = String(turnId || "").slice(0, 80);
+  if (!id || !token) return false;
+  const saved = await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:seen:${id}:${token}`, "1", "EX", String(SEEN_SECONDS), "NX"]);
+  if (!saved.ok) return true;
+  return saved.result != null;
 }
 
 /**

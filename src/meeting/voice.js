@@ -4,6 +4,7 @@ import { addressesHearing, DEFAULT_HEARING_ALIASES, normalizeHearing } from "../
 import { handleMcpRequest } from "../mcp.js";
 import { buildSystemPrompt } from "../bot/persona.js";
 import { openRouterConfig, openRouterSpeech, openRouterTurn } from "../openrouter.js";
+import { voiceModels } from "./voice-models.js";
 import {
   CONVERSATION_MS,
   HEAR_LINE,
@@ -566,24 +567,7 @@ async function defaultRunTool(input) {
   }, input.deps, input.context);
 }
 
-/** Fast tool caller, then a second vendor, then the newer lite. A pin replaces the first. */
-const MEETING_VOICE_MODELS = [
-  "google/gemini-2.5-flash-lite",
-  "openai/gpt-4.1-mini",
-  "google/gemini-3.1-flash-lite",
-];
 
-function voiceModels(env) {
-  const pinned = typeof env.OPENROUTER_VOICE_MODEL === "string" ? env.OPENROUTER_VOICE_MODEL.trim() : "";
-  const seen = new Set();
-  const models = [];
-  for (const model of [pinned, ...MEETING_VOICE_MODELS]) {
-    if (!model || seen.has(model)) continue;
-    seen.add(model);
-    models.push(model);
-  }
-  return models;
-}
 
 function keptLines(session, roomId, current) {
   const rows = Array.isArray(session?.decisions) ? session.decisions : [];

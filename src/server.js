@@ -28,8 +28,9 @@ import { loadLinearToken } from "./linear/token.js";
 import { createLinearInstallationStore } from "./linear/installations.js";
 import { handleLinearOAuth, linearClientMetadata, tenantLinearClient } from "./linear/oauth.js";
 import { renderCameraPage } from "./meeting/camera.js";
+import { handleMeetingAgent } from "./meeting/agent-http.js";
 import { loadSpikeShapes, measureSpeechProbe, pushSpikeShape, readSpikeShapes, saveSpikeShape, spikeAuthorized, spikeEnabled, transcriptEventShape } from "./meeting/spike.js";
-import { bindMeetingEar, clearPlayedFloor, meetingFloorClosedAt, offerMeetingClip, playedMeetingFloor, requestMeetingHold, stageMeetingFloor, takeMeetingVoice, validMeetingEar } from "./meeting/voice-bus.js";
+import { bindAgentSeat, bindMeetingEar, clearPlayedFloor, finishAgentSeat, meetingFloorClosedAt, offerMeetingClip, playedMeetingFloor, rememberAgentSeat, rememberAgentSpeaker, requestMeetingHold, stageMeetingFloor, takeMeetingVoice, validMeetingEar } from "./meeting/voice-bus.js";
 import { createMeetingAdapter, mediaFromBot, meetingCallUpdate, meetingDoorReady, meetingEnded, recallBotUrl, recallTranscriptDelivery, transcriptLines, verifyRecallRequest } from "./meeting/recall.js";
 import { applyPlayedFloor, claimMeetingEvent, claimMeetingEventLocal, meetingEventKey, meetingLineClosesFloor, meetingLineJoinsOpenTurn, meetingLineShouldAnswer, noteMeetingHeard, refreshMeetingFloor, releaseMeetingEvent, releaseMeetingEventLocal, speakMeetingTurn } from "./meeting/voice.js";
 import { keepRoomTranscript, meetingSpeechBook, rememberMeetingLine, scheduleMeetingSpeech, speechSpeakerKey, waitForMeetingSpeech } from "./meeting/speech-gate.js";
@@ -609,6 +610,9 @@ export function createApp(options = {}) {
   workspace.calendarMcp = createFakeCalendarMcp();
   workspace.calendarSave = typeof options.calendarSave === "function" ? options.calendarSave : null;
   workspace.fetchImpl = options.fetch || globalThis.fetch;
+  if (Array.isArray(options.agentSeats)) {
+    for (const seat of options.agentSeats) rememberAgentSeat(workspace, seat);
+  }
   async function mcpCallContext(req) {
     const gate = guardConsole(req, env);
     const tenantId = await resolveMcpSpace(gate, identity, workspace.deps.connectors);
@@ -1303,6 +1307,20 @@ export function createApp(options = {}) {
       send(res, 200, "text/html; charset=utf-8", renderCameraPage(url.searchParams.get("name") || "", { spike }));
       return;
     }
+    if (url.pathname.startsWith("/api/meeting/agent/")) {
+      const handled = await handleMeetingAgent({
+        req,
+        res,
+        url,
+        env,
+        workspace,
+        sessionFor: (tenantId) => sessionFor(workspace, tenantId),
+        headerValue,
+        readJson,
+        send,
+      });
+      if (handled) return;
+    }
     if (url.pathname === "/api/meeting/spike/tts" || url.pathname === "/api/meeting/spike/transcript") {
       if (!spikeEnabled(env)) {
         send(res, 404, "text/plain; charset=utf-8", "");
@@ -1567,6 +1585,13 @@ export function createApp(options = {}) {
             startedAt = typeof sent?.startedAt === "string" ? sent.startedAt : (typeof sent?.started_at === "string" ? sent.started_at : "");
             if (botId && typeof sent?.ear === "string") {
               await bindMeetingEar(workspace, sent.ear, botId, env, workspace.fetchImpl).catch(() => {});
+              await bindAgentSeat(workspace, {
+                ear: sent.ear,
+                botId,
+                tenantId: joinCompanyId || "",
+                roomId: botId,
+                botName: guest,
+              }, env, workspace.fetchImpl).catch(() => {});
             }
             if (!botId) {
               status = "failed";
@@ -1725,6 +1750,9 @@ export function createApp(options = {}) {
                 const participant = payload?.data?.data?.participant || payload?.data?.participant;
                 const speakerName = typeof participant?.name === "string" ? participant.name : "";
                 const heardDelivery = speakerName ? { ...delivery, speakerName } : delivery;
+                if (!delivery.partial && botId && speakerName && delivery.memberId) {
+                  await rememberAgentSpeaker(workspace, botId, delivery.memberId, speakerName, env, workspace.fetchImpl).catch(() => {});
+                }
                 if (!delivery.partial) {
                   noteMeetingHeard(current, heardDelivery);
                   if (botId) rememberMeetingLine(current, botId, { speaker: speakerName || "Someone", text: delivery.text });
@@ -1833,6 +1861,7 @@ export function createApp(options = {}) {
           }
           if (ended?.roomId) {
             tasks.push((async () => {
+              await finishAgentSeat(workspace, ended.roomId, env, workspace.fetchImpl).catch(() => {});
               const current = await prepareWorkspace(workspace, endedCompany);
               const endedCall = progress?.roomId === ended.roomId && progress.call ? progress.call : "done";
               await noteMeetingCall(current, depsFor(workspace, endedCompany), ended.roomId, endedCall).catch(() => {});

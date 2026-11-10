@@ -3,7 +3,6 @@ import { access } from "node:fs/promises";
 import { once } from "node:events";
 import { request } from "node:http";
 import test from "node:test";
-import { SILENT_MEETING_MP3 } from "../src/meeting/silent-clip.js";
 import { applyPlayedFloor } from "../src/meeting/voice.js";
 import { bindMeetingEar, clearPlayedFloor, meetingFloorClosedAt, meetingHoldRequested, offerMeetingClip, playedMeetingFloor, requestMeetingHold, stageMeetingFloor, takeMeetingClip, takeMeetingVoice } from "../src/meeting/voice-bus.js";
 import { createApp } from "../src/server.js";
@@ -718,16 +717,15 @@ test("the meeting page receives one clip and a bad ear gets nothing", async () =
     const page = await get(port, "/meeting?name=Adam");
     assert.equal(page.status, 200);
     assert.match(page.raw, /Sederunt/);
-    assert.match(page.raw, /\/meeting\/voice/);
-    assert.match(page.raw, /x-sederunt-hold/);
-    assert.doesNotMatch(page.raw, /loudTicks/);
-    assert.doesNotMatch(page.raw, /getUserMedia/);
+    assert.match(page.raw, /wss:\/\/meeting-data\.bot\.recall\.ai\/api\/v1\/transcript/);
+    assert.match(page.raw, /getUserMedia/);
+    assert.doesNotMatch(page.raw, /\/meeting\/voice/);
+    assert.doesNotMatch(page.raw, /sk-or-/);
     assert.match(page.raw, /textContent/);
     assert.match(page.raw, /#081428/);
     assert.doesNotMatch(page.raw, /#f4f3ef/);
     assert.doesNotMatch(page.raw, /Quiet until addressed/);
     assert.doesNotMatch(page.raw, /Say this name/);
-    assert.doesNotMatch(page.raw, /destination/);
     assert.equal(await bindMeetingEar({ meetingVoice: held }, ear, "bot-page", {}), true);
     assert.equal(await offerMeetingClip({ meetingVoice: held }, "bot-page", clip, {}), true);
     const first = await get(port, `/meeting/voice?ear=${ear}`);
@@ -802,7 +800,7 @@ test("joining binds the ear the meeting page polls", async () => {
   }
 });
 
-test("the camera tile shows the guest name and plays one clip", { timeout: 60000 }, async (t) => {
+test("the camera tile shows the guest name and answers only when addressed", { timeout: 60000 }, async (t) => {
   let chromium;
   try {
     ({ chromium } = await import("playwright"));
@@ -843,7 +841,11 @@ test("the camera tile shows the guest name and plays one clip", { timeout: 60000
   for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 }]) {
     const page = await browser.newPage({ viewport });
     const errors = [];
+    const voiceHits = [];
     page.on("pageerror", (error) => errors.push(String(error)));
+    page.on("request", (hit) => {
+      if (hit.url().includes("/meeting/voice")) voiceHits.push(hit.url());
+    });
     await page.goto(`${origin}/meeting?name=${encodeURIComponent("Adam <b>no</b>")}&ear=${ear}`);
     await page.locator("#guest").waitFor();
     assert.equal(await page.locator("#guest").innerText(), "Adam <b>no</b>");
@@ -857,26 +859,44 @@ test("the camera tile shows the guest name and plays one clip", { timeout: 60000
     assert.equal(box.scroll <= box.client, true);
     assert.equal(box.color, "rgb(8, 20, 40)");
     assert.equal(box.ink, "rgb(250, 248, 245)");
-    assert.equal(await bindMeetingEar({ meetingVoice: held }, ear, "bot-tile", {}), true);
-    const spoken = Buffer.concat(Array.from({ length: 40 }, () => SILENT_MEETING_MP3));
-    assert.equal(await offerMeetingClip({ meetingVoice: held }, "bot-tile", spoken, {}), true);
-    await page.waitForFunction(() => {
-      const audio = document.querySelector("#voice");
-      const name = document.getElementById("guest");
-      return Boolean(audio && audio.currentSrc.startsWith("blob:") && audio.paused === false && name.className === "speaking");
+    const decision = await page.evaluate(() => {
+      const agent = window.__sederunt;
+      const chatter = agent.shouldRespond("We should ship the booth on Thursday.", "Priya", 2000);
+      const follow = agent.shouldRespond("And the booth.", "Priya", 1000);
+      agent.noteAnswer("Priya", 1000);
+      return {
+        chatter,
+        called: agent.shouldRespond("Adam, keep Thursday.", "Priya", 2000),
+        self: agent.shouldRespond("Adam, keep Thursday.", "Adam", 2000),
+        followBefore: follow,
+        followAfter: agent.shouldRespond("And the booth.", "Priya", 2000),
+        other: agent.shouldRespond("And the booth.", "Sam", 2000),
+        closed: agent.endOfTurn("Keep the launch.", 1200),
+        early: agent.endOfTurn("Keep the launch.", 1199),
+        unfinished: agent.endOfTurn("Keep the about", 1200),
+        unfinishedDone: agent.endOfTurn("Keep the about", 2500),
+        state: document.getElementById("guest").dataset.state,
+      };
     });
-    await page.evaluate(() => stopTalking());
-    await page.waitForFunction(() => {
-      const audio = document.querySelector("#voice");
-      const name = document.getElementById("guest");
-      return Boolean(audio && audio.paused === true && name.className === "");
-    });
+    assert.equal(decision.chatter, false);
+    assert.equal(decision.called, true);
+    assert.equal(decision.self, false);
+    assert.equal(decision.followBefore, false);
+    assert.equal(decision.followAfter, true);
+    assert.equal(decision.other, false);
+    assert.equal(decision.closed, true);
+    assert.equal(decision.early, false);
+    assert.equal(decision.unfinished, false);
+    assert.equal(decision.unfinishedDone, true);
+    assert.equal(decision.state, "listening");
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.equal(voiceHits.length, 0);
     assert.deepEqual(errors, []);
     await page.close();
   }
 });
 
-test("a late stop does not cut a clip a newer poll started", { timeout: 30000 }, async (t) => {
+test("the agent page does not poll for a clip", { timeout: 30000 }, async (t) => {
   let chromium;
   try {
     ({ chromium } = await import("playwright"));
@@ -912,53 +932,23 @@ test("a late stop does not cut a clip a newer poll started", { timeout: 30000 },
   });
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   const errors = [];
+  const voiceHits = [];
   page.on("pageerror", (error) => errors.push(String(error)));
-  let calls = 0;
-  const tickets = [];
-  let markSecond = () => {};
-  const secondSeen = new Promise((resolve) => { markSecond = resolve; });
-  const spoken = Buffer.concat(Array.from({ length: 80 }, () => SILENT_MEETING_MP3));
-  await page.route("**/meeting/voice**", async (route) => {
-    calls += 1;
-    tickets.push(Number(new URL(route.request().url()).searchParams.get("n")));
-    if (calls === 1) {
-      await stopGate;
-      await route.fulfill({ status: 204, headers: { "x-sederunt-hold": "stop" }, body: "" });
-      return;
-    }
-    if (calls === 2) {
-      markSecond();
-      await route.fulfill({ status: 200, contentType: "audio/mpeg", body: spoken });
-      return;
-    }
-    await route.fulfill({ status: 204, body: "" });
+  page.on("request", (hit) => {
+    if (hit.url().includes("/meeting/voice")) voiceHits.push(hit.url());
   });
   await page.goto(`http://127.0.0.1:${port}/meeting?name=Adam&ear=${ear}`);
-  const overlapped = await Promise.race([
-    secondSeen.then(() => true),
-    new Promise((resolve) => setTimeout(() => resolve(false), 2000)),
-  ]);
-  assert.equal(overlapped, true);
-  assert.equal(tickets[0] > 1_000_000_000_000, true);
-  assert.equal(tickets[1] > tickets[0], true);
-  await page.waitForFunction(() => {
-    const audio = document.querySelector("#voice");
-    const name = document.getElementById("guest");
-    return Boolean(audio && audio.currentSrc.startsWith("blob:") && audio.paused === false && name.className === "speaking");
-  });
+  await page.locator("#guest").waitFor();
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.equal(voiceHits.length, 0);
+  assert.equal(await page.locator("#guest").innerText(), "Adam");
+  assert.equal(await page.locator("#guest").getAttribute("data-state"), "listening");
   releaseStop();
-  await new Promise((resolve) => setTimeout(resolve, 400));
-  const still = await page.evaluate(() => {
-    const audio = document.querySelector("#voice");
-    const name = document.getElementById("guest");
-    return Boolean(audio && audio.paused === false && audio.currentSrc.startsWith("blob:") && name.className === "speaking");
-  });
-  assert.equal(still, true);
   assert.deepEqual(errors, []);
   await page.close();
 });
 
-test("a new clip waits until the current one ends, and a stop drops what is waiting", { timeout: 30000 }, async (t) => {
+test("the agent page fits a phone width and does not poll for clips", { timeout: 30000 }, async (t) => {
   let chromium;
   try {
     ({ chromium } = await import("playwright"));
@@ -988,67 +978,25 @@ test("a new clip waits until the current one ends, and a stop drops what is wait
     await browser.close();
     await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
   });
-  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
   const errors = [];
+  const voiceHits = [];
   page.on("pageerror", (error) => errors.push(String(error)));
-  await page.addInitScript(() => {
-    window.__clips = [];
-    document.addEventListener("play", (event) => {
-      if (event.target && event.target.id === "voice") window.__clips.push(event.target.currentSrc);
-    }, true);
+  page.on("request", (hit) => {
+    if (hit.url().includes("/meeting/voice")) voiceHits.push(hit.url());
   });
-  let calls = 0;
   const ear = "d5".repeat(24);
-  const first = Buffer.concat(Array.from({ length: 80 }, () => SILENT_MEETING_MP3));
-  const second = Buffer.concat(Array.from({ length: 40 }, () => SILENT_MEETING_MP3));
-  await page.route("**/meeting/voice**", async (route) => {
-    calls += 1;
-    if (calls === 1) {
-      await route.fulfill({ status: 200, contentType: "audio/mpeg", body: first });
-      return;
-    }
-    if (calls === 2) {
-      await route.fulfill({ status: 200, contentType: "audio/mpeg", body: second });
-      return;
-    }
-    await route.fulfill({ status: 204, headers: { "x-sederunt-hold": "stop" }, body: "" });
-  });
   await page.goto(`http://127.0.0.1:${port}/meeting?name=Adam&ear=${ear}`);
-  await page.waitForFunction(() => {
-    const audio = document.querySelector("#voice");
-    return Boolean(audio && audio.paused === false && audio.currentSrc.startsWith("blob:"));
-  });
-  const started = Date.now();
-  while (calls < 2 && Date.now() - started < 2000) {
-    await new Promise((resolve) => setTimeout(resolve, 40));
-  }
-  assert.equal(calls >= 2, true);
-  const during = await page.evaluate(() => ({
-    clips: window.__clips.length,
-    paused: document.querySelector("#voice").paused,
-    speaking: document.getElementById("guest").className,
+  await page.locator("#guest").waitFor();
+  const box = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+    socket: document.documentElement.innerHTML.includes("wss://meeting-data.bot.recall.ai/api/v1/transcript"),
   }));
-  assert.equal(during.clips, 1);
-  assert.equal(during.paused, false);
-  assert.equal(during.speaking, "speaking");
-  const stopping = Date.now();
-  while (calls < 3 && Date.now() - stopping < 2000) {
-    await new Promise((resolve) => setTimeout(resolve, 40));
-  }
-  assert.equal(calls >= 3, true);
-  await page.waitForFunction(() => {
-    const audio = document.querySelector("#voice");
-    return Boolean(audio && audio.paused === true);
-  });
+  assert.equal(box.scroll <= box.client, true);
+  assert.equal(box.socket, true);
   await new Promise((resolve) => setTimeout(resolve, 500));
-  const after = await page.evaluate(() => ({
-    clips: window.__clips.length,
-    paused: document.querySelector("#voice").paused,
-    speaking: document.getElementById("guest").className,
-  }));
-  assert.equal(after.clips, 1);
-  assert.equal(after.paused, true);
-  assert.equal(after.speaking, "");
+  assert.equal(voiceHits.length, 0);
   assert.deepEqual(errors, []);
   await page.close();
 });

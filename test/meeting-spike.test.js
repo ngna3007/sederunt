@@ -112,8 +112,9 @@ test("the spike stays off until the preview flag is set", async () => {
   try {
     const page = await call(port, "GET", "/meeting?spike=1");
     assert.equal(page.status, 200);
-    assert.equal(page.raw.includes("meeting-data.bot.recall.ai"), false);
-    assert.equal(page.raw.includes("getUserMedia"), false);
+    assert.equal(page.raw.includes("/api/meeting/spike/transcript"), false);
+    assert.equal(page.raw.includes("wss://meeting-data.bot.recall.ai/api/v1/transcript"), true);
+    assert.equal(page.raw.includes("getUserMedia"), true);
     const probe = await call(port, "POST", "/api/meeting/spike/tts", {
       headers: { "x-sederunt-spike": NONCE },
     });
@@ -145,7 +146,8 @@ test("a spiked page logs the transcript shape and the speech probe stays on the 
   const port = app.address().port;
   try {
     const plain = await call(port, "GET", "/meeting?name=Adam");
-    assert.equal(plain.raw.includes("meeting-data.bot.recall.ai"), false);
+    assert.equal(plain.raw.includes("wss://meeting-data.bot.recall.ai/api/v1/transcript"), true);
+    assert.equal(plain.raw.includes("/api/meeting/spike/transcript"), false);
     const spiked = await call(port, "GET", `/meeting?name=Adam&spike=1&ear=${EAR}`);
     assert.equal(spiked.raw.includes("wss://meeting-data.bot.recall.ai/api/v1/transcript"), true);
     assert.equal(spiked.raw.includes(KEY), false);
