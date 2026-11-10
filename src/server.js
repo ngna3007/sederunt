@@ -27,8 +27,9 @@ import { loadLinearToken } from "./linear/token.js";
 import { createLinearInstallationStore } from "./linear/installations.js";
 import { handleLinearOAuth, linearClientMetadata, tenantLinearClient } from "./linear/oauth.js";
 import { renderCameraPage } from "./meeting/camera.js";
+import { bindMeetingEar, offerMeetingClip, takeMeetingClip } from "./meeting/voice-bus.js";
 import { createMeetingAdapter, mediaFromBot, meetingCallUpdate, meetingDoorReady, meetingEnded, recallBotUrl, recallTranscriptDelivery, transcriptLines, verifyRecallRequest } from "./meeting/recall.js";
-import { meetingLineShouldAnswer, speakMeetingTurn } from "./meeting/voice.js";
+import { meetingLineClosesFloor, meetingLineShouldAnswer, meetingPresenceLine, noteMeetingHeard, refreshMeetingFloor, speakMeetingTurn } from "./meeting/voice.js";
 import { createMeetingFollowups, parseFollowupValue } from "./meeting/followups.js";
 import { createSupabaseFollowupStore } from "./meeting/followup-store.js";
 import { acceptMeetingEnd, buildMeetingFollowupInput, followupInteractionFields, validateFollowupEdit } from "./meeting/live-followups.js";
@@ -586,6 +587,7 @@ export function createApp(options = {}) {
     ask: options.askStore || createAskStore(env),
     openrouterFetch: options.openrouterFetch || null,
     participantBindings: options.participantBindings || createParticipantBindings(env, { fetchImpl: options.fetch || globalThis.fetch }),
+    meetingVoice: options.meetingVoice && typeof options.meetingVoice === "object" ? options.meetingVoice : undefined,
   };
   if (proofWarmOn(env) && workspace.companyLoaded && deps.tatum) {
     // Verify proofs already on this process. Rebuilding the unbound company
@@ -1287,6 +1289,15 @@ export function createApp(options = {}) {
       send(res, 200, "text/html; charset=utf-8", renderCameraPage(url.searchParams.get("name") || ""));
       return;
     }
+    if (req.method === "GET" && url.pathname === "/meeting/voice") {
+      const clip = await takeMeetingClip(workspace, url.searchParams.get("ear") || "", env, workspace.fetchImpl);
+      if (!clip) {
+        send(res, 204, "text/plain; charset=utf-8", "", { "cache-control": "no-store" });
+        return;
+      }
+      send(res, 200, "audio/mpeg", clip, { "cache-control": "no-store" });
+      return;
+    }
     if (req.method === "POST" && url.pathname === "/api/hearing") {
       const authz = await authorizeBotWrite({ req, env, identity });
       if (!authz.ok) {
@@ -1474,6 +1485,9 @@ export function createApp(options = {}) {
             const sent = await deps.meeting.join({ url: meetingUrl, name: guest, botName: bot.name });
             botId = typeof sent?.id === "string" ? sent.id : "";
             startedAt = typeof sent?.startedAt === "string" ? sent.startedAt : (typeof sent?.started_at === "string" ? sent.started_at : "");
+            if (botId && typeof sent?.ear === "string") {
+              await bindMeetingEar(workspace, sent.ear, botId, env, workspace.fetchImpl).catch(() => {});
+            }
             if (!botId) {
               status = "failed";
             } else if (joinCompanyId && workspace.tenantBind) {
@@ -1561,10 +1575,16 @@ export function createApp(options = {}) {
               return;
             }
             // Unbound production memory fails closed (empty tenant + no allowUnscoped).
-            const current = await prepareWorkspace(workspace, companyId);
+            // A check can be spoken from the session already in hand. A question
+            // gets a short head start, then speaks while the rest of the index finishes.
+            let current = sessionFor(workspace, companyId);
+            const presence = meetingPresenceLine(delivery.text);
+            if (!current.readReport?.ok && !delivery.partial && !presence) {
+              current = await prepareWorkspace(workspace, companyId, false, SPEECH_INDEX_WAIT_MS);
+            }
             const participant = payload?.data?.data?.participant || payload?.data?.participant;
             // Display names and unverified mailbox claims never establish attendance identity.
-            if (participant?.email_verified === true && typeof participant.email === "string" && delivery.memberId) {
+            if (!delivery.partial && participant?.email_verified === true && typeof participant.email === "string" && delivery.memberId) {
               try {
                 await workspace.participantBindings.record({ tenantId: companyId, roomId: delivery.room.id, memberId: delivery.memberId, email: participant.email });
               } catch (error) {
@@ -1575,15 +1595,19 @@ export function createApp(options = {}) {
                 }
               }
             }
-            const answerLine = meetingLineShouldAnswer(current, delivery);
+            const speakerName = typeof participant?.name === "string" ? participant.name : "";
+            const heardDelivery = speakerName ? { ...delivery, speakerName } : delivery;
+            if (!delivery.partial) noteMeetingHeard(current, heardDelivery);
+            const answerLine = meetingLineShouldAnswer(current, heardDelivery);
+            if (!delivery.partial && (answerLine || meetingLineClosesFloor(current, heardDelivery))) {
+              refreshMeetingFloor(current, heardDelivery);
+            }
             const seenDelivery = Boolean(
               delivery.deliveryId
               && current.deliveries instanceof Set
               && current.deliveries.has(delivery.deliveryId),
             );
-            const speakerName = typeof participant?.name === "string" ? participant.name : "";
-            // Speak before the keep. A short call ends if the reply waits on memory.
-            if (answerLine && !seenDelivery) {
+            const startSpeech = () => {
               voiceWork = speakMeetingTurn({
                 answer: true,
                 text: delivery.text,
@@ -1593,8 +1617,10 @@ export function createApp(options = {}) {
                 room: delivery.room,
                 session: current,
                 deliveryId: delivery.deliveryId,
+                utteranceId: delivery.utteranceId,
                 env,
                 fetchImpl: workspace.fetchImpl,
+                deliver: (audio) => offerMeetingClip(workspace, delivery.room?.id, audio, env, workspace.fetchImpl),
                 deps: depsFor(workspace, companyId),
                 context: {
                   tenantId: companyId || "",
@@ -1608,12 +1634,25 @@ export function createApp(options = {}) {
                   origin: typeof env.SEDERUNT_PUBLIC_ORIGIN === "string" ? env.SEDERUNT_PUBLIC_ORIGIN : "",
                 },
               }).catch(() => {});
+            };
+            // A partial is an intermediate. It can answer a check early. It is not a keep.
+            if (delivery.partial) {
+              if (answerLine && delivery.room?.id) {
+                current.hearingArmedRooms ??= new Set();
+                current.hearingArmedRooms.add(delivery.room.id);
+              }
+              if (answerLine && presence && !seenDelivery) startSpeech();
+            } else if (answerLine && !seenDelivery) {
+              startSpeech();
             }
-            await handleUtterance({ ...delivery, session: current }, depsFor(workspace, companyId));
-            if (delivery.room?.id) {
-              await noteMeetingCall(current, depsFor(workspace, companyId), delivery.room.id, "in_call_recording").catch(() => {});
+            if (!delivery.partial) {
+              if (!current.readReport?.ok) current = await prepareWorkspace(workspace, companyId);
+              await handleUtterance({ ...delivery, session: current }, depsFor(workspace, companyId));
+              if (delivery.room?.id) {
+                await noteMeetingCall(current, depsFor(workspace, companyId), delivery.room.id, "in_call_recording").catch(() => {});
+              }
             }
-            if (companyId && workspace.followups && workspace.followupStore) {
+            if (!delivery.partial && companyId && workspace.followups && workspace.followupStore) {
               const outcomes = await workspace.followupStore.list(companyId, { kind: "outcome", meetingId: delivery.room.id, limit: 1 });
               if (outcomes.length) await persistMeetingFollowups(workspace, companyId, delivery.room.id);
             }
@@ -3138,6 +3177,7 @@ async function currentBot(workspace, req) {
 
 const BOARD_PROOF_WAIT_MS = 400;
 const BOARD_INDEX_WAIT_MS = 80;
+const SPEECH_INDEX_WAIT_MS = 80;
 const BOARD_SIDE_WAIT_MS = 1200;
 const PAGE_DOOR_WAIT_MS = 400;
 

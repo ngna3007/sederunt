@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { redactStructured } from "../src/connectors/expose.js";
+import { callCustomTool, redactStructured } from "../src/connectors/expose.js";
 import { presentCustomToolResult } from "../src/mcp.js";
 
 test("custom tool results keep structured content and a text fallback", () => {
@@ -65,4 +65,72 @@ test("structured tool results drop bearer tokens", () => {
   assert.equal(encoded.includes("Bearer"), false);
   const same = { id: "acme", note: "demo" };
   assert.equal(redactStructured(same, token), same);
+});
+
+function connectorStore(slug, toolName, actionClass) {
+  return {
+    async list() {
+      return [{
+        slug,
+        status: "connected",
+        enabled: true,
+        url: "http://10.1.1.1/mcp",
+        tools: [{ name: toolName, enabled: true, changed: false, actionClass, description: "Create" }],
+      }];
+    },
+  };
+}
+
+test("a linear write follows Run automatically, and a delete still waits", async () => {
+  const ran = await callCustomTool({
+    store: connectorStore("linear", "create_issue", "write"),
+    tenantId: "northline",
+    session: { preferences: [{ tool: "linear", value: "do" }] },
+    name: "linear__create_issue",
+    args: { title: "Random task" },
+  });
+  assert.equal(ran.held, false);
+  assert.equal(String(ran.text || "").includes("Needs confirmation"), false);
+
+  const ask = await callCustomTool({
+    store: connectorStore("linear", "create_issue", "write"),
+    tenantId: "northline",
+    session: { preferences: [{ tool: "linear", value: "ask" }] },
+    name: "linear__create_issue",
+    args: { title: "Random task" },
+  });
+  assert.equal(ask.held, true);
+  assert.equal(ask.preference, "ask");
+
+  const specific = await callCustomTool({
+    store: connectorStore("linear", "create_issue", "write"),
+    tenantId: "northline",
+    session: {
+      preferences: [
+        { tool: "linear", value: "do" },
+        { tool: "mcp:linear:create_issue", value: "ask" },
+      ],
+    },
+    name: "linear__create_issue",
+    args: { title: "Random task" },
+  });
+  assert.equal(specific.held, true);
+
+  const removed = await callCustomTool({
+    store: connectorStore("linear", "delete_issue", "delete"),
+    tenantId: "northline",
+    session: { preferences: [{ tool: "linear", value: "do" }] },
+    name: "linear__delete_issue",
+    args: { id: "LIN-1" },
+  });
+  assert.equal(removed.held, true);
+
+  const other = await callCustomTool({
+    store: connectorStore("demo", "create_note", "write"),
+    tenantId: "northline",
+    session: { preferences: [{ tool: "linear", value: "do" }] },
+    name: "demo__create_note",
+    args: { text: "hello" },
+  });
+  assert.equal(other.held, true);
 });

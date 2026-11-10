@@ -224,10 +224,25 @@ export async function resolveMcpSpace(gate, identity, store) {
 function preferenceFor(tool, slug, session) {
   if (tool.actionClass === "read") return "do";
   if (tool.actionClass === "delete") return "ask";
+  const prefs = session?.preferences || [];
   const key = `mcp:${slug}:${tool.name}`;
-  const live = (session?.preferences || []).filter((pref) => pref?.tool === key && !pref.replacedBy);
-  if (!live.length) return "ask";
-  return resolvePreference(session.preferences, key, null);
+  const mcpLive = prefs.filter((pref) => pref?.tool === key && !pref.replacedBy);
+  if (mcpLive.length) return resolvePreference(prefs, key, null);
+  const consoleKey = consoleToolKey(slug);
+  const consoleLive = consoleKey
+    ? prefs.filter((pref) => pref?.tool === consoleKey && !pref.replacedBy)
+    : [];
+  if (consoleLive.length) return resolvePreference(prefs, consoleKey, null);
+  return "ask";
+}
+
+function consoleToolKey(slug) {
+  const name = String(slug || "").toLowerCase();
+  if (name === "linear" || name.startsWith("linear-")) return "linear";
+  if (name === "slack" || name.startsWith("slack-")) return "slack";
+  if (name === "calendar" || name === "google-calendar" || name.startsWith("calendar-")) return "calendar";
+  if (name === "forms" || name === "google-forms" || name.startsWith("forms-")) return "forms";
+  return "";
 }
 
 function confirmIdFrom(input) {

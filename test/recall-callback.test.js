@@ -177,7 +177,7 @@ test("a transcript lands on the opened meeting room without a typed name", async
   }
 });
 
-test("join leaves the camera off and a failed join omits the key", async () => {
+test("join opens the meeting page as the camera and a failed join omits the key", async () => {
   const key = "recall-key-toolsecret";
   const env = { RECALL_API_KEY: key, RECALL_WEBHOOK_SECRET: secret, SEDERUNT_PUBLIC_ORIGIN: "https://sederunt.example" };
   const meeting = { url: "https://meet.google.com/abc-defg-hij" };
@@ -205,18 +205,26 @@ test("join leaves the camera off and a failed join omits the key", async () => {
     },
   }).join(meeting);
   assert.equal(created.id, "bot-1");
+  assert.match(created.ear, /^[a-f0-9]{48}$/);
   assert.equal(sent.length, 1);
   assert.equal(sent[0].url, "https://ap-northeast-1.recall.ai/api/v1/bot/");
   assert.equal(sent[0].init.headers.authorization, `Token ${key}`);
   const body = JSON.parse(sent[0].init.body);
   assert.equal(body.meeting_url, "https://meet.google.com/abc-defg-hij");
   assert.equal(body.bot_name, "Adam");
-  assert.equal(body.output_media, undefined);
-  assert.equal(body.automatic_audio_output.in_call_recording.data.kind, "mp3");
-  assert.equal(body.automatic_audio_output.in_call_recording.replay_on_participant_join, undefined);
-  const clip = Buffer.from(body.automatic_audio_output.in_call_recording.data.b64_data, "base64");
-  assert.equal(clip.subarray(0, 2).toString("hex"), "fff3");
-  assert.equal(clip.length > 100 && clip.length < 8000, true);
+  assert.equal(body.automatic_audio_output, undefined);
+  assert.equal(JSON.stringify(body).includes(key), false);
+  assert.equal(body.output_media.camera.kind, "webpage");
+  const camera = new URL(body.output_media.camera.config.url);
+  assert.equal(camera.origin, "https://sederunt.example");
+  assert.equal(camera.pathname, "/meeting");
+  assert.equal(camera.searchParams.get("name"), "Maple");
+  assert.equal(camera.searchParams.get("ear"), created.ear);
+  assert.deepEqual(body.variant, {
+    zoom: "web_4_core",
+    google_meet: "web_4_core",
+    microsoft_teams: "web_4_core",
+  });
   sent.length = 0;
   await createMeetingAdapter(env, {
     async fetch(url, init) {
@@ -226,10 +234,14 @@ test("join leaves the camera off and a failed join omits the key", async () => {
   }).join({ ...meeting, name: "Maple", botName: "Mai" });
   const renamed = JSON.parse(sent[0].init.body);
   assert.equal(renamed.bot_name, "Mai");
-  assert.equal(renamed.output_media, undefined);
-  assert.equal(renamed.automatic_audio_output.in_call_recording.data.kind, "mp3");
+  assert.equal(renamed.automatic_audio_output, undefined);
+  const renamedPage = new URL(renamed.output_media.camera.config.url);
+  assert.equal(renamedPage.searchParams.get("name"), "Maple");
+  assert.match(renamedPage.searchParams.get("ear"), /^[a-f0-9]{48}$/);
+  assert.notEqual(renamedPage.searchParams.get("ear"), created.ear);
   assert.deepEqual(body.recording_config, {
     video_mixed_mp4: {},
+    include_bot_in_recording: { audio: true },
     transcript: {
       provider: { recallai_streaming: { mode: "prioritize_low_latency", language_code: "en" } },
       diarization: { use_separate_streams_when_available: true },
@@ -237,7 +249,7 @@ test("join leaves the camera off and a failed join omits the key", async () => {
     realtime_endpoints: [{
       type: "webhook",
       url: "https://sederunt.example/api/recall",
-      events: ["transcript.data"],
+      events: ["transcript.data", "transcript.partial_data"],
     }],
   });
 
@@ -534,11 +546,152 @@ test("verified Google attendance binds a Recall speaker only in its meeting, eve
   } finally { await new Promise((resolve, reject) => app.close((error) => error ? reject(error) : resolve())); }
 });
 
+test("a presence line is spoken while the company index is still reading", async () => {
+  let releaseIndex = () => {};
+  const indexGate = new Promise((resolve) => { releaseIndex = resolve; });
+  let played;
+  const playedGate = new Promise((resolve) => { played = resolve; });
+  let sawChat = false;
+  const app = createApp({
+    companyLoaded: true,
+    env: {
+      RECALL_WEBHOOK_SECRET: secret,
+      RECALL_API_KEY: "recall-test-key",
+      OPENROUTER_API_KEY: "sk-test-voice",
+      OPENROUTER_VOICE_MODEL: "voice-model",
+      SEDERUNT_MEMBER: "100",
+    },
+    deps: {
+      memory: {
+        async remember() { return { blobId: null }; },
+        async index() { await indexGate; return []; },
+        async recall() { return []; },
+      },
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+    },
+    fetch: async (url) => {
+      const href = String(url);
+      if (href.includes("/chat/completions")) {
+        sawChat = true;
+        return { ok: true, async json() { return { choices: [{ message: { content: "too late" } }] }; }, async text() { return ""; } };
+      }
+      if (href.includes("/audio/speech")) {
+        return { ok: true, async arrayBuffer() { return Uint8Array.from([0xff, 0xfb, 0x10, 0x00]); }, async text() { return ""; } };
+      }
+      if (href.includes("/output_audio/")) {
+        played();
+        return { ok: true, async text() { return ""; }, async json() { return {}; } };
+      }
+      return { ok: false, async text() { return ""; }, async json() { return {}; } };
+    },
+  });
+  app.listen(0, "127.0.0.1");
+  await once(app, "listening");
+  const port = app.address().port;
+  const payload = JSON.stringify({
+    event: "transcript.data",
+    data: {
+      bot: { id: "22222222-2222-4222-8222-222222222222" },
+      transcript: { id: "tr-fast" },
+      data: {
+        participant: { id: 100, name: "Anh Nguyễn" },
+        words: ["hey", "adam", "can", "you", "hear", "me"].map((text, index) => ({ text, start_timestamp: { relative: index } })),
+      },
+    },
+  });
+  try {
+    const pending = post(port, "/api/recall", payload, {
+      "webhook-id": "msg-fast",
+      "webhook-timestamp": "1731705121",
+      "webhook-signature": `v1,${sign(secret, "msg-fast", "1731705121", payload)}`,
+    });
+    const hit = await Promise.race([
+      playedGate.then(() => "played"),
+      new Promise((resolve) => setTimeout(() => resolve("timeout"), 1000)),
+    ]);
+    assert.equal(hit, "played");
+    assert.equal(sawChat, false);
+    releaseIndex();
+    assert.equal((await pending).status, 204);
+  } finally {
+    releaseIndex();
+    await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
+test("a partial transcript answers a check and is not kept", async () => {
+  const remembered = [];
+  let plays = 0;
+  const app = createApp({
+    companyLoaded: true,
+    env: {
+      RECALL_WEBHOOK_SECRET: secret,
+      RECALL_API_KEY: "recall-test-key",
+      OPENROUTER_API_KEY: "sk-test-voice",
+      SEDERUNT_MEMBER: "100",
+    },
+    deps: {
+      memory: {
+        async remember(row) { remembered.push(row); return { blobId: null }; },
+        async index() { return []; },
+        async recall() { return []; },
+      },
+      tatum: { async getObject() { return { text: "", checkpoint: null, objectId: null }; } },
+    },
+    fetch: async (url) => {
+      const href = String(url);
+      if (href.includes("/audio/speech")) {
+        return { ok: true, async arrayBuffer() { return Uint8Array.from([0xff, 0xfb, 0x10, 0x00]); }, async text() { return ""; } };
+      }
+      if (href.includes("/output_audio/")) {
+        plays += 1;
+        return { ok: true, async text() { return ""; }, async json() { return {}; } };
+      }
+      if (href.includes("/chat/completions")) {
+        return { ok: true, async json() { return { choices: [{ message: { content: "The launch is Thursday." } }] }; }, async text() { return ""; } };
+      }
+      return { ok: false, async text() { return ""; }, async json() { return {}; } };
+    },
+  });
+  app.listen(0, "127.0.0.1");
+  await once(app, "listening");
+  const port = app.address().port;
+  const deliver = (event, words, id) => {
+    const payload = JSON.stringify({
+      event,
+      data: {
+        bot: { id: "33333333-3333-4333-8333-333333333333" },
+        transcript: { id: "tr-partial" },
+        data: {
+          participant: { id: 100, name: "Anh Nguyễn" },
+          words: words.map((text, index) => ({ text, start_timestamp: { relative: index === 0 ? 1.2 : index } })),
+        },
+      },
+    });
+    return post(port, "/api/recall", payload, {
+      "webhook-id": id,
+      "webhook-timestamp": "1731705121",
+      "webhook-signature": `v1,${sign(secret, id, "1731705121", payload)}`,
+    });
+  };
+  try {
+    assert.equal((await deliver("transcript.partial_data", ["hey", "adam", "can", "you", "hear", "me"], "msg-partial")).status, 204);
+    assert.equal(plays, 1);
+    assert.equal(remembered.some((row) => JSON.stringify(row).includes("hear me")), false);
+    assert.equal((await deliver("transcript.data", ["hey", "adam", "can", "you", "hear", "me"], "msg-final-check")).status, 204);
+    assert.equal(plays, 1);
+    assert.equal((await deliver("transcript.data", ["what", "time", "is", "the", "launch"], "msg-follow")).status, 204);
+    assert.equal(plays, 2);
+  } finally {
+    await new Promise((resolve, reject) => app.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
 test("hey adam can you hear me is spoken before the keep finishes", async () => {
-  let rememberPending = false;
+  let rememberFinished = false;
   let releaseRemember = () => {};
   const gate = new Promise((resolve) => { releaseRemember = resolve; });
-  let spokeWhilePending = false;
+  let keepFinishedAtPlay = true;
   let played;
   const playedGate = new Promise((resolve) => { played = resolve; });
   const app = createApp({
@@ -553,9 +706,8 @@ test("hey adam can you hear me is spoken before the keep finishes", async () => 
     deps: {
       memory: {
         async remember() {
-          rememberPending = true;
           await gate;
-          rememberPending = false;
+          rememberFinished = true;
           return { blobId: null };
         },
         async index() { return []; },
@@ -566,7 +718,7 @@ test("hey adam can you hear me is spoken before the keep finishes", async () => 
     fetch: async (url) => {
       const href = String(url);
       if (href.includes("/output_audio/")) {
-        spokeWhilePending = rememberPending;
+        keepFinishedAtPlay = rememberFinished;
         played();
         return { ok: true, async text() { return ""; }, async json() { return {}; } };
       }
@@ -604,7 +756,7 @@ test("hey adam can you hear me is spoken before the keep finishes", async () => 
       new Promise((resolve) => setTimeout(() => resolve("timeout"), 3000)),
     ]);
     assert.equal(hit, "played");
-    assert.equal(spokeWhilePending, true);
+    assert.equal(keepFinishedAtPlay, false);
     releaseRemember();
     assert.equal((await pending).status, 204);
   } finally {

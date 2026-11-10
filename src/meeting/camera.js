@@ -1,6 +1,9 @@
 /**
- * The bot's camera. A blank paper frame. The meeting already shows the
- * guest's name, so this page does not repeat it or explain how to wake the bot.
+ * The meeting camera. Output Media always shows this page, so the tile is
+ * the brand field with the guest's name. Cream on #081428 is the same pair
+ * used for type on the dark field. White paper read as a blank avatar.
+ * The page polls for a spoken clip and stops when the room talks over it.
+ * Meeting audio is analysed and never played back into the call.
  */
 const CAMERA_TEMPLATE = `<!doctype html>
 <html lang="en">
@@ -9,14 +12,114 @@ const CAMERA_TEMPLATE = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sederunt</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #f4f3ef; }
+  html, body { margin: 0; height: 100%; background: #081428; color: #faf8f5; }
+  body { display: flex; align-items: center; justify-content: center; }
+  #guest {
+    max-width: 100%;
+    margin: 0;
+    padding: 0 48px 12px;
+    overflow-wrap: anywhere;
+    font-family: system-ui, "Source Sans 3", sans-serif;
+    font-size: 64px;
+    font-weight: 500;
+    line-height: 1.15;
+    letter-spacing: 0;
+    text-align: center;
+    border-bottom: 2px solid transparent;
+  }
+  #guest.speaking { border-bottom-color: #faf8f5; }
+  #voice { position: absolute; width: 0; height: 0; }
 </style>
 </head>
-<body></body>
+<body>
+<p id="guest"></p>
+<audio id="voice"></audio>
+<script>
+var params = new URLSearchParams(location.search);
+var guest = document.getElementById("guest");
+var voice = document.getElementById("voice");
+guest.textContent = params.get("name") || "";
+var ear = params.get("ear") || "";
+if (!/^[a-f0-9]{32,64}$/.test(ear)) ear = "";
+var playing = false;
+var objectUrl = "";
+var loudTicks = 0;
+
+function mark(on) {
+  guest.className = on ? "speaking" : "";
+}
+
+function stopTalking() {
+  voice.onended = null;
+  voice.pause();
+  if (objectUrl) URL.revokeObjectURL(objectUrl);
+  objectUrl = "";
+  voice.removeAttribute("src");
+  try { voice.load(); } catch (error) {}
+  playing = false;
+  mark(false);
+}
+
+function playClip(blob) {
+  stopTalking();
+  objectUrl = URL.createObjectURL(blob);
+  voice.src = objectUrl;
+  playing = true;
+  mark(true);
+  voice.onended = function () { stopTalking(); };
+  voice.play().catch(function () {
+    playing = false;
+    mark(false);
+  });
+}
+
+function poll() {
+  if (!ear) return;
+  fetch("/meeting/voice?ear=" + encodeURIComponent(ear), { cache: "no-store" }).then(function (response) {
+    if (!response.ok || response.status === 204) return null;
+    return response.blob();
+  }).then(function (blob) {
+    if (!blob || !blob.size) return;
+    playClip(blob);
+  }).catch(function () {});
+}
+
+if (ear) setInterval(poll, 300);
+
+if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+  navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+    var Context = window.AudioContext || window.webkitAudioContext;
+    if (!Context) return;
+    var context = new Context();
+    var source = context.createMediaStreamSource(stream);
+    var analyser = context.createAnalyser();
+    analyser.fftSize = 512;
+    source.connect(analyser);
+    if (context.resume) context.resume().catch(function () {});
+    var samples = new Uint8Array(analyser.fftSize);
+    setInterval(function () {
+      analyser.getByteTimeDomainData(samples);
+      var sum = 0;
+      for (var i = 0; i < samples.length; i += 1) {
+        var sample = (samples[i] - 128) / 128;
+        sum += sample * sample;
+      }
+      var level = Math.sqrt(sum / samples.length);
+      if (level > 0.12) {
+        loudTicks += 1;
+        if (loudTicks >= 2 && playing) stopTalking();
+      } else {
+        loudTicks = 0;
+      }
+    }, 80);
+  }).catch(function () {});
+}
+</script>
+</body>
 </html>
 `;
 
-/** The camera page. The product title stays Sederunt. The guest name is the meeting label, not this frame. */
+/** The camera page. The product title stays Sederunt. The script reads the guest name. */
 export function renderCameraPage() {
   return CAMERA_TEMPLATE;
 }

@@ -1,7 +1,6 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { DEFAULT_BOT_NAME, normalizeBotName } from "../bot/identity.js";
 import { addressesHearing, normalizeHearing } from "../hearing.js";
-import { SILENT_MEETING_MP3 } from "./silent-clip.js";
 
 /**
  * Recall signs the raw body as id.timestamp.payload with the workspace secret.
@@ -42,22 +41,22 @@ export function recallBotUrl(id) {
   return `${BOT_URL}${encodeURIComponent(id)}/`;
 }
 
-/**
- * Recall.ai in ap-northeast-1. Join posts one bot only when the
- * key, an https meeting url, and a public https origin are all present.
- * The camera stays off so Google Meet draws its own tile. The origin is the transcript webhook.
- * A silent clip is set so a later spoken reply can play. The clip itself says nothing.
- * Localhost is refused before any request. The key is never put in the error.
- *
- * @param {NodeJS.ProcessEnv} [env]
- * @param {{ fetch?: typeof fetch }} [options]
- */
 /** True only when the Recall key and a public https camera page are both present. */
 export function meetingDoorReady(env = process.env) {
   const key = typeof env.RECALL_API_KEY === "string" && env.RECALL_API_KEY;
   return Boolean(key && env.RECALL_WEBHOOK_SECRET && cameraPage(env.SEDERUNT_PUBLIC_ORIGIN));
 }
 
+/**
+ * Recall.ai in ap-northeast-1. Join posts one bot only when the
+ * key, an https meeting url, and a public https origin are all present.
+ * The webpage is the camera: Output Media cannot send audio without that video.
+ * The page url carries an unguessable ear. Localhost is refused before any request.
+ * The key is never put in the error.
+ *
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ fetch?: typeof fetch }} [options]
+ */
 export function createMeetingAdapter(env = process.env, options = {}) {
   const fetchImpl = options.fetch ?? fetch;
   const calls = [];
@@ -69,7 +68,8 @@ export function createMeetingAdapter(env = process.env, options = {}) {
       const meetingUrl = httpsUrl(input?.url);
       const guest = normalizeHearing({ name: input?.name }).name;
       const botName = normalizeBotName(input?.botName) || DEFAULT_BOT_NAME;
-      const cameraUrl = cameraPage(env.SEDERUNT_PUBLIC_ORIGIN, guest);
+      const ear = randomBytes(24).toString("hex");
+      const cameraUrl = cameraPage(env.SEDERUNT_PUBLIC_ORIGIN, guest, ear);
       if (!key || !env.RECALL_WEBHOOK_SECRET || !meetingUrl || !cameraUrl) throw new Error("Meeting join is not configured");
       let response;
       try {
@@ -83,13 +83,20 @@ export function createMeetingAdapter(env = process.env, options = {}) {
           body: JSON.stringify({
             meeting_url: meetingUrl,
             bot_name: botName,
-            automatic_audio_output: {
-              in_call_recording: {
-                data: { kind: "mp3", b64_data: SILENT_MEETING_MP3.toString("base64") },
+            output_media: {
+              camera: {
+                kind: "webpage",
+                config: { url: cameraUrl },
               },
+            },
+            variant: {
+              zoom: "web_4_core",
+              google_meet: "web_4_core",
+              microsoft_teams: "web_4_core",
             },
             recording_config: {
               video_mixed_mp4: {},
+              include_bot_in_recording: { audio: true },
               transcript: {
                 provider: { recallai_streaming: { mode: "prioritize_low_latency", language_code: "en" } },
                 diarization: { use_separate_streams_when_available: true },
@@ -97,7 +104,7 @@ export function createMeetingAdapter(env = process.env, options = {}) {
               realtime_endpoints: [{
                 type: "webhook",
                 url: `${new URL(cameraUrl).origin}/api/recall`,
-                events: ["transcript.data"],
+                events: ["transcript.data", "transcript.partial_data"],
               }],
             },
           }),
@@ -115,7 +122,7 @@ export function createMeetingAdapter(env = process.env, options = {}) {
         id = "";
       }
       if (!id || text.includes(key)) throw new Error("Meeting join failed");
-      return { id };
+      return { id, ear };
     },
     /**
      * Documented Recall remove-from-call:
@@ -307,12 +314,15 @@ export function recallTranscriptDelivery(payload) {
     ? data.bot.id
     : (typeof data.bot_id === "string" && data.bot_id ? data.bot_id : "meeting");
   const deliveryId = transcriptChunkId(data, inner, words, text);
+  const event = typeof root.event === "string" ? root.event : "";
   return {
     text,
     memberId,
     door: "meeting",
     addressed: addressesHearing(text),
     deliveryId,
+    utteranceId: utteranceKey(data, words),
+    partial: event === "transcript.partial_data",
     participants: memberId ? [memberId] : [],
     room: {
       id: String(botId),
@@ -322,6 +332,14 @@ export function recallTranscriptDelivery(payload) {
       memberIds: memberId ? [memberId] : [],
     },
   };
+}
+
+function utteranceKey(data, words) {
+  const transcriptId = typeof data?.transcript?.id === "string" ? data.transcript.id.trim() : "";
+  const stamp = wordStamp(words[0]);
+  // The transcript id alone covers the whole recording. A missing stamp must not claim it.
+  if (!transcriptId || !stamp) return "";
+  return `${transcriptId}:${stamp}`;
 }
 
 /**
@@ -483,11 +501,14 @@ function httpsUrl(value) {
   }
 }
 
-function cameraPage(origin, name) {
+function cameraPage(origin, name, ear) {
   const url = httpsUrl(origin);
   if (!url) return "";
   const host = new URL(url).hostname;
   if (host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host.endsWith(".local")) return "";
   const guest = normalizeHearing({ name }).name;
-  return `${new URL(url).origin}/meeting?name=${encodeURIComponent(guest)}`;
+  const page = new URL("/meeting", new URL(url).origin);
+  page.searchParams.set("name", guest);
+  if (typeof ear === "string" && /^[a-f0-9]{32,64}$/.test(ear)) page.searchParams.set("ear", ear);
+  return page.toString();
 }

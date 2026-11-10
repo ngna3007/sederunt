@@ -51,6 +51,17 @@ test("BOT_SYSTEM_PROMPT is the slack-mode default", () => {
   assert.doesNotMatch(BOT_SYSTEM_PROMPT, /after the call/);
   const voice = buildSystemPrompt({ mode: "live_voice", language: "vi" });
   assert.match(voice, /after the call/);
+  assert.match(voice, /If the result says the write ran/);
+  const ran = checkReply(
+    { text: "Done, I filed that." },
+    { mode: "live_voice", writeRequested: true, confirmed: true },
+  );
+  assert.equal(ran.ok, true, JSON.stringify(ran.violations));
+  const unconfirmed = checkReply(
+    { text: "Done, I filed that." },
+    { mode: "live_voice", writeRequested: true },
+  );
+  assert.equal(unconfirmed.violations.some((violation) => violation.rule === "confirm_writes"), true);
   assert.match(voice, /half past two/);
   assert.match(voice, /Reply in Vietnamese/);
   assert.match(voice, /addresses you as Adam/);
