@@ -22,19 +22,7 @@ https://github.com/user-attachments/assets/63f84845-ff8a-435d-ae00-6054b085571f
 
 A meeting ends. A week later, someone asks, “What did we decide about the launch?” Sederunt keeps the decision with its meeting, so the people who were there can find it again in the app or ask from Slack.
 
-Sederunt was built for the **Tatum × Walrus Total Recall hackathon**, Track 2: Smart Agents for Real Life. It uses Walrus Memory to keep decisions and Tatum to read their Sui proofs. [Read the project write-up](docs/blog/total-recall.md).
-
-## Track 02 · Smart Agents for Real Life
-
-Sederunt is submitted to **Track 02: Smart Agents for Real Life**. This track is for agents that monitor inboxes, expenses, habits, or workflows and use portable memory to pick up where they left off across tools and sessions.
-
-It is a fit for AI builders and anyone who has wished their assistant remembered last Tuesday. Track examples include a research agent with source trust scores, an expense watchdog with long-term memory, and a workflow bot that learns escalation rules.
-
-| Track prize | Amount |
-| --- | ---: |
-| 1st place | $500 |
-| 2nd place | $300 |
-| 3rd place | $200 |
+Submitted to **Track 02: Smart Agents for Real Life** at the Tatum × Walrus Total Recall hackathon. It uses Walrus Memory to keep decisions and Tatum to read their Sui proofs. [Read the project write-up](docs/blog/total-recall.md).
 
 ## From a meeting to an answer
 
