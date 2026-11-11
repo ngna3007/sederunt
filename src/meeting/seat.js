@@ -507,6 +507,7 @@ function clockNumbers(clock) {
     firstToken: pick(clock?.firstToken),
     firstByte: pick(clock?.firstByte),
     playback: pick(clock?.playback),
+    tool: pick(clock?.tool),
   };
 }
 

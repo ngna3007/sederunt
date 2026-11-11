@@ -4,7 +4,7 @@ import { request } from "node:http";
 import test from "node:test";
 import vm from "node:vm";
 import { createSession } from "../src/session.js";
-import { acceptUtterance, endOfTurn, linesForSpeech, readySentences, spokenLines, utteranceToCommit, wordsFromTranscript, withoutBotSpeech } from "../src/meeting/agent.js";
+import { acceptUtterance, approvalPlace, APPROVAL_LINE, DRAFTED_LINE, endOfTurn, linesForSpeech, readySentences, spokenLines, utteranceToCommit, wordsFromTranscript, withoutBotSpeech } from "../src/meeting/agent.js";
 import { renderCameraPage } from "../src/meeting/camera.js";
 import { meetingMetrics, resetMeetingMetrics } from "../src/meeting/metrics.js";
 import { endAgentSeat, noteAgentMember, noteAgentSpeaker } from "../src/meeting/seat.js";
@@ -760,16 +760,12 @@ test("a write is held before the model speaks and is not described as done", asy
   const meetingVoice = {};
   const session = createSession();
   session.preferences = [{ id: "pref-2", tool: "mcp:notes:create_note", value: "do" }];
-  let heldBeforeAnswer = false;
   const { app } = boot(async (url, init) => {
     urls.push(String(url));
     const payload = JSON.parse(init.body);
     chats.push(payload);
     const answering = (payload.messages || []).some((message) => message.role === "tool");
-    if (answering) {
-      heldBeforeAnswer = meetingVoice.agentHolds?.[0]?.status === "held";
-      return { ok: true, status: 200, body: chatStream("Done. The write ran. The launch stays Thursday.") };
-    }
+    if (answering) return { ok: true, status: 200, body: chatStream("Done. The write ran. The launch stays Thursday.") };
     return {
       ok: true,
       status: 200,
@@ -796,7 +792,7 @@ test("a write is held before the model speaks and is not described as done", asy
       headers: { "content-type": "application/json", "x-meeting-ear": EAR },
       body: turnBody("Adam, file the launch note.", "Priya", { participantId: "7", turn_id: "write-hold" }),
     });
-    assert.equal(heldBeforeAnswer, true);
+    assert.equal(meetingVoice.agentHolds[0].status, "held");
     assert.equal(meetingVoice.agentHolds[0].tool, "notes__create_note");
     assert.equal(meetingVoice.agentHolds[0].tenantId, TENANT_A);
     assert.equal(meetingVoice.agentHolds[0].roomId, "bot-1");
@@ -809,11 +805,10 @@ test("a write is held before the model speaks and is not described as done", asy
     assert.equal(JSON.stringify(meetingVoice.agentHolds).includes("other-tenant"), false);
     assert.equal(JSON.stringify(meetingVoice.agentHolds).includes("secret-token"), false);
     assert.equal(urls.every((url) => url.startsWith("https://openrouter.ai/")), true);
-    const told = toolContents(chats).at(-1);
-    assert.match(told, /"status":"waiting_for_approval"/);
-    assert.match(told, /"ok":true/);
+    assert.equal(chats.some((payload) => (payload.messages || []).some((message) => message.role === "tool")), false);
     assert.equal(spoken.raw.includes("the write ran"), false);
-    assert.match(spoken.raw, /The launch stays Thursday/);
+    assert.equal(/created/i.test(spoken.raw), false);
+    assert.match(spoken.raw, /I've drafted that Linear issue/);
   } finally {
     await close(app);
   }
@@ -863,8 +858,7 @@ test("a held linear write confirms on a fresh session", async () => {
     assert.equal((meetingVoice.toolRuns || []).length, 0);
     assert.equal(issues.length, 0);
     assert.equal(session.actions.filter((row) => row.state === "paused").length, 1);
-    assert.match(toolContents(chats).at(-1), /"status":"waiting_for_approval"/);
-    assert.match(toolContents(chats).at(-1), /"ok":true/);
+    assert.match(spoken.raw, /I've drafted that Linear issue/);
     const fresh = createSession();
     assert.equal(fresh === session, false);
     await rebuildCompanyIndex(fresh, { memory });
@@ -1565,6 +1559,38 @@ test("a title and a decimal stay in one sentence", () => {
   assert.equal(readySentences("Ask Dr.").rest, "Ask Dr.");
 });
 
+test("a question about where to approve names Activity and does not call the model", async () => {
+  const urls = [];
+  const meetingVoice = {};
+  const { app } = boot(async (url) => {
+    urls.push(String(url));
+    return { ok: true, status: 200, body: chatStream("I have created a task on linear.") };
+  }, { meetingVoice });
+  noteAgentMember({ meetingVoice }, "bot-1", { participantId: "7", name: "Priya", memberId: "7" });
+  const port = await listen(app);
+  try {
+    const spoken = await call(port, "POST", "/api/meeting/agent/turn", {
+      headers: { "content-type": "application/json", "x-meeting-ear": EAR },
+      body: turnBody("Adam, where is the approval?", "Priya", { participantId: "7", turn_id: "where-approve" }),
+    });
+    assert.equal(spoken.status, 200);
+    assert.match(spoken.raw, /In the Sederunt console, under Activity/);
+    assert.equal(spoken.raw.includes("created"), false);
+    assert.equal(urls.some((url) => url.includes("openrouter.ai")), false);
+  } finally {
+    await close(app);
+  }
+});
+
+test("a held write is spoken as a draft, not as created", () => {
+  const spoken = linesForSpeech("I have created a task on linear it is waiting for your approval.", [{ status: "waiting_for_approval" }], { done: true });
+  assert.deepEqual(spoken, [DRAFTED_LINE]);
+  assert.equal(spoken.some((line) => /created/i.test(line)), false);
+  assert.equal(approvalPlace("where is the approval?"), APPROVAL_LINE);
+  assert.equal(approvalPlace("how do I approve that?"), APPROVAL_LINE);
+  assert.equal(approvalPlace("file the launch note"), "");
+});
+
 test("a title, a decimal, a version, and a morning time stay one spoken line", () => {
   assert.deepEqual(linesForSpeech("Dr. Smith said launch Friday.", [], { done: true }), ["Dr. Smith said launch Friday."]);
   assert.deepEqual(linesForSpeech("It is 3.5 percent higher.", [], { done: true }), ["It is 3.5 percent higher."]);
@@ -1705,8 +1731,7 @@ test("a write that cannot be saved releases the claim", async () => {
       body: turnBody("Adam, file the launch note again.", "Priya", { participantId: "7", turn_id: "hold-retry" }),
     });
     assert.equal(saved.status, 200);
-    assert.match(toolContents(chats).at(-1), /"status":"waiting_for_approval"/);
-    assert.match(toolContents(chats).at(-1), /"ok":true/);
+    assert.match(saved.raw, /I've drafted that Linear issue/);
     assert.equal(meetingVoice.agentHolds.length, 1);
     assert.equal(session.actions.length, 1);
     assert.equal((meetingVoice.toolRuns || []).length, 0);

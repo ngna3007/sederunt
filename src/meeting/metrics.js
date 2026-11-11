@@ -52,6 +52,7 @@ export function noteTurnLog(clock) {
     playback: latency(clock?.playback, origin),
   };
   if (typeof clock?.redis === "number" && Number.isFinite(clock.redis)) row.redis = clock.redis;
+  if (typeof clock?.tool === "number" && Number.isFinite(clock.tool)) row.tool = Math.max(0, Math.round(clock.tool));
   turnRows.push(row);
   if (turnRows.length > 200) turnRows.shift();
   console.info(JSON.stringify({ meeting: "turn", ...row }));

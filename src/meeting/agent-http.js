@@ -2,6 +2,8 @@ import {
   acceptUtterance,
   agentLive,
   agentPersona,
+  approvalPlace,
+  DRAFTED_LINE,
   agentToolBudgetMs,
   claimArgsFor,
   freshTurnId,
@@ -200,7 +202,7 @@ function stampClock(workspace, env, botId, turn, field, at) {
   let clock = bag.clocks.get(id) || {};
   if (field === "endpoint" && typeof clock.endpoint === "number") return clock;
   clock = { ...clock, [field]: at };
-  if (field !== "endpoint" && typeof clock.endpoint !== "number") clock.endpoint = at;
+  if (field !== "endpoint" && field !== "tool" && typeof clock.endpoint !== "number") clock.endpoint = at;
   bag.clocks.set(id, clock);
   const saved = { ...clock };
   forgetRedis(() => rememberAgentClock(env, workspace.fetchImpl, botId, turn, saved));
@@ -309,7 +311,16 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     const redis = redisTurnCount();
     const clock = bag.clocks.get(`${seat.botId}:${turn}`);
     if (clock) clock.redis = redis;
-    console.info(JSON.stringify({ meeting: "turn", redis }));
+    const origin = typeof clock?.endpoint === "number" ? clock.endpoint : null;
+    const since = (value) => (origin == null || typeof value !== "number" ? null : Math.max(0, Math.round(value - origin)));
+    console.info(JSON.stringify({
+      meeting: "turn",
+      redis,
+      endpoint: 0,
+      firstToken: since(clock?.firstToken),
+      tool: typeof clock?.tool === "number" ? Math.round(clock.tool) : null,
+      firstByte: since(clock?.firstByte),
+    }));
     if (!res.writableEnded) {
       writeEvent(res, "done", { turn_id: turn, ...extra });
       res.end();
@@ -378,7 +389,6 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
   req.on("close", () => {
     if (!res.writableEnded) abort.abort();
   });
-  await holdAgentTurn(env, workspace.fetchImpl, seat.botId, turn);
   const sent = new Set();
   const toolResults = [];
   const emit = async (full, done = false) => {
@@ -390,6 +400,12 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
       writeEvent(res, "sentence", { text: line, hash });
     }
   };
+  const place = approvalPlace(text);
+  if (answer && place) {
+    await emit(place, true);
+    await finish();
+    return;
+  }
   try {
     await streamVoice({
       env,
@@ -476,13 +492,22 @@ async function streamVoice(input) {
         function: { name: call.name, arguments: JSON.stringify(call.arguments || {}) },
       })),
     });
+    let toolMs = 0;
     for (const call of result.toolCalls) {
       if (input.signal.aborted && !toolIsWrite(allowed.get(call.name) || call.name)) break;
       const tool = allowed.get(call.name);
       input.writeEvent("tool_started", { name: call.name });
+      const started = Date.now();
       const outcome = await runAgentTool({ ...input, call, tool, allowed });
+      toolMs += Date.now() - started;
       input.toolResults.push(outcome.raw);
       messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(outcome.wrapped) });
+    }
+    if (toolMs) stampClock(input.workspace, input.env, input.botId, input.turnId, "tool", toolMs);
+    const held = input.toolResults.some((row) => row?.status === "waiting_for_approval" || row?.held === true);
+    if (held) {
+      await input.onText(DRAFTED_LINE, true);
+      return;
     }
     full = "";
   }
