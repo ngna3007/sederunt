@@ -13,7 +13,16 @@ export function directRequest(text) {
   // A write said as a command. Recall's low-latency stream can drop a leading
   // "Adam," after a pause, so the one person in the room said "schedule a
   // launch sync tomorrow at 10 am" and the page skipped it (demo take 2, Nov 11).
-  return /^(what|when|who|where|why|how|can|could|would|should|do|does|is|are|please|create|remind|note|recall|tell|schedule|reschedule|book|file|add|log|open|send|set|move|invite|assign|update|draft|find|look up|show|list)\b/i.test(value);
+  if (/^(what|when|who|where|why|how|can|could|would|should|do|does|is|are|please|create|remind|note|recall|tell)\b/i.test(value)) return true;
+  // These words also start plain statements ("the list price is up" said as
+  // "list price is up", "file is uploaded", "update: we shipped", "open house
+  // is Friday"). A command has no verb of its own in the next few words.
+  // Kept inline: the meeting page runs this function from its source.
+  var command = /^(schedule|reschedule|book|file|add|log|open|send|set|move|invite|assign|update|draft|find|look up|show|list)\b(.*)$/i.exec(folded);
+  if (!command) return false;
+  if (/^\s*[:\-]/.test(value.slice(command[1].length))) return false;
+  var next = command[2].trim().split(" ").slice(0, 3).join(" ");
+  return !/\b(is|are|was|were|isn't|aren't|wasn't|weren't|has|have|had|went|goes|looks|seems|shows|says|said|got|came|works|worked|will|would|did|does)\b/.test(next);
 }
 
 /**

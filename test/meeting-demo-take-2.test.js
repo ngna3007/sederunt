@@ -45,3 +45,34 @@ test("demo take 2: the webhook path agrees in a one-person call", () => {
   const session = { hearing: { name: "Adam" }, meetingDirect: true };
   assert.equal(meetingLineShouldAnswer(session, { text: HEARD, room: { id: "11972295-72c3-4b09-8025-e5d59d0b14b1" }, memberId: "100", speakerName: "Anh Nguyễn" }), true);
 });
+
+// ---- Review of PR 29 (Nov 11 2026) ----
+
+test("review: command words that start plain statements do not wake Adam in a solo call", () => {
+  for (const line of ["list price is up", "file is uploaded to the drive", "update: we shipped the beta", "open house is Friday", "book fair was great",
+    "show went well", "set up was done yesterday", "draft looks good", "log shows nothing", "invite went out", "send button works now", "move was approved"]) {
+    assert.equal(directRequest(line), false, line);
+  }
+  for (const line of ["schedule a launch sync tomorrow at 10 am", "show me the decisions", "list the open issues", "find the budget note",
+    "look up the venue", "draft an email to Bao", "update the launch sync to 11", "invite Bao to the review", "log a bug for the scanner"]) {
+    assert.equal(directRequest(line), true, line);
+  }
+});
+
+test("review: group calls still need the name; mic checks and keeps stay quiet in solo", () => {
+  const room = { id: "r-1" };
+  const group = { hearing: { name: "Adam" }, meetingDirect: false };
+  for (const line of ["schedule a launch sync tomorrow at 10 am", "send the notes to the team", "update the doc"]) {
+    assert.equal(meetingLineShouldAnswer(group, { text: line, room, memberId: "100", speakerName: "Anh" }), false, line);
+  }
+  const solo = { hearing: { name: "Adam" }, meetingDirect: true };
+  for (const line of ["testing testing", "check one two", "okay thanks", "Heads up, the review moved to Thursday", "list price is up"]) {
+    assert.equal(meetingLineShouldAnswer(solo, { text: line, room, memberId: "100", speakerName: "Anh" }), false, line);
+  }
+});
+
+test("review: a send said without the name still waits for a spoken yes", async () => {
+  const { writeRisk } = await import("../src/meeting/voice-write.js");
+  assert.equal(writeRisk("gmail__send_email"), "confirm");
+  assert.equal(writeRisk("calendar__update_event"), "confirm");
+});
