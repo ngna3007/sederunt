@@ -1,104 +1,98 @@
 <p align="center">
-  <img src="public/favicon.svg" alt="Sederunt" width="72" height="72">
+  <img src="public/favicon.svg" alt="Sederunt logo" width="64" height="64">
 </p>
 
 <h1 align="center">Sederunt</h1>
 
 <p align="center">
-  A meeting agent that keeps the decision and can answer from it later.
+  A meeting agent that keeps decisions and helps your team find them later.
 </p>
 
 <p align="center">
-  <a href="https://sederunt.vercel.app"><img src="https://img.shields.io/badge/Live_demo-sederunt.vercel.app-081428" alt="Live demo"></a>
-  <a href="#total-recall"><img src="https://img.shields.io/badge/Track_2-Smart_Agents_for_Real_Life-1B3A4B" alt="Track 2, Smart Agents for Real Life"></a>
-  <a href="https://memory.walrus.xyz"><img src="https://img.shields.io/badge/Walrus-Memory_on_Mainnet-1c9cf0" alt="Walrus Memory on Mainnet"></a>
-  <a href="https://docs.tatum.io"><img src="https://img.shields.io/badge/Tatum-Sui_gRPC-111111" alt="Tatum Sui gRPC"></a>
+  <a href="https://sederunt.vercel.app"><strong>Open Sederunt</strong></a>
+  &nbsp;·&nbsp;
+  <a href="docs/blog/total-recall.md">How it works</a>
+  &nbsp;·&nbsp;
+  <a href="docs/runbooks/new-user-live-demo.md">Demo runbook</a>
+  &nbsp;·&nbsp;
+  <a href="#run-locally">Run locally</a>
 </p>
 
 https://github.com/user-attachments/assets/63f84845-ff8a-435d-ae00-6054b085571f
 
-<p align="center">
-  <a href="https://sederunt.vercel.app"><strong>Open the app</strong></a>
-  &nbsp;·&nbsp;
-  <a href="docs/blog/total-recall.md"><strong>Read the write-up</strong></a>
-</p>
+A meeting ends. A week later, someone asks, “What did we decide about the launch?” Sederunt keeps the decision with its meeting, so the people who were there can find it again in the app or ask from Slack.
 
-## Start here
+Sederunt was built for the **Tatum × Walrus Total Recall hackathon**, Track 2: Smart Agents for Real Life. It uses Walrus Memory to keep decisions and Tatum to read their Sui proofs. [Read the project write-up](docs/blog/total-recall.md).
 
-1. Open [sederunt.vercel.app](https://sederunt.vercel.app) and sign in.
-2. Watch the promo above.
-3. Read [how the record is written and proved](docs/blog/total-recall.md).
-4. Open one stored decision on Suiscan: [the booth decision](https://suiscan.xyz/mainnet/object/0xf734ea6c946482d9bf28f6443ea6529099a67cc306717562361cd463438de944).
+## From a meeting to an answer
 
-## The app
+1. **Bring the agent into a meeting.** Connect your calendar or add the agent using a meeting link. Address it to keep a decision or request a change.
+2. **Find the record.** Open the meeting room to see its decisions, activity, and files. Ask a question in **Ask AI** or in Slack; access to a decision follows its recorded invitation.
+3. **Follow through.** Connect tools such as Linear and Google Calendar. Explicit requests follow the tool's setting: **Run automatically** is on by default, and turning it off makes the request wait for approval. Suggested follow-ups require the requester's approval.
+4. **Check the source.** Open a decision's proof to see the available Walrus and Sui details. Related files are kept through Walrus Console.
 
-Sederunt is the workspace a company uses for its meetings. People sign in, connect Google, Slack, and Linear, and work from one console. Each meeting is a room. The room holds who was there, what was decided, the activity, and the files.
+> **Project status:** Sederunt is a hackathon project. A full live Slack and Google meeting rehearsal is still needed to validate the end-to-end follow-up flow. A connected status or passing test suite alone does not prove that a meeting was heard or a ticket was filed. See the [demo runbook](docs/runbooks/new-user-live-demo.md) for the checks.
 
-Adam is the agent for that room. From the console he joins the Google Meet, follows the call, and writes the record while the meeting is going. The console and Slack both read that same record after the call, so a question about the meeting is answered from the room, not from a new chat with no history.
+## What is connected
 
-The record is Walrus Memory on Sui mainnet. The room shows the proof: the blob, the transaction, and the checkpoint, read through Tatum. A missing key leaves the proof unknown.
-
-Linear and Google Calendar are connected from the room. Creating an issue or an event runs in the call when the tool succeeds. A send, an update, or a delete waits for a spoken yes in the room.
-
-## Total Recall
-
-This entry is for **Track 2, Smart Agents for Real Life**, in the Tatum × Walrus hackathon.
-
-The agent is the meeting. Walrus Memory is where the decision lives after the call ends. Tatum is how the app reads that record back from Sui mainnet and shows the proof.
-
-| Piece | Where to look |
+| Part | Role in Sederunt |
 | --- | --- |
-| Working demo | [sederunt.vercel.app](https://sederunt.vercel.app) |
-| Promo | [the video at the top of this page](https://github.com/user-attachments/assets/63f84845-ff8a-435d-ae00-6054b085571f) |
-| Blog post | [docs/blog/total-recall.md](docs/blog/total-recall.md) |
-| Mainnet proof | [docs/hackathon/mainnet-seed-proof.json](docs/hackathon/mainnet-seed-proof.json) |
-| Public repo | [github.com/ngna3007/sederunt](https://github.com/ngna3007/sederunt) |
+| **Google Meet and Recall.ai** | Bring the meeting agent into a call and receive meeting events. |
+| **Slack** | Keep channel context, answer questions, and deliver eligible meeting follow-ups. |
+| **Linear and Google Calendar** | Carry out supported requests through connected tools. |
+| **Walrus Memory and Walrus Console** | Store decision records and related files. |
+| **Sui and Tatum** | Read the on-chain object and checkpoint used to verify a record. |
+| **Supabase and Redis** | Support identity, workspace data, and durable application state. |
 
-On 4 November 2026 the `sederunt` namespace on mainnet held 28 memories. Tatum verified all 28. The checks are `GetObject`, `ListOwnedObjects`, `GetTransaction`, `GetCheckpoint`, and `GetServiceInfo`, sent as native gRPC to `sui-mainnet-grpc.gateway.tatum.io`. Writes go to the Walrus Memory relayer at `relayer.memory.walrus.xyz`. Sederunt holds a delegate key. It does not keep a SUI balance for that write.
+A decision is available only to an authorized reader. The agent checks the room and requester before returning a record; a tool write passes through the common allow gate. Inferred proposals do not become authorized writes by themselves. See the [requirements](docs/requirements/sederunt.md) and [access design](docs/design/access.md) for the full rules.
 
-If the Tatum key is missing, the proof stays unknown. The app does not switch to a public fullnode.
+## Run locally
 
-The technical note is [docs/hackathon.md](docs/hackathon.md).
-
-## Run it yourself
-
-You need the Node version in `.nvmrc`, and npm.
+**Prerequisites:** Node.js **24.15.0** (pinned in [`.nvmrc`](.nvmrc)), npm, and Git. The commands below use [`nvm`](https://github.com/nvm-sh/nvm) to select Node.
 
 ```sh
+git clone https://github.com/ngna3007/sederunt.git
+cd sederunt
+nvm install
 nvm use
 npm ci
 SEDERUNT_AUTH_FAKE=1 npm start
 ```
 
-Then open http://127.0.0.1:8787/console.
+Open **[http://127.0.0.1:8787/console](http://127.0.0.1:8787/console)**. In the sign-in screen, click **Continue with Google** to use the local fake identity and follow the workspace setup. This is a development profile: it uses local identities and a fake calendar. It does not connect a real meeting, Slack workspace, Linear account, or Walrus storage. Without a configured company memory account, the console may say the account is not loaded.
 
-That mode is for development. It uses local identities and a fake calendar. It does not show live Google, Slack, Walrus, or Linear.
-
-To run against real services, copy `.env.example` to `.env`, fill in your own credentials, and start the server:
+To configure real integrations, copy [`.env.example`](.env.example) to `.env` and provide your own credentials, then start the server:
 
 ```sh
+cp .env.example .env
+# Configure the services you intend to use in .env.
 node --env-file=.env src/server.js
 ```
 
-Setup guides: [sign-in](docs/auth-setup.md), [connectors](docs/connectors.md), [Walrus files](docs/design/walrus-files.md). Keep tokens and private keys out of git. Do not commit `.local/`.
+Start with the [Google sign-in setup](docs/auth-setup.md), [connector guide](docs/connectors.md), and [Walrus Files design](docs/design/walrus-files.md). Never commit `.env`, tokens, private keys, or `.local/`. A production deployment also needs the required database migrations, durable stores, and recovery configuration described in the [release report](docs/reports/2026-11-09-product-reliability.md).
 
-Check the code with:
+## Test
 
 ```sh
-npm test
+npm test                 # Node test suite
+npm run check:syntax     # JavaScript syntax
+npm run check:integration # disposable database and Redis checks; requires Docker
+npm run check:audit      # npm dependency audit
+npm run check:secrets    # Git-history scan; requires Docker and full history
 ```
 
-Tests use `node --test`. A few integration tests stay skipped unless you point them at a disposable Postgres or Redis. They are not the live production databases.
+The regular test suite can skip tests that require external services. The integration command creates and removes dedicated disposable services; see the [CI guide](.github/workflows/README.md) for the exact checks and remaining gaps.
 
-## Where to read the code
+## Explore the code
 
-| Path | What it is |
+| Path | Start here for… |
 | --- | --- |
-| `src/server.js` | The one Node process |
-| `src/meeting/` | Adam in the meeting |
-| `src/memory/` | Walrus Memory writes, and how a later answer uses them |
-| `src/tatum/` | Tatum gRPC reads and the proof |
-| `src/domain/` | The allow check before a write |
-| `docs/` | Design notes, the hackathon write-up, and runbooks |
+| [`src/server.js`](src/server.js) | The Node server and HTTP routes |
+| [`src/meeting/`](src/meeting/) and [`src/slack/`](src/slack/) | Meeting events and Slack interactions |
+| [`src/ask/`](src/ask/) and [`src/memory/`](src/memory/) | Questions, decision storage, and recovery |
+| [`src/domain/`](src/domain/) | Invitation checks and the allow gate |
+| [`src/files/`](src/files/) | File access, storage, and background jobs |
+| [`src/tatum/`](src/tatum/) | Tatum gRPC reads and proof verification |
+| [`docs/`](docs/README.md) | Requirements, design notes, and operations |
 
-A write goes through `handleUtterance`, and only after an allow.
+For a concrete on-chain example, inspect the [booth decision on Suiscan](https://suiscan.xyz/mainnet/object/0xf734ea6c946482d9bf28f6443ea6529099a67cc306717562361cd463438de944) and its [recorded mainnet proof](docs/hackathon/mainnet-seed-proof.json).
