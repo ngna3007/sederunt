@@ -47,6 +47,9 @@ const AGENT_PAGE = `<!doctype html>
   if (!/^[a-f0-9]{32,64}$/.test(ear)) ear = "";
   var botName = "Adam";
   var participantId = "";
+  var people = {};
+  var direct = false;
+  var rosterKnown = false;
   var floorSpeaker = "";
   var floorUntil = 0;
   var lineText = "";
@@ -90,10 +93,20 @@ const AGENT_PAGE = `<!doctype html>
     var who = letters(speaker);
     if (who && who === letters(botName)) return false;
     if (participantId && claimedId && String(claimedId) === String(participantId)) return false;
+    if (direct) return true;
     var clock = typeof now === "number" ? now : Date.now();
     if (new RegExp("\\\\b(" + letters(botName) + "|adam|maple)\\\\b", "i").test(said)) return true;
     if (who && who === letters(floorSpeaker) && clock < floorUntil) return true;
     return false;
+  }
+
+  function notePerson(id, name) {
+    var key = id == null || id === "" ? "" : String(id);
+    if (!key) return;
+    if (participantId && key === String(participantId)) return;
+    if (letters(name) && letters(name) === letters(botName)) return;
+    people[key] = 1;
+    if (!rosterKnown) direct = Object.keys(people).length === 1;
   }
 
   function noteAnswer(speaker, now) {
@@ -162,6 +175,7 @@ const AGENT_PAGE = `<!doctype html>
   function onTranscript(message) {
     var heard = utteranceToCommit(committed, message, { name: botName, participantId: participantId });
     if (!heard) return;
+    notePerson(heard.participantId, heard.speaker);
     if (heard.barge && playStarted && Date.now() - playStarted >= 300) barge();
     if (!heard.open) return;
     var who = letters(heard.speaker || "");
@@ -209,7 +223,7 @@ const AGENT_PAGE = `<!doctype html>
       method: "POST",
       headers: headers(),
       signal: controller.signal,
-      body: JSON.stringify({ text: text, speaker: speaker, participantId: claimed, turn_id: String(Date.now()) })
+      body: JSON.stringify({ text: text, speaker: speaker, participantId: claimed, turn_id: String(Date.now()), people: Object.keys(people) })
     }).then(function (response) {
       if (!response.ok || !response.body) throw new Error("turn");
       return readEvents(response.body, text, speaker);
@@ -524,21 +538,33 @@ const AGENT_PAGE = `<!doctype html>
   }
 
   setInterval(maybeCommit, 200);
-  if (ear) {
+  function applySession(body) {
+    if (!body) return;
+    if (body.botName) botName = String(body.botName);
+    if (body.participantId) participantId = String(body.participantId);
+    if (body.direct === true || body.direct === false) {
+      rosterKnown = true;
+      direct = body.direct === true;
+    }
+  }
+
+  function pullSession() {
+    if (!ear) return;
     fetch("/api/meeting/agent/session", { method: "POST", headers: { "x-meeting-ear": ear } })
       .then(function (response) { return response.ok ? response.json() : null; })
-      .then(function (body) {
-        if (!body) return;
-        if (body.botName) botName = body.botName;
-        if (body.participantId) participantId = String(body.participantId);
-      })
+      .then(applySession)
       .catch(function () {});
+  }
+
+  if (ear) {
+    pullSession();
+    setInterval(pullSession, 2000);
     connectSocket();
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
       navigator.mediaDevices.getUserMedia({ audio: true }).then(watchLevel).catch(function () {});
     }
   }
-  window.__sederunt = { shouldRespond: shouldRespond, endOfTurn: endOfTurn, noteAnswer: noteAnswer };
+  window.__sederunt = { shouldRespond: shouldRespond, endOfTurn: endOfTurn, noteAnswer: noteAnswer, notePerson: notePerson };
 })();
 </script>
 </body>

@@ -249,7 +249,13 @@ test("join opens the meeting page as the camera and a failed join omits the key"
     realtime_endpoints: [{
       type: "webhook",
       url: "https://sederunt.example/api/recall",
-      events: ["transcript.data", "transcript.partial_data"],
+      events: [
+        "transcript.data",
+        "transcript.partial_data",
+        "participant_events.join",
+        "participant_events.leave",
+        "participant_events.update",
+      ],
     }],
   });
 

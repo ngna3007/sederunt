@@ -30,8 +30,8 @@ import { handleLinearOAuth, linearClientMetadata, tenantLinearClient } from "./l
 import { renderCameraPage } from "./meeting/camera.js";
 import { handleMeetingAgent } from "./meeting/agent-http.js";
 import { loadSpikeShapes, measureSpeechProbe, pushSpikeShape, readSpikeShapes, saveSpikeShape, spikeAuthorized, spikeEnabled, transcriptEventShape } from "./meeting/spike.js";
-import { bindAgentSeat, bindMeetingEar, finishAgentSeat, rememberAgentMember, rememberAgentSeat, rememberAgentSpeaker, validMeetingEar } from "./meeting/seat.js";
-import { createMeetingAdapter, mediaFromBot, meetingCallUpdate, meetingDoorReady, meetingEnded, recallBotUrl, recallTranscriptDelivery, transcriptLines, verifyRecallRequest } from "./meeting/recall.js";
+import { bindAgentSeat, bindMeetingEar, finishAgentSeat, rememberAgentMember, rememberAgentSeat, rememberAgentSpeaker, rememberMeetingPerson, validMeetingEar } from "./meeting/seat.js";
+import { createMeetingAdapter, mediaFromBot, meetingCallUpdate, meetingDoorReady, meetingEnded, recallBotUrl, recallParticipantChange, recallTranscriptDelivery, transcriptLines, verifyRecallRequest } from "./meeting/recall.js";
 import { claimMeetingEvent, claimMeetingEventLocal, meetingEventKey, releaseMeetingEvent, releaseMeetingEventLocal } from "./meeting/events.js";
 import { keepRoomTranscript, rememberMeetingLine } from "./meeting/speech-gate.js";
 import { createMeetingFollowups, parseFollowupValue } from "./meeting/followups.js";
@@ -1663,6 +1663,8 @@ export function createApp(options = {}) {
       let recallWork = null;
       try {
         const payload = JSON.parse(raw || "{}");
+        const person = recallParticipantChange(payload);
+        if (person) rememberMeetingPerson(workspace, person.botId, person, env, workspace.fetchImpl).catch(() => {});
         const delivery = recallTranscriptDelivery(payload);
         const progress = meetingCallUpdate(payload);
         const ended = meetingEnded(payload);

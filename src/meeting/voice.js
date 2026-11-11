@@ -3,11 +3,12 @@ import { CONVERSATION_MS } from "./speech-gate.js";
 
 /**
  * Answer a called line, or the same person while their floor is open.
+ * A room with one person and the bot answers that person without the name.
  * Someone else in the room is not a turn. A bare uh-huh, okay, or thanks is not a turn.
  * While a reply is still being composed, only that speaker continues it.
  * The armed room is not a reason to speak.
  *
- * @param {{ hearing?: { name?: string, triggers?: string[] }, hearingHold?: { roomId?: string, until?: number, speaker?: string }, meetingFloor?: { roomId?: string, speaker?: string, until?: number }, meetingCompose?: { roomId?: string, speaker?: string } } | null | undefined} session
+ * @param {{ hearing?: { name?: string, triggers?: string[] }, hearingHold?: { roomId?: string, until?: number, speaker?: string }, meetingFloor?: { roomId?: string, speaker?: string, until?: number }, meetingCompose?: { roomId?: string, speaker?: string }, meetingDirect?: boolean } | null | undefined} session
  * @param {{ text?: string, addressed?: boolean, room?: { id?: string }, memberId?: string, speakerName?: string } | null | undefined} delivery
  */
 export function meetingLineShouldAnswer(session, delivery) {
@@ -21,8 +22,9 @@ export function meetingLineShouldAnswer(session, delivery) {
   const speaker = speakerKey(delivery);
   const compose = session?.meetingCompose;
   const composing = Boolean(roomId && compose?.roomId === roomId && compose.speaker);
-  if (composing && speaker && speaker !== compose.speaker && !addressed) return false;
-  if (addressed) return true;
+  const direct = session?.meetingDirect === true;
+  if (composing && speaker && speaker !== compose.speaker && !addressed && !direct) return false;
+  if (addressed || direct) return true;
   const floor = session?.meetingFloor;
   const floorOpen = Boolean(roomId && floor?.roomId === roomId && floor.speaker && typeof floor.until === "number" && floor.until > Date.now());
   if (!composing && floorOpen && speaker && speaker === floor.speaker) return true;

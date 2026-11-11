@@ -354,6 +354,87 @@ export async function agentMember(workspace, botId, query = {}, env = process.en
   return row;
 }
 
+function peopleRow(workspace, botId, create) {
+  const bag = seatBag(workspace);
+  const id = cleanBotId(botId);
+  if (!bag || !id) return null;
+  if (!(bag.people instanceof Map)) bag.people = new Map();
+  let row = bag.people.get(id) || null;
+  if (!row && create) {
+    row = { known: false, list: new Map() };
+    bag.people.set(id, row);
+  }
+  return row;
+}
+
+function humanIds(row, bot = {}) {
+  const botParticipant = String(bot.participantId || "").trim();
+  const botName = String(bot.name || bot.botName || "");
+  const humans = [];
+  for (const [participantId, person] of row.list) {
+    if (botParticipant && participantId === botParticipant) continue;
+    if (botName && namesMatch(person.name, botName)) continue;
+    if (!String(person?.name || "").trim()) continue;
+    humans.push(participantId);
+  }
+  return humans;
+}
+
+/** One present person besides the bot. Null until a join or leave has been seen. */
+export function meetingPeopleDirect(workspace, botId, bot = {}) {
+  const row = peopleRow(workspace, botId, false);
+  if (!row?.known) return null;
+  return humanIds(row, bot).length === 1;
+}
+
+/** Remember who is in the call. A leave drops that participant. */
+export function noteMeetingPerson(workspace, botId, person) {
+  const participantId = String(person?.participantId || "").trim().slice(0, 40);
+  const row = peopleRow(workspace, botId, true);
+  if (!row || !participantId) return false;
+  row.known = true;
+  if (person?.present === false) row.list.delete(participantId);
+  else row.list.set(participantId, { name: String(person?.name || "").slice(0, 80) });
+  return true;
+}
+
+export async function rememberMeetingPerson(workspace, botId, person, env = process.env, fetchImpl = fetch) {
+  if (!noteMeetingPerson(workspace, botId, person)) return false;
+  const id = cleanBotId(botId);
+  const row = peopleRow(workspace, id, false);
+  if (!row) return false;
+  const body = JSON.stringify({
+    known: true,
+    people: [...row.list].map(([participantId, item]) => ({ participantId, name: item.name })),
+  });
+  await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:people:${id}`, body, "EX", String(EAR_SECONDS)]);
+  return true;
+}
+
+/** Replace the local roster when Redis has one. A missing key leaves the local roster alone. */
+export async function loadMeetingPeople(workspace, botId, env = process.env, fetchImpl = fetch) {
+  const id = cleanBotId(botId);
+  if (!id || !redisConfigured(env)) return false;
+  const loaded = await redisCommand(env, fetchImpl, ["GET", `sederunt:voice:people:${id}`]);
+  if (typeof loaded.result !== "string" || !loaded.result.startsWith("{")) return false;
+  try {
+    const parsed = JSON.parse(loaded.result);
+    if (!parsed || parsed.known !== true || !Array.isArray(parsed.people)) return false;
+    const row = peopleRow(workspace, id, true);
+    if (!row) return false;
+    row.known = true;
+    row.list = new Map();
+    for (const person of parsed.people) {
+      const participantId = String(person?.participantId || "").trim().slice(0, 40);
+      if (!participantId) continue;
+      row.list.set(participantId, { name: String(person?.name || "").slice(0, 80) });
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** The bot's own participant, from a final whose speaker is the bot. */
 export function noteAgentSpeaker(workspace, botId, participantId, speakerName = "") {
   const seat = agentSeatForBot(workspace, botId);
@@ -442,6 +523,7 @@ export async function rememberHeardLine(env, fetchImpl, botId, row) {
     speaker: String(row?.speaker || "").slice(0, 80),
     turn,
     roomId: String(row?.roomId || "").slice(0, 80),
+    assistant: String(row?.assistant || "").slice(0, 500),
   });
   const saved = await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:heard-line:${id}`, body, "EX", String(LINE_SECONDS)]);
   return saved.ok === true;
@@ -460,6 +542,7 @@ export async function loadHeardLine(env, fetchImpl, botId) {
       speaker: typeof parsed.speaker === "string" ? parsed.speaker : "",
       turn: parsed.turn,
       roomId: typeof parsed.roomId === "string" ? parsed.roomId : "",
+      assistant: typeof parsed.assistant === "string" ? parsed.assistant : "",
     };
   } catch {
     return null;

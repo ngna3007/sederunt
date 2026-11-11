@@ -59,6 +59,17 @@ test("a name, a trigger, and an open hold are worth an answer", () => {
   assert.equal(meetingLineShouldAnswer(session, { text: "what time is the launch", room: { id: "bot-1" } }), true);
 });
 
+test("one person with the bot is answered without the name", () => {
+  const room = { id: "bot-1" };
+  const session = { hearing: { name: "Adam", triggers: ["hey adam"] }, meetingDirect: true };
+  assert.equal(meetingLineShouldAnswer(session, { text: "what time is the launch", room, memberId: "100", speakerName: "Anh" }), true);
+  assert.equal(meetingLineShouldAnswer(session, { text: "okay", room, memberId: "100", speakerName: "Anh" }), false);
+  assert.equal(meetingLineShouldAnswer(session, { text: "thanks", room, memberId: "100", speakerName: "Anh" }), false);
+  assert.equal(meetingLineShouldAnswer(session, { text: "the launch is Thursday", room, memberId: "9", speakerName: "Adam" }), false);
+  session.meetingDirect = false;
+  assert.equal(meetingLineShouldAnswer(session, { text: "what time is the launch", room, memberId: "100", speakerName: "Anh" }), false);
+});
+
 test("the person who called can continue, and someone else is heard but not answered", () => {
   const session = { hearing: { name: "Adam", triggers: ["hey adam"] } };
   const room = { id: "bot-1" };

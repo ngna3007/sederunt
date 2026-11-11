@@ -105,7 +105,13 @@ export function createMeetingAdapter(env = process.env, options = {}) {
               realtime_endpoints: [{
                 type: "webhook",
                 url: `${new URL(cameraUrl).origin}/api/recall`,
-                events: ["transcript.data", "transcript.partial_data"],
+                events: [
+                  "transcript.data",
+                  "transcript.partial_data",
+                  "participant_events.join",
+                  "participant_events.leave",
+                  "participant_events.update",
+                ],
               }],
             },
           }),
@@ -295,6 +301,33 @@ function relativeStamp(value) {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (value && typeof value === "object" && typeof value.relative === "number" && Number.isFinite(value.relative)) return value.relative;
   return NaN;
+}
+
+/**
+ * A join, leave, or name change. Absent when the payload is not a participant event.
+ *
+ * @param {unknown} payload
+ * @returns {{ botId: string, participantId: string, name: string, present: boolean } | null}
+ */
+export function recallParticipantChange(payload) {
+  const root = payload && typeof payload === "object" ? payload : {};
+  const event = typeof root.event === "string" ? root.event : "";
+  const present = event === "participant_events.join" || event === "participant_events.update"
+    ? true
+    : (event === "participant_events.leave" ? false : null);
+  if (present === null) return null;
+  const data = root.data && typeof root.data === "object" ? root.data : {};
+  const inner = data.data && typeof data.data === "object" ? data.data : data;
+  const participant = inner.participant && typeof inner.participant === "object" ? inner.participant : null;
+  const participantId = participant?.id == null ? "" : String(participant.id).trim();
+  const botId = typeof data.bot?.id === "string" ? data.bot.id.trim() : "";
+  if (!participantId || !botId) return null;
+  return {
+    botId,
+    participantId,
+    name: typeof participant.name === "string" ? participant.name : "",
+    present,
+  };
 }
 
 export function recallTranscriptDelivery(payload) {
