@@ -78,7 +78,7 @@ const AGENT_PAGE = `<!doctype html>
   var turnController = null;
   // Past the server's own 25 s turn cap, so a slow answer ends with its own done event first.
   var TURN_CAP_MS = 32000;
-  var stats = { msgs: 0, opened: 0, own: 0, echo: 0, commits: 0, asked: 0, skipped: 0, busy: 0, done: 0, errors: 0, stuck: 0, sentences: 0, socketOpens: 0, socketCloses: 0 };
+  var stats = { msgs: 0, opened: 0, own: 0, echo: 0, commits: 0, asked: 0, skipped: 0, busy: 0, done: 0, errors: 0, stuck: 0, sentences: 0, spoken: 0, speakRetries: 0, speakFailed: 0, socketOpens: 0, socketCloses: 0 };
 
   function letters(value) {
     return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -395,16 +395,31 @@ const AGENT_PAGE = `<!doctype html>
     }).catch(function () {});
   }
 
-  function enqueue(text) {
-    var controller = track(new AbortController());
-    var job = fetch("/api/meeting/agent/speak", {
+  function speakOnce(text, controller) {
+    return fetch("/api/meeting/agent/speak", {
       method: "POST",
       headers: headers(),
       signal: controller.signal,
       body: JSON.stringify({ text: text })
     }).then(function (response) {
-      return response.ok ? response : null;
+      return response && response.ok ? response : null;
     }).catch(function () { return null; });
+  }
+
+  /** A refused or failed line is asked for once more before it is dropped (Nov 11, bot be88aa49). */
+  function enqueue(text) {
+    var controller = track(new AbortController());
+    var job = speakOnce(text, controller).then(function (response) {
+      if (response || controller.signal.aborted) return response;
+      stats.speakRetries += 1;
+      return new Promise(function (resolve) { setTimeout(resolve, 400); }).then(function () {
+        return controller.signal.aborted ? null : speakOnce(text, controller);
+      });
+    }).then(function (response) {
+      if (response) stats.spoken += 1;
+      else stats.speakFailed += 1;
+      return response;
+    });
     queue.push(job);
     if (!pumping) playNext();
   }
