@@ -1,3 +1,5 @@
+import { createHash, randomBytes } from "node:crypto";
+
 // Walrus Memory refuses writes past 180 weighted requests a minute (HTTP 429,
 // retry_after_seconds). A meeting fact refused that way was lost (dry run 2,
 // Nov 11 09:41:04 UTC: "the design review moved to Thursday"). Writes now back
@@ -7,6 +9,11 @@ const QUEUE_KEY = "sederunt:memory-retry";
 const DEAD_KEY = "sederunt:memory-retry:dead";
 const LOCK_KEY = "sederunt:memory-retry:lock";
 const MAX_ATTEMPTS = 40;
+// Queued facts are meeting content: they do not sit in Redis for ever.
+const QUEUE_TTL_S = 7 * 24 * 3600;
+// Longer than one drain (40 s deadline plus a 20-45 s Walrus write), so two
+// drains never hold the same row.
+const LOCK_TTL_S = 120;
 
 /** True for a Walrus rate-limit refusal. */
 export function isRateLimited(error) {
@@ -24,6 +31,18 @@ export function retryAfterMs(error) {
 /** Room snapshots are rebuilt from Recall; every other kind is a fact to keep. */
 export function durableKind(kind) {
   return typeof kind === "string" && kind !== "room";
+}
+
+/**
+ * A stable idempotency key for a queued write that came without one, so a drain
+ * that wrote the fact but died before removing it cannot write it twice.
+ */
+function queuedInput(tenantId, input) {
+  if (!input || typeof input !== "object" || input.idempotencyKey) return input;
+  const print = createHash("sha256").update(JSON.stringify([
+    tenantId || "", input.account || "", input.kind || "", input.text || "", input.room?.id || input.roomId || "", input.at || "",
+  ]), "utf8").digest("hex").slice(0, 32);
+  return { ...input, idempotencyKey: `retry:${print}` };
 }
 
 function sleep(ms) {
@@ -64,9 +83,11 @@ export function withRateLimitRetry(memory, options = {}) {
       }
     }
     if (durableKind(input?.kind) && typeof options.redis === "function") {
-      const row = JSON.stringify({ tenantId: options.tenantId || "", input, at: new Date().toISOString(), attempts: 0 });
+      const tenantId = options.tenantId || "";
+      const row = JSON.stringify({ tenantId, input: queuedInput(tenantId, input), at: new Date().toISOString(), attempts: 0 });
       const pushed = await options.redis(["LPUSH", QUEUE_KEY, row]).catch(() => null);
       if (pushed?.ok) {
+        await options.redis(["EXPIRE", QUEUE_KEY, String(QUEUE_TTL_S)]).catch(() => null);
         try { log({ kind: "memory-queued", kindName: input?.kind || "", reason: "rate-limited" }); } catch {}
         return { blobId: null, queued: true };
       }
@@ -77,8 +98,11 @@ export function withRateLimitRetry(memory, options = {}) {
 }
 
 /**
- * Write queued facts. One drain at a time across instances (a Redis lock);
- * a rate-limited write goes back to the queue and stops this drain.
+ * Write queued facts. One drain at a time across instances (a Redis lock with
+ * its own token). A row is read, written, and only then removed, so a drain
+ * that dies mid-write leaves it queued; its idempotency key makes the rewrite
+ * a no-op. A rate-limited write stays where it is and stops this drain; any
+ * other failure moves the row to the back of the line.
  *
  * @param {{ redis: (command: unknown[]) => Promise<any>, memoryFor: (tenantId: string) => any,
  *   log?: (row: object) => void, limit?: number, deadlineMs?: number }} options
@@ -88,40 +112,53 @@ export async function drainMemoryRetries(options) {
   const log = typeof options.log === "function" ? options.log : (row) => console.info(JSON.stringify(row));
   const limit = Number.isInteger(options.limit) ? options.limit : 5;
   const deadline = Date.now() + (Number.isFinite(options.deadlineMs) ? options.deadlineMs : 40_000);
-  const lock = await redis(["SET", LOCK_KEY, "1", "NX", "EX", "55"]).catch(() => null);
+  const token = randomBytes(12).toString("hex");
+  const lock = await redis(["SET", LOCK_KEY, token, "NX", "EX", String(LOCK_TTL_S)]).catch(() => null);
   if (!lock?.ok || lock.result?.result == null) return { drained: 0, locked: true };
   let drained = 0;
+  const drop = (raw) => redis(["LREM", QUEUE_KEY, "-1", raw]).catch(() => null);
   try {
     for (let index = 0; index < limit && Date.now() < deadline; index += 1) {
-      const popped = await redis(["RPOP", QUEUE_KEY]).catch(() => null);
-      const raw = popped?.ok ? popped.result?.result : null;
+      const peeked = await redis(["LINDEX", QUEUE_KEY, "-1"]).catch(() => null);
+      const raw = peeked?.ok ? peeked.result?.result : null;
       if (typeof raw !== "string" || !raw) break;
       let row;
-      try { row = JSON.parse(raw); } catch { continue; }
+      try { row = JSON.parse(raw); } catch { await drop(raw); continue; }
       const memory = options.memoryFor(String(row.tenantId || ""));
       try {
         if (!memory || typeof memory.remember !== "function") throw new Error("memory unavailable");
         const saved = await memory.remember(row.input);
         if (!saved || saved.ok === false) throw new Error("not saved");
+        await drop(raw);
         drained += 1;
         log({ kind: "memory-retry-saved", kindName: row.input?.kind || "", attempts: (row.attempts || 0) + 1 });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error || "");
-        if (/\(409\)/.test(message)) { drained += 1; continue; }
-        const next = { ...row, attempts: (row.attempts || 0) + 1 };
-        if (next.attempts >= MAX_ATTEMPTS) {
-          await redis(["LPUSH", DEAD_KEY, JSON.stringify(next)]).catch(() => null);
+        // Already written under this key (a drain that died after the write).
+        if (/\(409\)/.test(message)) { await drop(raw); drained += 1; continue; }
+        const next = JSON.stringify({ ...row, attempts: (row.attempts || 0) + 1 });
+        if ((row.attempts || 0) + 1 >= MAX_ATTEMPTS) {
+          await drop(raw);
+          await redis(["LPUSH", DEAD_KEY, next]).catch(() => null);
+          await redis(["EXPIRE", DEAD_KEY, String(QUEUE_TTL_S)]).catch(() => null);
           log({ kind: "memory-retry-dead", kindName: row.input?.kind || "", message: message.slice(0, 200) });
           continue;
         }
-        // Back at the end that pops next, so order is kept.
-        await redis(["RPUSH", QUEUE_KEY, JSON.stringify(next)]).catch(() => null);
-        log({ kind: "memory-retry-later", kindName: row.input?.kind || "", attempts: next.attempts, message: message.slice(0, 200) });
-        if (isRateLimited(error)) break;
+        if (isRateLimited(error)) {
+          // Same place in line, one more attempt counted; try again next drain.
+          await redis(["LSET", QUEUE_KEY, "-1", next]).catch(() => null);
+          log({ kind: "memory-retry-later", kindName: row.input?.kind || "", attempts: (row.attempts || 0) + 1, message: message.slice(0, 200) });
+          break;
+        }
+        await drop(raw);
+        await redis(["LPUSH", QUEUE_KEY, next]).catch(() => null);
+        log({ kind: "memory-retry-later", kindName: row.input?.kind || "", attempts: (row.attempts || 0) + 1, message: message.slice(0, 200) });
       }
     }
   } finally {
-    await redis(["DEL", LOCK_KEY]).catch(() => null);
+    // Only this drain's lock; one that expired and was taken by another drain is left.
+    const held = await redis(["GET", LOCK_KEY]).catch(() => null);
+    if (held?.ok && held.result?.result === token) await redis(["DEL", LOCK_KEY]).catch(() => null);
   }
   return { drained };
 }

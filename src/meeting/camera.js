@@ -294,29 +294,51 @@ const AGENT_PAGE = `<!doctype html>
     }
   }
 
-  /** Take back an open turn that has not spoken or run a tool; its line is heard again with what follows. */
+  /**
+   * Take back an open turn that has not spoken or run a tool; its line is heard again
+   * with what follows. The server decides: a turn that already started a write is
+   * kept (409), so one request is never filed twice.
+   */
   function supersede(who) {
     var open = inflight;
-    if (!open || !turnOpen || open.spoke || open.tool || !who || who !== open.who) return false;
+    if (!open || !turnOpen || open.spoke || open.tool || open.cancelling || !who || who !== open.who) return false;
     // Only the rest of the same utterance: words soon after the commit.
     if (Date.now() - open.at > SUPERSEDE_MS) return false;
+    if (!ear) return false;
+    open.cancelling = true;
+    fetch("/api/meeting/agent/cancel", { method: "POST", headers: headers(), body: JSON.stringify({ turn_id: open.turnId }) }).then(function (response) {
+      open.cancelling = false;
+      if (!response || response.status === 409 || !response.ok) {
+        // Kept: the turn runs on; the new words are their own line.
+        open.tool = true;
+        return;
+      }
+      takeBack(open);
+    }, function () {
+      open.cancelling = false;
+      open.tool = true;
+    });
+    return true;
+  }
+
+  function takeBack(open) {
+    if (inflight !== open || open.spoke || open.controller !== turnController) return;
     inflight = null;
-    if (open.controller === turnController) turnController = null;
+    turnController = null;
     // Only this turn is taken back; audio an earlier turn is still playing is left alone.
     clearTimeout(turnTimer);
     turnOpen = false;
     turnStartedAt = 0;
     try { open.controller.abort(); } catch (error) {}
     if (guest.dataset.state === "thinking" || guest.dataset.state === "tool") setState(pumping ? "speaking" : "listening");
-    if (ear) fetch("/api/meeting/agent/cancel", { method: "POST", headers: headers(), body: JSON.stringify({ turn_id: open.turnId }) }).catch(function () {});
     heldAsk = null;
     committed = null;
+    var who = open.who;
     lineText = lineText && letters(lineSpeaker || "") === who ? joinLine(open.text, lineText) : open.text;
     lineSpeaker = open.speaker;
     lineParticipant = open.claimed || lineParticipant;
     lineWoke = lineWoke || open.woke;
     lastWordAt = Date.now();
-    return true;
   }
 
   function maybeCommit() {

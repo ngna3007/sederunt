@@ -76,7 +76,7 @@ async function boot({ model, deps = {}, seat = {}, env = {}, memory } = {}) {
 }
 
 /** The meeting page in a vm with a fake clock; turn replies come from `reply(n)`. */
-function pageRig(reply) {
+function pageRig(reply, options = {}) {
   const page = renderCameraPage();
   const script = page.slice(page.indexOf("<script>") + "<script>".length, page.indexOf("</script>"));
   const posts = [];
@@ -103,6 +103,7 @@ function pageRig(reply) {
       posts.push(row);
       if (target === "/api/meeting/agent/turn") return Promise.resolve(reply(posts.filter((item) => item.url === target).length, row));
       if (target === "/api/meeting/agent/speak") return Promise.resolve(null);
+      if (target === "/api/meeting/agent/cancel" && options.cancelStatus) return Promise.resolve({ ok: options.cancelStatus < 300, status: options.cancelStatus });
       return Promise.resolve({ ok: true, json: async () => ({ botName: "Adam", participantId: "", direct: true }), body: null });
     },
   });
@@ -335,6 +336,17 @@ function fakeRedis() {
     if (op === "RPUSH") { const list = store.get(key) || []; list.push(...rest); store.set(key, list); return list.length; }
     if (op === "RPOP") { const list = store.get(key) || []; return list.length ? list.pop() : null; }
     if (op === "GET") return store.has(key) ? store.get(key) : null;
+    if (op === "EXPIRE") return store.has(key) ? 1 : 0;
+    if (op === "LINDEX") { const list = store.get(key) || []; const at = Number(rest[0]); return list[at < 0 ? list.length + at : at] ?? null; }
+    if (op === "LSET") { const list = store.get(key) || []; const at = Number(rest[0]); list[at < 0 ? list.length + at : at] = rest[1]; return "OK"; }
+    if (op === "LREM") {
+      const list = store.get(key) || [];
+      const count = Number(rest[0]);
+      const at = count < 0 ? list.lastIndexOf(rest[1]) : list.indexOf(rest[1]);
+      if (at < 0) return 0;
+      list.splice(at, 1);
+      return 1;
+    }
     return null;
   };
   return { store, command: async (command) => ({ ok: true, result: { result: run(command) } }) };
@@ -438,4 +450,110 @@ test("dry run 2: the console asks a finished room for media once per page load, 
   now += 10 * 60_000;
   context.tick();
   assert.deepEqual(asked.slice(4), ["0fde3ab3-b2c6-460d-8bb0-34b8d85e97e7"], "after ten minutes only the live room is asked again");
+});
+
+
+// ---- Review of PR 26 (Nov 11 2026) ----
+
+test("review: a turn the server says already started a tool is not taken back, so the line is not filed twice", async () => {
+  const page = pageRig((count) => (count === 1 ? hang() : streamOf("")), { cancelStatus: 409 });
+  await page.start();
+  await replayLinearLine(page, { partials: false });
+  const turns = page.posts.filter((row) => row.url === "/api/meeting/agent/turn");
+  assert.equal(page.posts.some((row) => row.url === "/api/meeting/agent/cancel"), true, "the page asked");
+  assert.equal(turns[0].signal.aborted, false, "the writing turn keeps its stream");
+  assert.equal(page.turns().some((text) => /create a linear issue, fix the onboarding/i.test(text)), false, "the merged line is not asked again");
+});
+
+test("review: the turn lane — the first of write and cancel wins, shared by instances", async () => {
+  const { markTurnLane } = await import("../src/meeting/seat.js");
+  // In process.
+  const ws = {};
+  assert.equal(await markTurnLane(ws, BOT, "t1", "write", {}), "write");
+  assert.equal(await markTurnLane(ws, BOT, "t1", "cancel", {}), "write");
+  assert.equal(await markTurnLane(ws, BOT, "t2", "cancel", {}), "cancel");
+  assert.equal(await markTurnLane(ws, BOT, "t2", "write", {}), "cancel");
+  // Across instances (Redis): another process sees the first mark.
+  const store = new Map();
+  const fetchImpl = async (_url, init) => {
+    const [op, key, value, ...rest] = JSON.parse(init.body);
+    let result = null;
+    if (op === "SET") { if (rest.includes("NX") && store.has(key)) result = null; else { store.set(key, value); result = "OK"; } }
+    if (op === "GET") result = store.get(key) ?? null;
+    return { ok: true, json: async () => ({ result }) };
+  };
+  const env = { UPSTASH_REDIS_REST_URL: "https://redis.test", UPSTASH_REDIS_REST_TOKEN: "t" };
+  assert.equal(await markTurnLane({}, BOT, "t3", "write", env, fetchImpl), "write");
+  assert.equal(await markTurnLane({}, BOT, "t3", "cancel", env, fetchImpl), "write");
+  assert.equal(await markTurnLane({}, BOT, "t4", "cancel", env, fetchImpl), "cancel");
+  assert.equal(await markTurnLane({}, BOT, "t4", "write", env, fetchImpl), "cancel");
+});
+
+test("review: cancel answers 409 for a writing turn, and a taken-back turn files nothing", async () => {
+  const { markTurnLane } = await import("../src/meeting/seat.js");
+  const filed = [];
+  const ctx = await boot({
+    model: async () => ({ ok: true, status: 200, body: toolCallStream("act", { title: "Fix the onboarding email" }) }),
+    deps: { linear: { async createIssue(input) { filed.push(input); return { id: "ROW-1", identifier: "ROW-1", url: "https://linear.app/x/issue/ROW-1" }; } } },
+  });
+  try {
+    await markTurnLane({ meetingVoice: ctx.meetingVoice }, BOT, "writing-1", "write", {});
+    const kept = await post(ctx.port, "/api/meeting/agent/cancel", JSON.stringify({ turn_id: "writing-1" }), { "x-meeting-ear": EAR });
+    assert.equal(kept.status, 409);
+    const taken = await post(ctx.port, "/api/meeting/agent/cancel", JSON.stringify({ turn_id: "taken-1" }), { "x-meeting-ear": EAR });
+    assert.equal(taken.status, 204);
+    // The same turn id arriving after it was taken back reaches the tool but writes nothing.
+    const raw = (await turn(ctx.port, "Adam, file a linear issue about the onboarding email", { turn_id: "taken-1" })).raw;
+    assert.doesNotMatch(raw, /I filed/);
+    assert.equal(filed.length, 0);
+    // Control: a turn that was not taken back files once.
+    const control = (await turn(ctx.port, "Adam, please file a linear issue about the scanner jam", { turn_id: "kept-2" })).raw;
+    assert.match(control, /I filed/);
+    assert.equal(filed.length, 1);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test("review: inline titles only for a request to Adam, not narration or a destination", () => {
+  for (const [line, title] of [
+    ["Adam, create a Linear issue, fix the onboarding email before launch", "Fix the onboarding email before launch"],
+    ["create a linear issue to track the login bug", "Track the login bug"],
+    ["Adam, can you create a ticket called fix login", "Fix login"],
+    ["so Adam could you open a ticket saying update the deck", "Update the deck"],
+    ["create a linear issue for the onboarding email", "The onboarding email"],
+  ]) assert.equal(inlineIssueTitle(line), title, line);
+  for (const line of ["I will create a task for Bao later", "we should create an issue to track churn", "Adam, add a task to the list to remind Bao",
+    "create an issue for the team", "Adam, create an issue to Linear", "Adam create a ticket for it", "did you create an issue for the scanner",
+    "can you create a ticket for the bug?", "create a ticket to"]) {
+    assert.equal(inlineIssueTitle(line), "", line);
+  }
+});
+
+test("review: the retry queue reads before it removes, keys queued facts, expires, and keeps its own lock", async () => {
+  const redis = fakeRedis();
+  const commands = [];
+  const command = async (cmd) => { commands.push(cmd[0]); return redis.command(cmd); };
+  const refusing = withRateLimitRetry({ async remember() { throw new Error(RATE_LIMITED); } }, { tenantId: "t-9", redis: command, waits: [1], wait: async () => {}, log: () => {} });
+  await refusing.remember({ kind: "decision", text: "The booth opens at nine." });
+  await refusing.remember({ kind: "decision", text: "The booth opens at nine." });
+  const rows = redis.store.get("sederunt:memory-retry").map((raw) => JSON.parse(raw));
+  assert.match(rows[0].input.idempotencyKey, /^retry:[0-9a-f]{32}$/);
+  assert.equal(rows[0].input.idempotencyKey, rows[1].input.idempotencyKey, "the same fact gets the same key, so it is written once");
+  assert.equal(commands.includes("EXPIRE"), true);
+  // A drain that dies mid-write leaves the row queued.
+  await assert.rejects(drainMemoryRetries({ redis: command, memoryFor: () => ({ async remember() { throw Object.assign(new Error("boom"), { fatal: true }); } }), log: () => { throw new Error("crash"); } }));
+  assert.equal(redis.store.get("sederunt:memory-retry").length >= 1, true);
+  // Another drain's lock is never deleted by this one.
+  redis.store.set("sederunt:memory-retry:lock", "someone-else");
+  const locked = await drainMemoryRetries({ redis: command, memoryFor: () => null, log: () => {} });
+  assert.equal(locked.locked, true);
+  assert.equal(redis.store.get("sederunt:memory-retry:lock"), "someone-else");
+  redis.store.delete("sederunt:memory-retry:lock");
+  const written = [];
+  const result = await drainMemoryRetries({ redis: command, memoryFor: (tenantId) => ({ async remember(input) { written.push({ tenantId, key: input.idempotencyKey }); return { blobId: "b" }; } }), log: () => {} });
+  assert.equal(result.drained, 2);
+  assert.equal(written.every((row) => row.tenantId === "t-9"), true);
+  assert.equal(redis.store.get("sederunt:memory-retry").length, 0);
+  assert.equal(redis.store.has("sederunt:memory-retry:lock"), false);
 });

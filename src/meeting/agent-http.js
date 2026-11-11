@@ -75,6 +75,7 @@ import {
   redisTurnCount,
   releaseAgentTurn,
   releaseNamedAgentTurn,
+  markTurnLane,
   rememberAgentClock,
   rememberAgentFloor,
   rememberEchoLines,
@@ -202,6 +203,11 @@ export async function handleMeetingAgent(input) {
       named = String(sent?.turn_id || "").trim().slice(0, 80);
     } catch {
       named = "";
+    }
+    // A turn that already started a write is kept: the page must not ask its line again.
+    if (named && await markTurnLane(workspace, seat.botId, named, "cancel", env, workspace.fetchImpl) === "write") {
+      send(res, 409, "application/json; charset=utf-8", JSON.stringify({ kept: true, reason: "tool-started" }));
+      return true;
     }
     await cancelTurn(workspace, env, seat.botId, named);
     send(res, 204, "text/plain; charset=utf-8", "");
@@ -1092,6 +1098,12 @@ function toolOutcome(wrapped) {
 async function executeAgentTool(input) {
   const name = input.call.name;
   const write = toolIsWrite(input.tool || name);
+  // The page may take back a turn that has not reached a tool yet. Whichever comes
+  // first wins: a taken-back turn writes nothing; a writing turn cannot be taken back.
+  if (write && input.turnId && await markTurnLane(input.workspace, input.botId || input.seat?.botId, input.turnId, "write", input.env, input.fetchImpl) !== "write") {
+    const raw = { ok: false, reason: "aborted", tool: name };
+    return { raw, wrapped: wrapToolResult(raw, name) };
+  }
   const member = await agentMember(input.workspace, input.seat.botId, {
     participantId: input.participantId,
     name: input.speaker,

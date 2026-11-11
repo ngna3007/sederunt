@@ -3867,17 +3867,21 @@ function saveRoomOnce(workspace, tenant, id, collected) {
   if (!memory || typeof memory.remember !== "function") return;
   const env = workspace.env || {};
   const fetchImpl = workspace.fetchImpl || globalThis.fetch;
-  const local = `${deps.tenantId || ""}:${id}`;
+  const room = Object.assign({}, ...collected.map((input) => (input?.room && typeof input.room === "object" ? input.room : {})));
+  const lines = collected.map((input) => input?.room?.lines).filter(Array.isArray).sort((a, b) => b.length - a.length)[0];
+  if (lines) room.lines = lines;
+  // Recall often ends the call before the transcript and recording span are ready.
+  // Each stage (ended, + lines, + span) is written once, so a room written at
+  // call_ended still gets its transcript later: at most three writes per room.
+  const stage = `${lines?.length ? "l" : ""}${Number(room.duration) > 0 && room.startedAt ? "s" : ""}` || "e";
+  const local = `${deps.tenantId || ""}:${id}:${stage}`;
   workspace.mediaRoomsSaved ??= new Set();
   if (workspace.mediaRoomsSaved.has(local)) return;
   if (workspace.mediaRoomsSaved.size >= 5000) workspace.mediaRoomsSaved.clear();
   workspace.mediaRoomsSaved.add(local);
-  const room = Object.assign({}, ...collected.map((input) => (input?.room && typeof input.room === "object" ? input.room : {})));
-  const lines = collected.map((input) => input?.room?.lines).filter(Array.isArray).sort((a, b) => b.length - a.length)[0];
-  if (lines) room.lines = lines;
   const print = createHash("sha256").update(JSON.stringify(room), "utf8").digest("hex").slice(0, 12);
   const input = { ...collected[collected.length - 1], account: "company", kind: "room", text: `${id} meeting`, idempotencyKey: `${id}:media:${print}`, room };
-  const key = `sederunt:media-room-saved:${deps.tenantId || "local"}:${id}`;
+  const key = `sederunt:media-room-saved:${deps.tenantId || "local"}:${id}:${stage}`;
   const run = async () => {
     const claim = await within(sharedRedisCommand(env, fetchImpl, ["SET", key, "1", "NX", "EX", String(MEDIA_ROOM_SAVED_TTL_S)]), 1500, { ok: false });
     if (claim?.ok && claim.result && Object.prototype.hasOwnProperty.call(claim.result, "result") && claim.result.result === null) return;

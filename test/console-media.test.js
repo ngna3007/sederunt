@@ -689,7 +689,9 @@ test("dry run 2: a failed room write is not retried by every poll", async () => 
     } finally { instance.app.close(); }
   }
   assert.equal(calls, 1, "one try; the next is due after the short retry claim expires");
-  assert.equal(redis.store.get(`sederunt:media-room-saved:local:${id}`), "retry");
+  const claims = [...redis.store.keys()].filter((key) => key.startsWith(`sederunt:media-room-saved:local:${id}:`));
+  assert.equal(claims.length, 1);
+  assert.equal(redis.store.get(claims[0]), "retry");
 });
 
 test("dry run 2: polling a live room writes nothing to Walrus", async () => {

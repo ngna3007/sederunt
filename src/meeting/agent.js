@@ -145,8 +145,21 @@ export function titleFromAnswer(text, botName = "Adam") {
 export function inlineIssueTitle(text, botName = "Adam") {
   const value = String(text || "").replace(/\s+/g, " ").trim();
   if (!value) return "";
-  const match = /\b(?:create|file|open|log|add|make|raise|start|write)\s+(?:(?:a|an|the|new|one|another)\s+)*(?:linear\s+)?(?:issue|ticket|task|bug|to-?do)\b(?:\s+(?:in|on)\s+linear\b)?(?:\s*[,:;\-–—]\s*(?:(?:called|titled|named|saying|that says|to say)\s+)?|\s+(?:called|titled|named|saying|that says|to say|about|to|for)\s+)(.+)$/i.exec(value);
+  // Only a request to Adam: the verb leads the line ("Adam, create ...", "can you
+  // create ...", "please file ..."). Narration ("I will create a task for Bao
+  // later") and discussion are not filed without the model.
+  const name = String(botName || "Adam").replace(/[^\p{L}\p{N} ]+/gu, "").trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const lead = new RegExp(`^(?:(?:hey|hi|ok|okay|so|alright)[,\\s]+)?(?:(?:${name || "adam"}|adam)[,.:\\s]+)?(?:(?:please|now)\\s+)?(?:(?:can|could|would|will) you\\s+(?:please\\s+)?|(?:i (?:want|need|would like|'d like) you to|go ahead and|let'?s)\\s+)?(?:please\\s+)?`, "iu");
+  const head = lead.exec(value);
+  const body = head ? value.slice(head[0].length) : value;
+  const match = /^(?:create|file|open|log|add|make|raise|start|write)\s+(?:(?:a|an|the|new|one|another)\s+)*(?:linear\s+)?(?:issue|ticket|task|bug|to-?do)\b(?:\s+(?:in|on)\s+linear\b)?(?:\s*[,:;\-–—]\s*(?:(?:called|titled|named|saying|that says|to say)\s+)?|\s+(?:called|titled|named|saying|that says|to say|about|to|for)\s+)(.+)$/i.exec(body);
   if (!match) return "";
+  const marker = /\s(to|for)\s+$/i.exec(body.slice(0, body.length - match[1].length));
+  // "to the board", "for Linear": where it goes, not what it says.
+  const where = marker?.[1]?.toLowerCase() === "to"
+    ? /^(?:the|a|an|my|our|your|this|that|linear|backlog|board|list|project|team|me|us|him|her|them|it)\b/i
+    : /^(?:linear|me|us|him|her|them|it|this|that|(?:the|our|my) (?:team|board|backlog|project|list))\b/i;
+  if (marker && where.test(match[1])) return "";
   const rest = match[1].replace(/^["'“‘]+|["'”’]+$/g, "").trim();
   if (!rest || /\?\s*$/.test(rest)) return "";
   return titleFromAnswer(rest, botName);
