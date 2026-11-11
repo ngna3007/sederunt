@@ -15,9 +15,9 @@
   <a href="https://docs.tatum.io"><img src="https://img.shields.io/badge/Tatum-Sui_gRPC-111111" alt="Tatum Sui gRPC"></a>
 </p>
 
-<p align="center">
-  <a href="docs/media/sederunt-promo.mp4"><img src="docs/media/promo-poster.png" alt="Play the Sederunt promo" width="820"></a>
-</p>
+
+https://github.com/user-attachments/assets/63f84845-ff8a-435d-ae00-6054b085571f
+
 
 <p align="center">
   <a href="docs/media/sederunt-promo.mp4"><strong>Watch the promo</strong></a>
