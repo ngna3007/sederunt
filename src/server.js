@@ -222,6 +222,7 @@ export function defaultDeps(options = {}) {
         linearCalls.push("create");
         return { identifier: "", id: "" };
       },
+      connected: false,
       async assignIssue() {
         linearCalls.push("assign");
         return { identifier: "", id: "" };

@@ -1,4 +1,4 @@
-import { utteranceToCommit } from "./agent.js";
+import { echoShare, utteranceToCommit } from "./agent.js";
 import { directRequest } from "./voice.js";
 
 /**
@@ -40,6 +40,7 @@ const AGENT_PAGE = `<!doctype html>
 (function () {
   ${utteranceToCommit.toString()}
   ${directRequest.toString()}
+  ${echoShare.toString()}
   var params = new URLSearchParams(location.search);
   var guest = document.getElementById("guest");
   var voice = document.getElementById("voice");
@@ -61,6 +62,7 @@ const AGENT_PAGE = `<!doctype html>
   var committed = null;
   var lastWordAt = 0;
   var playStarted = 0;
+  var recentSpeech = [];
   var turnTimer = 0;
   var turnOpen = false;
   var stopAudio = function () {};
@@ -109,6 +111,36 @@ const AGENT_PAGE = `<!doctype html>
     if (letters(name) && letters(name) === letters(botName)) return;
     people[key] = 1;
     if (!rosterKnown) direct = Object.keys(people).length === 1;
+  }
+
+  function noteSpoken(text, now) {
+    var clock = typeof now === "number" ? now : Date.now();
+    var kept = [];
+    var index = 0;
+    for (index = 0; index < recentSpeech.length; index += 1) {
+      if (clock - recentSpeech[index].at < 15000) kept.push(recentSpeech[index]);
+    }
+    kept.push({ text: String(text || ""), at: clock });
+    recentSpeech = kept.slice(-12);
+  }
+
+  function spokenNow(now) {
+    var clock = typeof now === "number" ? now : Date.now();
+    var parts = [];
+    var index = 0;
+    for (index = 0; index < recentSpeech.length; index += 1) {
+      if (clock - recentSpeech[index].at < 15000) parts.push(recentSpeech[index].text);
+    }
+    return parts.join(" ");
+  }
+
+  function noteEcho() {
+    if (!ear) return;
+    fetch("/api/meeting/agent/log", {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ echo: true })
+    }).catch(function () {});
   }
 
   function noteAnswer(speaker, now) {
@@ -178,7 +210,11 @@ const AGENT_PAGE = `<!doctype html>
     var heard = utteranceToCommit(committed, message, { name: botName, participantId: participantId });
     if (!heard) return;
     notePerson(heard.participantId, heard.speaker);
-    if (heard.barge && playStarted && Date.now() - playStarted >= 300) barge();
+    if (echoShare(heard.text, spokenNow()) >= 0.6) {
+      noteEcho();
+      return;
+    }
+    if (heard.barge && playStarted && Date.now() - playStarted >= 300) barge(wokeIn(heard.text) ? "name" : "word");
     if (!heard.open) return;
     var who = letters(heard.speaker || "");
     var same = lineText && who === letters(lineSpeaker || "");
@@ -260,6 +296,7 @@ const AGENT_PAGE = `<!doctype html>
             try { payload = JSON.parse(data); } catch (error) { payload = {}; }
             if (payload.text) {
               played.push(payload.text);
+              noteSpoken(payload.text, Date.now());
               noteAnswer(speaker, Date.now());
               enqueue(payload.text);
             }
@@ -479,8 +516,15 @@ const AGENT_PAGE = `<!doctype html>
     }).catch(function () { next(); });
   }
 
-  function barge() {
+  function barge(cause) {
     if (!playStarted || Date.now() - playStarted < 300) return;
+    if (ear) {
+      fetch("/api/meeting/agent/log", {
+        method: "POST",
+        headers: headers(),
+        body: JSON.stringify({ barge: cause === "name" ? "name" : "word" })
+      }).catch(function () {});
+    }
     cancelTurn();
   }
 
@@ -534,7 +578,6 @@ const AGENT_PAGE = `<!doctype html>
       }
       var loud = Math.sqrt(sum / samples.length) > 12;
       if (loud) loudUntil = Date.now() + 400;
-      if (playStarted && Date.now() - playStarted >= 300 && loud) barge();
       if (!loud && lineText && Date.now() > loudUntil) maybeCommit();
     }, 100);
   }
@@ -566,7 +609,14 @@ const AGENT_PAGE = `<!doctype html>
       navigator.mediaDevices.getUserMedia({ audio: true }).then(watchLevel).catch(function () {});
     }
   }
-  window.__sederunt = { shouldRespond: shouldRespond, endOfTurn: endOfTurn, noteAnswer: noteAnswer, notePerson: notePerson };
+  window.__sederunt = {
+    shouldRespond: shouldRespond,
+    endOfTurn: endOfTurn,
+    noteAnswer: noteAnswer,
+    notePerson: notePerson,
+    noteSpoken: noteSpoken,
+    markPlaying: function (now) { playStarted = typeof now === "number" ? now : Date.now(); }
+  };
 })();
 </script>
 </body>

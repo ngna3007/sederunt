@@ -552,6 +552,13 @@ export async function rememberHeardLine(env, fetchImpl, botId, row) {
     turn,
     roomId: String(row?.roomId || "").slice(0, 80),
     assistant: String(row?.assistant || "").slice(0, 500),
+    hold: row?.hold && row.hold.status === "waiting_for_approval"
+      ? {
+        title: String(row.hold.title || "").slice(0, 120),
+        status: "waiting_for_approval",
+        speaker: String(row.hold.speaker || "").slice(0, 80),
+      }
+      : null,
   });
   const saved = await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:heard-line:${id}`, body, "EX", String(LINE_SECONDS)]);
   return saved.ok === true;
@@ -571,9 +578,45 @@ export async function loadHeardLine(env, fetchImpl, botId) {
       turn: parsed.turn,
       roomId: typeof parsed.roomId === "string" ? parsed.roomId : "",
       assistant: typeof parsed.assistant === "string" ? parsed.assistant : "",
+      hold: parsed.hold && parsed.hold.status === "waiting_for_approval"
+        ? {
+          title: typeof parsed.hold.title === "string" ? parsed.hold.title : "",
+          status: "waiting_for_approval",
+          speaker: typeof parsed.hold.speaker === "string" ? parsed.hold.speaker : "",
+        }
+        : null,
     };
   } catch {
     return null;
+  }
+}
+
+const ECHO_KEEP_MS = 15000;
+
+export async function rememberEchoLines(env, fetchImpl, botId, lines) {
+  const id = cleanBotId(botId);
+  if (!id) return false;
+  const now = Date.now();
+  const kept = (Array.isArray(lines) ? lines : [])
+    .filter((row) => row && typeof row.at === "number" && now - row.at < ECHO_KEEP_MS)
+    .slice(-12)
+    .map((row) => ({ text: String(row.text || "").slice(0, 400), at: row.at }));
+  const saved = await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:echo:${id}`, JSON.stringify(kept), "EX", "15"]);
+  return saved.ok === true;
+}
+
+export async function loadEchoLines(env, fetchImpl, botId) {
+  const id = cleanBotId(botId);
+  if (!id || !redisConfigured(env)) return [];
+  const loaded = await redisCommand(env, fetchImpl, ["GET", `sederunt:voice:echo:${id}`]);
+  if (typeof loaded.result !== "string" || !loaded.result.startsWith("[")) return [];
+  try {
+    const parsed = JSON.parse(loaded.result);
+    if (!Array.isArray(parsed)) return [];
+    const now = Date.now();
+    return parsed.filter((row) => row && typeof row.text === "string" && typeof row.at === "number" && now - row.at < ECHO_KEEP_MS);
+  } catch {
+    return [];
   }
 }
 

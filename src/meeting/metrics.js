@@ -2,6 +2,8 @@ const toolRows = [];
 const stageRows = [];
 const turnRows = [];
 const socketRows = [];
+const echoCounts = new Map();
+const bargeRows = [];
 
 /**
  * One tool outcome. The row is the name, the latency, and the outcome.
@@ -82,11 +84,34 @@ export function noteSocketShape(shape) {
   return row;
 }
 
+/** One dropped echo for this bot. The line itself is not stored. */
+export function noteEchoDrop(botId) {
+  const bot = String(botId || "").slice(0, 80);
+  const drops = (echoCounts.get(bot) || 0) + 1;
+  echoCounts.set(bot, drops);
+  console.info(JSON.stringify({ meeting: "echo", bot, drops }));
+  return drops;
+}
+
+/** Why playback stopped. name or word. The transcript is not stored. */
+export function noteBarge(botId, cause) {
+  const row = {
+    bot: String(botId || "").slice(0, 80),
+    cause: cause === "name" ? "name" : "word",
+  };
+  bargeRows.push(row);
+  if (bargeRows.length > 200) bargeRows.shift();
+  console.info(JSON.stringify({ meeting: "barge", ...row }));
+  return row;
+}
+
 export function meetingMetrics() {
   return {
     tools: toolRows.map((row) => ({ ...row })),
     stages: stageRows.map((row) => ({ ...row })),
     turns: turnRows.map((row) => ({ ...row })),
+    echo: [...echoCounts].map(([bot, drops]) => ({ bot, drops })),
+    barge: bargeRows.map((row) => ({ ...row })),
     sockets: socketRows.map((row) => ({
       ...row,
       keys: [...row.keys],
@@ -104,4 +129,6 @@ export function resetMeetingMetrics() {
   stageRows.length = 0;
   turnRows.length = 0;
   socketRows.length = 0;
+  echoCounts.clear();
+  bargeRows.length = 0;
 }

@@ -3,8 +3,12 @@ import {
   agentLive,
   agentPersona,
   approvalPlace,
+  asksHoldStatus,
   concreteTitle,
   draftedLine,
+  filedVoiceLine,
+  holdStatusLine,
+  isEchoLine,
   agentToolBudgetMs,
   claimArgsFor,
   freshTurnId,
@@ -21,7 +25,7 @@ import { meetingContext, rememberMeetingExchange } from "./speech-gate.js";
 import { voiceModels } from "./voice-models.js";
 import { refreshMeetingFloor } from "./voice.js";
 import { handleMcpRequest } from "../mcp.js";
-import { rememberHeldAction } from "../typed-path.js";
+import { handleUtterance, rememberHeldAction } from "../typed-path.js";
 import {
   agentMember,
   agentTurnCurrent,
@@ -32,12 +36,14 @@ import {
   inRedisTurn,
   loadAgentClock,
   loadAgentFloor,
+  loadEchoLines,
   loadHeardLine,
   loadSpokenTurn,
   redisTurnCount,
   releaseAgentTurn,
   rememberAgentClock,
   rememberAgentFloor,
+  rememberEchoLines,
   rememberAgentTurn,
   rememberHeardLine,
   rememberSpokenTurn,
@@ -49,7 +55,7 @@ import {
   takeSocketSample,
 } from "./seat.js";
 import { openRouterSpeechStream, openRouterStream } from "../openrouter.js";
-import { noteSocketShape, noteStageMetric, noteToolMetric, noteTurnLog } from "./metrics.js";
+import { noteBarge, noteEchoDrop, noteSocketShape, noteStageMetric, noteToolMetric, noteTurnLog } from "./metrics.js";
 import { createHash } from "node:crypto";
 
 const FIRST_TOKEN_MS = 2500;
@@ -71,6 +77,7 @@ function runtime(workspace) {
       recent: new Map(),
       clocks: new Map(),
       sockets: new Map(),
+      echo: new Map(),
     };
   }
   return workspace.agentRuntime;
@@ -169,6 +176,14 @@ export async function handleMeetingAgent(input) {
 }
 
 async function logPlayed(workspace, sessionFor, env, seat, body) {
+  if (body?.echo === true) {
+    noteEchoDrop(seat.botId);
+    return;
+  }
+  if (body?.barge === "name" || body?.barge === "word") {
+    noteBarge(seat.botId, body.barge);
+    return;
+  }
   if (body?.playback === true) await notePlayback(workspace, env, seat);
   const bag = runtime(workspace);
   const known = bag.lines.get(seat.botId);
@@ -336,6 +351,7 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     hydrateFloor(session, env, workspace.fetchImpl, seat),
     loadAgentSpeaker(workspace, seat, env, workspace.fetchImpl),
     loadMeetingPeople(workspace, seat.botId, env, workspace.fetchImpl),
+    loadEchoLines(env, workspace.fetchImpl, seat.botId).then((rows) => mergeEcho(bag, seat.botId, rows)),
     prior?.text ? null : loadHeardLine(env, workspace.fetchImpl, seat.botId).then((row) => {
       if (row?.text) prior = row;
     }),
@@ -381,7 +397,14 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     return;
   }
   refreshMeetingFloor(session, delivery);
-  const heard = { text, speaker, turn, roomId: seat.roomId, assistant: "" };
+  const heard = {
+    text,
+    speaker,
+    turn,
+    roomId: seat.roomId,
+    assistant: "",
+    hold: prior?.hold?.status === "waiting_for_approval" ? prior.hold : null,
+  };
   bag.heard.set(seat.botId, heard);
   await Promise.all([
     rememberAgentFloor(env, workspace.fetchImpl, seat.botId, session.meetingFloor || null),
@@ -402,17 +425,25 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
   });
   const sent = new Set();
   const toolResults = [];
+  const pendingHold = holdForSpeaker(heard.hold, speaker);
   const emit = async (full, done = false) => {
     if (abort.signal.aborted) return;
-    for (const line of linesForSpeech(full, toolResults, { done })) {
+    for (const line of linesForSpeech(full, toolResults, { done, holdTitle: pendingHold?.title || "" })) {
       if (sent.has(line) || sent.size >= 2) continue;
       sent.add(line);
       heard.assistant = [heard.assistant, line].filter(Boolean).join(" ").slice(0, 500);
+      noteEchoSpoken(bag, seat.botId, line);
+      forgetRedis(() => rememberEchoLines(env, workspace.fetchImpl, seat.botId, bag.echo.get(seat.botId) || []));
       forgetRedis(() => rememberHeardLine(env, workspace.fetchImpl, seat.botId, heard));
       const hash = rememberLine(bag, env, workspace.fetchImpl, seat.botId, turn, line);
       writeEvent(res, "sentence", { text: line, hash });
     }
   };
+  if (pendingHold && asksHoldStatus(text)) {
+    await emit(holdStatusLine(pendingHold.title), true);
+    await finish();
+    return;
+  }
   const place = approvalPlace(text);
   if (answer && place) {
     await emit(place, true);
@@ -436,6 +467,7 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
       messages: [{ role: "user", content: userTurn(session, seat, speaker, text, prior) }],
       startedAt: Date.now(),
       onText: emit,
+      existingHold: pendingHold,
       toolResults,
       writeEvent: (name, data) => {
         if (!res.writableEnded) writeEvent(res, name, data);
@@ -448,7 +480,48 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     const live = bag.live.get(seat.botId);
     if (live?.turnId === turn) bag.live.delete(seat.botId);
   }
+  const held = toolResults.find((row) => row?.status === "waiting_for_approval" && row?.title);
+  if (held) {
+    heard.hold = {
+      title: String(held.title).slice(0, 120),
+      status: "waiting_for_approval",
+      speaker: String(speaker || "").slice(0, 80),
+    };
+    forgetRedis(() => rememberHeardLine(env, workspace.fetchImpl, seat.botId, heard));
+  }
   await finish(abort.signal.aborted ? { aborted: true } : {});
+}
+
+function spokenEcho(bag, botId) {
+  const now = Date.now();
+  const list = (bag.echo.get(botId) || []).filter((row) => now - row.at < 15000);
+  bag.echo.set(botId, list);
+  return list.map((row) => row.text).join(" ");
+}
+
+function mergeEcho(bag, botId, rows) {
+  const now = Date.now();
+  const list = (bag.echo.get(botId) || []).filter((row) => now - row.at < 15000);
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!row || typeof row.text !== "string" || typeof row.at !== "number" || now - row.at >= 15000) continue;
+    if (!list.some((item) => item.at === row.at && item.text === row.text)) list.push({ text: row.text, at: row.at });
+  }
+  bag.echo.set(botId, list.slice(-12));
+}
+
+function noteEchoSpoken(bag, botId, text) {
+  const now = Date.now();
+  const list = (bag.echo.get(botId) || []).filter((row) => now - row.at < 15000);
+  list.push({ text: String(text || "").slice(0, 400), at: now });
+  bag.echo.set(botId, list.slice(-12));
+}
+
+function holdForSpeaker(hold, speaker) {
+  if (!hold || hold.status !== "waiting_for_approval" || !hold.title) return null;
+  const left = String(hold.speaker || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const right = String(speaker || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  if (left && right && left !== right) return null;
+  return hold;
 }
 
 function reportedHumans(body, seat) {
@@ -536,6 +609,21 @@ async function streamVoice(input) {
       messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(outcome.wrapped) });
     }
     if (toolMs) stampClock(input.workspace, input.env, input.botId, input.turnId, "tool", toolMs);
+    const needsTitle = input.toolResults.some((row) => row?.reason === "needs_title");
+    if (needsTitle && input.existingHold?.title) {
+      await input.onText(holdStatusLine(input.existingHold.title), true);
+      return;
+    }
+    const filedRow = input.toolResults.find((row) => row?.status === "filed");
+    if (filedRow) {
+      await input.onText(filedVoiceLine(filedRow.title || ""), true);
+      return;
+    }
+    const failedFile = input.toolResults.find((row) => row?.reason === "file-failed");
+    if (failedFile) {
+      await input.onText("The Linear issue did not go through.", true);
+      return;
+    }
     const heldRow = input.toolResults.find((row) => row?.status === "waiting_for_approval" || row?.held === true);
     if (heldRow) {
       await input.onText(draftedLine(heldRow.tool, heldRow.title), true);
@@ -648,6 +736,20 @@ async function executeAgentTool(input) {
       const raw = { ok: false, reason: "claimed", held: false };
       return { raw, wrapped: wrapToolResult(raw, name) };
     }
+    if (filesWithoutApproval(name) && input.deps?.linear?.connected !== false && typeof input.deps?.linear?.createIssue === "function") {
+      const filed = await fileVoiceLinear(input, name, args, member.memberId);
+      if (filed?.issueId) {
+        const raw = { ok: true, status: "filed", title, tool: name, issueId: filed.issueId };
+        return { raw, wrapped: wrapToolResult(raw, name) };
+      }
+      if (filed?.allow === "not-invited") {
+        undoEmptyFile(input.session, filed.deliveryId);
+        await releaseWrite(input, name, args);
+        const raw = { ok: false, reason: "file-failed", held: false, title };
+        return { raw, wrapped: wrapToolResult(raw, name) };
+      }
+      undoEmptyFile(input.session, filed?.deliveryId);
+    }
     const held = await rememberHold(input, name, args, member.memberId);
     if (!held) {
       await releaseWrite(input, name, args);
@@ -712,6 +814,58 @@ function recallForRoom(result) {
     ...result,
     why: result.why.filter((row) => visible.has(String(row?.text || "").trim())),
   };
+}
+
+function filesWithoutApproval(name) {
+  return name === "act" || name === "linear__create_issue";
+}
+
+function undoEmptyFile(session, deliveryId) {
+  if (!session || typeof session !== "object" || !deliveryId) return;
+  const removed = new Set((session.actions || []).filter((row) => row.deliveryId === deliveryId).map((row) => row.id));
+  if (removed.size) session.actions = (session.actions || []).filter((row) => !removed.has(row.id));
+  if (Array.isArray(session.activity) && removed.size) {
+    session.activity = session.activity.filter((row) => !removed.has(row.requestId));
+  }
+  session.deliveries?.delete(deliveryId);
+}
+
+async function fileVoiceLinear(input, name, args, memberId) {
+  const participantId = String(memberId || "");
+  const workspaceMember = await boundWorkspaceMember(input, participantId);
+  const owner = workspaceMember || participantId;
+  const sentBy = String(input.seat?.userId || "").trim().slice(0, 80);
+  const participants = [];
+  for (const id of [owner, participantId, sentBy]) {
+    if (id && !participants.includes(id)) participants.push(id);
+  }
+  const title = String(args?.title || "").replace(/\s+/g, " ").trim().slice(0, 120);
+  const deliveryId = `voice-file-${input.turnId || heldActionId(input.seat.roomId, owner, name, args)}`;
+  let result = null;
+  try {
+    result = await handleUtterance({
+      text: `file the ${title}`,
+      voiceFile: true,
+      door: "mcp",
+      clientName: "meeting",
+      memberId: owner,
+      deliveryId,
+      room: {
+        id: input.seat.roomId,
+        botPresent: true,
+        source: "recall",
+        kind: "meeting",
+        memberIds: participants,
+      },
+      participants,
+      session: input.session,
+    }, input.deps || {});
+  } catch {
+    return { deliveryId };
+  }
+  const issueId = String(result?.issueId || "").trim();
+  if (issueId) return { issueId, deliveryId };
+  return { deliveryId, allow: result?.allow || "" };
 }
 
 function heldParams(name, args) {

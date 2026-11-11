@@ -4,7 +4,7 @@ import { request } from "node:http";
 import test from "node:test";
 import vm from "node:vm";
 import { createSession } from "../src/session.js";
-import { acceptUtterance, approvalPlace, APPROVAL_LINE, concreteTitle, DRAFTED_LINE, draftedLine, endOfTurn, linesForSpeech, readySentences, spokenLines, utteranceToCommit, wordsFromTranscript, withoutBotSpeech } from "../src/meeting/agent.js";
+import { acceptUtterance, approvalPlace, APPROVAL_LINE, asksHoldStatus, concreteTitle, DRAFTED_LINE, draftedLine, echoShare, endOfTurn, holdStatusLine, isEchoLine, linesForSpeech, readySentences, spokenLines, utteranceToCommit, wordsFromTranscript, withoutBotSpeech } from "../src/meeting/agent.js";
 import { renderCameraPage } from "../src/meeting/camera.js";
 import { meetingMetrics, resetMeetingMetrics } from "../src/meeting/metrics.js";
 import { endAgentSeat, loadMeetingPeople, meetingPeopleDirect, noteAgentMember, noteAgentSpeaker, noteMeetingPerson, rememberMeetingPerson } from "../src/meeting/seat.js";
@@ -815,7 +815,7 @@ test("a write is held before the model speaks and is not described as done", asy
   }
 });
 
-test("a held linear write confirms on a fresh session", async () => {
+test("a voice linear write files the issue without approval", async () => {
   const docs = [];
   const memory = {
     async remember(row) { docs.push(structuredClone(row)); return { blobId: "saved" }; },
@@ -854,33 +854,33 @@ test("a held linear write confirms on a fresh session", async () => {
       body: turnBody("Adam, file the launch note.", "Priya", { participantId: "7", turn_id: "linear-hold" }),
     });
     assert.equal(spoken.status, 200);
-    assert.equal(meetingVoice.agentHolds[0].status, "held");
-    assert.equal(meetingVoice.agentHolds[0].tool, "linear__create_issue");
+    assert.equal((meetingVoice.agentHolds || []).length, 0);
     assert.equal((meetingVoice.toolRuns || []).length, 0);
-    assert.equal(issues.length, 0);
-    assert.equal(session.actions.filter((row) => row.state === "paused").length, 1);
-    assert.match(spoken.raw, /I've drafted the Linear issue 'Launch the Friday note'/);
+    assert.equal(issues.length, 1);
+    assert.equal(issues[0].title, "Launch the Friday note");
+    assert.equal(session.actions.filter((row) => row.state === "paused").length, 0);
+    assert.equal(session.actions.some((row) => row.state === "closed" && row.connectorId === "ROW-9"), true);
+    assert.match(spoken.raw, /I filed the Linear issue 'Launch the Friday note'/);
+    assert.equal(/Approve it in the Sederunt console/.test(spoken.raw), false);
     const fresh = createSession();
     assert.equal(fresh === session, false);
     await rebuildCompanyIndex(fresh, { memory });
-    const paused = fresh.actions.find((row) => row.state === "paused");
-    assert.equal(paused.tool, "linear");
-    assert.equal(paused.roomId, "bot-hold");
-    assert.equal(paused.memberId, "7");
-    assert.equal(paused.params.title, "Launch the Friday note");
-    assert.match(paused.statement, /Launch the Friday note/);
-    assert.equal(paused.inviteMemberIds.includes("7"), true);
-    const result = await handleUtterance({
+    const filed = fresh.actions.find((row) => row.connectorId === "ROW-9");
+    assert.equal(filed.state, "closed");
+    assert.equal(filed.tool, "linear");
+    assert.equal(filed.roomId, "bot-hold");
+    assert.equal(filed.memberId, "7");
+    assert.equal(filed.params.title, "Launch the Friday note");
+    const again = await handleUtterance({
       session: fresh,
-      text: `confirm ${paused.id}`,
+      text: `confirm ${filed.id}`,
       deliveryId: "confirm-held",
       memberId: "7",
       room: { id: "bot-hold", kind: "meeting", source: "recall", botPresent: true, memberIds: ["7"] },
       participants: ["7"],
     }, { memory, linear });
     assert.equal(issues.length, 1);
-    assert.equal(issues[0].title, "Launch the Friday note");
-    assert.equal(result.issueId, "ROW-9");
+    assert.equal(again.issueId, null);
   } finally {
     await close(app);
   }
@@ -964,33 +964,29 @@ test("a signed-in console user approves a voice hold and sees it", async () => {
     });
     assert.equal(spoken.status, 200);
     assert.equal((meetingVoice.toolRuns || []).length, 0);
-    assert.equal(issues.length, 0);
-    const held = session.actions.find((row) => row.state === "paused");
-    assert.equal(held.memberId, "7");
-    assert.equal(held.inviteMemberIds.includes("7"), true);
-    assert.match(held.statement, /Launch the Friday note/);
+    assert.equal(issues.length, 1);
+    assert.equal(issues[0].title, "Launch the Friday note");
+    assert.match(spoken.raw, /I filed the Linear issue 'Launch the Friday note'/);
+    const filed = session.actions.find((row) => row.state === "closed");
+    assert.equal(filed.memberId, "7");
+    assert.equal(filed.connectorId, "ROW-9");
     const hidden = await board(otherCookie);
-    assert.equal(hidden.waiting.some((row) => row.id === held.id), false);
+    assert.equal(hidden.waiting.some((row) => row.id === filed.id), false);
     const refused = await call(port, "POST", "/api/typed", {
       headers: { "content-type": "application/json", cookie: otherCookie },
-      body: JSON.stringify({ text: `confirm ${held.id}`, company: TENANT_C }),
+      body: JSON.stringify({ text: `confirm ${filed.id}`, company: TENANT_C }),
     });
     assert.equal(refused.status, 200);
     const refusal = JSON.parse(refused.raw);
     assert.equal(refusal.allow, "not-invited");
-    assert.equal(issues.length, 0);
-    const visible = await board(ownerCookie);
-    assert.equal(visible.waiting.some((row) => row.id === held.id && /Launch the Friday note/.test(row.statement)), true);
-    assert.equal(visible.rooms.some((room) => room.id === "bot-hold"), true);
+    assert.equal(issues.length, 1);
     const approved = await call(port, "POST", "/api/typed", {
       headers: { "content-type": "application/json", cookie: ownerCookie },
-      body: JSON.stringify({ text: `confirm ${held.id}`, company: TENANT_C }),
+      body: JSON.stringify({ text: `confirm ${filed.id}`, company: TENANT_C }),
     });
     assert.equal(approved.status, 200, approved.raw);
-    const result = JSON.parse(approved.raw);
-    assert.equal(result.issueId, "ROW-9", approved.raw);
+    assert.equal(JSON.parse(approved.raw).issueId, null);
     assert.equal(issues.length, 1);
-    assert.equal(issues[0].title, "Launch the Friday note");
     assert.equal((meetingVoice.toolRuns || []).length, 0);
   } finally {
     await close(app);
@@ -1041,33 +1037,33 @@ test("a room binding stores the workspace member on the voice hold", async () =>
       body: turnBody("Adam, file the launch note.", "Priya", { participantId: "7", turn_id: "mapped-hold" }),
     });
     assert.equal(spoken.status, 200);
-    const held = session.actions.find((row) => row.state === "paused");
-    assert.equal(held.memberId, "user-priya");
-    assert.equal(held.inviteMemberIds.includes("7"), true);
-    assert.equal(held.inviteMemberIds.includes("user-priya"), true);
+    const filed = session.actions.find((row) => row.state === "closed");
+    assert.equal(filed.memberId, "user-priya");
+    assert.equal(filed.inviteMemberIds.includes("7"), true);
+    assert.equal(filed.inviteMemberIds.includes("user-priya"), true);
     assert.equal((meetingVoice.toolRuns || []).length, 0);
-    assert.equal(issues.length, 0);
+    assert.equal(issues.length, 1);
+    assert.equal(issues[0].title, "Launch the Friday note");
     const asParticipant = await handleUtterance({
       session,
-      text: `confirm ${held.id}`,
+      text: `confirm ${filed.id}`,
       deliveryId: "confirm-participant",
       memberId: "7",
       room: { id: "bot-map", kind: "meeting", source: "recall", botPresent: true, memberIds: ["7"] },
       participants: ["7"],
     }, { memory, linear });
     assert.equal(asParticipant.allow, "not-invited");
-    assert.equal(issues.length, 0);
+    assert.equal(issues.length, 1);
     const asMember = await handleUtterance({
       session,
-      text: `confirm ${held.id}`,
+      text: `confirm ${filed.id}`,
       deliveryId: "confirm-member",
       memberId: "user-priya",
       room: { id: "bot-map", kind: "meeting", source: "recall", botPresent: true, memberIds: ["user-priya"] },
       participants: ["user-priya"],
     }, { memory, linear });
-    assert.equal(asMember.issueId, "ROW-9");
+    assert.equal(asMember.issueId, null);
     assert.equal(issues.length, 1);
-    assert.equal(issues[0].title, "Launch the Friday note");
     assert.equal((meetingVoice.toolRuns || []).length, 0);
   } finally {
     await close(app);
@@ -1149,24 +1145,20 @@ test("the console user who sent the bot approves the voice hold without a partic
     });
     assert.equal(spoken.status, 200);
     assert.equal((meetingVoice.toolRuns || []).length, 0);
-    assert.equal(issues.length, 0);
-    const held = session.actions.find((row) => row.state === "paused");
-    assert.equal(held.memberId, "7");
-    assert.equal(held.inviteMemberIds.includes("7"), true);
-    assert.equal(held.inviteMemberIds.includes(ownerId), true);
-    assert.equal(held.inviteMemberIds.includes("user-admin"), true);
-    assert.equal(held.inviteMemberIds.includes("user-member"), false);
-    const visible = await board();
-    assert.equal(visible.waiting.some((row) => row.id === held.id && /Launch the Friday note/.test(row.statement)), true);
-    const approved = await call(port, "POST", "/api/typed", {
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ text: `confirm ${held.id}`, company: TENANT_C }),
-    });
-    assert.equal(approved.status, 200, approved.raw);
-    const result = JSON.parse(approved.raw);
-    assert.equal(result.issueId, "ROW-9", approved.raw);
     assert.equal(issues.length, 1);
     assert.equal(issues[0].title, "Launch the Friday note");
+    const filed = session.actions.find((row) => row.state === "closed");
+    assert.equal(filed.memberId, "7");
+    assert.equal(filed.inviteMemberIds.includes("7"), true);
+    assert.equal(filed.inviteMemberIds.includes(ownerId), true);
+    assert.equal(filed.connectorId, "ROW-9");
+    const approved = await call(port, "POST", "/api/typed", {
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ text: `confirm ${filed.id}`, company: TENANT_C }),
+    });
+    assert.equal(approved.status, 200, approved.raw);
+    assert.equal(JSON.parse(approved.raw).issueId, null);
+    assert.equal(issues.length, 1);
     assert.equal((meetingVoice.toolRuns || []).length, 0);
   } finally {
     await close(app);
@@ -1232,8 +1224,10 @@ test("a person outside the tenant cannot approve the voice hold", async () => {
       body: turnBody("Adam, file the launch note.", "Priya", { participantId: "7", turn_id: "outsider-hold" }),
     });
     assert.equal(spoken.status, 200);
-    const held = session.actions.find((row) => row.state === "paused");
-    assert.equal(held.inviteMemberIds.includes(outsiderId), false);
+    assert.equal(issues.length, 1);
+    const filed = session.actions.find((row) => row.state === "closed");
+    assert.equal(filed.inviteMemberIds.includes(outsiderId), false);
+    assert.equal(filed.connectorId, "ROW-9");
     const outsiderCookie = cookieFor(outsiderId, "outsider@example.com");
     let board = null;
     for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -1243,14 +1237,14 @@ test("a person outside the tenant cannot approve the voice hold", async () => {
       if (board.reading !== true && board.read !== "reading") break;
       await new Promise((resolve) => setTimeout(resolve, 30));
     }
-    assert.equal((board.waiting || []).some((row) => row.id === held.id), false);
+    assert.equal((board.waiting || []).some((row) => row.id === filed.id), false);
     const refused = await call(port, "POST", "/api/typed", {
       headers: { "content-type": "application/json", cookie: cookieFor(outsiderId, "outsider@example.com") },
-      body: JSON.stringify({ text: `confirm ${held.id}`, company: TENANT_C }),
+      body: JSON.stringify({ text: `confirm ${filed.id}`, company: TENANT_C }),
     });
     assert.equal(refused.status, 200);
     assert.equal(JSON.parse(refused.raw).allow, "not-invited");
-    assert.equal(issues.length, 0);
+    assert.equal(issues.length, 1);
     assert.equal((meetingVoice.toolRuns || []).length, 0);
   } finally {
     await close(app);
@@ -1699,6 +1693,87 @@ test("a vague linear request asks for a title, then that title is the hold", asy
   } finally {
     await close(first.app);
     await close(second.app);
+  }
+});
+
+test("Adam's own words played back as the human are an echo", () => {
+  const spoken = "What should the issue say?";
+  assert.equal(isEchoLine("what should be", spoken), true);
+  assert.equal(isEchoLine("issue", spoken), true);
+  assert.equal(isEchoLine("say", spoken), true);
+  assert.equal(isEchoLine("what should the issue say", spoken), true);
+  assert.equal(echoShare("what should be", spoken) >= 0.6, true);
+  assert.equal(isEchoLine("Fix the onboarding email", spoken), false);
+  assert.equal(asksHoldStatus("have you created it"), true);
+  assert.equal(asksHoldStatus("can you push it"), true);
+  assert.equal(asksHoldStatus("fire it"), true);
+  assert.equal(asksHoldStatus("submit it"), true);
+  assert.equal(asksHoldStatus("what time is the launch"), false);
+  assert.equal(holdStatusLine("Fix the onboarding email"), "It's drafted as 'Fix the onboarding email'. Only a person can approve it, in the Sederunt console under Activity.");
+});
+
+test("an agent turn still answers a follow-up that shares Adam's words", async () => {
+  const chats = [];
+  const { app } = boot(async (url, init) => {
+    if (String(url).includes("openrouter.ai")) chats.push(JSON.parse(init.body));
+    return { ok: true, status: 200, body: chatStream("We will finish the booth.") };
+  });
+  const port = await listen(app);
+  try {
+    const headers = { "content-type": "application/json", "x-meeting-ear": EAR };
+    const asked = await call(port, "POST", "/api/meeting/agent/turn", {
+      headers,
+      body: turnBody("Adam, what is left on the booth?", "Priya", { participantId: "7", turn_id: "echo-ask" }),
+    });
+    assert.match(asked.raw, /We will finish the booth/);
+    const follow = await call(port, "POST", "/api/meeting/agent/turn", {
+      headers,
+      body: turnBody("And finish the booth.", "Priya", { participantId: "7", turn_id: "echo-follow" }),
+    });
+    assert.equal(sseEvents(follow.raw).some((event) => event.data?.text === "We will finish the booth."), true);
+    assert.equal(chats.length, 2);
+  } finally {
+    await close(app);
+  }
+});
+
+test("a held title is not asked for again", async () => {
+  const chats = [];
+  const meetingVoice = {};
+  const session = createSession();
+  const { app } = boot(async (url, init) => {
+    if (String(url).includes("openrouter.ai")) chats.push(JSON.parse(init.body));
+    return { ok: true, status: 200, body: toolCallStream("act", { title: "Fix the onboarding email" }) };
+  }, {
+    session,
+    sessions: new Map([[TENANT_A, session]]),
+    meetingVoice,
+    seats: [{ ear: EAR, botId: "bot-1", tenantId: TENANT_A, roomId: "bot-1", botName: "Adam" }],
+  });
+  noteAgentMember({ meetingVoice }, "bot-1", { participantId: "7", name: "Priya", memberId: "7" });
+  const port = await listen(app);
+  try {
+    const headers = { "content-type": "application/json", "x-meeting-ear": EAR };
+    const filed = await call(port, "POST", "/api/meeting/agent/turn", {
+      headers,
+      body: turnBody("Adam, file the launch note.", "Priya", { participantId: "7", turn_id: "hold-title" }),
+    });
+    assert.match(filed.raw, /I've drafted the Linear issue 'Fix the onboarding email'/);
+    const pushed = await call(port, "POST", "/api/meeting/agent/turn", {
+      headers,
+      body: turnBody("can you push it", "Priya", { participantId: "7", turn_id: "hold-push" }),
+    });
+    assert.match(pushed.raw, /It's drafted as 'Fix the onboarding email'/);
+    assert.match(pushed.raw, /Only a person can approve it, in the Sederunt console under Activity/);
+    const again = await call(port, "POST", "/api/meeting/agent/turn", {
+      headers,
+      body: turnBody("create a task on Linear", "Priya", { participantId: "7", turn_id: "hold-again" }),
+    });
+    assert.equal(again.raw.includes("What should the issue say?"), false);
+    assert.equal(session.actions.filter((row) => row.state === "paused").length, 1);
+    assert.equal(chats.length, 3);
+  } finally {
+    await close(app);
   }
 });
 
@@ -2295,6 +2370,58 @@ test("the meeting page asks one person without the name", async () => {
   crowded.fire();
   await crowded.settle();
   assert.equal(crowded.turns().length, 0);
+});
+
+test("the meeting page drops Adam's own words during playback", async () => {
+  const page = renderCameraPage();
+  const start = page.indexOf("<script>");
+  const end = page.indexOf("</script>");
+  const posts = [];
+  const window = {};
+  let socket = null;
+  const guest = { dataset: { state: "listening" }, textContent: "" };
+  class Socket {
+    constructor() { socket = this; }
+  }
+  vm.runInNewContext(page.slice(start + "<script>".length, end), {
+    URLSearchParams,
+    WebSocket: Socket,
+    AbortController,
+    Promise,
+    JSON,
+    Math,
+    RegExp,
+    URL,
+    Uint8Array,
+    Date,
+    setInterval: () => 1,
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    document: { getElementById: (id) => (id === "voice" ? {} : guest) },
+    location: { search: `?ear=${EAR}&name=Adam` },
+    navigator: {},
+    window,
+    fetch: (url, init) => {
+      posts.push({ url: String(url), body: init && init.body ? String(init.body) : "" });
+      return Promise.resolve({ ok: true, json: async () => ({ botName: "Adam", participantId: "99" }), body: null });
+    },
+  });
+  const turns = () => posts.filter((row) => row.url === "/api/meeting/agent/turn");
+  const logs = () => posts.filter((row) => row.url === "/api/meeting/agent/log").map((row) => JSON.parse(row.body));
+  window.__sederunt.noteSpoken("What should the issue say?", Date.now());
+  window.__sederunt.markPlaying(Date.now() - 500);
+  const send = (text) => socket.onmessage({ data: JSON.stringify({
+    event: "transcript.data",
+    data: { data: { words: text.split(" ").map((word) => ({ text: word })), participant: { id: 7, name: "Priya" } } },
+  }) });
+  for (const fragment of ["what should be", "issue", "say"]) send(fragment);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(turns().length, 0);
+  assert.equal(logs().filter((row) => row.echo === true).length, 3);
+  assert.equal(logs().some((row) => row.barge), false);
+  send("Adam stop the playback");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(logs().some((row) => row.barge === "name"), true);
 });
 
 test("the meeting page appends speak audio as each chunk arrives", async () => {

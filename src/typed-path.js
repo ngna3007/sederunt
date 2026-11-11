@@ -490,7 +490,9 @@ async function defaultFollowupCall(connector, tool, args) {
 
 async function requestWrite(input, session, deps, parsed) {
   const invited = writerInvite(input);
-  const preference = resolvePreference(session.preferences, parsed.tool, invited.room?.id || input.room?.id);
+  const preference = input.voiceFile === true && parsed.tool === "linear"
+    ? "do"
+    : resolvePreference(session.preferences, parsed.tool, invited.room?.id || input.room?.id);
   if (!invited.ok) {
     if (invited.reason === "not-invited") await noteOutsideAsk(session, deps, input);
     return finish(session, {

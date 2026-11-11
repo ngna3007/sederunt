@@ -77,6 +77,32 @@ export const DRAFTED_LINE = "I've drafted that request. Approve it in the Sederu
 export const APPROVAL_LINE = "In the Sederunt console, under Activity.";
 export const TITLE_QUESTION = "What should the issue say?";
 
+/** Share of this line's words that already appear in Adam's recent speech. */
+export function echoShare(text, spoken) {
+  const heard = String(text || "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const known = new Set(String(spoken || "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
+  if (!heard.length || !known.size) return 0;
+  let hit = 0;
+  for (const word of heard) if (known.has(word)) hit += 1;
+  return hit / heard.length;
+}
+
+/** True when this line is mostly Adam's own words from the last few seconds. */
+export function isEchoLine(text, spoken) {
+  return echoShare(text, spoken) >= 0.6;
+}
+
+/** A question about a hold that is already waiting. */
+export function asksHoldStatus(text) {
+  return /\b(created|create it|push|fire it|submit)\b/i.test(String(text || ""));
+}
+
+export function holdStatusLine(title) {
+  const clean = String(title || "").replace(/['"]/g, "").replace(/\s+/g, " ").trim();
+  if (!clean) return "It's drafted. Only a person can approve it, in the Sederunt console under Activity.";
+  return `It's drafted as '${clean}'. Only a person can approve it, in the Sederunt console under Activity.`;
+}
+
 const REQUEST_PAIR = [
   ["can", "you"], ["could", "you"], ["would", "you"], ["help", "me"],
   ["a", "task"], ["a", "tasks"], ["an", "issue"], ["a", "issue"], ["an", "issues"],
@@ -113,6 +139,13 @@ export function concreteTitle(value) {
   const content = title.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(" ").filter((word) => word && !TITLE_SKIP.has(word));
   if (content.length < 2) return "";
   return title.slice(0, 120);
+}
+
+/** Spoken after a voice Linear write is filed. Approval is not required. */
+export function filedVoiceLine(title) {
+  const clean = String(title || "").replace(/['"]/g, "").replace(/\s+/g, " ").trim();
+  if (!clean) return "I filed the Linear issue.";
+  return `I filed the Linear issue '${clean}'.`;
 }
 
 /** The spoken hold. Linear and the built-in act tool read the title back. */
@@ -606,7 +639,14 @@ function fitRecallFacts(body, facts) {
  * @param {{ done?: boolean }} [options]
  */
 export function linesForSpeech(text, results = [], options = {}) {
+  if (options.done === true && options.holdTitle && String(text || "") === holdStatusLine(options.holdTitle)) {
+    return [String(text)];
+  }
   const rows = Array.isArray(results) ? results : [];
+  const filedRow = rows.find((row) => row?.status === "filed");
+  if (options.done === true && filedRow) {
+    return [filedVoiceLine(filedRow.title || filedRow.data?.title || "")];
+  }
   const slow = rows.find((row) => row?.reason === "slow");
   const heldRow = rows.find((row) => row?.status === "waiting_for_approval" || row?.held === true);
   const held = Boolean(heldRow);
@@ -619,6 +659,8 @@ export function linesForSpeech(text, results = [], options = {}) {
     const tool = String(heldRow?.source || heldRow?.data?.tool || heldRow?.tool || "");
     const title = String(heldRow?.data?.title || heldRow?.title || "");
     lines = [draftedLine(tool, title)];
+  } else if (options.done === true && lines.length === 0 && needsTitle && options.holdTitle) {
+    lines = [holdStatusLine(options.holdTitle)];
   } else if (options.done === true && lines.length === 0 && (needsTitle || slow?.held === true)) {
     lines = [TITLE_QUESTION];
   } else if (options.done === true && slow && lines.length === 0) {
