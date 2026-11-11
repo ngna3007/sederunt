@@ -105,11 +105,18 @@ function allowSpeak(bag, botId) {
   return true;
 }
 
+const LINE_SAVE_WAIT_MS = 400;
+
 async function rememberLine(bag, env, fetchImpl, botId, turn, text) {
   const hash = sentenceHash(text);
   if (!bag.lines.has(botId)) bag.lines.set(botId, new Map());
   bag.lines.get(botId).set(hash, { text, turn, at: Date.now() });
-  try { await rememberSpokenTurn(env, fetchImpl, botId, hash, turn); } catch {}
+  // Bounded: a slow or absent Redis must not hold the sentence. This instance
+  // still knows the line, and the page asks once more if another instance refuses it.
+  let timer;
+  const saved = Promise.resolve().then(() => rememberSpokenTurn(env, fetchImpl, botId, hash, turn)).catch(() => false);
+  await Promise.race([saved, new Promise((resolve) => { timer = setTimeout(resolve, LINE_SAVE_WAIT_MS); timer.unref?.(); })]);
+  clearTimeout(timer);
   return hash;
 }
 
@@ -289,10 +296,15 @@ async function spokenForTurn(bag, env, fetchImpl, botId, text) {
   const hash = sentenceHash(text);
   const local = bag.lines.get(botId)?.get(hash);
   const cached = bag.heard.get(botId);
-  let remoteTurn = local?.turn || await loadSpokenTurn(env, fetchImpl, botId, hash);
-  if (!remoteTurn) remoteTurn = await loadSpokenTurn(env, fetchImpl, botId, hash);
+  // Redis first for both: the same words may have been said again in a newer turn
+  // on another instance, so this instance's copy of the line can be the older turn.
+  const [shared, heard] = await Promise.all([
+    loadSpokenTurn(env, fetchImpl, botId, hash).catch(() => ""),
+    loadHeardLine(env, fetchImpl, botId).catch(() => null),
+  ]);
+  const remoteTurn = shared || local?.turn || "";
   if (!remoteTurn) return null;
-  const current = await loadHeardLine(env, fetchImpl, botId) || cached;
+  const current = heard || cached;
   if (current && remoteTurn === current.turn) return { turn: remoteTurn };
   return null;
 }

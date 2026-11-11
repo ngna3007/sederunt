@@ -66,7 +66,7 @@ function sentences(raw) {
 }
 
 /** Two function instances of one deployment: separate memory, one Redis. */
-async function twoInstances() {
+async function twoInstances({ hangLine = false } = {}) {
   const store = new Map();
   const redis = redisFake(store);
   const memory = { remember() { return new Promise(() => {}); }, async index() { return []; } };
@@ -74,7 +74,11 @@ async function twoInstances() {
   const linear = { async createIssue(input) { issues.push(input); return { identifier: "ROW-21", id: "ROW-21" }; } };
   const fetchImpl = async (url, init) => {
     const target = String(url);
-    if (target.startsWith("https://redis.test")) return redis(init);
+    if (target.startsWith("https://redis.test")) {
+      // A Redis that never answers the spoken-line write.
+      if (hangLine && /"SET","sederunt:voice:line:/.test(String(init.body))) return new Promise(() => {});
+      return redis(init);
+    }
     if (target.endsWith("/audio/speech")) {
       let sent = false;
       return { ok: true, status: 200, body: { getReader() { return { async read() { if (sent) return { done: true }; sent = true; return { done: false, value: new Uint8Array([0xff, 0xfb, 0x90, 0x00]) }; }, cancel() {} }; } } };
@@ -224,4 +228,41 @@ test("the page plays the filed line, and tries a refused line once more", async 
   await page.say("Adam fix the onboarding email before launch");
   assert.deepEqual(page.speaks(), [FILED, FILED]);
   assert.deepEqual(page.played, [FILED], "the page played the filed confirmation");
+});
+
+test("a slow Redis does not hold the sentence or fail the turn", async () => {
+  const rig = await twoInstances({ hangLine: true });
+  const [a] = rig.ports;
+  try {
+    const started = Date.now();
+    const heard = await post(a, "/api/meeting/agent/turn", turn("Hey Adam, can you hear me?", "1794381900000"));
+    assert.deepEqual(sentences(heard.raw), ["Yes, I can hear you."]);
+    assert.equal(Date.now() - started < 2000, true, `the turn took ${Date.now() - started} ms`);
+    // The same instance still speaks its own line without the Redis record.
+    const spoken = await post(a, "/api/meeting/agent/speak", JSON.stringify({ text: "Yes, I can hear you." }));
+    assert.equal(spoken.status, 200);
+  } finally {
+    await rig.close();
+  }
+});
+
+test("the same words said again in a newer turn on another instance are spoken, and the older turn's copy does not block them", async () => {
+  const rig = await twoInstances();
+  const [a, b] = rig.ports;
+  try {
+    const first = await post(b, "/api/meeting/agent/turn", turn("Hey Adam, can you hear me?", "1794381910000"));
+    assert.deepEqual(sentences(first.raw), ["Yes, I can hear you."]);
+    assert.equal((await post(b, "/api/meeting/agent/speak", JSON.stringify({ text: "Yes, I can hear you." }))).status, 200);
+    // A newer turn on A gives the same reply; the page's /speak lands on B, which holds the older turn's copy.
+    const second = await post(a, "/api/meeting/agent/turn", turn("Adam, are you there now?", "1794381920000"));
+    assert.deepEqual(sentences(second.raw), ["Yes, I can hear you."]);
+    const again = await post(b, "/api/meeting/agent/speak", JSON.stringify({ text: "Yes, I can hear you." }));
+    assert.equal(again.status, 200);
+    // A barge-in starts a third turn; the second turn's line is refused everywhere.
+    await post(a, "/api/meeting/agent/turn", turn("Adam, create a task now.", "1794381930000"));
+    assert.equal((await post(b, "/api/meeting/agent/speak", JSON.stringify({ text: "Yes, I can hear you." }))).status, 409);
+    assert.equal((await post(a, "/api/meeting/agent/speak", JSON.stringify({ text: "Yes, I can hear you." }))).status, 409);
+  } finally {
+    await rig.close();
+  }
 });
