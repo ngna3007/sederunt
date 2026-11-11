@@ -1,0 +1,1786 @@
+{
+ "bot": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+ "note": "Reconstructed from the Recall post-call transcript (word timings, participants) in the socket message shape logged by /api/meeting/agent/socket (transcript.is_final, participant keys). Partials grow per word; one final per utterance. Participant 2147483647 is Adam's own voice.",
+ "events": [
+  {
+   "at": 0,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 0,
+     "speaker": "Anh Nguy\u1ec5n",
+     "speaker_id": 100,
+     "participant": {
+      "id": 100,
+      "name": "Anh Nguy\u1ec5n",
+      "is_host": true,
+      "platform": "desktop",
+      "extra_data": {
+       "google_meet": {
+        "static_participant_id": "w3ISz0aWVzgtWHPR5bVqyeUNpBw47vYj0i8j0sWbvO4="
+       }
+      },
+      "email": null
+     },
+     "words": [
+      {
+       "text": "hey",
+       "start_time": 18.071774,
+       "end_time": 18.311773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:47.840Z",
+       "end_time_abs": "2026-11-11T06:33:48.080Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 240,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 0,
+     "speaker": "Anh Nguy\u1ec5n",
+     "speaker_id": 100,
+     "participant": {
+      "id": 100,
+      "name": "Anh Nguy\u1ec5n",
+      "is_host": true,
+      "platform": "desktop",
+      "extra_data": {
+       "google_meet": {
+        "static_participant_id": "w3ISz0aWVzgtWHPR5bVqyeUNpBw47vYj0i8j0sWbvO4="
+       }
+      },
+      "email": null
+     },
+     "words": [
+      {
+       "text": "hey",
+       "start_time": 18.071774,
+       "end_time": 18.311773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:47.840Z",
+       "end_time_abs": "2026-11-11T06:33:48.080Z"
+      },
+      {
+       "text": "adam",
+       "start_time": 18.311773,
+       "end_time": 18.551773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:48.080Z",
+       "end_time_abs": "2026-11-11T06:33:48.320Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 720,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 0,
+     "speaker": "Anh Nguy\u1ec5n",
+     "speaker_id": 100,
+     "participant": {
+      "id": 100,
+      "name": "Anh Nguy\u1ec5n",
+      "is_host": true,
+      "platform": "desktop",
+      "extra_data": {
+       "google_meet": {
+        "static_participant_id": "w3ISz0aWVzgtWHPR5bVqyeUNpBw47vYj0i8j0sWbvO4="
+       }
+      },
+      "email": null
+     },
+     "words": [
+      {
+       "text": "hey",
+       "start_time": 18.071774,
+       "end_time": 18.311773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:47.840Z",
+       "end_time_abs": "2026-11-11T06:33:48.080Z"
+      },
+      {
+       "text": "adam",
+       "start_time": 18.311773,
+       "end_time": 18.551773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:48.080Z",
+       "end_time_abs": "2026-11-11T06:33:48.320Z"
+      },
+      {
+       "text": "can",
+       "start_time": 18.951775,
+       "end_time": 19.031775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:48.720Z",
+       "end_time_abs": "2026-11-11T06:33:48.800Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 880,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 0,
+     "speaker": "Anh Nguy\u1ec5n",
+     "speaker_id": 100,
+     "participant": {
+      "id": 100,
+      "name": "Anh Nguy\u1ec5n",
+      "is_host": true,
+      "platform": "desktop",
+      "extra_data": {
+       "google_meet": {
+        "static_participant_id": "w3ISz0aWVzgtWHPR5bVqyeUNpBw47vYj0i8j0sWbvO4="
+       }
+      },
+      "email": null
+     },
+     "words": [
+      {
+       "text": "hey",
+       "start_time": 18.071774,
+       "end_time": 18.311773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:47.840Z",
+       "end_time_abs": "2026-11-11T06:33:48.080Z"
+      },
+      {
+       "text": "adam",
+       "start_time": 18.311773,
+       "end_time": 18.551773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:48.080Z",
+       "end_time_abs": "2026-11-11T06:33:48.320Z"
+      },
+      {
+       "text": "can",
+       "start_time": 18.951775,
+       "end_time": 19.031775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:48.720Z",
+       "end_time_abs": "2026-11-11T06:33:48.800Z"
+      },
+      {
+       "text": "you",
+       "start_time": 19.111774,
+       "end_time": 19.191774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:48.880Z",
+       "end_time_abs": "2026-11-11T06:33:48.960Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 1040,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 0,
+     "speaker": "Anh Nguy\u1ec5n",
+     "speaker_id": 100,
+     "participant": {
+      "id": 100,
+      "name": "Anh Nguy\u1ec5n",
+      "is_host": true,
+      "platform": "desktop",
+      "extra_data": {
+       "google_meet": {
+        "static_participant_id": "w3ISz0aWVzgtWHPR5bVqyeUNpBw47vYj0i8j0sWbvO4="
+       }
+      },
+      "email": null
+     },
+     "words": [
+      {
+       "text": "hey",
+       "start_time": 18.071774,
+       "end_time": 18.311773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:47.840Z",
+       "end_time_abs": "2026-11-11T06:33:48.080Z"
+      },
+      {
+       "text": "adam",
+       "start_time": 18.311773,
+       "end_time": 18.551773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:48.080Z",
+       "end_time_abs": "2026-11-11T06:33:48.320Z"
+      },
+      {
+       "text": "can",
+       "start_time": 18.951775,
+       "end_time": 19.031775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:48.720Z",
+       "end_time_abs": "2026-11-11T06:33:48.800Z"
+      },
+      {
+       "text": "you",
+       "start_time": 19.111774,
+       "end_time": 19.191774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:48.880Z",
+       "end_time_abs": "2026-11-11T06:33:48.960Z"
+      },
+      {
+       "text": "hear",
+       "start_time": 19.271774,
+       "end_time": 19.351774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:49.040Z",
+       "end_time_abs": "2026-11-11T06:33:49.120Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 1120,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 0,
+     "speaker": "Anh Nguy\u1ec5n",
+     "speaker_id": 100,
+     "participant": {
+      "id": 100,
+      "name": "Anh Nguy\u1ec5n",
+      "is_host": true,
+      "platform": "desktop",
+      "extra_data": {
+       "google_meet": {
+        "static_participant_id": "w3ISz0aWVzgtWHPR5bVqyeUNpBw47vYj0i8j0sWbvO4="
+       }
+      },
+      "email": null
+     },
+     "words": [
+      {
+       "text": "hey",
+       "start_time": 18.071774,
+       "end_time": 18.311773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:47.840Z",
+       "end_time_abs": "2026-11-11T06:33:48.080Z"
+      },
+      {
+       "text": "adam",
+       "start_time": 18.311773,
+       "end_time": 18.551773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:48.080Z",
+       "end_time_abs": "2026-11-11T06:33:48.320Z"
+      },
+      {
+       "text": "can",
+       "start_time": 18.951775,
+       "end_time": 19.031775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:48.720Z",
+       "end_time_abs": "2026-11-11T06:33:48.800Z"
+      },
+      {
+       "text": "you",
+       "start_time": 19.111774,
+       "end_time": 19.191774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:48.880Z",
+       "end_time_abs": "2026-11-11T06:33:48.960Z"
+      },
+      {
+       "text": "hear",
+       "start_time": 19.271774,
+       "end_time": 19.351774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:49.040Z",
+       "end_time_abs": "2026-11-11T06:33:49.120Z"
+      },
+      {
+       "text": "me",
+       "start_time": 19.351774,
+       "end_time": 19.431774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:49.120Z",
+       "end_time_abs": "2026-11-11T06:33:49.200Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 1420,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 0,
+     "speaker": "Anh Nguy\u1ec5n",
+     "speaker_id": 100,
+     "participant": {
+      "id": 100,
+      "name": "Anh Nguy\u1ec5n",
+      "is_host": true,
+      "platform": "desktop",
+      "extra_data": {
+       "google_meet": {
+        "static_participant_id": "w3ISz0aWVzgtWHPR5bVqyeUNpBw47vYj0i8j0sWbvO4="
+       }
+      },
+      "email": null
+     },
+     "words": [
+      {
+       "text": "hey",
+       "start_time": 18.071774,
+       "end_time": 18.311773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:47.840Z",
+       "end_time_abs": "2026-11-11T06:33:48.080Z"
+      },
+      {
+       "text": "adam",
+       "start_time": 18.311773,
+       "end_time": 18.551773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:48.080Z",
+       "end_time_abs": "2026-11-11T06:33:48.320Z"
+      },
+      {
+       "text": "can",
+       "start_time": 18.951775,
+       "end_time": 19.031775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:48.720Z",
+       "end_time_abs": "2026-11-11T06:33:48.800Z"
+      },
+      {
+       "text": "you",
+       "start_time": 19.111774,
+       "end_time": 19.191774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:48.880Z",
+       "end_time_abs": "2026-11-11T06:33:48.960Z"
+      },
+      {
+       "text": "hear",
+       "start_time": 19.271774,
+       "end_time": 19.351774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:49.040Z",
+       "end_time_abs": "2026-11-11T06:33:49.120Z"
+      },
+      {
+       "text": "me",
+       "start_time": 19.351774,
+       "end_time": 19.431774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:49.120Z",
+       "end_time_abs": "2026-11-11T06:33:49.200Z"
+      }
+     ],
+     "is_final": true,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 6279,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 1,
+     "speaker": "Unknown",
+     "speaker_id": 2147483647,
+     "participant": {
+      "id": 2147483647,
+      "name": "Unknown",
+      "is_host": null,
+      "platform": "unknown",
+      "extra_data": null
+     },
+     "words": [
+      {
+       "text": "yes",
+       "start_time": 24.110773,
+       "end_time": 24.590775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:53.879Z",
+       "end_time_abs": "2026-11-11T06:33:54.359Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 6279,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 1,
+     "speaker": "Unknown",
+     "speaker_id": 2147483647,
+     "participant": {
+      "id": 2147483647,
+      "name": "Unknown",
+      "is_host": null,
+      "platform": "unknown",
+      "extra_data": null
+     },
+     "words": [
+      {
+       "text": "yes",
+       "start_time": 24.110773,
+       "end_time": 24.590775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:53.879Z",
+       "end_time_abs": "2026-11-11T06:33:54.359Z"
+      },
+      {
+       "text": "i",
+       "start_time": 24.590775,
+       "end_time": 24.590775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:54.359Z",
+       "end_time_abs": "2026-11-11T06:33:54.359Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 6279,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 1,
+     "speaker": "Unknown",
+     "speaker_id": 2147483647,
+     "participant": {
+      "id": 2147483647,
+      "name": "Unknown",
+      "is_host": null,
+      "platform": "unknown",
+      "extra_data": null
+     },
+     "words": [
+      {
+       "text": "yes",
+       "start_time": 24.110773,
+       "end_time": 24.590775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:53.879Z",
+       "end_time_abs": "2026-11-11T06:33:54.359Z"
+      },
+      {
+       "text": "i",
+       "start_time": 24.590775,
+       "end_time": 24.590775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:54.359Z",
+       "end_time_abs": "2026-11-11T06:33:54.359Z"
+      },
+      {
+       "text": "can",
+       "start_time": 24.590775,
+       "end_time": 24.590775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:54.359Z",
+       "end_time_abs": "2026-11-11T06:33:54.359Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 6359,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 1,
+     "speaker": "Unknown",
+     "speaker_id": 2147483647,
+     "participant": {
+      "id": 2147483647,
+      "name": "Unknown",
+      "is_host": null,
+      "platform": "unknown",
+      "extra_data": null
+     },
+     "words": [
+      {
+       "text": "yes",
+       "start_time": 24.110773,
+       "end_time": 24.590775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:53.879Z",
+       "end_time_abs": "2026-11-11T06:33:54.359Z"
+      },
+      {
+       "text": "i",
+       "start_time": 24.590775,
+       "end_time": 24.590775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:54.359Z",
+       "end_time_abs": "2026-11-11T06:33:54.359Z"
+      },
+      {
+       "text": "can",
+       "start_time": 24.590775,
+       "end_time": 24.590775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:54.359Z",
+       "end_time_abs": "2026-11-11T06:33:54.359Z"
+      },
+      {
+       "text": "hear",
+       "start_time": 24.590775,
+       "end_time": 24.670774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:54.359Z",
+       "end_time_abs": "2026-11-11T06:33:54.439Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 6519,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 1,
+     "speaker": "Unknown",
+     "speaker_id": 2147483647,
+     "participant": {
+      "id": 2147483647,
+      "name": "Unknown",
+      "is_host": null,
+      "platform": "unknown",
+      "extra_data": null
+     },
+     "words": [
+      {
+       "text": "yes",
+       "start_time": 24.110773,
+       "end_time": 24.590775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:53.879Z",
+       "end_time_abs": "2026-11-11T06:33:54.359Z"
+      },
+      {
+       "text": "i",
+       "start_time": 24.590775,
+       "end_time": 24.590775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:54.359Z",
+       "end_time_abs": "2026-11-11T06:33:54.359Z"
+      },
+      {
+       "text": "can",
+       "start_time": 24.590775,
+       "end_time": 24.590775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:54.359Z",
+       "end_time_abs": "2026-11-11T06:33:54.359Z"
+      },
+      {
+       "text": "hear",
+       "start_time": 24.590775,
+       "end_time": 24.670774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:54.359Z",
+       "end_time_abs": "2026-11-11T06:33:54.439Z"
+      },
+      {
+       "text": "you",
+       "start_time": 24.750774,
+       "end_time": 24.830774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:54.519Z",
+       "end_time_abs": "2026-11-11T06:33:54.599Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 6819,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 1,
+     "speaker": "Unknown",
+     "speaker_id": 2147483647,
+     "participant": {
+      "id": 2147483647,
+      "name": "Unknown",
+      "is_host": null,
+      "platform": "unknown",
+      "extra_data": null
+     },
+     "words": [
+      {
+       "text": "yes",
+       "start_time": 24.110773,
+       "end_time": 24.590775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:53.879Z",
+       "end_time_abs": "2026-11-11T06:33:54.359Z"
+      },
+      {
+       "text": "i",
+       "start_time": 24.590775,
+       "end_time": 24.590775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:54.359Z",
+       "end_time_abs": "2026-11-11T06:33:54.359Z"
+      },
+      {
+       "text": "can",
+       "start_time": 24.590775,
+       "end_time": 24.590775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:54.359Z",
+       "end_time_abs": "2026-11-11T06:33:54.359Z"
+      },
+      {
+       "text": "hear",
+       "start_time": 24.590775,
+       "end_time": 24.670774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:54.359Z",
+       "end_time_abs": "2026-11-11T06:33:54.439Z"
+      },
+      {
+       "text": "you",
+       "start_time": 24.750774,
+       "end_time": 24.830774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:33:54.519Z",
+       "end_time_abs": "2026-11-11T06:33:54.599Z"
+      }
+     ],
+     "is_final": true,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 12720,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 2,
+     "speaker": "Anh Nguy\u1ec5n",
+     "speaker_id": 100,
+     "participant": {
+      "id": 100,
+      "name": "Anh Nguy\u1ec5n",
+      "is_host": true,
+      "platform": "desktop",
+      "extra_data": {
+       "google_meet": {
+        "static_participant_id": "w3ISz0aWVzgtWHPR5bVqyeUNpBw47vYj0i8j0sWbvO4="
+       }
+      },
+      "email": null
+     },
+     "words": [
+      {
+       "text": "create",
+       "start_time": 30.951775,
+       "end_time": 31.031773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:00.720Z",
+       "end_time_abs": "2026-11-11T06:34:00.800Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 12880,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 2,
+     "speaker": "Anh Nguy\u1ec5n",
+     "speaker_id": 100,
+     "participant": {
+      "id": 100,
+      "name": "Anh Nguy\u1ec5n",
+      "is_host": true,
+      "platform": "desktop",
+      "extra_data": {
+       "google_meet": {
+        "static_participant_id": "w3ISz0aWVzgtWHPR5bVqyeUNpBw47vYj0i8j0sWbvO4="
+       }
+      },
+      "email": null
+     },
+     "words": [
+      {
+       "text": "create",
+       "start_time": 30.951775,
+       "end_time": 31.031773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:00.720Z",
+       "end_time_abs": "2026-11-11T06:34:00.800Z"
+      },
+      {
+       "text": "a",
+       "start_time": 31.111774,
+       "end_time": 31.191774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:00.880Z",
+       "end_time_abs": "2026-11-11T06:34:00.960Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 13120,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 2,
+     "speaker": "Anh Nguy\u1ec5n",
+     "speaker_id": 100,
+     "participant": {
+      "id": 100,
+      "name": "Anh Nguy\u1ec5n",
+      "is_host": true,
+      "platform": "desktop",
+      "extra_data": {
+       "google_meet": {
+        "static_participant_id": "w3ISz0aWVzgtWHPR5bVqyeUNpBw47vYj0i8j0sWbvO4="
+       }
+      },
+      "email": null
+     },
+     "words": [
+      {
+       "text": "create",
+       "start_time": 30.951775,
+       "end_time": 31.031773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:00.720Z",
+       "end_time_abs": "2026-11-11T06:34:00.800Z"
+      },
+      {
+       "text": "a",
+       "start_time": 31.111774,
+       "end_time": 31.191774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:00.880Z",
+       "end_time_abs": "2026-11-11T06:34:00.960Z"
+      },
+      {
+       "text": "task",
+       "start_time": 31.351774,
+       "end_time": 31.431774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:01.120Z",
+       "end_time_abs": "2026-11-11T06:34:01.200Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 13360,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 2,
+     "speaker": "Anh Nguy\u1ec5n",
+     "speaker_id": 100,
+     "participant": {
+      "id": 100,
+      "name": "Anh Nguy\u1ec5n",
+      "is_host": true,
+      "platform": "desktop",
+      "extra_data": {
+       "google_meet": {
+        "static_participant_id": "w3ISz0aWVzgtWHPR5bVqyeUNpBw47vYj0i8j0sWbvO4="
+       }
+      },
+      "email": null
+     },
+     "words": [
+      {
+       "text": "create",
+       "start_time": 30.951775,
+       "end_time": 31.031773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:00.720Z",
+       "end_time_abs": "2026-11-11T06:34:00.800Z"
+      },
+      {
+       "text": "a",
+       "start_time": 31.111774,
+       "end_time": 31.191774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:00.880Z",
+       "end_time_abs": "2026-11-11T06:34:00.960Z"
+      },
+      {
+       "text": "task",
+       "start_time": 31.351774,
+       "end_time": 31.431774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:01.120Z",
+       "end_time_abs": "2026-11-11T06:34:01.200Z"
+      },
+      {
+       "text": "on",
+       "start_time": 31.591774,
+       "end_time": 31.671774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:01.360Z",
+       "end_time_abs": "2026-11-11T06:34:01.440Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 13840,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 2,
+     "speaker": "Anh Nguy\u1ec5n",
+     "speaker_id": 100,
+     "participant": {
+      "id": 100,
+      "name": "Anh Nguy\u1ec5n",
+      "is_host": true,
+      "platform": "desktop",
+      "extra_data": {
+       "google_meet": {
+        "static_participant_id": "w3ISz0aWVzgtWHPR5bVqyeUNpBw47vYj0i8j0sWbvO4="
+       }
+      },
+      "email": null
+     },
+     "words": [
+      {
+       "text": "create",
+       "start_time": 30.951775,
+       "end_time": 31.031773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:00.720Z",
+       "end_time_abs": "2026-11-11T06:34:00.800Z"
+      },
+      {
+       "text": "a",
+       "start_time": 31.111774,
+       "end_time": 31.191774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:00.880Z",
+       "end_time_abs": "2026-11-11T06:34:00.960Z"
+      },
+      {
+       "text": "task",
+       "start_time": 31.351774,
+       "end_time": 31.431774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:01.120Z",
+       "end_time_abs": "2026-11-11T06:34:01.200Z"
+      },
+      {
+       "text": "on",
+       "start_time": 31.591774,
+       "end_time": 31.671774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:01.360Z",
+       "end_time_abs": "2026-11-11T06:34:01.440Z"
+      },
+      {
+       "text": "linear",
+       "start_time": 32.071774,
+       "end_time": 32.15177,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:01.840Z",
+       "end_time_abs": "2026-11-11T06:34:01.920Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 14140,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 2,
+     "speaker": "Anh Nguy\u1ec5n",
+     "speaker_id": 100,
+     "participant": {
+      "id": 100,
+      "name": "Anh Nguy\u1ec5n",
+      "is_host": true,
+      "platform": "desktop",
+      "extra_data": {
+       "google_meet": {
+        "static_participant_id": "w3ISz0aWVzgtWHPR5bVqyeUNpBw47vYj0i8j0sWbvO4="
+       }
+      },
+      "email": null
+     },
+     "words": [
+      {
+       "text": "create",
+       "start_time": 30.951775,
+       "end_time": 31.031773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:00.720Z",
+       "end_time_abs": "2026-11-11T06:34:00.800Z"
+      },
+      {
+       "text": "a",
+       "start_time": 31.111774,
+       "end_time": 31.191774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:00.880Z",
+       "end_time_abs": "2026-11-11T06:34:00.960Z"
+      },
+      {
+       "text": "task",
+       "start_time": 31.351774,
+       "end_time": 31.431774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:01.120Z",
+       "end_time_abs": "2026-11-11T06:34:01.200Z"
+      },
+      {
+       "text": "on",
+       "start_time": 31.591774,
+       "end_time": 31.671774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:01.360Z",
+       "end_time_abs": "2026-11-11T06:34:01.440Z"
+      },
+      {
+       "text": "linear",
+       "start_time": 32.071774,
+       "end_time": 32.15177,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:01.840Z",
+       "end_time_abs": "2026-11-11T06:34:01.920Z"
+      }
+     ],
+     "is_final": true,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 18199,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 3,
+     "speaker": "Unknown",
+     "speaker_id": 2147483647,
+     "participant": {
+      "id": 2147483647,
+      "name": "Unknown",
+      "is_host": null,
+      "platform": "unknown",
+      "extra_data": null
+     },
+     "words": [
+      {
+       "text": "what",
+       "start_time": 36.430775,
+       "end_time": 36.510773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:06.199Z",
+       "end_time_abs": "2026-11-11T06:34:06.279Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 18359,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 3,
+     "speaker": "Unknown",
+     "speaker_id": 2147483647,
+     "participant": {
+      "id": 2147483647,
+      "name": "Unknown",
+      "is_host": null,
+      "platform": "unknown",
+      "extra_data": null
+     },
+     "words": [
+      {
+       "text": "what",
+       "start_time": 36.430775,
+       "end_time": 36.510773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:06.199Z",
+       "end_time_abs": "2026-11-11T06:34:06.279Z"
+      },
+      {
+       "text": "should",
+       "start_time": 36.590775,
+       "end_time": 36.670773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:06.359Z",
+       "end_time_abs": "2026-11-11T06:34:06.439Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 18519,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 3,
+     "speaker": "Unknown",
+     "speaker_id": 2147483647,
+     "participant": {
+      "id": 2147483647,
+      "name": "Unknown",
+      "is_host": null,
+      "platform": "unknown",
+      "extra_data": null
+     },
+     "words": [
+      {
+       "text": "what",
+       "start_time": 36.430775,
+       "end_time": 36.510773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:06.199Z",
+       "end_time_abs": "2026-11-11T06:34:06.279Z"
+      },
+      {
+       "text": "should",
+       "start_time": 36.590775,
+       "end_time": 36.670773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:06.359Z",
+       "end_time_abs": "2026-11-11T06:34:06.439Z"
+      },
+      {
+       "text": "the",
+       "start_time": 36.750774,
+       "end_time": 36.830772,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:06.519Z",
+       "end_time_abs": "2026-11-11T06:34:06.599Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 18999,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 3,
+     "speaker": "Unknown",
+     "speaker_id": 2147483647,
+     "participant": {
+      "id": 2147483647,
+      "name": "Unknown",
+      "is_host": null,
+      "platform": "unknown",
+      "extra_data": null
+     },
+     "words": [
+      {
+       "text": "what",
+       "start_time": 36.430775,
+       "end_time": 36.510773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:06.199Z",
+       "end_time_abs": "2026-11-11T06:34:06.279Z"
+      },
+      {
+       "text": "should",
+       "start_time": 36.590775,
+       "end_time": 36.670773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:06.359Z",
+       "end_time_abs": "2026-11-11T06:34:06.439Z"
+      },
+      {
+       "text": "the",
+       "start_time": 36.750774,
+       "end_time": 36.830772,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:06.519Z",
+       "end_time_abs": "2026-11-11T06:34:06.599Z"
+      },
+      {
+       "text": "issue",
+       "start_time": 37.070774,
+       "end_time": 37.310776,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:06.839Z",
+       "end_time_abs": "2026-11-11T06:34:07.079Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 19079,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 3,
+     "speaker": "Unknown",
+     "speaker_id": 2147483647,
+     "participant": {
+      "id": 2147483647,
+      "name": "Unknown",
+      "is_host": null,
+      "platform": "unknown",
+      "extra_data": null
+     },
+     "words": [
+      {
+       "text": "what",
+       "start_time": 36.430775,
+       "end_time": 36.510773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:06.199Z",
+       "end_time_abs": "2026-11-11T06:34:06.279Z"
+      },
+      {
+       "text": "should",
+       "start_time": 36.590775,
+       "end_time": 36.670773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:06.359Z",
+       "end_time_abs": "2026-11-11T06:34:06.439Z"
+      },
+      {
+       "text": "the",
+       "start_time": 36.750774,
+       "end_time": 36.830772,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:06.519Z",
+       "end_time_abs": "2026-11-11T06:34:06.599Z"
+      },
+      {
+       "text": "issue",
+       "start_time": 37.070774,
+       "end_time": 37.310776,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:06.839Z",
+       "end_time_abs": "2026-11-11T06:34:07.079Z"
+      },
+      {
+       "text": "say",
+       "start_time": 37.310776,
+       "end_time": 37.390774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:07.079Z",
+       "end_time_abs": "2026-11-11T06:34:07.159Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 19379,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 3,
+     "speaker": "Unknown",
+     "speaker_id": 2147483647,
+     "participant": {
+      "id": 2147483647,
+      "name": "Unknown",
+      "is_host": null,
+      "platform": "unknown",
+      "extra_data": null
+     },
+     "words": [
+      {
+       "text": "what",
+       "start_time": 36.430775,
+       "end_time": 36.510773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:06.199Z",
+       "end_time_abs": "2026-11-11T06:34:06.279Z"
+      },
+      {
+       "text": "should",
+       "start_time": 36.590775,
+       "end_time": 36.670773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:06.359Z",
+       "end_time_abs": "2026-11-11T06:34:06.439Z"
+      },
+      {
+       "text": "the",
+       "start_time": 36.750774,
+       "end_time": 36.830772,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:06.519Z",
+       "end_time_abs": "2026-11-11T06:34:06.599Z"
+      },
+      {
+       "text": "issue",
+       "start_time": 37.070774,
+       "end_time": 37.310776,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:06.839Z",
+       "end_time_abs": "2026-11-11T06:34:07.079Z"
+      },
+      {
+       "text": "say",
+       "start_time": 37.310776,
+       "end_time": 37.390774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:07.079Z",
+       "end_time_abs": "2026-11-11T06:34:07.159Z"
+      }
+     ],
+     "is_final": true,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 27120,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 4,
+     "speaker": "Anh Nguy\u1ec5n",
+     "speaker_id": 100,
+     "participant": {
+      "id": 100,
+      "name": "Anh Nguy\u1ec5n",
+      "is_host": true,
+      "platform": "desktop",
+      "extra_data": {
+       "google_meet": {
+        "static_participant_id": "w3ISz0aWVzgtWHPR5bVqyeUNpBw47vYj0i8j0sWbvO4="
+       }
+      },
+      "email": null
+     },
+     "words": [
+      {
+       "text": "fix",
+       "start_time": 45.351776,
+       "end_time": 45.431774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:15.120Z",
+       "end_time_abs": "2026-11-11T06:34:15.200Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 27200,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 4,
+     "speaker": "Anh Nguy\u1ec5n",
+     "speaker_id": 100,
+     "participant": {
+      "id": 100,
+      "name": "Anh Nguy\u1ec5n",
+      "is_host": true,
+      "platform": "desktop",
+      "extra_data": {
+       "google_meet": {
+        "static_participant_id": "w3ISz0aWVzgtWHPR5bVqyeUNpBw47vYj0i8j0sWbvO4="
+       }
+      },
+      "email": null
+     },
+     "words": [
+      {
+       "text": "fix",
+       "start_time": 45.351776,
+       "end_time": 45.431774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:15.120Z",
+       "end_time_abs": "2026-11-11T06:34:15.200Z"
+      },
+      {
+       "text": "the",
+       "start_time": 45.431774,
+       "end_time": 45.511772,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:15.200Z",
+       "end_time_abs": "2026-11-11T06:34:15.280Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 27760,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 4,
+     "speaker": "Anh Nguy\u1ec5n",
+     "speaker_id": 100,
+     "participant": {
+      "id": 100,
+      "name": "Anh Nguy\u1ec5n",
+      "is_host": true,
+      "platform": "desktop",
+      "extra_data": {
+       "google_meet": {
+        "static_participant_id": "w3ISz0aWVzgtWHPR5bVqyeUNpBw47vYj0i8j0sWbvO4="
+       }
+      },
+      "email": null
+     },
+     "words": [
+      {
+       "text": "fix",
+       "start_time": 45.351776,
+       "end_time": 45.431774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:15.120Z",
+       "end_time_abs": "2026-11-11T06:34:15.200Z"
+      },
+      {
+       "text": "the",
+       "start_time": 45.431774,
+       "end_time": 45.511772,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:15.200Z",
+       "end_time_abs": "2026-11-11T06:34:15.280Z"
+      },
+      {
+       "text": "onboarding",
+       "start_time": 45.671776,
+       "end_time": 46.071774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:15.440Z",
+       "end_time_abs": "2026-11-11T06:34:15.840Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 28000,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 4,
+     "speaker": "Anh Nguy\u1ec5n",
+     "speaker_id": 100,
+     "participant": {
+      "id": 100,
+      "name": "Anh Nguy\u1ec5n",
+      "is_host": true,
+      "platform": "desktop",
+      "extra_data": {
+       "google_meet": {
+        "static_participant_id": "w3ISz0aWVzgtWHPR5bVqyeUNpBw47vYj0i8j0sWbvO4="
+       }
+      },
+      "email": null
+     },
+     "words": [
+      {
+       "text": "fix",
+       "start_time": 45.351776,
+       "end_time": 45.431774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:15.120Z",
+       "end_time_abs": "2026-11-11T06:34:15.200Z"
+      },
+      {
+       "text": "the",
+       "start_time": 45.431774,
+       "end_time": 45.511772,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:15.200Z",
+       "end_time_abs": "2026-11-11T06:34:15.280Z"
+      },
+      {
+       "text": "onboarding",
+       "start_time": 45.671776,
+       "end_time": 46.071774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:15.440Z",
+       "end_time_abs": "2026-11-11T06:34:15.840Z"
+      },
+      {
+       "text": "email",
+       "start_time": 46.231773,
+       "end_time": 46.311775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:16Z",
+       "end_time_abs": "2026-11-11T06:34:16.080Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 28240,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 4,
+     "speaker": "Anh Nguy\u1ec5n",
+     "speaker_id": 100,
+     "participant": {
+      "id": 100,
+      "name": "Anh Nguy\u1ec5n",
+      "is_host": true,
+      "platform": "desktop",
+      "extra_data": {
+       "google_meet": {
+        "static_participant_id": "w3ISz0aWVzgtWHPR5bVqyeUNpBw47vYj0i8j0sWbvO4="
+       }
+      },
+      "email": null
+     },
+     "words": [
+      {
+       "text": "fix",
+       "start_time": 45.351776,
+       "end_time": 45.431774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:15.120Z",
+       "end_time_abs": "2026-11-11T06:34:15.200Z"
+      },
+      {
+       "text": "the",
+       "start_time": 45.431774,
+       "end_time": 45.511772,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:15.200Z",
+       "end_time_abs": "2026-11-11T06:34:15.280Z"
+      },
+      {
+       "text": "onboarding",
+       "start_time": 45.671776,
+       "end_time": 46.071774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:15.440Z",
+       "end_time_abs": "2026-11-11T06:34:15.840Z"
+      },
+      {
+       "text": "email",
+       "start_time": 46.231773,
+       "end_time": 46.311775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:16Z",
+       "end_time_abs": "2026-11-11T06:34:16.080Z"
+      },
+      {
+       "text": "before",
+       "start_time": 46.47177,
+       "end_time": 46.551773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:16.240Z",
+       "end_time_abs": "2026-11-11T06:34:16.320Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 28800,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 4,
+     "speaker": "Anh Nguy\u1ec5n",
+     "speaker_id": 100,
+     "participant": {
+      "id": 100,
+      "name": "Anh Nguy\u1ec5n",
+      "is_host": true,
+      "platform": "desktop",
+      "extra_data": {
+       "google_meet": {
+        "static_participant_id": "w3ISz0aWVzgtWHPR5bVqyeUNpBw47vYj0i8j0sWbvO4="
+       }
+      },
+      "email": null
+     },
+     "words": [
+      {
+       "text": "fix",
+       "start_time": 45.351776,
+       "end_time": 45.431774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:15.120Z",
+       "end_time_abs": "2026-11-11T06:34:15.200Z"
+      },
+      {
+       "text": "the",
+       "start_time": 45.431774,
+       "end_time": 45.511772,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:15.200Z",
+       "end_time_abs": "2026-11-11T06:34:15.280Z"
+      },
+      {
+       "text": "onboarding",
+       "start_time": 45.671776,
+       "end_time": 46.071774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:15.440Z",
+       "end_time_abs": "2026-11-11T06:34:15.840Z"
+      },
+      {
+       "text": "email",
+       "start_time": 46.231773,
+       "end_time": 46.311775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:16Z",
+       "end_time_abs": "2026-11-11T06:34:16.080Z"
+      },
+      {
+       "text": "before",
+       "start_time": 46.47177,
+       "end_time": 46.551773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:16.240Z",
+       "end_time_abs": "2026-11-11T06:34:16.320Z"
+      },
+      {
+       "text": "launch",
+       "start_time": 47.031776,
+       "end_time": 47.111774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:16.800Z",
+       "end_time_abs": "2026-11-11T06:34:16.880Z"
+      }
+     ],
+     "is_final": false,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  },
+  {
+   "at": 29100,
+   "message": {
+    "bot_id": "e75fb7eb-c960-4dd7-8fdf-fd28cd2ddc47",
+    "recording_id": "r",
+    "transcript": {
+     "original_transcript_id": 4,
+     "speaker": "Anh Nguy\u1ec5n",
+     "speaker_id": 100,
+     "participant": {
+      "id": 100,
+      "name": "Anh Nguy\u1ec5n",
+      "is_host": true,
+      "platform": "desktop",
+      "extra_data": {
+       "google_meet": {
+        "static_participant_id": "w3ISz0aWVzgtWHPR5bVqyeUNpBw47vYj0i8j0sWbvO4="
+       }
+      },
+      "email": null
+     },
+     "words": [
+      {
+       "text": "fix",
+       "start_time": 45.351776,
+       "end_time": 45.431774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:15.120Z",
+       "end_time_abs": "2026-11-11T06:34:15.200Z"
+      },
+      {
+       "text": "the",
+       "start_time": 45.431774,
+       "end_time": 45.511772,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:15.200Z",
+       "end_time_abs": "2026-11-11T06:34:15.280Z"
+      },
+      {
+       "text": "onboarding",
+       "start_time": 45.671776,
+       "end_time": 46.071774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:15.440Z",
+       "end_time_abs": "2026-11-11T06:34:15.840Z"
+      },
+      {
+       "text": "email",
+       "start_time": 46.231773,
+       "end_time": 46.311775,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:16Z",
+       "end_time_abs": "2026-11-11T06:34:16.080Z"
+      },
+      {
+       "text": "before",
+       "start_time": 46.47177,
+       "end_time": 46.551773,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:16.240Z",
+       "end_time_abs": "2026-11-11T06:34:16.320Z"
+      },
+      {
+       "text": "launch",
+       "start_time": 47.031776,
+       "end_time": 47.111774,
+       "confidence": 0.9,
+       "start_time_abs": "2026-11-11T06:34:16.800Z",
+       "end_time_abs": "2026-11-11T06:34:16.880Z"
+      }
+     ],
+     "is_final": true,
+     "language": "en",
+     "source": "meeting"
+    }
+   }
+  }
+ ]
+}
