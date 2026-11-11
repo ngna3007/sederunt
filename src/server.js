@@ -570,6 +570,9 @@ export function createApp(options = {}) {
   }
   const companies = options.companies && typeof options.companies === "object" ? options.companies : null;
   const sessions = new Map();
+  if (options.sessions instanceof Map) {
+    for (const [key, value] of options.sessions) sessions.set(key, value);
+  }
   const loads = new Map();
   const workspace = {
     env,

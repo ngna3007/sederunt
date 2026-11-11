@@ -1,4 +1,5 @@
 import {
+  acceptUtterance,
   agentLive,
   agentPersona,
   agentToolBudgetMs,
@@ -21,13 +22,23 @@ import { rememberHeldAction } from "../typed-path.js";
 import {
   agentMember,
   agentTurnCurrent,
+  claimUtterance,
   holdAgentTurn,
+  loadAgentClock,
+  loadAgentFloor,
+  loadHeardLine,
+  loadSpokenTurn,
   releaseAgentTurn,
+  rememberAgentClock,
+  rememberAgentFloor,
   rememberAgentTurn,
+  rememberHeardLine,
+  rememberSpokenTurn,
   resolveAgentSeat,
+  takeSocketSample,
 } from "./seat.js";
 import { openRouterSpeechStream, openRouterStream } from "../openrouter.js";
-import { noteStageMetric, noteToolMetric } from "./metrics.js";
+import { noteSocketShape, noteStageMetric, noteToolMetric, noteTurnLog } from "./metrics.js";
 import { createHash } from "node:crypto";
 
 const FIRST_TOKEN_MS = 2500;
@@ -46,7 +57,9 @@ function runtime(workspace) {
       lines: new Map(),
       heard: new Map(),
       speaks: new Map(),
-      committed: new Map(),
+      recent: new Map(),
+      clocks: new Map(),
+      sockets: new Map(),
     };
   }
   return workspace.agentRuntime;
@@ -68,10 +81,11 @@ function allowSpeak(bag, botId) {
   return true;
 }
 
-function rememberLine(bag, botId, turn, text) {
+async function rememberLine(bag, env, fetchImpl, botId, turn, text) {
   const hash = sentenceHash(text);
   if (!bag.lines.has(botId)) bag.lines.set(botId, new Map());
   bag.lines.get(botId).set(hash, { text, turn, at: Date.now() });
+  await rememberSpokenTurn(env, fetchImpl, botId, hash, turn);
   return hash;
 }
 
@@ -118,7 +132,12 @@ export async function handleMeetingAgent(input) {
     return true;
   }
   if (path === "/api/meeting/agent/log") {
-    logPlayed(workspace, sessionFor, seat, body);
+    await logPlayed(workspace, sessionFor, env, seat, body);
+    send(res, 204, "text/plain; charset=utf-8", "");
+    return true;
+  }
+  if (path === "/api/meeting/agent/socket") {
+    await logSocket(workspace, env, seat, body);
     send(res, 204, "text/plain; charset=utf-8", "");
     return true;
   }
@@ -134,17 +153,21 @@ export async function handleMeetingAgent(input) {
   return true;
 }
 
-function logPlayed(workspace, sessionFor, seat, body) {
+async function logPlayed(workspace, sessionFor, env, seat, body) {
+  if (body?.playback === true) await notePlayback(workspace, env, seat);
   const bag = runtime(workspace);
   const known = bag.lines.get(seat.botId);
-  const heard = bag.heard.get(seat.botId);
+  let heard = bag.heard.get(seat.botId);
+  if (!heard) heard = await loadHeardLine(env, workspace.fetchImpl, seat.botId);
   const sentences = Array.isArray(body?.sentences) ? body.sentences : [];
   const played = [];
   for (const value of sentences) {
     const text = String(value || "").replace(/\s+/g, " ").trim();
     if (!text || text.length > SPEAK_MAX) continue;
-    const row = known?.get(sentenceHash(text));
-    if (!row || row.turn !== heard?.turn) continue;
+    const hash = sentenceHash(text);
+    const row = known?.get(hash);
+    const turn = row?.turn || await loadSpokenTurn(env, workspace.fetchImpl, seat.botId, hash);
+    if (!turn || turn !== heard?.turn) continue;
     played.push(text);
   }
   if (!played.length || !heard?.text) return;
@@ -153,6 +176,74 @@ function logPlayed(workspace, sessionFor, seat, body) {
     user: heard.text,
     assistant: played.join(" "),
   });
+}
+
+async function hydrateFloor(session, env, fetchImpl, seat) {
+  const floor = session?.meetingFloor;
+  if (floor && floor.roomId === seat.roomId && typeof floor.until === "number" && floor.until > Date.now()) return;
+  const loaded = await loadAgentFloor(env, fetchImpl, seat.botId);
+  if (loaded && loaded.roomId === seat.roomId) session.meetingFloor = loaded;
+}
+
+async function stampClock(workspace, env, botId, turn, field, at) {
+  const bag = runtime(workspace);
+  const id = `${botId}:${turn}`;
+  let clock = bag.clocks.get(id) || await loadAgentClock(env, workspace.fetchImpl, botId, turn) || {};
+  if (field === "endpoint" && typeof clock.endpoint === "number") return clock;
+  clock = { ...clock, [field]: at };
+  if (field !== "endpoint" && typeof clock.endpoint !== "number") clock.endpoint = at;
+  bag.clocks.set(id, clock);
+  await rememberAgentClock(env, workspace.fetchImpl, botId, turn, clock);
+  if (field === "playback" && clock.logged !== true) {
+    clock.logged = true;
+    bag.clocks.set(id, clock);
+    noteTurnLog(clock);
+    noteStageMetric("playback", Math.max(0, at - clock.endpoint));
+  }
+  return clock;
+}
+
+async function notePlayback(workspace, env, seat) {
+  const bag = runtime(workspace);
+  const heard = bag.heard.get(seat.botId) || await loadHeardLine(env, workspace.fetchImpl, seat.botId);
+  if (!heard?.turn) return;
+  await stampClock(workspace, env, seat.botId, heard.turn, "playback", Date.now());
+}
+
+async function spokenForTurn(bag, env, fetchImpl, botId, text) {
+  const hash = sentenceHash(text);
+  const local = bag.lines.get(botId)?.get(hash);
+  let heard = bag.heard.get(botId);
+  if (local && heard && local.turn === heard.turn) return { turn: local.turn };
+  const remoteTurn = await loadSpokenTurn(env, fetchImpl, botId, hash);
+  if (!heard) heard = await loadHeardLine(env, fetchImpl, botId);
+  if (remoteTurn && heard && remoteTurn === heard.turn) return { turn: remoteTurn };
+  return null;
+}
+
+function socketShape(message) {
+  const root = message && typeof message === "object" && !Array.isArray(message) ? message : {};
+  const transcript = root.transcript && typeof root.transcript === "object" ? root.transcript : null;
+  const data = root.data && typeof root.data === "object" ? root.data : null;
+  const inner = data?.data && typeof data.data === "object" ? data.data : null;
+  const lists = [inner?.words, data?.words, transcript?.words, root.words];
+  const words = lists.find(Array.isArray);
+  const keys = Object.keys(root).filter((key) => key !== "transcript" && key !== "data" && key !== "words").slice(0, 8);
+  const event = String(root.event || root.type || (transcript ? "transcript" : "")).slice(0, 60);
+  const final = transcript && typeof transcript.is_final === "boolean" ? transcript.is_final === true : event === "transcript.data";
+  return { event, words: Array.isArray(words) ? words.length : 0, final, keys };
+}
+
+async function logSocket(workspace, env, seat, body) {
+  const bag = runtime(workspace);
+  const remote = await takeSocketSample(env, workspace.fetchImpl, seat.botId);
+  let count = remote;
+  if (count == null) {
+    count = (bag.sockets.get(seat.botId) || 0) + 1;
+    bag.sockets.set(seat.botId, count);
+  }
+  if (count > 20) return;
+  noteSocketShape(socketShape(body));
 }
 
 async function cancelTurn(workspace, env, botId) {
@@ -185,6 +276,7 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     }
   };
   const session = sessionFor(seat.tenantId);
+  await hydrateFloor(session, env, workspace.fetchImpl, seat);
   const delivery = {
     text,
     partial,
@@ -193,9 +285,12 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     room: { id: seat.roomId },
   };
   const answer = Boolean(text) && agentLive(env) && shouldRespond(session, delivery, { name: seat.botName, participantId: seat.participantId });
-  if (!bag.committed) bag.committed = new Map();
   const key = answer ? utteranceKey(text, speaker) : "";
-  if (key && bag.committed.get(seat.botId) === key) {
+  if (key && !acceptUtterance(bag.recent, seat.botId, key)) {
+    finish({ duplicate: true });
+    return;
+  }
+  if (key && await claimUtterance(env, workspace.fetchImpl, seat.botId, key) === false) {
     finish({ duplicate: true });
     return;
   }
@@ -203,7 +298,6 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     finish({ duplicate: true });
     return;
   }
-  if (key) bag.committed.set(seat.botId, key);
   if (requested) {
     const won = await rememberAgentTurn(env, workspace.fetchImpl, seat.botId, requested);
     markTurn(bag, seat.botId, requested);
@@ -217,7 +311,11 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     return;
   }
   refreshMeetingFloor(session, delivery);
-  bag.heard.set(seat.botId, { text, speaker, turn, roomId: seat.roomId });
+  await rememberAgentFloor(env, workspace.fetchImpl, seat.botId, session.meetingFloor || null);
+  const heard = { text, speaker, turn, roomId: seat.roomId };
+  bag.heard.set(seat.botId, heard);
+  await rememberHeardLine(env, workspace.fetchImpl, seat.botId, heard);
+  await stampClock(workspace, env, seat.botId, turn, "endpoint", Date.now());
   const previous = bag.live.get(seat.botId);
   if (previous) {
     previous.abort.abort();
@@ -232,12 +330,12 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
   await holdAgentTurn(env, workspace.fetchImpl, seat.botId, turn);
   const sent = new Set();
   const toolResults = [];
-  const emit = (full, done = false) => {
+  const emit = async (full, done = false) => {
     if (abort.signal.aborted) return;
     for (const line of linesForSpeech(full, toolResults, { done })) {
       if (sent.has(line) || sent.size >= 2) continue;
       sent.add(line);
-      const hash = rememberLine(bag, seat.botId, turn, line);
+      const hash = await rememberLine(bag, env, workspace.fetchImpl, seat.botId, turn, line);
       writeEvent(res, "sentence", { text: line, hash });
     }
   };
@@ -315,7 +413,7 @@ async function streamVoice(input) {
     const result = await streamOneRound({ ...input, messages, tools, models, full, round });
     full = result.full;
     if (input.signal.aborted || !result.toolCalls.length || round === 1) {
-      input.onText(full, true);
+      await input.onText(full, true);
       return;
     }
     messages.push({
@@ -364,10 +462,10 @@ async function streamOneRound(input) {
       maxTokens: 400,
       signal,
       onActivity: mark,
-      onDelta(delta) {
+      async onDelta(delta) {
         if (String(delta || "").trim()) mark();
         full += String(delta || "");
-        input.onText(full, false);
+        await input.onText(full, false);
       },
     });
     clearTimeout(timer);
@@ -381,6 +479,7 @@ async function streamOneRound(input) {
       if (saw && !input.tokenNoted) {
         input.tokenNoted = true;
         noteStageMetric("first-token", Date.now() - (input.startedAt || Date.now()));
+        await stampClock(input.workspace, input.env, input.botId, input.turnId, "firstToken", Date.now());
       }
       return { full, text: result?.text || "", toolCalls: toolCalls.filter((call) => input.tools.some((tool) => tool.function.name === call.name)) };
     }
@@ -399,7 +498,7 @@ async function runAgentTool(input) {
 function toolOutcome(wrapped) {
   if (wrapped?.reason === "slow") return "timeout";
   if (wrapped?.reason === "aborted") return "cancel";
-  if (wrapped?.held === true) return "held";
+  if (wrapped?.status === "waiting_for_approval" || wrapped?.held === true) return "held";
   if (wrapped?.ok === false) return "failed";
   return "ok";
 }
@@ -434,7 +533,14 @@ async function executeAgentTool(input) {
       const raw = { ok: false, reason: "claimed", held: false };
       return { raw, wrapped: wrapToolResult(raw, name) };
     }
-    await rememberHold(input, name, args, member.memberId);
+    const held = await rememberHold(input, name, args, member.memberId);
+    if (!held) {
+      await releaseWrite(input, name, args);
+      const raw = { ok: false, reason: "hold-failed", held: false };
+      return { raw, wrapped: wrapToolResult(raw, name) };
+    }
+    const raw = { ok: true, status: "waiting_for_approval" };
+    return { raw, wrapped: wrapToolResult(raw, name) };
   }
   const child = new AbortController();
   const stopRead = () => {
@@ -538,6 +644,10 @@ async function rememberHold(input, name, args, memberId) {
     actionId: action.id,
     status: "held",
   };
+  if (!(action.revision >= 1)) {
+    const saved = await rememberHeldAction(input.deps, action);
+    if (!saved) return false;
+  }
   const session = input.session;
   if (session && typeof session === "object") {
     session.agentHolds = Array.isArray(session.agentHolds) ? session.agentHolds : [];
@@ -545,26 +655,38 @@ async function rememberHold(input, name, args, memberId) {
     session.actions = Array.isArray(session.actions) ? session.actions : [];
     if (!session.actions.some((item) => item.id === action.id)) session.actions.push(action);
   }
-  const bag = input.workspace.meetingVoice;
-  if (bag && typeof bag === "object") {
-    bag.agentHolds = Array.isArray(bag.agentHolds) ? bag.agentHolds : [];
-    bag.agentHolds.push(row);
+  const voice = input.workspace.meetingVoice;
+  if (voice && typeof voice === "object") {
+    voice.agentHolds = Array.isArray(voice.agentHolds) ? voice.agentHolds : [];
+    voice.agentHolds.push(row);
   }
-  if (!(action.revision >= 1)) await rememberHeldAction(input.deps, action);
-  return row;
+  return true;
 }
 
-async function claimWrite(input, name, args) {
-  const scope = {
+function writeScope(input, name, args) {
+  return {
     tenantId: input.seat.tenantId,
     roomId: input.seat.roomId,
     toolName: name,
     args: claimArgsFor(name, args),
   };
+}
+
+async function claimWrite(input, name, args) {
   const store = input.workspace.actionClaims;
   if (!store || typeof store.claim !== "function") return true;
   try {
-    return await store.claim(scope);
+    return await store.claim(writeScope(input, name, args));
+  } catch {
+    return false;
+  }
+}
+
+async function releaseWrite(input, name, args) {
+  const store = input.workspace.actionClaims;
+  if (!store || typeof store.release !== "function") return false;
+  try {
+    return await store.release(writeScope(input, name, args));
   } catch {
     return false;
   }
@@ -612,9 +734,8 @@ async function speakSentence(req, res, env, workspace, seat, body) {
     res.end();
     return;
   }
-  const row = bag.lines.get(seat.botId)?.get(sentenceHash(text));
-  const heard = bag.heard.get(seat.botId);
-  if (!row || !heard || row.turn !== heard.turn) {
+  const allowed = await spokenForTurn(bag, env, workspace.fetchImpl, seat.botId, text);
+  if (!allowed) {
     res.writeHead(409, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
     res.end();
     return;
@@ -648,6 +769,7 @@ async function speakSentence(req, res, env, workspace, seat, body) {
       if (!heardAudio) {
         heardAudio = true;
         noteStageMetric("first-audio", Date.now() - speakStarted);
+        await stampClock(workspace, env, seat.botId, allowed.turn, "firstByte", Date.now());
       }
       res.write(chunk);
     }

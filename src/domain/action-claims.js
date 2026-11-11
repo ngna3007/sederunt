@@ -78,6 +78,11 @@ export function createMemoryActionClaims() {
       claims.add(keys[0]);
       return true;
     },
+    async release(scope) {
+      const tenant = String(scope.tenantId || "").toLowerCase();
+      for (const digest of claimDigests(scope)) claims.delete(`${tenant}:${digest}`);
+      return true;
+    },
   };
 }
 
@@ -110,6 +115,19 @@ export function createActionClaims(env = {}, { fetchImpl = globalThis.fetch } = 
       if (typeof value !== "boolean") throw new Error("Action claim returned an invalid response.");
       return value;
     },
+    async release(scope) {
+      const tenant = encodeURIComponent(scope.tenantId);
+      for (const digest of claimDigests(scope)) {
+        const response = await fetchImpl(`${base}/rest/v1/action_execution_claims?tenant_id=eq.${tenant}&claim_key=eq.${digest}`, {
+          method: "DELETE",
+          redirect: "error",
+          signal: AbortSignal.timeout(10000),
+          headers: { apikey: key, authorization: `Bearer ${key}`, prefer: "return=minimal" },
+        });
+        if (!response.ok) return false;
+      }
+      return true;
+    },
   };
 }
 
@@ -126,6 +144,12 @@ export async function createLocalActionClaims(file) {
       const seen = db.prepare("SELECT 1 AS hit FROM action_claims WHERE tenant_id = ? AND claim_key = ?");
       if (digests.some((digest) => seen.get(tenant, digest))) return false;
       return insert.run(tenant, digests[0]).changes === 1;
+    },
+    async release(scope) {
+      const tenant = scope.tenantId.toLowerCase();
+      const del = db.prepare("DELETE FROM action_claims WHERE tenant_id = ? AND claim_key = ?");
+      for (const digest of claimDigests(scope)) del.run(tenant, digest);
+      return true;
     },
     close() { db.close(); },
   };

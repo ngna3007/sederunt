@@ -3,7 +3,7 @@
  * Vercel isolates do not share memory, so the ear also goes through Redis.
  */
 
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 
 const EAR_SECONDS = 6 * 60 * 60;
 const EAR_PATTERN = /^[a-f0-9]{32,64}$/;
@@ -117,6 +117,8 @@ export async function bindMeetingEar(workspace, ear, botId, env = process.env, f
 const SPEAKER_SECONDS = 120;
 const TURN_SECONDS = 30;
 const SEEN_SECONDS = 600;
+const SAID_SECONDS = 8;
+const LINE_SECONDS = 120;
 
 function seatBag(workspace) {
   const bag = bagOf(workspace);
@@ -328,4 +330,149 @@ export async function rememberAgentTurn(env, fetchImpl, botId, turnId) {
   const saved = await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:seen:${id}:${token}`, "1", "EX", String(SEEN_SECONDS), "NX"]);
   if (!saved.ok) return true;
   return saved.result != null;
+}
+
+function stateHash(value) {
+  return createHash("sha256").update(String(value || ""), "utf8").digest("hex");
+}
+
+/** True when this utterance is new. False when it was heard inside 8 seconds. Null when Redis is absent. */
+export async function claimUtterance(env, fetchImpl, botId, key) {
+  const id = cleanBotId(botId);
+  if (!id || !key || !redisConfigured(env)) return null;
+  const saved = await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:said:${id}:${stateHash(key)}`, "1", "EX", String(SAID_SECONDS), "NX"]);
+  if (!saved.ok) return null;
+  return saved.result != null;
+}
+
+export async function rememberSpokenTurn(env, fetchImpl, botId, hash, turn) {
+  const id = cleanBotId(botId);
+  const token = String(turn || "").slice(0, 80);
+  const digest = String(hash || "").slice(0, 80);
+  if (!id || !token || !digest) return false;
+  const saved = await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:line:${id}:${digest}`, token, "EX", String(LINE_SECONDS)]);
+  return saved.ok === true;
+}
+
+export async function loadSpokenTurn(env, fetchImpl, botId, hash) {
+  const id = cleanBotId(botId);
+  const digest = String(hash || "").slice(0, 80);
+  if (!id || !digest || !redisConfigured(env)) return "";
+  const loaded = await redisCommand(env, fetchImpl, ["GET", `sederunt:voice:line:${id}:${digest}`]);
+  return typeof loaded.result === "string" ? loaded.result : "";
+}
+
+export async function rememberHeardLine(env, fetchImpl, botId, row) {
+  const id = cleanBotId(botId);
+  const turn = String(row?.turn || "").slice(0, 80);
+  if (!id || !turn) return false;
+  const body = JSON.stringify({
+    text: String(row?.text || "").slice(0, 4000),
+    speaker: String(row?.speaker || "").slice(0, 80),
+    turn,
+    roomId: String(row?.roomId || "").slice(0, 80),
+  });
+  const saved = await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:heard-line:${id}`, body, "EX", String(LINE_SECONDS)]);
+  return saved.ok === true;
+}
+
+export async function loadHeardLine(env, fetchImpl, botId) {
+  const id = cleanBotId(botId);
+  if (!id || !redisConfigured(env)) return null;
+  const loaded = await redisCommand(env, fetchImpl, ["GET", `sederunt:voice:heard-line:${id}`]);
+  if (typeof loaded.result !== "string" || !loaded.result.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(loaded.result);
+    if (!parsed || typeof parsed.turn !== "string" || !parsed.turn) return null;
+    return {
+      text: typeof parsed.text === "string" ? parsed.text : "",
+      speaker: typeof parsed.speaker === "string" ? parsed.speaker : "",
+      turn: parsed.turn,
+      roomId: typeof parsed.roomId === "string" ? parsed.roomId : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function rememberAgentFloor(env, fetchImpl, botId, floor) {
+  const id = cleanBotId(botId);
+  if (!id) return false;
+  const key = `sederunt:voice:floor:${id}`;
+  if (!floor || typeof floor.until !== "number" || floor.until <= Date.now()) {
+    await redisCommand(env, fetchImpl, ["DEL", key]);
+    return true;
+  }
+  const ttl = Math.max(1, Math.ceil((floor.until - Date.now()) / 1000));
+  const body = JSON.stringify({
+    roomId: String(floor.roomId || "").slice(0, 80),
+    speaker: String(floor.speaker || "").slice(0, 120),
+    until: floor.until,
+    at: typeof floor.at === "number" ? floor.at : Date.now(),
+  });
+  await redisCommand(env, fetchImpl, ["SET", key, body, "EX", String(ttl)]);
+  return true;
+}
+
+export async function loadAgentFloor(env, fetchImpl, botId) {
+  const id = cleanBotId(botId);
+  if (!id || !redisConfigured(env)) return null;
+  const loaded = await redisCommand(env, fetchImpl, ["GET", `sederunt:voice:floor:${id}`]);
+  if (typeof loaded.result !== "string" || !loaded.result.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(loaded.result);
+    if (!parsed || typeof parsed.until !== "number" || parsed.until <= Date.now()) return null;
+    if (typeof parsed.roomId !== "string" || !parsed.roomId || typeof parsed.speaker !== "string" || !parsed.speaker) return null;
+    return { roomId: parsed.roomId, speaker: parsed.speaker, until: parsed.until, at: parsed.at };
+  } catch {
+    return null;
+  }
+}
+
+function clockNumbers(clock) {
+  const pick = (value) => (typeof value === "number" && Number.isFinite(value) ? value : null);
+  return {
+    endpoint: pick(clock?.endpoint),
+    firstToken: pick(clock?.firstToken),
+    firstByte: pick(clock?.firstByte),
+    playback: pick(clock?.playback),
+  };
+}
+
+export async function rememberAgentClock(env, fetchImpl, botId, turn, clock) {
+  const id = cleanBotId(botId);
+  const token = String(turn || "").slice(0, 80);
+  if (!id || !token) return false;
+  const saved = await redisCommand(env, fetchImpl, [
+    "SET",
+    `sederunt:voice:clock:${id}:${token}`,
+    JSON.stringify(clockNumbers(clock)),
+    "EX",
+    String(LINE_SECONDS),
+  ]);
+  return saved.ok === true;
+}
+
+export async function loadAgentClock(env, fetchImpl, botId, turn) {
+  const id = cleanBotId(botId);
+  const token = String(turn || "").slice(0, 80);
+  if (!id || !token || !redisConfigured(env)) return null;
+  const loaded = await redisCommand(env, fetchImpl, ["GET", `sederunt:voice:clock:${id}:${token}`]);
+  if (typeof loaded.result !== "string" || !loaded.result.startsWith("{")) return null;
+  try {
+    return clockNumbers(JSON.parse(loaded.result));
+  } catch {
+    return null;
+  }
+}
+
+/** The sample number, or null when Redis is absent. The caller logs only 1 through 20. */
+export async function takeSocketSample(env, fetchImpl, botId) {
+  const id = cleanBotId(botId);
+  if (!id || !redisConfigured(env)) return null;
+  const key = `sederunt:voice:socket:${id}`;
+  const saved = await redisCommand(env, fetchImpl, ["INCR", key]);
+  if (!saved.ok || typeof saved.result !== "number") return null;
+  if (saved.result === 1) await redisCommand(env, fetchImpl, ["EXPIRE", key, String(EAR_SECONDS)]);
+  return saved.result;
 }

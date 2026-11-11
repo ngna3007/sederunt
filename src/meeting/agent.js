@@ -120,11 +120,14 @@ export function wordsFromTranscript(message) {
   const transcript = root.transcript && typeof root.transcript === "object" ? root.transcript : null;
   const list = [inner?.words, data?.words, transcript?.words, root.words].find(Array.isArray) || [];
   const participant = inner?.participant || data?.participant || root.participant || null;
+  const legacy = transcript && (transcript.speaker || transcript.speaker_id != null)
+    ? { name: typeof transcript.speaker === "string" ? transcript.speaker : "", id: transcript.speaker_id }
+    : null;
   return list.map((word) => {
     const text = typeof word === "string" ? word : (typeof word?.text === "string" ? word.text : "");
     const start = word?.start_timestamp?.relative ?? word?.start ?? null;
     const end = word?.end_timestamp?.relative ?? word?.end ?? null;
-    const who = word?.participant && typeof word.participant === "object" ? word.participant : participant;
+    const who = word?.participant && typeof word.participant === "object" ? word.participant : (participant || legacy);
     return {
       text: String(text || "").trim(),
       start: typeof start === "number" && Number.isFinite(start) ? start : null,
@@ -150,6 +153,8 @@ export function utteranceToCommit(committed, message, bot) {
     return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
   }
   function partial(value) {
+    const transcript = value.transcript && typeof value.transcript === "object" ? value.transcript : null;
+    if (transcript && typeof transcript.is_final === "boolean") return transcript.is_final === false;
     if (value.partial === true) return true;
     const event = String(value.event || value.type || "");
     if (event === "transcript.partial_data" || event.indexOf("partial_data") !== -1) return true;
@@ -170,6 +175,10 @@ export function utteranceToCommit(committed, message, bot) {
     if (value.data && value.data.data && value.data.data.participant) return value.data.data.participant;
     if (value.data && value.data.participant) return value.data.participant;
     if (value.participant) return value.participant;
+    const transcript = value.transcript && typeof value.transcript === "object" ? value.transcript : null;
+    if (transcript && (transcript.speaker || transcript.speaker_id != null)) {
+      return { name: transcript.speaker || "", id: transcript.speaker_id };
+    }
     return null;
   }
   const root = message && typeof message === "object" ? message : null;
@@ -226,6 +235,32 @@ export function utteranceKey(text, speaker) {
   if (!said) return "";
   const who = String(speaker || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
   return `${who}\n${said}`;
+}
+
+const REPEAT_MS = 8000;
+
+/**
+ * The same utterance is dropped only inside the repeat window.
+ * A different line, or the same line after the window, is accepted.
+ *
+ * @param {Map<string, Map<string, number>>} store
+ * @param {string} botId
+ * @param {string} key
+ * @param {number} [now]
+ */
+export function acceptUtterance(store, botId, key, now = Date.now()) {
+  if (!key || !(store instanceof Map)) return true;
+  let bag = store.get(botId);
+  if (!(bag instanceof Map)) {
+    bag = new Map();
+    store.set(botId, bag);
+  }
+  for (const [id, until] of bag) {
+    if (!(until > now)) bag.delete(id);
+  }
+  if ((bag.get(key) || 0) > now) return false;
+  bag.set(key, now + REPEAT_MS);
+  return true;
 }
 
 /** Drop the bot's own participant. The page must not answer Adam. */
@@ -404,15 +439,72 @@ export function wrapToolResult(result, source) {
     source: String(source || ""),
   };
   if (data.reason) body.reason = data.reason;
+  if (typeof data.status === "string" && data.status) body.status = data.status.slice(0, 64);
   if (data.held === true) body.held = true;
   else if (data.held === false) body.held = false;
   body.data = data;
   let encoded = "";
   try { encoded = JSON.stringify(body); } catch { encoded = ""; }
   if (encoded.length > TOOL_RESULT_CHARS) {
-    return { ok: body.ok, untrusted: true, source: body.source, reason: body.reason, held: body.held, data: { truncated: true } };
+    if (body.source === "recall") {
+      const fitted = fitRecallFacts(body, recallFacts(data));
+      if (fitted) return fitted;
+    }
+    return { ok: body.ok, untrusted: true, source: body.source, reason: body.reason, held: body.held, status: body.status, data: { truncated: true } };
   }
   return body;
+}
+
+function recallFacts(data) {
+  const facts = [];
+  const push = (text, id) => {
+    if (facts.length >= 3) return;
+    const line = String(text || "").replace(/\s+/g, " ").trim();
+    const sourceId = String(id || "").trim();
+    if (!line && !sourceId) return;
+    facts.push({ id: sourceId, text: line });
+  };
+  for (const row of Array.isArray(data?.visible) ? data.visible : []) push(row?.text, row?.id || row?.sourceId);
+  if (!facts.length) {
+    for (const row of Array.isArray(data?.why) ? data.why : []) push(row?.text, row?.id || row?.sourceId);
+  }
+  return facts;
+}
+
+function fitRecallFacts(body, facts) {
+  if (!facts.length) return null;
+  const pack = (items) => {
+    const next = {
+      ok: body.ok,
+      untrusted: true,
+      source: body.source,
+      data: { facts: items.map((fact) => ({ id: fact.id, text: fact.text })) },
+    };
+    if (body.reason) next.reason = body.reason;
+    if (body.status) next.status = body.status;
+    if (body.held === true) next.held = true;
+    else if (body.held === false) next.held = false;
+    return next;
+  };
+  let packed = pack(facts);
+  let encoded = JSON.stringify(packed);
+  if (encoded.length <= TOOL_RESULT_CHARS) return packed;
+  const trimmed = facts.map((fact) => ({ id: fact.id, text: fact.text }));
+  const overhead = encoded.length - trimmed.reduce((sum, fact) => sum + fact.text.length, 0);
+  const share = Math.max(0, Math.floor((TOOL_RESULT_CHARS - overhead - 16) / trimmed.length));
+  for (const fact of trimmed) fact.text = fact.text.slice(0, share);
+  packed = pack(trimmed);
+  encoded = JSON.stringify(packed);
+  let guard = 0;
+  while (encoded.length > TOOL_RESULT_CHARS && guard < 8000) {
+    const longest = trimmed.reduce((best, fact) => (fact.text.length > best.text.length ? fact : best), trimmed[0]);
+    if (!longest.text.length) break;
+    longest.text = longest.text.slice(0, -1);
+    packed = pack(trimmed);
+    encoded = JSON.stringify(packed);
+    guard += 1;
+  }
+  return encoded.length <= TOOL_RESULT_CHARS ? packed : null;
 }
 
 /**
@@ -422,13 +514,16 @@ export function wrapToolResult(result, source) {
  * @param {{ done?: boolean }} [options]
  */
 export function linesForSpeech(text, results = [], options = {}) {
-  const slow = (Array.isArray(results) ? results : []).find((row) => row?.reason === "slow");
-  let lines = spokenLines(text);
+  const rows = Array.isArray(results) ? results : [];
+  const slow = rows.find((row) => row?.reason === "slow");
+  const held = rows.some((row) => row?.status === "waiting_for_approval" || row?.held === true);
+  const source = options.done === true ? text : readySentences(text).ready.join(" ");
+  let lines = spokenLines(source).filter((line) => !/follow up once it is saved/i.test(line));
   if (slow && slow.held !== true) lines = lines.filter((line) => !/follow up/i.test(line));
-  if (options.done === true && slow && lines.length === 0) {
-    lines = [slow.held === true
-      ? "That is taking too long. I will follow up once it is saved."
-      : "That is taking too long."];
+  if (options.done === true && lines.length === 0 && (held || slow?.held === true)) {
+    lines = ["It's waiting for approval in the console."];
+  } else if (options.done === true && slow && lines.length === 0) {
+    lines = ["That is taking too long."];
   }
   return lines.slice(0, 2);
 }

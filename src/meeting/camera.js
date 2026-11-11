@@ -52,6 +52,7 @@ const AGENT_PAGE = `<!doctype html>
   var lineText = "";
   var lineSpeaker = "";
   var lineParticipant = "";
+  var lineWoke = false;
   var committed = null;
   var lastWordAt = 0;
   var playStarted = 0;
@@ -63,6 +64,7 @@ const AGENT_PAGE = `<!doctype html>
   var pumping = false;
   var wsWait = 500;
   var socket;
+  var socketPosts = 0;
 
   function letters(value) {
     return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -78,6 +80,7 @@ const AGENT_PAGE = `<!doctype html>
 
   function endOfTurn(text, quietMs) {
     if (!String(text || "").trim() || !(quietMs >= 0)) return false;
+    if (/\\?$/.test(String(text || "").trim())) return quietMs >= 700;
     return quietMs >= (unfinished(text) ? 2500 : 1200);
   }
 
@@ -131,14 +134,47 @@ const AGENT_PAGE = `<!doctype html>
     fetch("/api/meeting/agent/cancel", { method: "POST", headers: headers(), signal: controller.signal }).catch(function () {});
   }
 
+  function wokeIn(text) {
+    return new RegExp("\\\\b(" + letters(botName) + "|adam|maple)\\\\b", "i").test(String(text || ""));
+  }
+
+  function joinLine(left, right) {
+    var prior = String(left || "");
+    var next = String(right || "");
+    if (!prior) return next;
+    if (!next) return prior;
+    var lead = prior.toLowerCase();
+    var tail = next.toLowerCase();
+    if (tail.indexOf(lead) === 0) return next;
+    if (lead.indexOf(tail) === 0) return prior;
+    var size = 0;
+    var cap = lead.length < tail.length ? lead.length : tail.length;
+    for (var i = cap; i > 0; i -= 1) {
+      if (lead.slice(lead.length - i) === tail.slice(0, i)) {
+        size = i;
+        break;
+      }
+    }
+    if (size > 0) return prior + next.slice(size);
+    return prior + " " + next;
+  }
+
   function onTranscript(message) {
     var heard = utteranceToCommit(committed, message, { name: botName, participantId: participantId });
     if (!heard) return;
     if (heard.barge && playStarted && Date.now() - playStarted >= 300) barge();
     if (!heard.open) return;
+    var who = letters(heard.speaker || "");
+    var same = lineText && who === letters(lineSpeaker || "");
+    if (same) {
+      lineText = joinLine(lineText, heard.text);
+      if (wokeIn(heard.text)) lineWoke = true;
+    } else {
+      lineText = heard.text;
+      lineWoke = wokeIn(heard.text);
+    }
     lineSpeaker = heard.speaker || lineSpeaker;
     lineParticipant = heard.participantId || lineParticipant;
-    lineText = heard.text;
     lastWordAt = Date.now();
   }
 
@@ -148,10 +184,15 @@ const AGENT_PAGE = `<!doctype html>
     var text = lineText;
     var speaker = lineSpeaker;
     var claimed = lineParticipant;
+    var woke = lineWoke;
     lineText = "";
+    lineWoke = false;
     lastWordAt = 0;
     committed = { text: text, speaker: speaker };
-    if (!shouldRespond(text, speaker, Date.now(), claimed)) return;
+    var ownName = letters(speaker) && letters(speaker) === letters(botName);
+    var ownId = participantId && claimed && String(claimed) === String(participantId);
+    if (ownName || ownId) return;
+    if (!woke && !shouldRespond(text, speaker, Date.now(), claimed)) return;
     ask(text, speaker, claimed);
   }
 
@@ -226,6 +267,17 @@ const AGENT_PAGE = `<!doctype html>
     }).catch(function () {});
   }
 
+  function markPlayback() {
+    playStarted = Date.now();
+    if (window.__sederunt) window.__sederunt.playbackAt = playStarted;
+    if (!ear) return;
+    fetch("/api/meeting/agent/log", {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ playback: true })
+    }).catch(function () {});
+  }
+
   function enqueue(text) {
     var controller = track(new AbortController());
     var job = fetch("/api/meeting/agent/speak", {
@@ -234,7 +286,7 @@ const AGENT_PAGE = `<!doctype html>
       signal: controller.signal,
       body: JSON.stringify({ text: text })
     }).then(function (response) {
-      return response.ok ? response.arrayBuffer() : null;
+      return response.ok ? response : null;
     }).catch(function () { return null; });
     queue.push(job);
     if (!pumping) playNext();
@@ -248,70 +300,125 @@ const AGENT_PAGE = `<!doctype html>
       return;
     }
     pumping = true;
-    job.then(function (bytes) {
-      if (!bytes) {
+    job.then(function (response) {
+      if (!response) {
         playNext();
         return;
       }
-      playBytes(bytes, playNext);
+      playResponse(response, playNext);
+    });
+  }
+
+  function playResponse(response, next) {
+    var readable = response.body && response.body.getReader;
+    if (window.MediaSource && MediaSource.isTypeSupported("audio/mpeg") && readable) {
+      try {
+        streamMpeg(response, next);
+        return;
+      } catch (error) {}
+    }
+    if (!response.arrayBuffer) {
+      next();
+      return;
+    }
+    response.arrayBuffer().then(function (bytes) {
+      playBytes(bytes, next);
+    }).catch(function () { next(); });
+  }
+
+  function streamMpeg(response, next) {
+    var media = new MediaSource();
+    voice.src = URL.createObjectURL(media);
+    media.addEventListener("sourceopen", function () {
+      var source = media.addSourceBuffer("audio/mpeg");
+      var reader = response.body.getReader();
+      var started = false;
+      var pending = [];
+      var writing = false;
+      function writeNext() {
+        if (writing || !pending.length) return;
+        writing = true;
+        var chunk = pending.shift();
+        var buffer = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength);
+        var onend = function () {
+          source.removeEventListener("updateend", onend);
+          writing = false;
+          writeNext();
+        };
+        source.addEventListener("updateend", onend);
+        try { source.appendBuffer(buffer); }
+        catch (error) {
+          writing = false;
+          next();
+        }
+      }
+      function finish() {
+        if (writing || pending.length) {
+          source.addEventListener("updateend", function wait() {
+            source.removeEventListener("updateend", wait);
+            finish();
+          });
+          return;
+        }
+        if (media.readyState === "open") {
+          try { media.endOfStream(); } catch (error) {}
+        }
+      }
+      function pull() {
+        reader.read().then(function (step) {
+          if (step.done) {
+            finish();
+            return;
+          }
+          if (step.value) pending.push(step.value);
+          if (!started) {
+            started = true;
+            setState("speaking");
+            markPlayback();
+            stopAudio = function () {
+              try { voice.pause(); } catch (error) {}
+              try { reader.cancel(); } catch (error) {}
+              playStarted = 0;
+            };
+            voice.onended = function () {
+              playStarted = 0;
+              next();
+            };
+            voice.play().catch(function () {});
+          }
+          writeNext();
+          pull();
+        }).catch(function () { next(); });
+      }
+      pull();
     });
   }
 
   function playBytes(bytes, next) {
     var audio = new Uint8Array(bytes);
-    function fallback() {
-      var Ctx = window.AudioContext || window.webkitAudioContext;
-      if (!Ctx) {
+    var Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) {
+      next();
+      return;
+    }
+    var ctx = playBytes.ctx || new Ctx();
+    playBytes.ctx = ctx;
+    ctx.decodeAudioData(audio.buffer.slice(0)).then(function (buffer) {
+      var source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      setState("speaking");
+      markPlayback();
+      stopAudio = function () {
+        try { source.stop(); } catch (error) {}
+        playStarted = 0;
+      };
+      source.onended = function () {
+        playStarted = 0;
         next();
-        return;
-      }
-      var ctx = playBytes.ctx || new Ctx();
-      playBytes.ctx = ctx;
-      ctx.decodeAudioData(audio.buffer.slice(0)).then(function (buffer) {
-        var source = ctx.createBufferSource();
-        source.buffer = buffer;
-        source.connect(ctx.destination);
-        setState("speaking");
-        playStarted = Date.now();
-        stopAudio = function () {
-          try { source.stop(); } catch (error) {}
-          playStarted = 0;
-        };
-        source.onended = function () {
-          playStarted = 0;
-          next();
-        };
-        source.start();
-        if (window.__sederunt) window.__sederunt.playbackAt = Date.now();
-      }).catch(function () { next(); });
-    }
-    if (window.MediaSource && MediaSource.isTypeSupported("audio/mpeg")) {
-      try {
-        var media = new MediaSource();
-        voice.src = URL.createObjectURL(media);
-        media.addEventListener("sourceopen", function () {
-          var source = media.addSourceBuffer("audio/mpeg");
-          source.addEventListener("updateend", function () {
-            if (media.readyState === "open") media.endOfStream();
-          });
-          source.appendBuffer(audio);
-        });
-        setState("speaking");
-        playStarted = Date.now();
-        if (window.__sederunt) window.__sederunt.playbackAt = playStarted;
-        stopAudio = function () {
-          voice.pause();
-          playStarted = 0;
-        };
-        voice.onended = function () {
-          playStarted = 0;
-          next();
-        };
-        voice.play().catch(fallback);
-        return;
-      } catch (error) {}
-    }
-    fallback();
+      };
+      source.start();
+    }).catch(function () { next(); });
   }
 
   function barge() {
@@ -328,6 +435,18 @@ const AGENT_PAGE = `<!doctype html>
     }
     socket.onopen = function () { wsWait = 500; };
     socket.onmessage = function (ev) {
+      if (socketPosts < 20 && ear) {
+        socketPosts += 1;
+        var raw = "";
+        try { raw = String(ev.data || "").slice(0, 60000); } catch (error) { raw = ""; }
+        if (raw) {
+          fetch("/api/meeting/agent/socket", {
+            method: "POST",
+            headers: headers(),
+            body: raw
+          }).catch(function () {});
+        }
+      }
       try { onTranscript(JSON.parse(ev.data)); }
       catch (error) {}
     };

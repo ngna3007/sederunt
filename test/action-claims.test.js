@@ -13,6 +13,8 @@ test("action claims bind room, source and action and cannot be taken twice", asy
   assert.notEqual(actionClaimKey(scope), actionClaimKey({ ...scope, sourceId: "other" }));
   assert.notEqual(actionClaimKey(scope), actionClaimKey({ ...scope, action: "other" }));
   assert.deepEqual(await Promise.all([store.claim(scope), store.claim(scope)]), [true, false]);
+  assert.equal(await store.release(scope), true);
+  assert.equal(await store.claim(scope), true);
   assert.equal(await store.claim({ ...scope, tenantId: "22222222-2222-4222-8222-222222222222" }), true);
   for (const field of ["tenantId", "roomId", "sourceId", "action"]) assert.throws(() => actionClaimKey({ ...scope, [field]: "" }));
 });
