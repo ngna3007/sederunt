@@ -263,8 +263,13 @@ export async function answerSlackQuestion(visible, question, options = {}) {
       hits = null;
     }
   }
-  const memories = askMemories(rows, hits, limit);
-  const fallback = () => ({ ...slackAnswer(rows, asked), source: "retrieval", recalled: memories.length });
+  // The asker's own recent meetings (1:1 DM only), newest first, ahead of the sentence memories.
+  const meetings = (Array.isArray(options.meetings) ? options.meetings : [])
+    .filter((row) => row && String(row.text ?? "").trim())
+    .slice(0, limit);
+  const memories = [...meetings, ...askMemories(rows, hits, Math.max(1, limit - meetings.length))];
+  // Without the model only the most recent meeting is quoted, so a fallback never dumps three transcripts.
+  const fallback = () => ({ ...slackAnswer([...meetings.slice(0, 1), ...rows], asked), source: "retrieval", recalled: memories.length });
   if (!openRouterConfig(env).enabled) return fallback();
   const prior = Array.isArray(options.history) ? options.history : await slackRecentTurns({
     token: options.token || env.SLACK_BOT_TOKEN,
