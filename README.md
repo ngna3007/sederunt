@@ -1,12 +1,72 @@
-# Sederunt
+<p align="center">
+  <img src="public/favicon.svg" alt="Sederunt" width="72" height="72">
+</p>
 
-Meeting memory for teams. Sederunt keeps decisions from meetings and Slack, answers questions from the record, and asks for approval before taking an action.
+<h1 align="center">Sederunt</h1>
 
-[Open the app](https://sederunt.vercel.app) · [New-user demo](docs/runbooks/new-user-live-demo.md) · [Documentation](docs/README.md)
+<p align="center">
+  A meeting agent that keeps the decision and can answer from it later.
+</p>
 
-## Run locally
+<p align="center">
+  <a href="https://sederunt.vercel.app"><img src="https://img.shields.io/badge/Live_demo-sederunt.vercel.app-081428" alt="Live demo"></a>
+  <a href="#total-recall"><img src="https://img.shields.io/badge/Track_2-Smart_Agents_for_Real_Life-1B3A4B" alt="Track 2, Smart Agents for Real Life"></a>
+  <a href="https://memory.walrus.xyz"><img src="https://img.shields.io/badge/Walrus-Memory_on_Mainnet-1c9cf0" alt="Walrus Memory on Mainnet"></a>
+  <a href="https://docs.tatum.io"><img src="https://img.shields.io/badge/Tatum-Sui_gRPC-111111" alt="Tatum Sui gRPC"></a>
+</p>
 
-Use the Node version in `.nvmrc` and npm:
+<p align="center">
+  <a href="docs/media/sederunt-promo.mp4"><img src="docs/media/promo-poster.png" alt="Play the Sederunt promo" width="820"></a>
+</p>
+
+<p align="center">
+  <a href="docs/media/sederunt-promo.mp4"><strong>Watch the promo</strong></a>
+  &nbsp;·&nbsp;
+  <a href="https://sederunt.vercel.app"><strong>Open the app</strong></a>
+  &nbsp;·&nbsp;
+  <a href="docs/blog/total-recall.md"><strong>Read the write-up</strong></a>
+</p>
+
+GitHub plays the video when you open that file. The picture above is the first frame.
+
+## Start here
+
+1. Open [sederunt.vercel.app](https://sederunt.vercel.app) and sign in.
+2. Watch the [promo](docs/media/sederunt-promo.mp4).
+3. Read [how the record is written and proved](docs/blog/total-recall.md).
+4. Open one stored decision on Suiscan: [the booth decision](https://suiscan.xyz/mainnet/object/0xf734ea6c946482d9bf28f6443ea6529099a67cc306717562361cd463438de944).
+
+## What it does
+
+Adam joins a Google Meet. He keeps the decision, the minutes, and the action item. Later, someone can ask what was decided, from the console or from Slack, and the answer comes from that record.
+
+A correction is stored as its own memory. The next answer uses the correction. A preference is stored the same way, so the next draft follows it. The Why list names the memories that changed the answer.
+
+A new Linear issue or calendar event is filed during the call once the tool succeeds. A send, an update, or a delete waits until someone in the room says yes.
+
+## Total Recall
+
+This entry is for **Track 2, Smart Agents for Real Life**, in the Tatum × Walrus hackathon.
+
+The agent is the meeting. Walrus Memory is where the decision lives after the call ends. Tatum is how the app reads that record back from Sui mainnet and shows the proof.
+
+| Piece | Where to look |
+| --- | --- |
+| Working demo | [sederunt.vercel.app](https://sederunt.vercel.app) |
+| Promo | [docs/media/sederunt-promo.mp4](docs/media/sederunt-promo.mp4) |
+| Blog post | [docs/blog/total-recall.md](docs/blog/total-recall.md) |
+| Mainnet proof | [docs/hackathon/mainnet-seed-proof.json](docs/hackathon/mainnet-seed-proof.json) |
+| Public repo | [github.com/ngna3007/sederunt](https://github.com/ngna3007/sederunt) |
+
+On 4 November 2026 the `sederunt` namespace on mainnet held 28 memories. Tatum verified all 28. The checks are `GetObject`, `ListOwnedObjects`, `GetTransaction`, `GetCheckpoint`, and `GetServiceInfo`, sent as native gRPC to `sui-mainnet-grpc.gateway.tatum.io`. Writes go to the Walrus Memory relayer at `relayer.memory.walrus.xyz`. Sederunt holds a delegate key. It does not keep a SUI balance for that write.
+
+If the Tatum key is missing, the proof stays unknown. The app does not switch to a public fullnode.
+
+The technical note is [docs/hackathon.md](docs/hackathon.md).
+
+## Run it yourself
+
+You need the Node version in `.nvmrc`, and npm.
 
 ```sh
 nvm use
@@ -14,41 +74,35 @@ npm ci
 SEDERUNT_AUTH_FAKE=1 npm start
 ```
 
-Open http://127.0.0.1:8787/console. Fake mode uses local identities and a fake calendar. It is for development; it does not demonstrate live Google, Slack, Walrus or Linear behavior.
+Then open http://127.0.0.1:8787/console.
 
-For real integrations, copy `.env.example` to `.env`, supply your credentials, and start with:
+That mode is for development. It uses local identities and a fake calendar. It does not show live Google, Slack, Walrus, or Linear.
+
+To run against real services, copy `.env.example` to `.env`, fill in your own credentials, and start the server:
 
 ```sh
 node --env-file=.env src/server.js
 ```
 
-Follow [authentication setup](docs/auth-setup.md), [connector setup](docs/connectors.md), and the [Files design](docs/design/walrus-files.md). Credentials stay in ignored environment files or the deployment environment. Never commit tokens, private keys, user exports, or `.local/`.
+Setup guides: [sign-in](docs/auth-setup.md), [connectors](docs/connectors.md), [Walrus files](docs/design/walrus-files.md). Keep tokens and private keys out of git. Do not commit `.local/`.
 
-## Check changes
+Check the code with:
 
 ```sh
 npm test
-npm audit
 ```
 
-The test runner is Node's built-in `node --test`. Browser tests use Playwright and a locally installed Chrome/Chromium; some integration tests require explicit disposable PostgreSQL and Redis configuration. See the [source audit](docs/reports/2026-11-08-source-audit.md) for the baseline, verification results and remaining hardening work. A successful unit test run alone is not a live-integration check.
+Tests use `node --test`. A few integration tests stay skipped unless you point them at a disposable Postgres or Redis. They are not the live production databases.
 
-## Project layout
+## Where to read the code
 
-| Path | Purpose |
+| Path | What it is |
 | --- | --- |
-| `src/` | Node server, HTML views, integration adapters and domain rules |
-| `src/domain/` | Allow, status, clash and checkpoint rules |
-| `test/` | Behavioral tests and disposable fixtures |
-| `supabase/migrations/` | Reviewed database changes |
-| `public/` | Runtime media and models |
-| `scripts/` | Explicit operator utilities; read each before running |
-| `docs/` | Architecture, setup guides and operational runbooks |
+| `src/server.js` | The one Node process |
+| `src/meeting/` | Adam in the meeting |
+| `src/memory/` | Walrus Memory writes, and how a later answer uses them |
+| `src/tatum/` | Tatum gRPC reads and the proof |
+| `src/domain/` | The allow check before a write |
+| `docs/` | Design notes, the hackathon write-up, and runbooks |
 
-One Node package and one server process: `node src/server.js`. Business writes pass through `handleUtterance` after an allow. The admin page at `/admin` lists accounts and workspaces and supports quota reset or scoped app-data deletion; see the [admin runbook](docs/runbooks/admin-demo-recovery.md).
-
-## Repository hygiene
-
-Agent-specific tooling, raw research, old visual-review captures, video-generation sources and prototype pages are local development artifacts. They are excluded from new Git changes and deployment uploads. The app's rendered video clips remain in `public/clips/`; the source is preserved in the local archive. Required build and runtime files stay in Git.
-
-Removing a file from the current tree does not remove it from Git history. This cleanup does not rewrite published history or change repository visibility. The source audit records the scope of credential checks and outstanding review work.
+A write goes through `handleUtterance`, and only after an allow.
