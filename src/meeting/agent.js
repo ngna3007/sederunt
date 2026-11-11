@@ -134,6 +134,24 @@ export function titleFromAnswer(text, botName = "Adam") {
   return concreteTitle(value);
 }
 
+/**
+ * The title said inline with the request: "create a Linear issue, fix the
+ * onboarding email", "file an issue: ...", "open a ticket called ...",
+ * "log a task saying ...". Returns "" when the request names no title.
+ *
+ * @param {string} text
+ * @param {string} [botName]
+ */
+export function inlineIssueTitle(text, botName = "Adam") {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (!value) return "";
+  const match = /\b(?:create|file|open|log|add|make|raise|start|write)\s+(?:(?:a|an|the|new|one|another)\s+)*(?:linear\s+)?(?:issue|ticket|task|bug|to-?do)\b(?:\s+(?:in|on)\s+linear\b)?(?:\s*[,:;\-–—]\s*(?:(?:called|titled|named|saying|that says|to say)\s+)?|\s+(?:called|titled|named|saying|that says|to say|about|to|for)\s+)(.+)$/i.exec(value);
+  if (!match) return "";
+  const rest = match[1].replace(/^["'“‘]+|["'”’]+$/g, "").trim();
+  if (!rest || /\?\s*$/.test(rest)) return "";
+  return titleFromAnswer(rest, botName);
+}
+
 /** Share of this line's words that already appear in Adam's recent speech. */
 export function echoShare(text, spoken) {
   const heard = String(text || "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);

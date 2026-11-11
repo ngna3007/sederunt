@@ -13,6 +13,7 @@ import {
   holdStatusLine,
   isEchoLine,
   isTitleQuestion,
+  inlineIssueTitle,
   agentToolBudgetMs,
   claimArgsFor,
   freshTurnId,
@@ -73,6 +74,7 @@ import {
   loadSpokenTurn,
   redisTurnCount,
   releaseAgentTurn,
+  releaseNamedAgentTurn,
   rememberAgentClock,
   rememberAgentFloor,
   rememberEchoLines,
@@ -193,7 +195,15 @@ export async function handleMeetingAgent(input) {
     return true;
   }
   if (path === "/api/meeting/agent/cancel") {
-    await cancelTurn(workspace, env, seat.botId);
+    // A superseded turn names itself, so a late cancel never stops the turn after it.
+    let named = "";
+    try {
+      const sent = await readJson(req);
+      named = String(sent?.turn_id || "").trim().slice(0, 80);
+    } catch {
+      named = "";
+    }
+    await cancelTurn(workspace, env, seat.botId, named);
     send(res, 204, "text/plain; charset=utf-8", "");
     return true;
   }
@@ -403,9 +413,17 @@ export function keptAfterCue(text, botName = "Adam") {
 
 const KEPT_NOT_START = /^(?:what|when|who|whom|whose|where|why|how|which|can|could|would|should|shall|do|does|did|is|are|am|have|has|may|might|please|tell|show|give|find|check|look|read|remind|recall|hello|hi|hey|good (?:morning|afternoon|evening)|thanks|thank you|bye|goodbye|okay|ok|um+|uh+|hmm+|er+|ah+|oh|so|well|yeah|yes|yep|no|nope|right|sorry|wait|hold on|never ?mind|testing|test)\b/;
 
-async function cancelTurn(workspace, env, botId) {
+async function cancelTurn(workspace, env, botId, named = "") {
   const bag = runtime(workspace);
   const live = bag.live.get(botId);
+  if (named) {
+    if (live && live.turnId === named) {
+      live.abort.abort();
+      clearTimeout(live.cap);
+    }
+    await releaseNamedAgentTurn(env, workspace.fetchImpl, botId, named);
+    return;
+  }
   if (live) {
     live.abort.abort();
     clearTimeout(live.cap);
@@ -467,7 +485,11 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
       if (row?.text) prior = row;
     }),
   ]);
-  const awaiting = awaitingAnswer(prior, speaker, seat.roomId);
+  // A new request replaces the open question: "Adam, schedule a launch sync
+  // tomorrow at 10 am" after "What should the issue say?" is not the title
+  // (dry run 2, bot 0fde3ab3: it filed a calendar event with that line as its title).
+  const openQuestion = awaitingAnswer(prior, speaker, seat.roomId);
+  const awaiting = openQuestion && startsNewRequest(openQuestion, text) ? null : openQuestion;
   const roster = meetingPeopleDirect(workspace, seat.botId, { participantId: seat.participantId, name: seat.botName });
   const meetingDirect = roster === true || (roster == null && reportedHumans(body, seat).length === 1);
   const delivery = {
@@ -577,11 +599,15 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     for (const line of linesForSpeech(full, toolResults, { done, holdTitle: pendingHold?.title || "", titleAsk })) {
       if (sent.has(line) || sent.size >= 2) continue;
       sent.add(line);
-      const pendingKind = isTitleQuestion(line) ? "title"
+      let pendingKind = isTitleQuestion(line) ? "title"
         : isWhenQuestion(line) ? "when"
         : isDestroyQuestion(line) ? "destroy"
         : isArgQuestion(line) ? "arg"
         : "";
+      // One open question at a time, and the right one: a free-form question
+      // after "create a Linear issue" asks for the title (dry run 2 kept it as a
+      // generic "arg", filed nothing and asked again).
+      if ((pendingKind === "arg" || (!pendingKind && /\?\s*$/.test(line))) && titleAsk && !isScheduleRequest(text)) pendingKind = "title";
       if (pendingKind) {
         heard.awaiting = {
           ...(heard.awaiting && heard.awaiting.kind === pendingKind ? heard.awaiting : {}),
@@ -654,8 +680,13 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
         if (!res.writableEnded) writeEvent(res, name, data);
       },
     };
+    // "Create a Linear issue, fix the onboarding email" names its title: it is
+    // filed at once, with no model round and no "What should the issue say?".
+    const inline = !awaiting && !pendingHold && !partial && !isScheduleRequest(text) ? inlineIssueTitle(text, seat.botName) : "";
     if (awaiting && pendingAnswered(awaiting, text, seat.botName)) {
       await fileAnsweredPending({ ...voiceInput, heardTitle: text }, awaiting, text);
+    } else if (inline) {
+      await fileAnsweredPending({ ...voiceInput, heardTitle: inline }, { kind: "title", tool: "act", args: {} }, inline);
     } else await streamVoice(voiceInput);
   } catch {
     if (!res.writableEnded) writeEvent(res, "error", { reason: "unavailable" });
@@ -689,6 +720,17 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
       speaker: String(speaker || "").slice(0, 80),
     };
   }
+  if (abort.signal.aborted) {
+    // A superseded turn's question was never spoken: the open question stays
+    // what it was before, and a newer turn's line is never overwritten.
+    heard.awaiting = openQuestion || null;
+    const newer = bag.heard.get(seat.botId) !== heard
+      || await agentTurnCurrent(env, workspace.fetchImpl, seat.botId).then((current) => Boolean(current) && current !== turn && current !== `cancel:${turn}`, () => false);
+    if (newer) {
+      await finish({ aborted: true });
+      return;
+    }
+  }
   // The last word on this turn's open question. The per-line writes above are not awaited and can land out of order.
   try { await rememberHeardLine(env, workspace.fetchImpl, seat.botId, heard); } catch {}
   await finish(abort.signal.aborted ? { aborted: true } : {});
@@ -716,6 +758,14 @@ function noteEchoSpoken(bag, botId, text) {
   const list = (bag.echo.get(botId) || []).filter((row) => now - row.at < 15000);
   list.push({ text: String(text || "").slice(0, 400), at: now });
   bag.echo.set(botId, list.slice(-12));
+}
+
+/** A line that is its own new request, not an answer to an open title or value question. */
+function startsNewRequest(awaiting, text) {
+  if (!awaiting || !["title", "arg", "answer"].includes(awaiting.kind)) return false;
+  const value = String(text || "");
+  if (isScheduleRequest(value)) return true;
+  return /\b(?:create|file|open|log|make|raise)\s+(?:(?:a|an|the|new|another)\s+)*(?:linear\s+)?(?:issue|ticket|task|bug)\b/i.test(value);
 }
 
 function pendingAnswered(awaiting, text, botName) {
@@ -904,7 +954,12 @@ async function fileAnsweredPending(input, awaiting, text) {
   }
   const toolName = String(awaiting?.tool || "act");
   const args = awaiting?.args && typeof awaiting.args === "object" ? { ...awaiting.args } : {};
-  if (awaiting?.kind === "title") {
+  // A free-form question the model asked about an issue ("What would you like it
+  // to say?") has no field: its answer is the title (dry run 2 answered it as
+  // "value" and asked again).
+  const titleKind = awaiting?.kind === "title"
+    || (awaiting?.kind === "arg" && !awaiting.field && (toolName === "act" || isLinearCreateTool(toolName)));
+  if (titleKind) {
     const title = titleFromAnswer(text, botName);
     if (!title) {
       await input.onText("What should the issue say?", true);
@@ -1082,7 +1137,7 @@ async function executeAgentTool(input) {
       return { raw, wrapped: wrapToolResult(raw, name) };
     }
     if (isLinearCreateTool(name) && !scheduleAsk) {
-      const title = concreteTitle(args.title || args.text || args.summary || "");
+      const title = concreteTitle(args.title || args.text || args.summary || "") || inlineIssueTitle(utterance, input.seat?.botName);
       if (!title) {
         const raw = { ok: false, reason: "needs_title", question: "What should the issue say?", held: false, tool: name, args: { ...args } };
         return { raw, wrapped: wrapToolResult(raw, name) };
@@ -1093,7 +1148,14 @@ async function executeAgentTool(input) {
       const raw = { ok: false, reason: "needs_when", question: WHEN_QUESTION, tool: name, title: args.title || args.summary || "", args: { ...args } };
       return { raw, wrapped: wrapToolResult(raw, name) };
     }
-    const missing = missingRequired(tool, args);
+    let missing = missingRequired(tool, args);
+    if (missing.length && kindForField(missing[0]) === "title" && !scheduleAsk) {
+      const inline = inlineIssueTitle(utterance, input.seat?.botName);
+      if (inline) {
+        args[missing[0]] = inline;
+        missing = missingRequired(tool, args);
+      }
+    }
     if (missing.length) {
       const field = missing[0];
       const kind = kindForField(field);
@@ -1128,6 +1190,8 @@ async function executeAgentTool(input) {
           id: filed.eventId,
           url: filed.link || "",
         };
+        // The created event's id, so a wrong event can be found and removed.
+        console.info(JSON.stringify({ meeting: "filed", bot: String(input.botId || "").slice(0, 12), tool: name, kind: "calendar", eventId: String(filed.eventId).slice(0, 120) }));
         announceVoiceChat(input, raw, name, args);
         noteFiledActivity(input, raw, name, args);
         return { raw, wrapped: wrapToolResult(raw, name) };

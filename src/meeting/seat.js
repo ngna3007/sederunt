@@ -70,7 +70,7 @@ function restConfig(env) {
   return { url, token };
 }
 
-function redisConfigured(env) {
+export function redisConfigured(env) {
   if (restConfig(env)) return true;
   return Boolean(String(env?.REDIS_URL || env?.KV_URL || "").trim());
 }
@@ -558,6 +558,17 @@ export async function releaseAgentTurn(env, fetchImpl, botId, turnId) {
   const id = cleanBotId(botId);
   if (!id) return false;
   await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:turn:${id}`, `cancel:${String(turnId || "").slice(0, 80)}`, "EX", String(TURN_SECONDS)]);
+  return true;
+}
+
+/** Release the turn only while it is still the current one; a newer turn is left alone. */
+export async function releaseNamedAgentTurn(env, fetchImpl, botId, turnId) {
+  const id = cleanBotId(botId);
+  const token = String(turnId || "").slice(0, 80);
+  if (!id || !token) return false;
+  const loaded = await redisCommand(env, fetchImpl, ["GET", `sederunt:voice:turn:${id}`]);
+  if (!loaded.ok || loaded.result !== token) return false;
+  await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:turn:${id}`, `cancel:${token}`, "EX", String(TURN_SECONDS)]);
   return true;
 }
 

@@ -80,6 +80,11 @@ const AGENT_PAGE = `<!doctype html>
   var busyFlagged = false;
   var lastBeat = "";
   var turnController = null;
+  // The line the open turn answers. Until it speaks or runs a tool, more words
+  // from the same speaker supersede it (dry run 2, bot 0fde3ab3: "create a
+  // Linear issue," and "fix the onboarding email" became two turns).
+  var inflight = null;
+  var SUPERSEDE_MS = 3000;
   // Past the server's own 25 s turn cap, so a slow answer ends with its own done event first.
   var TURN_CAP_MS = 32000;
   // A follow-up question ("What should the issue say?") waits this long. If the asker
@@ -87,7 +92,7 @@ const AGENT_PAGE = `<!doctype html>
   // (Nov 11 dry run, bot b38fa40d: Recall split the request at the comma).
   var ASK_HOLD_MS = 1500;
   var heldAsk = null;
-  var stats = { asksHeld: 0, asksDropped: 0, msgs: 0, opened: 0, own: 0, echo: 0, commits: 0, asked: 0, skipped: 0, busy: 0, done: 0, errors: 0, stuck: 0, sentences: 0, spoken: 0, speakRetries: 0, speakFailed: 0, socketOpens: 0, socketCloses: 0 };
+  var stats = { superseded: 0, asksHeld: 0, asksDropped: 0, msgs: 0, opened: 0, own: 0, echo: 0, commits: 0, asked: 0, skipped: 0, busy: 0, done: 0, errors: 0, stuck: 0, sentences: 0, spoken: 0, speakRetries: 0, speakFailed: 0, socketOpens: 0, socketCloses: 0 };
 
   function letters(value) {
     return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -261,8 +266,15 @@ const AGENT_PAGE = `<!doctype html>
     if (heard.open) stats.opened += 1;
     notePerson(heard.participantId, heard.speaker);
     if (heard.barge && playStarted && Date.now() - playStarted >= 300) barge(wokeIn(heard.text) ? "name" : "word");
-    if (!heard.open) return;
     var who = letters(heard.speaker || "");
+    var ownWords = (participantId && heard.participantId && String(heard.participantId) === String(participantId)) || (who && who === letters(botName));
+    if (!ownWords && heard.barge && supersede(who)) stats.superseded += 1;
+    if (!heard.open) {
+      // A partial is the speaker still talking: it holds the line open, so the
+      // rest of a long sentence joins it instead of becoming a second turn.
+      if (heard.barge && !ownWords && lineText && who === letters(lineSpeaker || "")) lastWordAt = Date.now();
+      return;
+    }
     var same = lineText && who === letters(lineSpeaker || "");
     if (same) {
       lineText = joinLine(lineText, heard.text);
@@ -274,12 +286,37 @@ const AGENT_PAGE = `<!doctype html>
     lineSpeaker = heard.speaker || lineSpeaker;
     lineParticipant = heard.participantId || lineParticipant;
     lastWordAt = Date.now();
-    var filler = /^(?:um+|uh+|hmm+|hm+|mm+|er+|ah+|oh|okay|ok|so|yeah|yes|yep|right|well|and|but)$/.test(String(heard.text || "").toLowerCase().replace(/[^a-z\s]/g, " ").replace(/\s+/g, " ").trim());
+    var filler = /^(?:um+|uh+|hmm+|hm+|mm+|er+|ah+|oh|okay|ok|so|yeah|yes|yep|right|well|and|but)$/.test(String(heard.text || "").toLowerCase().replace(/[^a-z\\s]/g, " ").replace(/\\s+/g, " ").trim());
     if (!filler) lastContentAt = lastWordAt;
     if (!filler && heldAsk && heldAsk.who && heldAsk.who === letters(heard.speaker || "")) {
       heldAsk = null;
       stats.asksDropped += 1;
     }
+  }
+
+  /** Take back an open turn that has not spoken or run a tool; its line is heard again with what follows. */
+  function supersede(who) {
+    var open = inflight;
+    if (!open || !turnOpen || open.spoke || open.tool || !who || who !== open.who) return false;
+    // Only the rest of the same utterance: words soon after the commit.
+    if (Date.now() - open.at > SUPERSEDE_MS) return false;
+    inflight = null;
+    if (open.controller === turnController) turnController = null;
+    // Only this turn is taken back; audio an earlier turn is still playing is left alone.
+    clearTimeout(turnTimer);
+    turnOpen = false;
+    turnStartedAt = 0;
+    try { open.controller.abort(); } catch (error) {}
+    if (guest.dataset.state === "thinking" || guest.dataset.state === "tool") setState(pumping ? "speaking" : "listening");
+    if (ear) fetch("/api/meeting/agent/cancel", { method: "POST", headers: headers(), body: JSON.stringify({ turn_id: open.turnId }) }).catch(function () {});
+    heldAsk = null;
+    committed = null;
+    lineText = lineText && letters(lineSpeaker || "") === who ? joinLine(open.text, lineText) : open.text;
+    lineSpeaker = open.speaker;
+    lineParticipant = open.claimed || lineParticipant;
+    lineWoke = lineWoke || open.woke;
+    lastWordAt = Date.now();
+    return true;
   }
 
   function maybeCommit() {
@@ -318,12 +355,18 @@ const AGENT_PAGE = `<!doctype html>
       return;
     }
     committed = { text: text, speaker: speaker };
-    ask(text, speaker, claimed);
+    ask(text, speaker, claimed, woke);
   }
 
-  function ask(text, speaker, claimed) {
+  function ask(text, speaker, claimed, woke) {
     if (!ear) return;
     stats.asked += 1;
+    // Lines the last turn left unspoken are refused by the server once this turn
+    // starts (409); they are dropped here instead of asked for twice.
+    if (queue.length) {
+      abortFetches();
+      queue = [];
+    }
     turnStartedAt = Date.now();
     turnOpen = true;
     setState("thinking");
@@ -333,15 +376,20 @@ const AGENT_PAGE = `<!doctype html>
     }, 6000);
     var controller = track(new AbortController());
     turnController = controller;
+    var turnId = String(Date.now());
+    inflight = { at: Date.now(), text: text, speaker: speaker, who: letters(speaker || ""), claimed: claimed, woke: Boolean(woke), controller: controller, turnId: turnId, spoke: false, tool: false };
     fetch("/api/meeting/agent/turn", {
       method: "POST",
       headers: headers(),
       signal: controller.signal,
-      body: JSON.stringify({ text: text, speaker: speaker, participantId: claimed, turn_id: String(Date.now()), people: Object.keys(people) })
+      body: JSON.stringify({ text: text, speaker: speaker, participantId: claimed, turn_id: turnId, people: Object.keys(people) })
     }).then(function (response) {
       if (!response.ok || !response.body) throw new Error("turn");
       return readEvents(response.body, text, speaker, controller);
     }).catch(function () {
+      // A superseded or replaced turn's stream ends here; it must not close the newer turn.
+      if (turnController && turnController !== controller) return;
+      if (controller.signal.aborted && !turnOpen) return;
       stats.errors += 1;
       if (guest.dataset.state === "thinking") setState("listening");
       turnOpen = false;
@@ -355,7 +403,10 @@ const AGENT_PAGE = `<!doctype html>
     var played = [];
     function pump() {
       return reader.read().then(function (step) {
-        if (step.done) return logPlayed(userText, played);
+        if (step.done) {
+          if (owner && turnController && owner !== turnController) return logPlayed(userText, played, true);
+          return logPlayed(userText, played);
+        }
         buffer += decoder.decode(step.value, { stream: true });
         var cut;
         while ((cut = buffer.indexOf("\\n\\n")) !== -1) {
@@ -371,9 +422,13 @@ const AGENT_PAGE = `<!doctype html>
             clearTimeout(turnTimer);
             var payload = {};
             try { payload = JSON.parse(data); } catch (error) { payload = {}; }
-            if (payload.text && payload.ask && !played.length) {
+            if (owner && owner !== turnController) {
+              // A superseded turn never speaks.
+            } else if (payload.text && payload.ask && !played.length) {
+              if (inflight && inflight.controller === owner) inflight.spoke = true;
               holdAsk(payload.text, speaker, owner);
             } else if (payload.text) {
+              if (inflight && inflight.controller === owner) inflight.spoke = true;
               stats.sentences += 1;
               played.push(payload.text);
               noteSpoken(payload.text, Date.now());
@@ -381,10 +436,14 @@ const AGENT_PAGE = `<!doctype html>
               enqueue(payload.text);
             }
           }
-          if (event === "tool_started") setState("tool");
+          if (event === "tool_started") {
+            if (inflight && inflight.controller === owner) inflight.tool = true;
+            setState("tool");
+          }
           if (event === "done") stats.done += 1;
           if (event === "error") stats.errors += 1;
           if (event === "done" || event === "error") {
+            if (inflight && inflight.controller === owner) inflight = null;
             turnOpen = false;
             // A turn that ends with nothing to say goes back to listening now, not
             // after the 6 s thinking timer (which also sent a needless cancel).
@@ -441,8 +500,8 @@ const AGENT_PAGE = `<!doctype html>
     }, ASK_HOLD_MS);
   }
 
-  function logPlayed(userText, sentences) {
-    turnOpen = false;
+  function logPlayed(userText, sentences, stale) {
+    if (!stale) turnOpen = false;
     if (!sentences.length || !ear) return;
     fetch("/api/meeting/agent/log", {
       method: "POST",
