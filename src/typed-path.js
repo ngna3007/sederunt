@@ -2829,6 +2829,21 @@ function snapshot(input, room) {
   return ids;
 }
 
+/**
+ * The memory idempotency key. A room record is written by more than one isolate,
+ * each from its own copy of the room, so the same key can carry different content
+ * (Walrus answers 409). The content fingerprint keeps a true retry on one key and
+ * gives a different room snapshot its own key.
+ */
+function memoryKey(document) {
+  const base = String(document.idempotencyKey || document.text || "");
+  if (document.kind !== "room" || !document.room || typeof document.room !== "object") return byteTrim(base, 255);
+  let body = "";
+  try { body = JSON.stringify(document.room); } catch { body = ""; }
+  const print = createHash("sha256").update(`${document.text || ""}\n${body}`, "utf8").digest("hex").slice(0, 12);
+  return `${byteTrim(base, 242)}:${print}`;
+}
+
 async function remember(deps, document) {
   if (!deps.memory?.remember) return { blobId: null };
   try {
@@ -2836,7 +2851,7 @@ async function remember(deps, document) {
       account: document.account,
       kind: document.kind,
       text: document.text,
-      idempotencyKey: byteTrim(document.idempotencyKey || document.text, 255),
+      idempotencyKey: memoryKey(document),
       private: document.account === "personal",
       decision: document.decision,
       preference: document.preference,

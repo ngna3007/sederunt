@@ -2,13 +2,17 @@ import {
   acceptUtterance,
   agentLive,
   agentPersona,
+  ANSWER_WAIT_MS,
   approvalPlace,
+  asksForWrite,
   asksHoldStatus,
+  cancelsAnswer,
   concreteTitle,
   draftedLine,
   filedVoiceLine,
   holdStatusLine,
   isEchoLine,
+  isTitleQuestion,
   agentToolBudgetMs,
   claimArgsFor,
   freshTurnId,
@@ -17,6 +21,7 @@ import {
   scopedToolArgs,
   sentenceHash,
   shouldRespond,
+  titleFromAnswer,
   toolIsWrite,
   utteranceKey,
   wrapToolResult,
@@ -180,6 +185,16 @@ async function logPlayed(workspace, sessionFor, env, seat, body) {
     noteEchoDrop(seat.botId);
     return;
   }
+  if (body?.gate === "skip") {
+    console.info(JSON.stringify({
+      meeting: "gate",
+      gate: "skip",
+      words: Math.max(0, Math.min(400, Math.round(Number(body.words) || 0))),
+      floor: body.floor === true,
+      direct: body.direct === true,
+    }));
+    return;
+  }
   if (body?.barge === "name" || body?.barge === "word") {
     noteBarge(seat.botId, body.barge);
     return;
@@ -325,6 +340,7 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     "cache-control": "no-store",
     "x-accel-buffering": "no",
   });
+  const notes = { answered: false, awaiting: "", outcomes: [] };
   const finish = async (extra = {}) => {
     await settleRedisTurn();
     const redis = redisTurnCount();
@@ -339,6 +355,9 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
       firstToken: since(clock?.firstToken),
       tool: typeof clock?.tool === "number" ? Math.round(clock.tool) : null,
       firstByte: since(clock?.firstByte),
+      answered: notes.answered,
+      awaiting: notes.awaiting || null,
+      outcomes: notes.outcomes.slice(0, 4),
     }));
     if (!res.writableEnded) {
       writeEvent(res, "done", { turn_id: turn, ...extra });
@@ -352,10 +371,11 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     loadAgentSpeaker(workspace, seat, env, workspace.fetchImpl),
     loadMeetingPeople(workspace, seat.botId, env, workspace.fetchImpl),
     loadEchoLines(env, workspace.fetchImpl, seat.botId).then((rows) => mergeEcho(bag, seat.botId, rows)),
-    prior?.text ? null : loadHeardLine(env, workspace.fetchImpl, seat.botId).then((row) => {
+    loadHeardLine(env, workspace.fetchImpl, seat.botId).then((row) => {
       if (row?.text) prior = row;
     }),
   ]);
+  const awaiting = awaitingAnswer(prior, speaker, seat.roomId);
   const roster = meetingPeopleDirect(workspace, seat.botId, { participantId: seat.participantId, name: seat.botName });
   const meetingDirect = roster === true || (roster == null && reportedHumans(body, seat).length === 1);
   const delivery = {
@@ -365,7 +385,13 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     memberId: participantId,
     room: { id: seat.roomId },
   };
-  const answer = Boolean(text) && agentLive(env) && shouldRespond({ ...session, meetingDirect }, delivery, { name: seat.botName, participantId: seat.participantId });
+  const bot = { name: seat.botName, participantId: seat.participantId };
+  const live = Boolean(text) && agentLive(env);
+  let answer = live && shouldRespond({ ...session, meetingDirect }, delivery, bot);
+  if (!answer && live && awaiting) {
+    const floor = { roomId: seat.roomId, speaker: floorSpeaker(participantId, speaker), until: Date.now() + 1000 };
+    answer = shouldRespond({ ...session, meetingDirect, meetingFloor: floor }, delivery, bot);
+  }
   const key = answer ? utteranceKey(text, speaker) : "";
   if (key && !acceptUtterance(bag.recent, seat.botId, key)) {
     await finish({ duplicate: true });
@@ -393,9 +419,17 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     }
   }
   if (!answer) {
+    if (awaiting && !partial && cancelsAnswer(text, seat.botName)) {
+      // "Never mind" from the asker closes the open question, so later chatter is not an answer.
+      const closed = { ...prior, awaiting: null };
+      bag.heard.set(seat.botId, closed);
+      try { await rememberHeardLine(env, workspace.fetchImpl, seat.botId, closed); } catch {}
+      notes.awaiting = "cancelled";
+    }
     await finish();
     return;
   }
+  notes.answered = true;
   refreshMeetingFloor(session, delivery);
   const heard = {
     text,
@@ -404,6 +438,7 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     roomId: seat.roomId,
     assistant: "",
     hold: prior?.hold?.status === "waiting_for_approval" ? prior.hold : null,
+    awaiting: null,
   };
   bag.heard.set(seat.botId, heard);
   await Promise.all([
@@ -426,11 +461,19 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
   const sent = new Set();
   const toolResults = [];
   const pendingHold = holdForSpeaker(heard.hold, speaker);
+  const titleAsk = asksForWrite(text) || awaiting?.kind === "title";
   const emit = async (full, done = false) => {
     if (abort.signal.aborted) return;
-    for (const line of linesForSpeech(full, toolResults, { done, holdTitle: pendingHold?.title || "" })) {
+    for (const line of linesForSpeech(full, toolResults, { done, holdTitle: pendingHold?.title || "", titleAsk })) {
       if (sent.has(line) || sent.size >= 2) continue;
       sent.add(line);
+      if (isTitleQuestion(line)) {
+        heard.awaiting = { kind: "title", speaker: String(speaker || "").slice(0, 80), until: Date.now() + ANSWER_WAIT_MS };
+      } else if (/\?\s*$/.test(line) && heard.awaiting?.kind !== "title") {
+        heard.awaiting = { kind: "answer", speaker: String(speaker || "").slice(0, 80), until: Date.now() + ANSWER_WAIT_MS };
+      } else if (heard.awaiting?.kind === "answer") {
+        heard.awaiting = null;
+      }
       heard.assistant = [heard.assistant, line].filter(Boolean).join(" ").slice(0, 500);
       noteEchoSpoken(bag, seat.botId, line);
       forgetRedis(() => rememberEchoLines(env, workspace.fetchImpl, seat.botId, bag.echo.get(seat.botId) || []));
@@ -439,19 +482,25 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
       writeEvent(res, "sentence", { text: line, hash });
     }
   };
-  if (pendingHold && asksHoldStatus(text)) {
+  const answeredTitle = awaiting?.kind === "title" ? titleFromAnswer(text, seat.botName) : "";
+  if (awaiting?.kind === "title" && !answeredTitle && cancelsAnswer(text, seat.botName)) {
+    await emit("Okay, I won't file it.", true);
+    await finish();
+    return;
+  }
+  if (pendingHold && asksHoldStatus(text) && !answeredTitle) {
     await emit(holdStatusLine(pendingHold.title), true);
     await finish();
     return;
   }
   const place = approvalPlace(text);
-  if (answer && place) {
+  if (answer && place && !answeredTitle) {
     await emit(place, true);
     await finish();
     return;
   }
   try {
-    await streamVoice({
+    const voiceInput = {
       env,
       fetchImpl: workspace.fetchImpl,
       signal: abort.signal,
@@ -472,7 +521,9 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
       writeEvent: (name, data) => {
         if (!res.writableEnded) writeEvent(res, name, data);
       },
-    });
+    };
+    if (answeredTitle) await fileAnsweredTitle(voiceInput, answeredTitle);
+    else await streamVoice(voiceInput);
   } catch {
     if (!res.writableEnded) writeEvent(res, "error", { reason: "unavailable" });
   } finally {
@@ -480,6 +531,8 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     const live = bag.live.get(seat.botId);
     if (live?.turnId === turn) bag.live.delete(seat.botId);
   }
+  notes.outcomes = toolResults.map((row) => String(row?.status || row?.reason || (row?.ok === false ? "failed" : "ok")).slice(0, 24));
+  notes.awaiting = heard.awaiting?.kind || "";
   const held = toolResults.find((row) => row?.status === "waiting_for_approval" && row?.title);
   if (held) {
     heard.hold = {
@@ -487,8 +540,9 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
       status: "waiting_for_approval",
       speaker: String(speaker || "").slice(0, 80),
     };
-    forgetRedis(() => rememberHeardLine(env, workspace.fetchImpl, seat.botId, heard));
   }
+  // The last word on this turn's open question. The per-line writes above are not awaited and can land out of order.
+  try { await rememberHeardLine(env, workspace.fetchImpl, seat.botId, heard); } catch {}
   await finish(abort.signal.aborted ? { aborted: true } : {});
 }
 
@@ -514,6 +568,28 @@ function noteEchoSpoken(bag, botId, text) {
   const list = (bag.echo.get(botId) || []).filter((row) => now - row.at < 15000);
   list.push({ text: String(text || "").slice(0, 400), at: now });
   bag.echo.set(botId, list.slice(-12));
+}
+
+/** Adam's open question to this speaker in this room, if it has not expired. */
+function awaitingAnswer(prior, speaker, roomId) {
+  const row = prior?.awaiting;
+  if (!row || (row.kind !== "title" && row.kind !== "answer")) return null;
+  if (!(Number(row.until) > Date.now())) return null;
+  if (prior.roomId && roomId && prior.roomId !== roomId) return null;
+  const left = String(row.speaker || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const right = String(speaker || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  if (left && right && left !== right) return null;
+  // A title answer files an issue, so it must come from the named asker.
+  if (row.kind === "title" && (!left || !right)) return null;
+  return row;
+}
+
+/** The floor key meetingLineShouldAnswer compares with. */
+function floorSpeaker(participantId, speaker) {
+  const id = String(participantId || "").trim();
+  if (id) return `id:${id}`;
+  const name = String(speaker || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  return name ? `name:${name}` : "";
 }
 
 function holdForSpeaker(hold, speaker) {
@@ -609,28 +685,48 @@ async function streamVoice(input) {
       messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(outcome.wrapped) });
     }
     if (toolMs) stampClock(input.workspace, input.env, input.botId, input.turnId, "tool", toolMs);
-    const needsTitle = input.toolResults.some((row) => row?.reason === "needs_title");
-    if (needsTitle && input.existingHold?.title) {
-      await input.onText(holdStatusLine(input.existingHold.title), true);
-      return;
-    }
-    const filedRow = input.toolResults.find((row) => row?.status === "filed");
-    if (filedRow) {
-      await input.onText(filedVoiceLine(filedRow.title || ""), true);
-      return;
-    }
-    const failedFile = input.toolResults.find((row) => row?.reason === "file-failed");
-    if (failedFile) {
-      await input.onText("The Linear issue did not go through.", true);
-      return;
-    }
-    const heldRow = input.toolResults.find((row) => row?.status === "waiting_for_approval" || row?.held === true);
-    if (heldRow) {
-      await input.onText(draftedLine(heldRow.tool, heldRow.title), true);
+    const settled = toolResultLine(input.toolResults, input.existingHold);
+    if (settled) {
+      await input.onText(settled, true);
       return;
     }
     full = "";
   }
+}
+
+/** The fixed line after a write tool ran, or "" when the model should speak. */
+function toolResultLine(toolResults, existingHold) {
+  const rows = Array.isArray(toolResults) ? toolResults : [];
+  const needsTitle = rows.some((row) => row?.reason === "needs_title");
+  if (needsTitle && existingHold?.title) return holdStatusLine(existingHold.title);
+  const filedRow = rows.find((row) => row?.status === "filed");
+  if (filedRow) return filedVoiceLine(filedRow.title || "");
+  if (rows.some((row) => row?.reason === "file-failed")) return "The Linear issue did not go through.";
+  const heldRow = rows.find((row) => row?.status === "waiting_for_approval" || row?.held === true);
+  if (heldRow) return draftedLine(heldRow.tool, heldRow.title);
+  return "";
+}
+
+/**
+ * Adam asked this speaker for a title and the line answers it.
+ * The write runs once with the speaker's words. The model is not asked again.
+ */
+async function fileAnsweredTitle(input, title) {
+  const call = { id: `title-${input.turnId}`, name: "act", arguments: { title } };
+  const tool = { name: "act", actionClass: "write" };
+  input.writeEvent("tool_started", { name: call.name });
+  const started = Date.now();
+  const outcome = await runAgentTool({ ...input, call, tool, allowed: new Map([["act", tool]]) });
+  stampClock(input.workspace, input.env, input.botId, input.turnId, "tool", Math.max(1, Date.now() - started));
+  input.toolResults.push(outcome.raw);
+  const line = toolResultLine(input.toolResults, input.existingHold);
+  if (line) {
+    await input.onText(line, true);
+    return;
+  }
+  const reason = outcome.raw?.reason;
+  if (reason === "claimed") return;
+  await input.onText("The Linear issue did not go through.", true);
 }
 
 async function streamOneRound(input) {

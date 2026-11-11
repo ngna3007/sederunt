@@ -542,6 +542,15 @@ export async function loadSpokenTurn(env, fetchImpl, botId, hash) {
   return typeof loaded.result === "string" ? loaded.result : "";
 }
 
+/** Adam asked the speaker a question and waits for the answer until `until`. */
+function cleanAwaiting(value) {
+  if (!value || typeof value !== "object") return null;
+  const kind = value.kind === "title" ? "title" : (value.kind === "answer" ? "answer" : "");
+  const until = Number(value.until);
+  if (!kind || !Number.isFinite(until) || until <= 0) return null;
+  return { kind, speaker: String(value.speaker || "").slice(0, 80), until };
+}
+
 export async function rememberHeardLine(env, fetchImpl, botId, row) {
   const id = cleanBotId(botId);
   const turn = String(row?.turn || "").slice(0, 80);
@@ -559,6 +568,7 @@ export async function rememberHeardLine(env, fetchImpl, botId, row) {
         speaker: String(row.hold.speaker || "").slice(0, 80),
       }
       : null,
+    awaiting: cleanAwaiting(row?.awaiting),
   });
   const saved = await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:heard-line:${id}`, body, "EX", String(LINE_SECONDS)]);
   return saved.ok === true;
@@ -585,6 +595,7 @@ export async function loadHeardLine(env, fetchImpl, botId) {
           speaker: typeof parsed.hold.speaker === "string" ? parsed.hold.speaker : "",
         }
         : null,
+      awaiting: cleanAwaiting(parsed.awaiting),
     };
   } catch {
     return null;
