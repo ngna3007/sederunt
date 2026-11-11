@@ -1559,6 +1559,7 @@ export function createApp(options = {}) {
       const work = (async () => {
         let botId = "";
         let startedAt = "";
+        let sentBy = "";
         let status = "not-configured";
         if (deps.meeting?.join) {
           try {
@@ -1572,7 +1573,7 @@ export function createApp(options = {}) {
             startedAt = typeof sent?.startedAt === "string" ? sent.startedAt : (typeof sent?.started_at === "string" ? sent.started_at : "");
             if (botId && typeof sent?.ear === "string") {
               const joiner = guardConsole(req, env).session;
-              const sentBy = joiner?.kind === "oauth" ? String(joiner.userId || joiner.memberId || "").trim() : "";
+              sentBy = joiner?.kind === "oauth" ? String(joiner.userId || joiner.memberId || "").trim() : "";
               await bindMeetingEar(workspace, sent.ear, botId, env, workspace.fetchImpl).catch(() => {});
               await bindAgentSeat(workspace, {
                 ear: sent.ear,
@@ -1625,7 +1626,12 @@ export function createApp(options = {}) {
               const current = await prepareWorkspace(workspace, joinCompanyId || "", false, 0, hearingTenant);
               await handleUtterance({
                 session: current,
-                openedRoom: { platform, id: botId, ...(startedAt ? { startedAt } : {}) },
+                openedRoom: {
+                  platform,
+                  id: botId,
+                  ...(startedAt ? { startedAt } : {}),
+                  ...(sentBy ? { memberIds: [sentBy] } : {}),
+                },
               }, depsFor(workspace, joinCompanyId || ""));
             } catch {
               // The door already sent the bot. A missed record does not change that word.
@@ -1664,7 +1670,6 @@ export function createApp(options = {}) {
       try {
         const payload = JSON.parse(raw || "{}");
         const person = recallParticipantChange(payload);
-        if (person) rememberMeetingPerson(workspace, person.botId, person, env, workspace.fetchImpl).catch(() => {});
         const delivery = recallTranscriptDelivery(payload);
         const progress = meetingCallUpdate(payload);
         const ended = meetingEnded(payload);
@@ -1719,6 +1724,9 @@ export function createApp(options = {}) {
         // A throw before the save releases the claim so a retry can still record.
         recallWork = (async () => {
           const tasks = [];
+          if (person) {
+            tasks.push(rememberMeetingPerson(workspace, person.botId, person, env, workspace.fetchImpl).catch(() => {}));
+          }
           if (delivery && ownedTranscript) {
             tasks.push((async () => {
               const botId = typeof delivery.room?.id === "string" ? delivery.room.id : "";

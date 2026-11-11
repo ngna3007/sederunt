@@ -7,12 +7,12 @@ import { createSession } from "../src/session.js";
 import { acceptUtterance, approvalPlace, APPROVAL_LINE, concreteTitle, DRAFTED_LINE, draftedLine, endOfTurn, linesForSpeech, readySentences, spokenLines, utteranceToCommit, wordsFromTranscript, withoutBotSpeech } from "../src/meeting/agent.js";
 import { renderCameraPage } from "../src/meeting/camera.js";
 import { meetingMetrics, resetMeetingMetrics } from "../src/meeting/metrics.js";
-import { endAgentSeat, meetingPeopleDirect, noteAgentMember, noteAgentSpeaker, noteMeetingPerson } from "../src/meeting/seat.js";
+import { endAgentSeat, loadMeetingPeople, meetingPeopleDirect, noteAgentMember, noteAgentSpeaker, noteMeetingPerson, rememberMeetingPerson } from "../src/meeting/seat.js";
 import { recallParticipantChange } from "../src/meeting/recall.js";
 import { openRouterSpeechStream } from "../src/openrouter.js";
 import { CONSOLE_COOKIE, sealSession } from "../src/console-auth.js";
 import { createApp } from "../src/server.js";
-import { handleUtterance, rebuildCompanyIndex } from "../src/typed-path.js";
+import { companyBoard, handleUtterance, rebuildCompanyIndex } from "../src/typed-path.js";
 
 const EAR = "ab".repeat(24);
 const EAR_B = "cd".repeat(24);
@@ -1709,19 +1709,24 @@ test("a generic title is refused and a speaker title is kept", () => {
   assert.equal(concreteTitle("create a task on linear"), "");
   assert.equal(concreteTitle("Create a task"), "");
   assert.equal(concreteTitle("please file the ticket"), "");
+  assert.equal(concreteTitle("Can you help me create a task on Linear"), "");
+  assert.equal(concreteTitle("Task for the team"), "");
+  assert.equal(concreteTitle("Fix onboarding"), "Fix onboarding");
   assert.equal(concreteTitle("Fix the onboarding email"), "Fix the onboarding email");
   assert.equal(concreteTitle("x".repeat(121)), "");
   assert.equal(draftedLine("notes__create_note", "Fix the onboarding email"), DRAFTED_LINE);
   assert.equal(draftedLine("linear__create_issue", ""), DRAFTED_LINE);
+  assert.equal(draftedLine("act", "Fix onboarding"), "I've drafted the Linear issue 'Fix onboarding'. Approve it in the Sederunt console, under Activity.");
 });
 
 test("one person with the bot is answered without the name", async () => {
   const meetingVoice = {};
+  const session = createSession();
   const chats = [];
   const { app } = boot(async (url, init) => {
     if (String(url).includes("openrouter.ai")) chats.push(JSON.parse(init.body));
     return { ok: true, status: 200, body: chatStream("We will keep Thursday.") };
-  }, { meetingVoice });
+  }, { meetingVoice, session });
   const port = await listen(app);
   try {
     const headers = { "content-type": "application/json", "x-meeting-ear": EAR };
@@ -1730,11 +1735,17 @@ test("one person with the bot is answered without the name", async () => {
       body: turnBody("what time is the launch", "Priya", { participantId: "7", turn_id: "alone-quiet" }),
     });
     assert.equal(sseEvents(quiet.raw).some((event) => event.name === "sentence"), false);
+    const narration = await call(port, "POST", "/api/meeting/agent/turn", {
+      headers,
+      body: turnBody("Okay, quick solo planning note. We launch November 18.", "Priya", { participantId: "7", turn_id: "alone-note", people: ["7"] }),
+    });
+    assert.equal(sseEvents(narration.raw).some((event) => event.name === "sentence"), false);
     const alone = await call(port, "POST", "/api/meeting/agent/turn", {
       headers,
       body: turnBody("what time is the launch", "Priya", { participantId: "7", turn_id: "alone-yes", people: ["7"] }),
     });
     assert.equal(sseEvents(alone.raw).some((event) => event.data?.text === "We will keep Thursday."), true);
+    assert.equal(session.meetingDirect, undefined);
     const back = await call(port, "POST", "/api/meeting/agent/turn", {
       headers,
       body: turnBody("okay", "Priya", { participantId: "7", turn_id: "alone-okay", people: ["7"] }),
@@ -1774,6 +1785,76 @@ test("one person with the bot is answered without the name", async () => {
   }
 });
 
+test("a later join keeps the person already stored", async () => {
+  const hashes = new Map();
+  const fetchImpl = async (_url, init) => {
+    const command = JSON.parse(init.body);
+    const [op, key, field, value] = command;
+    if (op === "HGETALL") {
+      const hash = hashes.get(key) || {};
+      const flat = [];
+      for (const [name, stored] of Object.entries(hash)) flat.push(name, stored);
+      return { ok: true, json: async () => ({ result: flat }) };
+    }
+    if (op === "HSET") {
+      const hash = hashes.get(key) || {};
+      hash[field] = value;
+      hashes.set(key, hash);
+      return { ok: true, json: async () => ({ result: 1 }) };
+    }
+    if (op === "EXPIRE") return { ok: true, json: async () => ({ result: 1 }) };
+    return { ok: true, json: async () => ({ result: null }) };
+  };
+  const env = { UPSTASH_REDIS_REST_URL: "https://redis.test", UPSTASH_REDIS_REST_TOKEN: "redis-token" };
+  const first = {};
+  const second = {};
+  assert.equal(await rememberMeetingPerson(first, "bot-1", { participantId: "7", name: "Priya", present: true }, env, fetchImpl), true);
+  assert.equal(await rememberMeetingPerson(second, "bot-1", { participantId: "4", name: "", present: true }, env, fetchImpl), true);
+  assert.equal(meetingPeopleDirect(second, "bot-1", { participantId: "99", name: "Adam" }), false);
+  const third = {};
+  assert.equal(await loadMeetingPeople(third, "bot-1", env, fetchImpl), true);
+  assert.equal(meetingPeopleDirect(third, "bot-1", { name: "Adam" }), false);
+  noteMeetingPerson(third, "bot-1", { participantId: "99", name: "Adam", present: true });
+  noteMeetingPerson(third, "bot-1", { participantId: "7", present: false });
+  noteMeetingPerson(third, "bot-1", { participantId: "4", present: false });
+  noteMeetingPerson(third, "bot-1", { participantId: "5", name: "", present: true });
+  assert.equal(meetingPeopleDirect(third, "bot-1", { participantId: "99", name: "Adam" }), true);
+});
+
+test("a solo meeting decision is visible to the launcher", async () => {
+  const session = createSession();
+  const launcher = "user-launcher";
+  const memory = { async remember() { return { blobId: null }; } };
+  await handleUtterance({
+    session,
+    openedRoom: { platform: "Google Meet", id: "bot-solo", memberIds: [launcher] },
+  }, { memory });
+  assert.deepEqual(session.rooms[0].memberIds, [launcher]);
+  const kept = await handleUtterance({
+    session,
+    door: "meeting",
+    text: "Adam, the booth ships on Friday",
+    memberId: "7",
+    addressed: true,
+    room: { id: "bot-solo", botPresent: true, kind: "meeting", source: "recall", memberIds: ["7"] },
+    participants: ["7"],
+    deliveryId: "solo-keep",
+  }, { memory });
+  assert.match(kept.body, /booth ships on Friday/i);
+  const board = companyBoard(session, launcher);
+  assert.equal(board.decisions.some((row) => /booth ships on Friday/i.test(row.text)), true);
+  const recalled = await handleUtterance({
+    session,
+    memberId: launcher,
+    intent: "recall",
+    text: "what was decided",
+    room: { id: "bot-solo", botPresent: true, kind: "meeting" },
+  }, { memory });
+  assert.match(recalled.body, /booth ships on Friday/i);
+  const other = companyBoard(session, "someone-else");
+  assert.equal(other.decisions.some((row) => /booth ships on Friday/i.test(row.text)), false);
+});
+
 test("a held write is spoken as a draft, not as created", () => {
   const spoken = linesForSpeech("I have created a task on linear it is waiting for your approval.", [{ status: "waiting_for_approval" }], { done: true });
   assert.deepEqual(spoken, [DRAFTED_LINE]);
@@ -1784,6 +1865,12 @@ test("a held write is spoken as a draft, not as created", () => {
     data: { title: "Fix the onboarding email" },
   }], { done: true });
   assert.deepEqual(linear, ["I've drafted the Linear issue 'Fix the onboarding email'. Approve it in the Sederunt console, under Activity."]);
+  const acted = linesForSpeech("", [{
+    status: "waiting_for_approval",
+    source: "act",
+    data: { title: "Fix onboarding" },
+  }], { done: true });
+  assert.deepEqual(acted, ["I've drafted the Linear issue 'Fix onboarding'. Approve it in the Sederunt console, under Activity."]);
   assert.equal(approvalPlace("where is the approval?"), APPROVAL_LINE);
   assert.equal(approvalPlace("how do I approve that?"), APPROVAL_LINE);
   assert.equal(approvalPlace("file the launch note"), "");
@@ -2182,6 +2269,11 @@ test("the meeting page asks one person without the name", async () => {
     return { turns, fire, settle, send, advance(ms) { now += ms; } };
   }
   const alone = open({ botName: "Adam", participantId: "99" });
+  alone.send(7, "Priya", "Okay, quick solo planning note. We launch November 18.");
+  alone.advance(1200);
+  alone.fire();
+  await alone.settle();
+  assert.equal(alone.turns().length, 0);
   alone.send(7, "Priya", "what time is the launch");
   alone.advance(1200);
   alone.fire();

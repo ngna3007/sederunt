@@ -1,6 +1,17 @@
 import { addressesHearing, DEFAULT_HEARING_ALIASES, normalizeHearing } from "../hearing.js";
 import { CONVERSATION_MS } from "./speech-gate.js";
 
+/** A solo line is worth an answer when it asks or requests something. Narration is not. */
+export function directRequest(text) {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  const folded = value.toLowerCase().replace(/[^a-z\s']/g, " ").replace(/\s+/g, " ").trim();
+  if (!folded) return false;
+  if (/^(hmm+|hm+|uh+|um+|er+|ah+)$/.test(folded)) return false;
+  if (folded === "okay thanks" || folded === "ok thanks" || folded === "thanks okay" || folded === "okay thank you" || folded === "so yeah" || folded === "let me think") return false;
+  if (/\?\s*$/.test(value)) return true;
+  return /^(what|when|who|where|why|how|can|could|would|should|do|does|is|are|please|create|remind|note|recall|tell)\b/i.test(value);
+}
+
 /**
  * Answer a called line, or the same person while their floor is open.
  * A room with one person and the bot answers that person without the name.
@@ -22,7 +33,7 @@ export function meetingLineShouldAnswer(session, delivery) {
   const speaker = speakerKey(delivery);
   const compose = session?.meetingCompose;
   const composing = Boolean(roomId && compose?.roomId === roomId && compose.speaker);
-  const direct = session?.meetingDirect === true;
+  const direct = session?.meetingDirect === true && directRequest(text);
   if (composing && speaker && speaker !== compose.speaker && !addressed && !direct) return false;
   if (addressed || direct) return true;
   const floor = session?.meetingFloor;

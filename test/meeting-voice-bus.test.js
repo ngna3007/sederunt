@@ -126,10 +126,11 @@ test("the camera tile shows the guest name and answers only when addressed", { t
         other: agent.shouldRespond("And the booth.", "Sam", 2000),
         alone: (function () {
           agent.notePerson("7", "Priya");
-          var yes = agent.shouldRespond("We should ship the booth on Thursday.", "Priya", 2000);
+          var yes = agent.shouldRespond("What should we ship on Thursday?", "Priya", 2000);
+          var note = agent.shouldRespond("Okay, quick solo planning note. We launch November 18.", "Priya", 30000);
           agent.notePerson("8", "Sam");
-          var no = agent.shouldRespond("We should ship the booth on Thursday.", "Sam", 2000);
-          return { yes: yes, no: no };
+          var no = agent.shouldRespond("What should we ship on Thursday?", "Sam", 2000);
+          return { yes: yes, note: note, no: no };
         })(),
         closed: agent.endOfTurn("Keep the launch.", 1200),
         early: agent.endOfTurn("Keep the launch.", 1199),
@@ -145,6 +146,7 @@ test("the camera tile shows the guest name and answers only when addressed", { t
     assert.equal(decision.followAfter, true);
     assert.equal(decision.other, false);
     assert.equal(decision.alone.yes, true);
+    assert.equal(decision.alone.note, false);
     assert.equal(decision.alone.no, false);
     assert.equal(decision.closed, true);
     assert.equal(decision.early, false);

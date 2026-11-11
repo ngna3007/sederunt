@@ -1,4 +1,5 @@
 import { utteranceToCommit } from "./agent.js";
+import { directRequest } from "./voice.js";
 
 /**
  * Output Media shows this page as the meeting camera.
@@ -38,6 +39,7 @@ const AGENT_PAGE = `<!doctype html>
 <script>
 (function () {
   ${utteranceToCommit.toString()}
+  ${directRequest.toString()}
   var params = new URLSearchParams(location.search);
   var guest = document.getElementById("guest");
   var voice = document.getElementById("voice");
@@ -93,7 +95,7 @@ const AGENT_PAGE = `<!doctype html>
     var who = letters(speaker);
     if (who && who === letters(botName)) return false;
     if (participantId && claimedId && String(claimedId) === String(participantId)) return false;
-    if (direct) return true;
+    if (direct && directRequest(said)) return true;
     var clock = typeof now === "number" ? now : Date.now();
     if (new RegExp("\\\\b(" + letters(botName) + "|adam|maple)\\\\b", "i").test(said)) return true;
     if (who && who === letters(floorSpeaker) && clock < floorUntil) return true;

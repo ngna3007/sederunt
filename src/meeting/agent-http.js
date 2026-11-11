@@ -341,7 +341,7 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     }),
   ]);
   const roster = meetingPeopleDirect(workspace, seat.botId, { participantId: seat.participantId, name: seat.botName });
-  session.meetingDirect = roster === true || (roster == null && reportedHumans(body, seat).length === 1);
+  const meetingDirect = roster === true || (roster == null && reportedHumans(body, seat).length === 1);
   const delivery = {
     text,
     partial,
@@ -349,7 +349,7 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     memberId: participantId,
     room: { id: seat.roomId },
   };
-  const answer = Boolean(text) && agentLive(env) && shouldRespond(session, delivery, { name: seat.botName, participantId: seat.participantId });
+  const answer = Boolean(text) && agentLive(env) && shouldRespond({ ...session, meetingDirect }, delivery, { name: seat.botName, participantId: seat.participantId });
   const key = answer ? utteranceKey(text, speaker) : "";
   if (key && !acceptUtterance(bag.recent, seat.botId, key)) {
     await finish({ duplicate: true });

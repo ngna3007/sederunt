@@ -77,28 +77,49 @@ export const DRAFTED_LINE = "I've drafted that request. Approve it in the Sederu
 export const APPROVAL_LINE = "In the Sederunt console, under Activity.";
 export const TITLE_QUESTION = "What should the issue say?";
 
-const VAGUE_WORD = new Set([
-  "a", "an", "the", "task", "tasks", "issue", "issues", "ticket", "tickets",
-  "create", "creating", "file", "filing", "on", "in", "linear", "please", "to", "for", "me", "my",
+const REQUEST_PAIR = [
+  ["can", "you"], ["could", "you"], ["would", "you"], ["help", "me"],
+  ["a", "task"], ["a", "tasks"], ["an", "issue"], ["a", "issue"], ["an", "issues"],
+  ["a", "ticket"], ["a", "tickets"], ["on", "linear"], ["in", "linear"],
+];
+const REQUEST_WORD = new Set([
+  "please", "create", "creating", "make", "making", "add", "adding", "file", "filing",
+  "task", "tasks", "issue", "issues", "ticket", "tickets",
 ]);
+const TITLE_SKIP = new Set(["a", "an", "the", "to", "for", "of", "and", "or", "on", "in", "me", "my", "you", "your"]);
 
-/** A title the speaker actually gave. Empty when it is too short or only a generic request. */
+function titleWord(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+/** A title the speaker actually gave. Request phrasing is removed before the check. */
 export function concreteTitle(value) {
-  const title = String(value || "").replace(/\s+/g, " ").trim();
+  const original = String(value || "").replace(/\s+/g, " ").trim();
+  if (!original || original.length > 120) return "";
+  const words = original.split(" ").filter(Boolean);
+  const kept = [];
+  for (let index = 0; index < words.length; index += 1) {
+    const folded = titleWord(words[index]);
+    const next = titleWord(words[index + 1]);
+    if (REQUEST_PAIR.some((pair) => pair[0] === folded && pair[1] === next)) {
+      index += 1;
+      continue;
+    }
+    if (REQUEST_WORD.has(folded)) continue;
+    kept.push(words[index]);
+  }
+  const title = kept.join(" ").replace(/\s+/g, " ").trim();
   if (title.length < 3 || title.length > 120) return "";
-  const words = title.split(" ").filter(Boolean);
-  if (words.length < 3) return "";
-  const folded = title.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
-  if (!folded || folded === "create a task on linear" || folded === "create a task" || folded === "task" || folded === "issue") return "";
-  const content = folded.split(" ").filter((word) => word && !VAGUE_WORD.has(word));
-  if (!content.length) return "";
+  const content = title.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(" ").filter((word) => word && !TITLE_SKIP.has(word));
+  if (content.length < 2) return "";
   return title.slice(0, 120);
 }
 
-/** The spoken hold. Linear reads the title back. Anything else stays generic. */
+/** The spoken hold. Linear and the built-in act tool read the title back. */
 export function draftedLine(toolName, title) {
   const clean = String(title || "").replace(/['"]/g, "").replace(/\s+/g, " ").trim();
-  if (/^linear__/i.test(String(toolName || "")) && clean) {
+  const name = String(toolName || "");
+  if (clean && (name === "act" || /^linear__/i.test(name))) {
     return `I've drafted the Linear issue '${clean}'. Approve it in the Sederunt console, under Activity.`;
   }
   return DRAFTED_LINE;

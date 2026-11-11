@@ -62,12 +62,24 @@ test("a name, a trigger, and an open hold are worth an answer", () => {
 test("one person with the bot is answered without the name", () => {
   const room = { id: "bot-1" };
   const session = { hearing: { name: "Adam", triggers: ["hey adam"] }, meetingDirect: true };
-  assert.equal(meetingLineShouldAnswer(session, { text: "what time is the launch", room, memberId: "100", speakerName: "Anh" }), true);
-  assert.equal(meetingLineShouldAnswer(session, { text: "okay", room, memberId: "100", speakerName: "Anh" }), false);
-  assert.equal(meetingLineShouldAnswer(session, { text: "thanks", room, memberId: "100", speakerName: "Anh" }), false);
-  assert.equal(meetingLineShouldAnswer(session, { text: "the launch is Thursday", room, memberId: "9", speakerName: "Adam" }), false);
+  const line = (text, memberId = "100", speakerName = "Anh") => ({ text, room, memberId, speakerName });
+  assert.equal(meetingLineShouldAnswer(session, line("what time is the launch")), true);
+  assert.equal(meetingLineShouldAnswer(session, line("Can you hear me?")), true);
+  assert.equal(meetingLineShouldAnswer(session, line("please note the launch")), true);
+  assert.equal(meetingLineShouldAnswer(session, line("okay")), false);
+  assert.equal(meetingLineShouldAnswer(session, line("okay thanks")), false);
+  assert.equal(meetingLineShouldAnswer(session, line("hmm")), false);
+  assert.equal(meetingLineShouldAnswer(session, line("uh…")), false);
+  assert.equal(meetingLineShouldAnswer(session, line("let me think")), false);
+  assert.equal(meetingLineShouldAnswer(session, line("so yeah")), false);
+  assert.equal(meetingLineShouldAnswer(session, line("Okay, quick solo planning note. We launch November 18.")), false);
+  assert.equal(meetingLineShouldAnswer(session, line("Fix the onboarding email")), false);
+  assert.equal(meetingLineShouldAnswer(session, line("Adam, keep Thursday.")), true);
+  assert.equal(meetingLineShouldAnswer(session, line("the launch is Thursday", "9", "Adam")), false);
+  refreshMeetingFloor(session, line("what time is the launch"));
+  assert.equal(meetingLineShouldAnswer(session, line("Fix the onboarding email")), true);
   session.meetingDirect = false;
-  assert.equal(meetingLineShouldAnswer(session, { text: "what time is the launch", room, memberId: "100", speakerName: "Anh" }), false);
+  assert.equal(meetingLineShouldAnswer(session, line("where should we meet", "200", "Lan")), false);
 });
 
 test("the person who called can continue, and someone else is heard but not answered", () => {

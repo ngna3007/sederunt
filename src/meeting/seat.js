@@ -374,7 +374,6 @@ function humanIds(row, bot = {}) {
   for (const [participantId, person] of row.list) {
     if (botParticipant && participantId === botParticipant) continue;
     if (botName && namesMatch(person.name, botName)) continue;
-    if (!String(person?.name || "").trim()) continue;
     humans.push(participantId);
   }
   return humans;
@@ -398,41 +397,70 @@ export function noteMeetingPerson(workspace, botId, person) {
   return true;
 }
 
-export async function rememberMeetingPerson(workspace, botId, person, env = process.env, fetchImpl = fetch) {
-  if (!noteMeetingPerson(workspace, botId, person)) return false;
-  const id = cleanBotId(botId);
-  const row = peopleRow(workspace, id, false);
-  if (!row) return false;
-  const body = JSON.stringify({
-    known: true,
-    people: [...row.list].map(([participantId, item]) => ({ participantId, name: item.name })),
-  });
-  await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:people:${id}`, body, "EX", String(EAR_SECONDS)]);
-  return true;
+function peopleFromHash(result) {
+  const map = new Map();
+  if (Array.isArray(result)) {
+    if (result.length && Array.isArray(result[0])) {
+      for (const pair of result) map.set(String(pair[0] || ""), String(pair[1] ?? ""));
+    } else {
+      for (let index = 0; index + 1 < result.length; index += 2) {
+        map.set(String(result[index] || ""), String(result[index + 1] ?? ""));
+      }
+    }
+  } else if (result && typeof result === "object") {
+    for (const [key, value] of Object.entries(result)) map.set(String(key), String(value ?? ""));
+  }
+  return map;
 }
 
-/** Replace the local roster when Redis has one. A missing key leaves the local roster alone. */
+function applyPersonField(row, participantId, raw) {
+  const id = String(participantId || "").trim().slice(0, 40);
+  if (!row || !id) return;
+  let name = "";
+  let present = true;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      name = String(parsed.name || "");
+      present = parsed.present !== false;
+    } else name = String(raw || "");
+  } catch {
+    name = String(raw || "");
+  }
+  if (!present) row.list.delete(id);
+  else row.list.set(id, { name: name.slice(0, 80) });
+}
+
+/** Read the shared roster and merge it onto this instance. One field does not replace the others. */
 export async function loadMeetingPeople(workspace, botId, env = process.env, fetchImpl = fetch) {
   const id = cleanBotId(botId);
   if (!id || !redisConfigured(env)) return false;
-  const loaded = await redisCommand(env, fetchImpl, ["GET", `sederunt:voice:people:${id}`]);
-  if (typeof loaded.result !== "string" || !loaded.result.startsWith("{")) return false;
-  try {
-    const parsed = JSON.parse(loaded.result);
-    if (!parsed || parsed.known !== true || !Array.isArray(parsed.people)) return false;
-    const row = peopleRow(workspace, id, true);
-    if (!row) return false;
-    row.known = true;
-    row.list = new Map();
-    for (const person of parsed.people) {
-      const participantId = String(person?.participantId || "").trim().slice(0, 40);
-      if (!participantId) continue;
-      row.list.set(participantId, { name: String(person?.name || "").slice(0, 80) });
-    }
-    return true;
-  } catch {
-    return false;
-  }
+  const loaded = await redisCommand(env, fetchImpl, ["HGETALL", `sederunt:voice:people:${id}`]);
+  if (!loaded.ok) return false;
+  const remote = peopleFromHash(loaded.result);
+  if (!remote.size) return false;
+  const row = peopleRow(workspace, id, true);
+  if (!row) return false;
+  row.known = true;
+  for (const [participantId, raw] of remote) applyPersonField(row, participantId, raw);
+  return true;
+}
+
+export async function rememberMeetingPerson(workspace, botId, person, env = process.env, fetchImpl = fetch) {
+  const id = cleanBotId(botId);
+  const participantId = String(person?.participantId || "").trim().slice(0, 40);
+  if (!id || !participantId) return false;
+  await loadMeetingPeople(workspace, id, env, fetchImpl);
+  if (!noteMeetingPerson(workspace, id, person)) return false;
+  if (!redisConfigured(env)) return true;
+  const key = `sederunt:voice:people:${id}`;
+  const body = JSON.stringify({
+    name: String(person?.name || "").slice(0, 80),
+    present: person?.present !== false,
+  });
+  const saved = await redisCommand(env, fetchImpl, ["HSET", key, participantId, body]);
+  if (saved.ok) await redisCommand(env, fetchImpl, ["EXPIRE", key, String(EAR_SECONDS)]);
+  return saved.ok === true;
 }
 
 /** The bot's own participant, from a final whose speaker is the bot. */

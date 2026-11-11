@@ -1592,13 +1592,22 @@ async function openMeetingRoom(session, deps, opened) {
     call: "joining_call",
   };
   if (startedAt) room.startedAt = startedAt;
+  const memberIds = copyMemberIds(opened?.memberIds);
+  if (memberIds.length) room.memberIds = memberIds;
   session.rooms.push(room);
   await remember(deps, {
     account: "company",
     kind: "room",
     text: `${room.id} meeting`,
     idempotencyKey: room.id,
-    room: { id: room.id, kind: "meeting", platform, call: "joining_call", ...(startedAt ? { startedAt } : {}) },
+    room: {
+      id: room.id,
+      kind: "meeting",
+      platform,
+      call: "joining_call",
+      ...(startedAt ? { startedAt } : {}),
+      ...(memberIds.length ? { memberIds } : {}),
+    },
   });
   return finish(session, {
     status: "recorded",
@@ -1688,7 +1697,7 @@ async function storeDecision(input, session, deps, parsed) {
   }
   const room = liveRoom(input);
   if (!room) return refusal(session, "no-room");
-  const inviteMemberIds = Array.isArray(input.participants) && input.participants.length ? input.participants : (room.memberIds || []);
+  const inviteMemberIds = meetingReaders(input, room);
   const invite = checkInvite(input.memberId, inviteMemberIds);
   if (!invite.ok) return refusal(session, invite.reason === "missing-member" ? "missing-member" : "not-invited");
   if (input.intent !== "keep" && looksLikeOpenQuestion(sentence)) {
@@ -2354,6 +2363,7 @@ function copyOpenedRoom(doc) {
   const duration = Number.isFinite(room.duration) && room.duration > 0 ? Math.round(room.duration) : 0;
   const lines = copySpokenLines(room.lines);
   const exchanges = copyExchanges(room.exchanges);
+  const memberIds = copyMemberIds(room.memberIds);
   return {
     id: room.id,
     kind: "meeting",
@@ -2362,9 +2372,41 @@ function copyOpenedRoom(doc) {
     ...(call ? { call } : {}),
     ...(startedAt ? { startedAt } : {}),
     ...(duration ? { duration } : {}),
+    ...(memberIds.length ? { memberIds } : {}),
     ...(lines.length ? { lines } : {}),
     ...(exchanges.length ? { exchanges } : {}),
   };
+}
+
+function copyMemberIds(ids) {
+  if (!Array.isArray(ids)) return [];
+  const out = [];
+  for (const id of ids) {
+    const value = String(id || "").trim().slice(0, 80);
+    if (value && !out.includes(value)) out.push(value);
+    if (out.length >= 40) break;
+  }
+  return out;
+}
+
+function meetingReaders(input, room) {
+  const ids = [];
+  const push = (value) => {
+    const id = String(value || "").trim();
+    if (id && !ids.includes(id)) ids.push(id);
+  };
+  const participants = Array.isArray(input?.participants) ? input.participants : [];
+  const onDelivery = Array.isArray(room?.memberIds) ? room.memberIds : [];
+  const stored = (input?.session?.rooms || []).find((item) => item && item.id === room?.id);
+  const onRoom = Array.isArray(stored?.memberIds) ? stored.memberIds : [];
+  const meeting = input?.door === "meeting" || room?.kind === "meeting" || room?.source === "recall";
+  if (meeting) {
+    for (const id of onRoom) push(id);
+    for (const id of (participants.length ? participants : onDelivery)) push(id);
+    if (ids.length) return ids;
+  }
+  for (const id of (participants.length ? participants : onDelivery)) push(id);
+  return ids;
 }
 
 function absorbOpenedRoom(session, room) {
@@ -2381,6 +2423,10 @@ function absorbOpenedRoom(session, room) {
       existing.lines = room.lines;
     }
     if (Array.isArray(room.exchanges) && room.exchanges.length) existing.exchanges = room.exchanges.slice(-3);
+    for (const id of copyMemberIds(room.memberIds)) {
+      existing.memberIds = Array.isArray(existing.memberIds) ? existing.memberIds : [];
+      if (!existing.memberIds.includes(id)) existing.memberIds.push(id);
+    }
     return;
   }
   session.rooms.push(room);
