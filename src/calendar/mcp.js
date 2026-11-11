@@ -129,7 +129,7 @@ export function createCalendarAdapter(env = process.env, options = {}) {
         const event = eventsFrom(listed).find((item) => item.id === clean);
         if (!event) throw new CalendarError("not-found", "That meeting was not found.");
         return toDetails(event, clean);
-      });
+      }, tokenOpts);
     },
     async updateEventDetails({ id, description, attendees, sendUpdates } = {}) {
       const current = await this.readEventDetails(id);
@@ -144,7 +144,7 @@ export function createCalendarAdapter(env = process.env, options = {}) {
             if (Number(error?.status) === 401) throw error;
             throw asCalendarError(error);
           }
-        });
+        }, tokenOpts);
       }
       return {
         id: current.id,
@@ -158,11 +158,17 @@ export function createCalendarAdapter(env = process.env, options = {}) {
       };
     },
     async call(name, params) {
-      const token = await currentToken(env, fetchImpl, save);
-      if (!token || !name) return { id: "" };
-      if (name === "update_event") return updateEvent(fetchImpl, token, params, zoneOf(env));
-      const result = await toolsCall(fetchImpl, token, name, params || {});
-      return { id: eventIdFrom(result) };
+      // A person's adapter signs with that person's grant, never the process-wide token
+      // (Nov 11 dry run: the in-call create read the env token for a person's calendar).
+      if (!name) return { id: "" };
+      const token = await currentToken(env, fetchImpl, save, tokenOpts);
+      if (!token) return { id: "" };
+      return withCalendarToken(env, fetchImpl, save, async (signed) => {
+        if (name === "update_event") return updateEvent(fetchImpl, signed, params, zoneOf(env));
+        const result = await toolsCall(fetchImpl, signed, name, params || {});
+        const link = eventLinkFrom(result);
+        return link ? { id: eventIdFrom(result), url: link } : { id: eventIdFrom(result) };
+      }, tokenOpts);
     },
   };
 }
@@ -582,6 +588,25 @@ function normalizeAttendees(list) {
     guests.push(guest);
   }
   return guests;
+}
+
+/** Google's own link to the event, when the tool returned one. */
+function eventLinkFrom(result) {
+  const pick = (row) => {
+    const link = String(row?.htmlLink || row?.url || row?.link || "").trim();
+    return /^https:\/\/(?:www\.)?(?:google\.com\/calendar|calendar\.google\.com)\//i.test(link) ? link : "";
+  };
+  const structured = result?.structuredContent;
+  const direct = pick(structured) || pick(structured?.event);
+  if (direct) return direct;
+  const text = (result?.content || []).find((part) => part?.type === "text")?.text || "";
+  try {
+    const parsed = JSON.parse(text);
+    return pick(parsed) || pick(parsed?.event) || "";
+  } catch {
+    const found = text.match(/https:\/\/(?:www\.)?(?:google\.com\/calendar|calendar\.google\.com)\/[^\s"')<>]+/i);
+    return found ? found[0] : "";
+  }
 }
 
 function eventIdFrom(result) {

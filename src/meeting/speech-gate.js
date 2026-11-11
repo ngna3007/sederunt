@@ -25,8 +25,28 @@ function wordsOf(text) {
 export function lineLooksUnfinished(text) {
   const value = String(text || "").trim();
   if (!value || value.endsWith("?")) return false;
+  if (lineWaitsForMore(value)) return true;
   const words = wordsOf(value.replace(/[.,!]+$/g, ""));
   return UNFINISHED_TAIL.has(words[words.length - 1] || "");
+}
+
+/**
+ * A line whose content is still coming: a bare keep cue ("Heads up."), a trailing comma,
+ * or a request that names the tool but not the thing yet ("Adam, create a Linear issue").
+ * Recall's realtime transcript splits such lines at the pause (Nov 11 dry run, bot
+ * b38fa40d). Self-contained: the meeting page runs it from its source text.
+ */
+export function lineWaitsForMore(text) {
+  var value = String(text || "").replace(/\s+/g, " ").trim();
+  if (!value || /\?$/.test(value)) return false;
+  if (/,$/.test(value)) return true;
+  var folded = value.toLowerCase().replace(/[\u2019']/g, "").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  folded = folded.replace(/^(?:(?:hey|hi|ok|okay)\s+)?(?:adam|maple)\s*/, "").trim();
+  if (!folded) return false;
+  if (/^(?:(?:just |a |quick )?heads ?up|fyi|note that|remember this|quick (?:update|note)|just so you know|for the record)$/.test(folded)) return true;
+  if (/\b(?:create|file|open|make|log|add|raise|start|put in|write up)\b(?: [a-z0-9]+){0,3} (?:issue|ticket|task|bug|todo|to do)$/.test(folded)) return true;
+  if (/\b(?:create|file|open|make|log|add|raise)\b(?: [a-z0-9]+){0,2} linear$/.test(folded)) return true;
+  return /\b(?:called|titled|named|saying|for|to)$/.test(folded) && /\b(?:issue|ticket|task|bug|event|meeting|invite|schedule|create|file)\b/.test(folded);
 }
 
 export function lineHoldMs(text) {
