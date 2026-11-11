@@ -19,7 +19,7 @@ revoke all on function private.slack_team_owned_by(uuid, text) from public, anon
 
 -- Link a Slack user to the one confirmed account with that email that is a
 -- member of this tenant. No email, no match, or more than one match removes a
--- previous user link for that Slack user (a guest-owned row is left alone).
+-- previous user link for that Slack user (a guest-owned row keeps only its guest).
 -- Returns the linked user id, or null.
 create or replace function public.slack_identity_link(
   p_tenant uuid, p_team text, p_slack_user text, p_email text, p_display text default null)
@@ -39,11 +39,16 @@ begin
     select array_agg(distinct u.id) into v_ids
     from auth.users u
     join public.memberships m on m.user_id = u.id and m.tenant_id = p_tenant
-    where lower(u.email) = v_email and u.email_confirmed_at is not null;
+    where lower(u.email) = v_email and u.email_confirmed_at is not null
+      and u.deleted_at is null and coalesce(u.is_anonymous, false) = false;
   end if;
   if coalesce(array_length(v_ids, 1), 0) <> 1 then
     delete from public.identities
     where provider = 'slack' and external_workspace_id = p_team and external_user_id = p_slack_user and guest_id is null;
+    -- A guest-owned row that was later linked keeps its guest, never the stale user.
+    update public.identities set user_id = null, linked_at = null
+    where provider = 'slack' and external_workspace_id = p_team and external_user_id = p_slack_user
+      and guest_id is not null and user_id is not null;
     return null;
   end if;
   v_user := v_ids[1];

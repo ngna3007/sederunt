@@ -33,6 +33,8 @@ const people = {
   UBEN: { email: "ben@northline.test", confirmed: true },
   UOUT: { email: "stranger@else.test", confirmed: true },
   UUNC: { email: "anh@northline.test", confirmed: false },
+  // Slack Connect: another organization's user carrying the host's email.
+  UEXT: { email: "anh@northline.test", confirmed: true, team: "TCONNECT" },
 };
 
 function env(extra = {}) {
@@ -64,7 +66,7 @@ function slackApi(log, { channelPrivate = false, members = ["UANH", "UBEN"] } = 
       const id = new URL(href).searchParams.get("user");
       const person = people[id];
       if (!person) return json({ ok: false, error: "user_not_found" });
-      return json({ ok: true, user: { id, is_bot: false, is_email_confirmed: person.confirmed, profile: { email: person.email, real_name: id } } });
+      return json({ ok: true, user: { id, team_id: person.team || "TNORTH", is_bot: false, is_email_confirmed: person.confirmed, profile: { email: person.email, real_name: id } } });
     }
     if (href.includes("conversations.info")) {
       const id = new URL(href).searchParams.get("channel");
@@ -181,6 +183,10 @@ test("users.info: only a confirmed full-member email is offered for linking", as
   assert.equal((await slackUserEmail({ token: "x", slackUserId: "UXX1", fetchImpl: as({ profile: {} }) })).reason, "no-email");
   // Slack omits is_email_confirmed for many workspaces: absence is not "unconfirmed".
   assert.equal((await slackUserEmail({ token: "x", slackUserId: "UXX1", fetchImpl: as({}) })).email, "a@b.test");
+  // Another organization's email (Slack Connect) proves nothing about this tenant.
+  assert.equal((await slackUserEmail({ token: "x", slackUserId: "UXX1", teamId: "TNORTH", fetchImpl: as({ team_id: "TCONNECT" }) })).reason, "external");
+  assert.equal((await slackUserEmail({ token: "x", slackUserId: "UXX1", teamId: "TNORTH", fetchImpl: as({ team_id: "TNORTH", is_stranger: true }) })).reason, "external");
+  assert.equal((await slackUserEmail({ token: "x", slackUserId: "UXX1", teamId: "TNORTH", fetchImpl: as({ team_id: "TNORTH" }) })).email, "a@b.test");
 });
 
 test("link: same-tenant verified email links once; other tenant, unconfirmed, ambiguous or foreign team never link", async () => {
@@ -279,7 +285,7 @@ test("DM from the meeting host's Slack account (same verified email) recalls the
 
 test("DM from a non-matching, other-tenant or unconfirmed Slack user is not linked and gets a reply that leaks nothing", async (t) => {
   const { port, log, identities } = await setup(t);
-  for (const [user, ts] of [["UOUT", "200.1"], ["UBEN", "200.2"], ["UUNC", "200.3"]]) {
+  for (const [user, ts] of [["UOUT", "200.1"], ["UBEN", "200.2"], ["UUNC", "200.3"], ["UEXT", "200.4"]]) {
     log.length = 0;
     const result = await call(port, dm(user, "What happened in the Google Meet we just had?", ts));
     assert.equal(result.status, 200);
@@ -368,4 +374,23 @@ test("resend order: the Walrus copy first, then the decision's Console id, then 
   assert.equal(await storedFileBytes(session, "plan.pdf", deps, {}, null, { walrus: async () => { throw new Error("console down"); } }), "from slack");
   assert.equal(await storedFileBytes(session, "plan.pdf", deps, {}, null, { walrus: async () => null }), "from slack");
   assert.deepEqual(slackReads, ["FPLAN", "FPLAN"]);
+});
+
+test("a channel @mention never answers from the asker's Meet-room memory (everyone in the channel reads the reply)", async (t) => {
+  const { port, log, identities } = await setup(t);
+  for (const [event, ts] of [
+    [{ type: "app_mention", channel: "C0CELAUNCH1", channel_type: "channel" }, "400.1"],
+    [{ type: "message", channel: "G0CEGROUP01", channel_type: "mpim" }, "400.2"],
+  ]) {
+    log.length = 0;
+    const result = await call(port, { type: "event_callback", team_id: "TNORTH", api_app_id: "APP", authorizations: [{ user_id: "UBOTA", is_bot: true }],
+      event: { ...event, user: "UANH", text: "<@UBOTA> What happened in the Google Meet we just had?", ts, client_msg_id: `m-${ts}` } });
+    assert.equal(result.status, 200);
+    assert.doesNotMatch(JSON.stringify(posted(log)), /Friday|meet-room/i, `${event.channel_type} reply stays Slack-only`);
+  }
+  // The same person in a one-to-one DM still gets the Meet-room answer.
+  log.length = 0;
+  await call(port, dm("UANH", "What happened in the Google Meet we just had?", "400.3"));
+  assert.match(posted(log)[0]?.text || "", /Friday/);
+  assert.equal(identities.identities.get("slack|TNORTH|UANH")?.userId, ANH);
 });

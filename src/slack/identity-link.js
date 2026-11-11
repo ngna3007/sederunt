@@ -21,10 +21,10 @@ const NEGATIVE_MS = 60 * 1000;
 /**
  * The verified profile email Slack reports for a person, or why there is none.
  *
- * @param {{ token: string, slackUserId: string, fetchImpl?: typeof fetch }} input
+ * @param {{ token: string, slackUserId: string, teamId?: string, fetchImpl?: typeof fetch }} input
  * @returns {Promise<{ email: string, displayName: string, reason: string }>}
  */
-export async function slackUserEmail({ token, slackUserId, fetchImpl = globalThis.fetch }) {
+export async function slackUserEmail({ token, slackUserId, teamId = "", fetchImpl = globalThis.fetch }) {
   const none = (reason) => ({ email: "", displayName: "", reason });
   if (!token || !SLACK_USER_ID.test(String(slackUserId || ""))) return none("no-user");
   const url = new URL(USERS_INFO_URL);
@@ -36,6 +36,9 @@ export async function slackUserEmail({ token, slackUserId, fetchImpl = globalThi
   if (user.deleted === true) return none("deleted");
   if (user.is_bot === true || user.is_app_user === true || user.id === "USLACKBOT") return none("bot");
   if (user.is_restricted === true || user.is_ultra_restricted === true) return none("guest");
+  // A Slack Connect person from another organization: their org, not this
+  // tenant's, controls that email, so it proves nothing here.
+  if (user.is_stranger === true || (teamId && user.team_id !== teamId)) return none("external");
   // Only an email Slack reports; a field Slack marks unconfirmed is not proof.
   if (user.is_email_confirmed === false) return none("unconfirmed");
   const email = normalizeEmail(user.profile?.email);
@@ -126,7 +129,7 @@ export function createSlackMemberResolver({ store, now = Date.now, positiveMs = 
       if (pending.has(key)) return pending.get(key);
       const work = (async () => {
         try {
-          const person = await slackUserEmail({ token, slackUserId, fetchImpl });
+          const person = await slackUserEmail({ token, slackUserId, teamId, fetchImpl });
           // Still call the store with no email: it drops a stale link for this Slack user.
           const memberId = person.reason === "lookup-failed"
             ? ""

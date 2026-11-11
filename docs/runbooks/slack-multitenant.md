@@ -57,15 +57,18 @@ app configuration or installation is changed by this branch's tests.
 
 - **Who is asking.** On a DM, an @mention, or a file kept in a channel, the
   server calls `users.info` with the tenant's bot token (`users:read.email`).
-  A full member (not a bot, not a guest, not deleted) whose profile email
+  A full member of that same Slack team (not a bot, not a guest, not deleted,
+  not a Slack Connect user from another organization) whose profile email
   Slack does not mark unconfirmed is linked when that email belongs to
   exactly one confirmed account with a membership in the tenant that owns
   the Slack team. The database function re-checks the team ownership, the
   confirmation and the membership. A hit is cached five minutes, a miss one
   minute; a Slack API failure is not cached. No email or no match removes an
   earlier link for that Slack user.
-- **What a linked asker reads.** Their Sederunt id (so Meet rooms they ran)
-  plus their Slack id for records kept in Slack channels. An unlinked asker
+- **What a linked asker reads.** In a one-to-one DM only: their Sederunt id
+  (so Meet rooms they ran) plus their Slack id for records kept in Slack
+  channels. A channel @mention or group DM keeps the Slack-id-only view,
+  because everyone there reads the reply. An unlinked asker
   keeps the old Slack-id-only view. An ask that finds only records the
   asker may not read gets a short "Sorry, I can't share that with you."
   instead of silence.

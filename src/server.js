@@ -2215,7 +2215,9 @@ export function createApp(options = {}) {
         const asker = (question || hasFiles) && delivery.intent !== "delete" && !huddle
           ? await slackAskerLink(workspace, filesRuntime, { tenantId: companyId, teamId: slackTeam, slackUserId: delivery.memberId, token: slackToken, fetchImpl: deps.slack?.fetch })
           : null;
-        const principal = slackReadPrincipal(asker);
+        // The Meet-room view answers only in a one-to-one DM: a channel or group DM
+        // reply is read by everyone there, so it keeps the Slack-id-only view.
+        const principal = question && !slackOneToOne(event) ? null : slackReadPrincipal(asker);
         let storedFile = null;
         let incoming = [];
         let storedFiles = [];
@@ -4234,6 +4236,13 @@ function withinOrNull(promise, ms) {
 }
 
 const SLACK_NOT_SHARED = "Sorry, I can't share that with you.";
+
+/** A one-to-one Slack DM (not a group DM, not a channel). */
+function slackOneToOne(event) {
+  const kind = typeof event?.channel_type === "string" ? event.channel_type.toLowerCase() : "";
+  if (kind) return kind === "im";
+  return typeof event?.channel === "string" && event.channel.startsWith("D");
+}
 
 /** Linked Slack asker, or null. Never throws and never waits long on Slack. */
 async function slackAskerLink(workspace, filesRuntime, { tenantId, teamId, slackUserId, token, fetchImpl }) {

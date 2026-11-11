@@ -45,6 +45,13 @@ test("real Postgres: Slack identity link and channel bind are tenant-scoped, ide
   assert.equal(await link(A, "TNORTH", "UANH", ""), "", "no email");
   assert.equal(await sql(`select count(*) from public.identities where external_user_id = 'UANH'`), "0", "stale link removed");
   assert.equal(await link(A, "TNORTH", "UANH", "anh@northline.test"), ANH);
+  // A Slack user first kept as a guest, later linked, then no longer matching:
+  // the guest stays and the stale user link is cleared (never kept).
+  const guest = await sql(`insert into public.guests (tenant_id, display_name) values ('${A}', 'Guest') returning id`);
+  await sql(`delete from public.identities where external_user_id = 'UGST'; insert into public.identities (provider, external_workspace_id, external_user_id, guest_id) values ('slack', 'TNORTH', 'UGST', '${guest.split("\n")[0]}')`);
+  assert.equal(await link(A, "TNORTH", "UGST", "anh@northline.test"), ANH);
+  assert.equal(await link(A, "TNORTH", "UGST", "someone@else.test"), "");
+  assert.equal(await sql(`select coalesce(user_id::text, 'none') || ':' || (guest_id is not null) from public.identities where external_user_id = 'UGST'`), "none:true");
   for (const role of ["anon", "authenticated"]) {
     await assert.rejects(() => sql(`set role ${role}; select public.slack_identity_link('${A}', 'TNORTH', 'UANH', 'anh@northline.test', null)`), /permission denied/);
     await assert.rejects(() => sql(`set role ${role}; select public.slack_channel_bind('${A}', 'TNORTH', 'C0CELAUNCH1', '${workspaceChannelId(A)}')`), /permission denied/);
