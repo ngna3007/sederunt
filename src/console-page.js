@@ -5164,14 +5164,25 @@ if (sessionWhen && sessionWhen.dataset.at) {
     var missingSpan = !room.spanKnown && (!(room.startedAt || room.recordingStart) || !(room.duration > 0));
     if ((terminal || settled) && !missingSpan) return false;
     var seen = progressAt[room.id] || 0;
+    // A finished room is asked once per page load: polling ten old rooms every
+    // minute kept Walrus busy during a live call (dry run 2, Nov 11).
+    if ((terminal || settled) && seen) return false;
+    var began = Date.parse(room.startedAt || room.recordingStart || "") || 0;
+    if (seen && began && Date.now() - began > 6 * 3600 * 1000) return false;
     var wait = room.call && !terminal ? 15000 : 60000;
     return Date.now() - seen >= wait;
   }
 
   function refreshMeetingProgress() {
-    var rooms = (state && state.rooms) || [];
-    rooms.forEach(function (room) {
-      if (!meetingNeedsProgress(room)) return;
+    var rooms = ((state && state.rooms) || []).filter(meetingNeedsProgress);
+    // Live calls first, and at most two asks per tick, so a page load does not
+    // fire one media request per old room at once.
+    rooms.sort(function (a, b) {
+      var liveA = a.call && a.call !== "done" && a.call !== "call_ended" && a.call !== "fatal" ? 0 : 1;
+      var liveB = b.call && b.call !== "done" && b.call !== "call_ended" && b.call !== "fatal" ? 0 : 1;
+      return liveA - liveB;
+    });
+    rooms.slice(0, 2).forEach(function (room) {
       progressAt[room.id] = Date.now();
       var asked = room.id;
       fetch("/console/rooms/" + encodeURIComponent(asked) + "/media" + consoleQuery()).then(function (response) {
@@ -5192,7 +5203,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
           paintArtifacts(media);
           renderTranscript(transcriptSource());
         }
-      }).catch(function () {});
+      }).catch(function () {}).then(function () {
+        // The next rooms in line are asked after this one answers.
+        setTimeout(refreshMeetingProgress, 500);
+      });
     });
   }
 

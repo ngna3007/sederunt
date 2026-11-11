@@ -70,7 +70,7 @@ function restConfig(env) {
   return { url, token };
 }
 
-function redisConfigured(env) {
+export function redisConfigured(env) {
   if (restConfig(env)) return true;
   return Boolean(String(env?.REDIS_URL || env?.KV_URL || "").trim());
 }
@@ -561,6 +561,17 @@ export async function releaseAgentTurn(env, fetchImpl, botId, turnId) {
   return true;
 }
 
+/** Release the turn only while it is still the current one; a newer turn is left alone. */
+export async function releaseNamedAgentTurn(env, fetchImpl, botId, turnId) {
+  const id = cleanBotId(botId);
+  const token = String(turnId || "").slice(0, 80);
+  if (!id || !token) return false;
+  const loaded = await redisCommand(env, fetchImpl, ["GET", `sederunt:voice:turn:${id}`]);
+  if (!loaded.ok || loaded.result !== token) return false;
+  await redisCommand(env, fetchImpl, ["SET", `sederunt:voice:turn:${id}`, `cancel:${token}`, "EX", String(TURN_SECONDS)]);
+  return true;
+}
+
 /** True when this turn id is the first claim. No Redis means the caller decides locally. */
 export async function rememberAgentTurn(env, fetchImpl, botId, turnId) {
   const id = cleanBotId(botId);
@@ -830,4 +841,40 @@ export async function takeKeepCue(workspace, botId, lane, speaker, env = process
   const taken = await redisCommand(env, fetchImpl, ["GETDEL", key]);
   if (taken.ok) return taken.result === "1";
   return typeof local === "number" && local > Date.now();
+}
+
+const LANE_SECONDS = 120;
+
+/**
+ * One outcome per turn, shared by instances: the turn starts a write, or the page
+ * takes it back (superseded). The first mark wins; the return is the winner.
+ * A turn that started a write is never cancelled, so its line is not asked
+ * again and filed twice.
+ *
+ * @param {"write" | "cancel"} mark
+ */
+export async function markTurnLane(workspace, botId, turnId, mark, env = process.env, fetchImpl = fetch) {
+  const id = cleanBotId(botId);
+  const turn = String(turnId || "").slice(0, 80);
+  if (!id || !turn || (mark !== "write" && mark !== "cancel")) return mark;
+  const key = `sederunt:voice:lane:${id}:${createHash("sha256").update(turn).digest("hex").slice(0, 24)}`;
+  const bag = bagOf(workspace);
+  if (bag && !(bag.lanes instanceof Map)) bag.lanes = new Map();
+  const local = bag?.lanes;
+  if (local && local.size > 500) local.clear();
+  if (redisConfigured(env)) {
+    const set = await redisCommand(env, fetchImpl, ["SET", key, mark, "NX", "EX", String(LANE_SECONDS)]);
+    if (set.ok && set.result === "OK") {
+      local?.set(key, mark);
+      return mark;
+    }
+    if (set.ok) {
+      const read = await redisCommand(env, fetchImpl, ["GET", key]);
+      if (read.ok && (read.result === "write" || read.result === "cancel")) return read.result;
+    }
+  }
+  const known = local?.get(key);
+  if (known) return known;
+  local?.set(key, mark);
+  return mark;
 }

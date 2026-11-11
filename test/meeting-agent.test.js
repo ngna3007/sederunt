@@ -311,7 +311,7 @@ test("a second transcript of the same words does not open another turn", () => {
   assert.equal(start > 0 && tail > start, true);
   assert.equal(page.includes(utteranceToCommit.toString()), true);
   assert.match(page, /utteranceToCommit\(committed, message/);
-  assert.match(page, /if \(!heard\.open\) return/);
+  assert.match(page, /if \(!heard\.open\) \{/);
   const fromPage = vm.runInNewContext(`${page.slice(start, tail)}\nutteranceToCommit`);
   assert.equal(fromPage(null, partial, bot).open, false);
   assert.equal(fromPage({ text: first.text, speaker: first.speaker }, finalWords, bot).open, false);

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { lookupByEmail } from "./slack/match.js";
 import { createDeletionStore, createLocalDeletionStore, withDeletionOverlay, filterDeletedDecisions, deletionMatches } from "./memory/deletions.js";
 import { drainDeletions } from "./memory/deletion-worker.js";
+import { drainMemoryRetries, withRateLimitRetry } from "./memory/retry.js";
 import { scopeAskStore } from "./ask/context.js";
 import { createParticipantBindings } from "./participant-bindings.js";
 import { consolePrincipal } from "./console-principal.js";
@@ -31,7 +32,7 @@ import { renderCameraPage } from "./meeting/camera.js";
 import { handleMeetingAgent, keptAfterCue } from "./meeting/agent-http.js";
 import { isBareKeepCue } from "./meeting/voice-write.js";
 import { loadSpikeShapes, measureSpeechProbe, pushSpikeShape, readSpikeShapes, saveSpikeShape, spikeAuthorized, spikeEnabled, transcriptEventShape } from "./meeting/spike.js";
-import { bindAgentSeat, bindMeetingEar, finishAgentSeat, rememberAgentMember, rememberAgentSeat, rememberAgentSpeaker, rememberKeepCue, rememberMeetingHost, rememberMeetingPerson, sharedRedisCommand, takeKeepCue, validMeetingEar } from "./meeting/seat.js";
+import { bindAgentSeat, bindMeetingEar, finishAgentSeat, rememberAgentMember, rememberAgentSeat, rememberAgentSpeaker, rememberKeepCue, rememberMeetingHost, rememberMeetingPerson, redisConfigured, sharedRedisCommand, takeKeepCue, validMeetingEar } from "./meeting/seat.js";
 import { createMeetingAdapter, mediaFromBot, meetingCallUpdate, meetingDoorReady, meetingEnded, recallBotUrl, recallParticipantChange, recallTranscriptDelivery, transcriptLines, verifyRecallRequest } from "./meeting/recall.js";
 import { claimMeetingEvent, claimMeetingEventLocal, meetingEventKey, releaseMeetingEvent, releaseMeetingEventLocal } from "./meeting/events.js";
 import { keepRoomTranscript, rememberMeetingLine } from "./meeting/speech-gate.js";
@@ -548,8 +549,9 @@ function followupStillDue(row, now) {
 const RECALL_READ_MS = 8000;
 const MEDIA_INDEX_WAIT_MS = 12_000;
 const SAVE_KEEP_MS = 55_000;
+const MEDIA_KEEP_BUDGET_MS = 50_000;
+const MEDIA_STEP_MS = 8_000;
 // A media save already made is not made again for a week (per content fingerprint).
-const MEDIA_SAVED_TTL_S = 7 * 24 * 3600;
 // Room activity mirrored in Redis so a just-finished meeting shows its rows
 // on any instance, without waiting for a Walrus Memory search.
 const ROOM_ACTIVITY_TTL_S = 14 * 24 * 3600;
@@ -630,6 +632,12 @@ export function createApp(options = {}) {
   workspace.fetchImpl = options.fetch || globalThis.fetch;
   workspace.recallReadMs = Number(options.recallReadMs) > 0 ? Number(options.recallReadMs) : RECALL_READ_MS;
   workspace.mediaIndexWaitMs = Number(options.mediaIndexWaitMs) > 0 ? Number(options.mediaIndexWaitMs) : MEDIA_INDEX_WAIT_MS;
+  // The media route hands roomMedia a copy of the workspace; these must be
+  // shared objects, or each request starts with an empty cache.
+  workspace.mediaCache = new Map();
+  workspace.mediaFlight = new Map();
+  workspace.mediaRoomsSaved = new Set();
+  workspace.mediaRoomQueue = { tail: Promise.resolve() };
   if (Array.isArray(options.agentSeats)) {
     for (const seat of options.agentSeats) rememberAgentSeat(workspace, seat);
   }
@@ -686,6 +694,8 @@ export function createApp(options = {}) {
       },
     });
     if (filesRuntime?.kick) await filesRuntime.kick();
+    const retried = kickMemoryRetries(workspace);
+    if (retried) result.memoryRetries = await retried;
     if (workspace.followups && workspace.followupStore) {
       // Drain leaves an exhausted failure where it is, so the oldest page must not hide a later tenant.
       const now = Date.now();
@@ -958,6 +968,7 @@ export function createApp(options = {}) {
       return;
     }
     if (req.method === "GET" && /^\/console\/rooms\/[^/]+\/media$/.test(url.pathname)) {
+      const mediaStartedAt = Date.now();
       const gate = guardConsole(req, env);
       if (gate.required && !gate.session) {
         send(res, 401, "application/json; charset=utf-8", JSON.stringify({ error: "Sign in." }));
@@ -976,7 +987,7 @@ export function createApp(options = {}) {
       const hearingTenant = (typeof resolved.companyId === "string" && resolved.companyId.trim()) || "local";
       // Preparing the room reads the guest again. A failed follow-up read keeps the recording closed.
       try {
-        await readBot(workspace.botPreferences, hearingTenant);
+        await withinMs(readBot(workspace.botPreferences, hearingTenant), MEDIA_STEP_MS);
       } catch {
         const denied = new Error("The hearing record could not be read.");
         denied.status = 503;
@@ -994,10 +1005,16 @@ export function createApp(options = {}) {
         send(res, 404, "application/json; charset=utf-8", JSON.stringify({ error: "That room is not available." }));
         return;
       }
-      const media = await roomMedia({ ...workspace, session: current, mediaTenantId: resolved.companyId, sessionReady: true }, id);
+      // Background saves stop before the 60 s function limit counted from the
+      // request start (b38fa40d timed out: a 55 s keep began ~20 s in).
+      const media = await withinOrNull(roomMedia({ ...workspace, session: current, mediaTenantId: resolved.companyId, sessionReady: true, keepUntil: mediaStartedAt + MEDIA_KEEP_BUDGET_MS }, id), MEDIA_STEP_MS * 2);
+      if (!media) {
+        send(res, 503, "application/json; charset=utf-8", JSON.stringify({ state: "loading", retryMs: 15000 }), { "retry-after": "15" });
+        return;
+      }
       // Activity rows for this room from the Redis mirror, so a meeting that just
       // ended shows what Adam did even when this instance's index predates it.
-      const body = { ...media, activity: await roomActivityFor(workspace, current, resolved.companyId, id) };
+      const body = { ...media, activity: await within(roomActivityFor(workspace, current, resolved.companyId, id), MEDIA_STEP_MS, []) };
       const secret = typeof env.RECALL_API_KEY === "string" ? env.RECALL_API_KEY : "";
       const raw = secret.length >= 12 ? JSON.stringify(body).split(secret).join("") : JSON.stringify(body);
       send(res, 200, "application/json; charset=utf-8", raw);
@@ -1337,6 +1354,7 @@ export function createApp(options = {}) {
       return;
     }
     if (url.pathname.startsWith("/api/meeting/agent/")) {
+      if (url.pathname === "/api/meeting/agent/log") kickMemoryRetries(workspace);
       const handled = await handleMeetingAgent({
         req,
         res,
@@ -1757,6 +1775,8 @@ export function createApp(options = {}) {
         // Signature and tenant checks are done. The index and the saved line
         // follow the ack. waitUntil keeps that work alive on Vercel.
         // A throw before the save releases the claim so a retry can still record.
+        // Facts a Walrus 429 queued earlier are written while the meeting runs.
+        kickMemoryRetries(workspace);
         recallWork = (async () => {
           const tasks = [];
           if (person) {
@@ -3188,17 +3208,50 @@ function depsFor(workspace, companyId, unfiltered = false) {
   const slackScoped = slackOn ? { slack: tenantSlackClient(workspace, tenantId) } : {};
   const linearScoped = linearDeps(workspace, tenantId, appBase);
   if (tenantId) deletionDeps.mirrorActivity = (event) => mirrorRoomActivity(workspace, tenantId, event);
-  if (workspace.companies) {
-    return { ...workspace.deps, ...slackScoped, ...linearScoped, ...deletionDeps, memory: filtered(workspace.companies[id]), tenantId };
-  }
-  const memory = bindMemoryTenant(
+  const memory = retryingMemory(workspace, tenantId, rawMemoryFor(workspace, companyId));
+  return { ...workspace.deps, ...slackScoped, ...linearScoped, ...deletionDeps, memory: filtered(memory), tenantId };
+}
+
+/** The tenant-bound Walrus Memory client, without retries or deletion overlay. */
+function rawMemoryFor(workspace, companyId) {
+  const id = companyKey(workspace, companyId);
+  if (workspace.companies) return workspace.companies[id];
+  return bindMemoryTenant(
     workspace.deps.memory,
-    tenantId,
+    id === "company" ? "" : id,
     workspace.env,
     workspace.memwalClient,
     workspace.deps.tatum,
   );
-  return { ...workspace.deps, ...slackScoped, ...linearScoped, ...deletionDeps, memory: filtered(memory), tenantId };
+}
+
+/** A 429 backs off and retries; a fact still refused is queued in Redis. */
+function retryingMemory(workspace, tenantId, memory) {
+  const env = workspace.env || {};
+  const fetchImpl = workspace.fetchImpl || globalThis.fetch;
+  return withRateLimitRetry(memory, {
+    tenantId,
+    redis: redisConfigured(env) ? (command) => sharedRedisCommand(env, fetchImpl, command) : null,
+    log: typeof workspace.deps?.log === "function" ? workspace.deps.log : undefined,
+    ...(workspace.memoryRetry || {}),
+  });
+}
+
+/** Write facts a 429 queued. At most one drain per instance every 20 s. */
+export function kickMemoryRetries(workspace) {
+  const env = workspace.env || {};
+  if (!redisConfigured(env)) return null;
+  const now = Date.now();
+  if (workspace.memoryRetryAt && now - workspace.memoryRetryAt < 20_000) return null;
+  workspace.memoryRetryAt = now;
+  const fetchImpl = workspace.fetchImpl || globalThis.fetch;
+  const work = drainMemoryRetries({
+    redis: (command) => sharedRedisCommand(env, fetchImpl, command),
+    memoryFor: (tenantId) => rawMemoryFor(workspace, tenantId),
+    log: typeof workspace.deps?.log === "function" ? workspace.deps.log : undefined,
+  }).catch(() => ({ drained: 0 }));
+  if (env.VERCEL) import("@vercel/functions").then(({ waitUntil }) => waitUntil(work)).catch(() => {});
+  return work;
 }
 
 function linearDeps(workspace, tenantId, app) {
@@ -3783,9 +3836,10 @@ async function roomMedia(workspace, id) {
 
 /** Work that outlives the response: kept alive on Vercel, bounded, never awaited by it. */
 function keepSaving(workspace, work) {
+  const left = Number.isFinite(workspace.keepUntil) ? Math.max(0, workspace.keepUntil - Date.now()) : SAVE_KEEP_MS;
   const bounded = Promise.race([
     work.catch(() => {}),
-    new Promise((resolve) => { const timer = setTimeout(resolve, SAVE_KEEP_MS); timer.unref?.(); }),
+    new Promise((resolve) => { const timer = setTimeout(resolve, Math.min(SAVE_KEEP_MS, left)); timer.unref?.(); }),
   ]);
   workspace.mediaSaves ??= new Set();
   workspace.mediaSaves.add(bounded);
@@ -3797,46 +3851,55 @@ function keepSaving(workspace, work) {
   }
 }
 
+const MEDIA_ENDED_CALLS = new Set(["done", "call_ended", "fatal", "analysis_done", "media_expired"]);
+const MEDIA_ROOM_SAVED_TTL_S = 30 * 24 * 3600;
+const MEDIA_ROOM_RETRY_TTL_S = 15 * 60;
+
 /**
- * Tenant deps whose memory skips a write already made with the same content.
- * The claim is a Redis SET NX on a content fingerprint (shared by instances),
- * with an in-process set as the fallback; a failed write releases it.
+ * One background Walrus write for an ended room, at most once per room: a
+ * shared Redis claim (SET NX) stops other instances and later polls. A failed
+ * write keeps a short claim, so a room is retried at most every 15 minutes.
+ * Writes from this process run one at a time.
  */
-function onceSavedDeps(workspace, tenant) {
+function saveRoomOnce(workspace, tenant, id, collected) {
   const deps = depsFor(workspace, tenant);
   const memory = deps.memory;
-  if (!memory || typeof memory.remember !== "function") return deps;
+  if (!memory || typeof memory.remember !== "function") return;
   const env = workspace.env || {};
   const fetchImpl = workspace.fetchImpl || globalThis.fetch;
-  const gated = Object.create(memory);
-  gated.remember = async (input) => {
-    const print = createHash("sha256").update(JSON.stringify([
-      deps.tenantId || "", input?.kind || "", input?.text || "", input?.idempotencyKey || "", input?.room ?? null,
-    ]), "utf8").digest("hex").slice(0, 32);
-    workspace.mediaSaved ??= new Set();
-    if (workspace.mediaSaved.has(print)) return { blobId: null, skipped: true };
-    if (workspace.mediaSaved.size >= 5000) workspace.mediaSaved.clear();
-    workspace.mediaSaved.add(print);
-    const key = `sederunt:media-saved:${print}`;
-    const claim = await within(sharedRedisCommand(env, fetchImpl, ["SET", key, "1", "NX", "EX", String(MEDIA_SAVED_TTL_S)]), 1500, { ok: false });
-    if (claim?.ok && claim.result && Object.prototype.hasOwnProperty.call(claim.result, "result") && claim.result.result === null) {
-      return { blobId: null, skipped: true };
-    }
-    const release = () => {
-      workspace.mediaSaved.delete(print);
-      if (claim?.ok) sharedRedisCommand(env, fetchImpl, ["DEL", key]).catch(() => {});
-    };
-    let saved;
+  const room = Object.assign({}, ...collected.map((input) => (input?.room && typeof input.room === "object" ? input.room : {})));
+  const lines = collected.map((input) => input?.room?.lines).filter(Array.isArray).sort((a, b) => b.length - a.length)[0];
+  if (lines) room.lines = lines;
+  // Recall often ends the call before the transcript and recording span are ready.
+  // Each stage (ended, + lines, + span) is written once, so a room written at
+  // call_ended still gets its transcript later: at most three writes per room.
+  const stage = `${lines?.length ? "l" : ""}${Number(room.duration) > 0 && room.startedAt ? "s" : ""}` || "e";
+  const local = `${deps.tenantId || ""}:${id}:${stage}`;
+  workspace.mediaRoomsSaved ??= new Set();
+  if (workspace.mediaRoomsSaved.has(local)) return;
+  if (workspace.mediaRoomsSaved.size >= 5000) workspace.mediaRoomsSaved.clear();
+  workspace.mediaRoomsSaved.add(local);
+  const print = createHash("sha256").update(JSON.stringify(room), "utf8").digest("hex").slice(0, 12);
+  const input = { ...collected[collected.length - 1], account: "company", kind: "room", text: `${id} meeting`, idempotencyKey: `${id}:media:${print}`, room };
+  const key = `sederunt:media-room-saved:${deps.tenantId || "local"}:${id}:${stage}`;
+  const run = async () => {
+    const claim = await within(sharedRedisCommand(env, fetchImpl, ["SET", key, "1", "NX", "EX", String(MEDIA_ROOM_SAVED_TTL_S)]), 1500, { ok: false });
+    if (claim?.ok && claim.result && Object.prototype.hasOwnProperty.call(claim.result, "result") && claim.result.result === null) return;
+    let saved = null;
     try {
       saved = await memory.remember(input);
-    } catch (error) {
-      release();
-      throw error;
+    } catch {
+      saved = null;
     }
-    if (!saved || saved.ok === false || !saved.blobId) release();
-    return saved;
+    if (!saved || saved.ok === false) {
+      if (claim?.ok) await sharedRedisCommand(env, fetchImpl, ["SET", key, "retry", "EX", String(MEDIA_ROOM_RETRY_TTL_S)]).catch(() => {});
+      else workspace.mediaRoomsSaved.delete(local);
+    }
   };
-  return { ...deps, memory: gated };
+  workspace.mediaRoomQueue ??= { tail: Promise.resolve() };
+  const work = workspace.mediaRoomQueue.tail.then(run, run);
+  workspace.mediaRoomQueue.tail = work.catch(() => {});
+  keepSaving(workspace, work);
 }
 
 function roomActivityKey(tenantId, roomId) {
@@ -3937,27 +4000,31 @@ async function loadRoomMedia(workspace, id, current, empty) {
     }
   }
   const tenant = typeof workspace.mediaTenantId === "string" ? workspace.mediaTenantId : "";
-  // Each of these updates the room in this process at once and then saves it to
-  // Walrus Memory, which takes 20-45 s a write. Awaited in series they ran the
-  // media request past the 60 s limit (Nov 11, /console/rooms/ae224b81.../media
-  // timed out at 08:18:16 UTC). The saves finish after the response.
-  // Polls repeat these saves from every instance; a save whose content was
-  // already written (by any instance) is skipped, so polls do not spam Walrus.
-  const saving = onceSavedDeps(workspace, tenant);
-  const saves = [];
+  // These update the room in this process at once. Nothing here writes to
+  // Walrus Memory per poll: a page load polled ten old rooms, each save was a
+  // 20-45 s Walrus job, and the burst used the 180 requests/min key limit, so a
+  // live meeting's heads-up fact failed with 429 (dry run 2, Nov 11 09:41 UTC).
+  // The room's rows are collected and, once the call has ended, written as one
+  // row, once per room (a shared claim), in the background.
+  const collected = [];
+  const collecting = {
+    ...depsFor(workspace, tenant),
+    memory: { async remember(input) { collected.push(input); return { blobId: null, collected: true }; } },
+  };
   if (body.call) {
-    saves.push(noteMeetingCall(current, saving, id, body.call));
+    await noteMeetingCall(current, collecting, id, body.call).catch(() => {});
   }
   const room = (current.rooms || []).find((item) => item.id === id);
   if (Array.isArray(body.lines) && body.lines.length) {
-    saves.push(noteMeetingLines(current, saving, id, body.lines));
+    await noteMeetingLines(current, collecting, id, body.lines).catch(() => {});
   } else if (Array.isArray(room?.lines) && room.lines.length) {
     body.lines = room.lines;
   }
   if (body.startedAt || body.duration > 0) {
-    saves.push(persistRecordingSpan(workspace, current, id, body.startedAt, body.duration, saving.memory));
+    await persistRecordingSpan(workspace, current, id, body.startedAt, body.duration, collecting.memory);
   }
-  if (saves.length) keepSaving(workspace, Promise.allSettled(saves));
+  const ended = MEDIA_ENDED_CALLS.has(String(body.call || room?.call || ""));
+  if (collected.length && ended) saveRoomOnce(workspace, tenant, id, collected);
   if (body.title) {
     current.roomNames ??= {};
     if (!current.roomNames[id]) current.roomNames[id] = body.title;
@@ -4062,6 +4129,15 @@ async function slackBytes(env, deps, file) {
   if (env.SLACK_BOT_TOKEN) return slackFileBytes({ token: env.SLACK_BOT_TOKEN, file, fetchImpl: deps.slack?.fetch });
   if (typeof deps.slack?.downloadFile === "function") return deps.slack.downloadFile(file);
   return null;
+}
+
+/** The work's value, or null once `ms` pass; a rejection still throws. */
+function withinOrNull(promise, ms) {
+  let timer;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((resolve) => { timer = setTimeout(() => resolve(null), ms); timer.unref?.(); }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 function withinMs(promise, ms) {

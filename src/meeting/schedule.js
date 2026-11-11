@@ -83,7 +83,30 @@ export function scheduledVoiceLine(input = {}) {
   const now = input.now instanceof Date ? input.now : new Date();
   if (!start) return `I scheduled ${title}.`;
   const when = formatWhen(start, timeZone, now);
-  return when ? `I scheduled ${title} for ${when}.` : `I scheduled ${title}.`;
+  // The time is said once: a title that still carries it is cut back first.
+  const named = when && stripWhenWords(title) !== title ? (tidyEventTitle(title) || title) : title;
+  return when ? `I scheduled ${named} for ${when}.` : `I scheduled ${named}.`;
+}
+
+/**
+ * An event title without the request around it: "Schedule a launch sync
+ * tomorrow at 10 am" is "Launch sync". A title that is already clean is kept.
+ * @param {string} value
+ */
+export function tidyEventTitle(value) {
+  let text = String(value || "").replace(/\s+/g, " ").trim().replace(/[.!?]+$/g, "").trim();
+  if (!text) return "";
+  const original = text;
+  const timed = DATE_MD.test(text) || WEEKDAY.test(text) || DAY_WORD.test(text) || TIME_AMPM.test(text) || TIME_BARE.test(text) || /\b(?:at|@)\s*\d/i.test(text) || /\bnoon\b/i.test(text);
+  const asked = /^(?:(?:hey|hi|ok|okay|please|so|adam|maple)\b[,.\s]*)*(?:(?:a|an|the|to|i)\s+)?(?:schedule|scheduled|set\s+up|setup|book|booked)\b/i.test(text);
+  if (!timed && !asked) return original;
+  text = text.replace(LEAD, "");
+  text = text.replace(/^(?:(?:a|an|the|to|i)\s+)?(?=(?:schedule|scheduled|set\s+up|setup|book|booked|create|add|put)\b)/i, "");
+  const request = /^(?:schedule|scheduled|set\s+up|setup|book|booked|create|add|put)\s+(?:(?:a|an|the|in|on)\s+)*/i.exec(text);
+  if (request) text = text.slice(request[0].length);
+  text = text.replace(/^(?:a|an|the)\s+/i, "");
+  if (!text) return "";
+  return eventTitle(text);
 }
 
 function eventTitle(body) {

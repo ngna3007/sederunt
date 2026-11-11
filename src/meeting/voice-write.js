@@ -1,4 +1,4 @@
-import { parseScheduleUtterance, parseWhenAnswer, scheduledVoiceLine as scheduledLine } from "./schedule.js";
+import { parseScheduleUtterance, parseWhenAnswer, scheduledVoiceLine as scheduledLine, tidyEventTitle } from "./schedule.js";
 export { parseWhenAnswer };
 
 const ROLE_MARK = /(?:^|\n)\s*(?:system|assistant|user|tool)\s*:/gi;
@@ -352,6 +352,18 @@ function stripLead(text) {
 export function applyScheduleDefaults(args, utterance, options = {}) {
   const filled = fillAliasedArgs(args);
   const parsed = parseScheduleUtterance(utterance, { now: options.now, timeZone: options.timeZone, env: options.env }) || { title: "", start: "", end: "", timeZone: options.timeZone || "", missing: "when" };
+  // A title that is the spoken request ("Schedule a launch sync tomorrow at 10
+  // am") is cut to the event's name ("Launch sync"), from the model or from a
+  // misread answer (dry run 2, bot 0fde3ab3).
+  for (const field of ["title", "summary", "name", "subject", "text"]) {
+    const given = typeof filled[field] === "string" ? filled[field].trim() : "";
+    if (!given) continue;
+    const tidy = tidyEventTitle(given);
+    if (tidy && tidy.toLowerCase() !== given.toLowerCase().replace(/[.!?]+$/, "")) {
+      filled[field] = tidy;
+    }
+  }
+  if (filled.title && filled.summary && filled.summary !== filled.title && tidyEventTitle(filled.summary) === filled.title) filled.summary = filled.title;
   if (!filled.title && !filled.summary && parsed.title) {
     filled.title = parsed.title;
     filled.summary = parsed.title;

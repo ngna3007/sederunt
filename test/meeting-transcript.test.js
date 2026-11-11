@@ -106,14 +106,17 @@ test("room media stores the spoken lines and a later load still has them", async
     assert.equal(body.lines.length, 2);
     assert.equal(body.lines[1].text, "invite me only");
     assert.equal(session.rooms[0].lines.length, 2);
-    assert.equal(remembered.some((item) => item.text === `${ROOM} meeting transcript`), true);
+    // An ended room is written once, as one row with its lines (dry run 2: polls no longer write per call).
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(remembered.some((item) => item.text === `${ROOM} meeting` && item.room?.lines?.length === 2), true);
     assert.equal(remembered.some((item) => String(item.text || "").includes("invite me only")), false);
     const listed = await fetch(`http://127.0.0.1:${port}/api/console?member=mina`);
     const raw = await listed.text();
     assert.equal(raw.includes("invite me only"), false);
     const again = await fetch(`http://127.0.0.1:${port}/console/rooms/${ROOM}/media`);
     assert.equal((await again.json()).lines[0].text.includes("7 pm today"), true);
-    assert.equal(remembered.filter((item) => item.text === `${ROOM} meeting transcript`).length, 1);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(remembered.filter((item) => item.kind === "room").length, 1);
   } finally {
     app.close();
   }

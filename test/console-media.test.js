@@ -648,7 +648,7 @@ async function mediaInstance({ redis, memory, id, tenant = "", activity = [] }) 
   return { app, port, session };
 }
 
-test("review: a second instance's media poll does not repeat saves already made", async () => {
+test("review: an ended room is written once, as one row, and a second instance does not write it again", async () => {
   const redis = sharedRedis();
   const saved = [];
   const memory = { async index() { return []; }, async recall() { return []; }, async remember(input) { saved.push(input); return { blobId: `blob-${saved.length}` }; } };
@@ -657,11 +657,15 @@ test("review: a second instance's media poll does not repeat saves already made"
   try {
     assert.equal((await fetch(`http://127.0.0.1:${first.port}/console/rooms/${id}/media?member=mina`)).status, 200);
     await new Promise((resolve) => setTimeout(resolve, 50));
+    // The same instance polling again writes nothing either.
+    first.app.workspace?.mediaCache?.clear?.();
+    assert.equal((await fetch(`http://127.0.0.1:${first.port}/console/rooms/${id}/media?member=mina`)).status, 200);
+    await new Promise((resolve) => setTimeout(resolve, 50));
   } finally { first.app.close(); }
-  const kinds = saved.map((row) => row.text);
-  assert.ok(saved.length >= 2, `first poll saves the room: ${kinds}`);
-  assert.ok(saved.some((row) => /meeting$/.test(row.text)), `the recording span is saved: ${kinds}`);
-  const before = saved.length;
+  assert.equal(saved.length, 1, `one write: ${saved.map((row) => row.idempotencyKey)}`);
+  assert.equal(saved[0].kind, "room");
+  assert.equal(saved[0].room.call, "done");
+  assert.equal(saved[0].room.lines[0].text, "file it");
   const second = await mediaInstance({ redis, memory, id });
   try {
     const body = await (await fetch(`http://127.0.0.1:${second.port}/console/rooms/${id}/media?member=mina`)).json();
@@ -669,23 +673,52 @@ test("review: a second instance's media poll does not repeat saves already made"
     assert.equal(body.lines[0].text, "file it");
     await new Promise((resolve) => setTimeout(resolve, 50));
   } finally { second.app.close(); }
-  assert.equal(saved.length, before, "same content is not written again");
+  assert.equal(saved.length, 1, "no instance writes the room again");
 });
 
-test("review: a refused save is released so a later poll writes it", async () => {
+test("dry run 2: a failed room write is not retried by every poll", async () => {
   const redis = sharedRedis();
   let calls = 0;
-  const memory = { async index() { return []; }, async recall() { return []; }, async remember() { calls += 1; return { blobId: null }; } };
+  const memory = { async index() { return []; }, async recall() { return []; }, async remember() { calls += 1; throw new Error("remember job timed out after 45000ms"); } };
   const id = "ae224b81-f5db-4049-bf97-9e4152f70f03";
-  for (let round = 0; round < 2; round += 1) {
+  for (let round = 0; round < 3; round += 1) {
     const instance = await mediaInstance({ redis, memory, id });
     try {
       await fetch(`http://127.0.0.1:${instance.port}/console/rooms/${id}/media?member=mina`);
       await new Promise((resolve) => setTimeout(resolve, 50));
     } finally { instance.app.close(); }
   }
-  assert.ok(calls >= 4, `both rounds tried (${calls})`);
-  assert.equal([...redis.store.keys()].some((key) => key.startsWith("sederunt:media-saved:")), false);
+  assert.equal(calls, 1, "one try; the next is due after the short retry claim expires");
+  const claims = [...redis.store.keys()].filter((key) => key.startsWith(`sederunt:media-room-saved:local:${id}:`));
+  assert.equal(claims.length, 1);
+  assert.equal(redis.store.get(claims[0]), "retry");
+});
+
+test("dry run 2: polling a live room writes nothing to Walrus", async () => {
+  const redis = sharedRedis();
+  const saved = [];
+  const memory = { async index() { return []; }, async recall() { return []; }, async remember(input) { saved.push(input); return { blobId: "b" }; } };
+  const { createSession } = await import("../src/session.js");
+  const id = "ae224b81-f5db-4049-bf97-9e4152f70f05";
+  const session = createSession();
+  session.rooms.push({ id, kind: "meeting", platform: "Google Meet", botPresent: true, call: "joining_call" });
+  session.readReport = { ok: true, empty: false };
+  const app = createApp({
+    companyLoaded: true,
+    session,
+    env: { RECALL_API_KEY: KEY, SEDERUNT_MEMBER: "mina", ...REDIS_ENV },
+    deps: { memory },
+    recall: { async readBot() { return { id, status_changes: [{ code: "joining_call" }, { code: "in_call_recording" }], recordings: [{ started_at: "2026-11-11T09:40:07.983Z", status: { code: "processing" } }] }; } },
+    fetch: async (url, init) => (String(url).startsWith("https://redis.test") ? redis.fetch(url, init) : new Response("no", { status: 404 })),
+  });
+  const port = await listen(app);
+  try {
+    const body = await (await fetch(`http://127.0.0.1:${port}/console/rooms/${id}/media?member=mina`)).json();
+    assert.equal(body.call, "in_call_recording");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  } finally { app.close(); }
+  assert.equal(session.rooms[0].call, "in_call_recording", "the room is updated in this process");
+  assert.equal(saved.length, 0);
 });
 
 test("review: a meeting that just ended shows its in-call Linear activity on another instance", async () => {
