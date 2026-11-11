@@ -105,11 +105,18 @@ function allowSpeak(bag, botId) {
   return true;
 }
 
-function rememberLine(bag, env, fetchImpl, botId, turn, text) {
+const LINE_SAVE_WAIT_MS = 400;
+
+async function rememberLine(bag, env, fetchImpl, botId, turn, text) {
   const hash = sentenceHash(text);
   if (!bag.lines.has(botId)) bag.lines.set(botId, new Map());
   bag.lines.get(botId).set(hash, { text, turn, at: Date.now() });
-  forgetRedis(() => rememberSpokenTurn(env, fetchImpl, botId, hash, turn));
+  // Bounded: a slow or absent Redis must not hold the sentence. This instance
+  // still knows the line, and the page asks once more if another instance refuses it.
+  let timer;
+  const saved = Promise.resolve().then(() => rememberSpokenTurn(env, fetchImpl, botId, hash, turn)).catch(() => false);
+  await Promise.race([saved, new Promise((resolve) => { timer = setTimeout(resolve, LINE_SAVE_WAIT_MS); timer.unref?.(); })]);
+  clearTimeout(timer);
   return hash;
 }
 
@@ -227,7 +234,7 @@ async function logPlayed(workspace, sessionFor, env, seat, body) {
   });
 }
 
-const BEAT_COUNTS = ["msgs", "opened", "own", "echo", "commits", "asked", "skipped", "busy", "done", "errors", "stuck", "sentences", "socketOpens", "socketCloses", "turnMs", "people"];
+const BEAT_COUNTS = ["msgs", "opened", "own", "echo", "commits", "asked", "skipped", "busy", "done", "errors", "stuck", "sentences", "spoken", "speakRetries", "speakFailed", "socketOpens", "socketCloses", "turnMs", "people"];
 const BEAT_FLAGS = ["turnOpen", "waiting", "floor", "direct", "playing"];
 const BEAT_STATES = new Set(["listening", "thinking", "tool", "speaking"]);
 
@@ -268,7 +275,8 @@ function stampClock(workspace, env, botId, turn, field, at) {
 
 async function notePlayback(workspace, env, seat) {
   const bag = runtime(workspace);
-  const heard = bag.heard.get(seat.botId) || await loadHeardLine(env, workspace.fetchImpl, seat.botId);
+  // The current turn may have run on another instance: Redis first, this instance's copy second.
+  const heard = await loadHeardLine(env, workspace.fetchImpl, seat.botId) || bag.heard.get(seat.botId);
   if (!heard?.turn) return;
   const id = `${seat.botId}:${heard.turn}`;
   if (!bag.clocks.get(id)) {
@@ -278,15 +286,26 @@ async function notePlayback(workspace, env, seat) {
   stampClock(workspace, env, seat.botId, heard.turn, "playback", Date.now());
 }
 
+/**
+ * A line may be spoken only while its turn is the current one. The current turn
+ * is the heard line in Redis: another function instance may have served the
+ * latest turn, so this instance's cached heard line can be an older turn
+ * (Nov 11, bot be88aa49: the filed confirmation was refused and never played).
+ */
 async function spokenForTurn(bag, env, fetchImpl, botId, text) {
   const hash = sentenceHash(text);
   const local = bag.lines.get(botId)?.get(hash);
-  let heard = bag.heard.get(botId);
-  if (local && heard && local.turn === heard.turn) return { turn: local.turn };
-  let remoteTurn = await loadSpokenTurn(env, fetchImpl, botId, hash);
-  if (!remoteTurn) remoteTurn = await loadSpokenTurn(env, fetchImpl, botId, hash);
-  if (!heard) heard = await loadHeardLine(env, fetchImpl, botId);
-  if (remoteTurn && heard && remoteTurn === heard.turn) return { turn: remoteTurn };
+  const cached = bag.heard.get(botId);
+  // Redis first for both: the same words may have been said again in a newer turn
+  // on another instance, so this instance's copy of the line can be the older turn.
+  const [shared, heard] = await Promise.all([
+    loadSpokenTurn(env, fetchImpl, botId, hash).catch(() => ""),
+    loadHeardLine(env, fetchImpl, botId).catch(() => null),
+  ]);
+  const remoteTurn = shared || local?.turn || "";
+  if (!remoteTurn) return null;
+  const current = heard || cached;
+  if (current && remoteTurn === current.turn) return { turn: remoteTurn };
   return null;
 }
 
@@ -495,7 +514,9 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
       noteEchoSpoken(bag, seat.botId, line);
       forgetRedis(() => rememberEchoLines(env, workspace.fetchImpl, seat.botId, bag.echo.get(seat.botId) || []));
       forgetRedis(() => rememberHeardLine(env, workspace.fetchImpl, seat.botId, heard));
-      const hash = rememberLine(bag, env, workspace.fetchImpl, seat.botId, turn, line);
+      // Recorded before the page hears of the line: its /speak may reach another instance.
+      const hash = await rememberLine(bag, env, workspace.fetchImpl, seat.botId, turn, line);
+      if (res.writableEnded) continue;
       writeEvent(res, "sentence", { text: line, hash });
     }
   };
@@ -1322,6 +1343,11 @@ async function invokeTool(input, name, args, signal) {
   });
 }
 
+/** A line the page asked to play and did not get. Status only, never the words. */
+function noteSpeakRefused(botId, status) {
+  console.info(JSON.stringify({ meeting: "speak", bot: String(botId).slice(0, 12), status }));
+}
+
 async function speakSentence(req, res, env, workspace, seat, body) {
   if (!inRedisTurn()) return countRedisTurn(() => speakSentence(req, res, env, workspace, seat, body));
   const bag = runtime(workspace);
@@ -1333,11 +1359,13 @@ async function speakSentence(req, res, env, workspace, seat, body) {
   }
   const allowed = await spokenForTurn(bag, env, workspace.fetchImpl, seat.botId, text);
   if (!allowed) {
+    noteSpeakRefused(seat.botId, 409);
     res.writeHead(409, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
     res.end();
     return;
   }
   if (!allowSpeak(bag, seat.botId)) {
+    noteSpeakRefused(seat.botId, 429);
     res.writeHead(429, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
     res.end();
     return;
@@ -1353,6 +1381,7 @@ async function speakSentence(req, res, env, workspace, seat, body) {
     signal: abort.signal,
   });
   if (!spoken.used || !spoken.chunks) {
+    noteSpeakRefused(seat.botId, 502);
     res.writeHead(502, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
     res.end();
     return;
