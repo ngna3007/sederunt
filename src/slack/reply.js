@@ -268,7 +268,8 @@ export async function answerSlackQuestion(visible, question, options = {}) {
     .filter((row) => row && String(row.text ?? "").trim())
     .slice(0, limit);
   const memories = [...meetings, ...askMemories(rows, hits, Math.max(1, limit - meetings.length))];
-  const fallback = () => ({ ...slackAnswer([...meetings, ...rows], asked), source: "retrieval", recalled: memories.length });
+  // Without the model only the most recent meeting is quoted, so a fallback never dumps three transcripts.
+  const fallback = () => ({ ...slackAnswer([...meetings.slice(0, 1), ...rows], asked), source: "retrieval", recalled: memories.length });
   if (!openRouterConfig(env).enabled) return fallback();
   const prior = Array.isArray(options.history) ? options.history : await slackRecentTurns({
     token: options.token || env.SLACK_BOT_TOKEN,

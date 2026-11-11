@@ -9,7 +9,9 @@ import { checkInvite } from "../domain/invite.js";
 // MemWal hits (all room documents) never matched a decision row. A question
 // about a meeting needs the asker's own recent meetings, not a sentence search.
 
-const MEETING_WORDS = /\b(?:meet(?:ing)?s?|google\s+meet|zoom|ms\s+teams|teams\s+call|calls?|huddles?|stand-?ups?|recap|minutes)\b/i;
+// "meet" alone is usually the verb ("meet the deadline", "when do we meet"), and
+// "minutes" a duration ("in 5 minutes"): only the noun forms count.
+const MEETING_WORDS = /\b(?:meetings?|(?:google|the|that|this|our|a|last|today'?s|yesterday'?s)\s+meet|zoom|ms\s+teams|teams\s+(?:call|meeting)|calls?|huddles?|stand-?ups?|recap|(?:meeting|the)\s+minutes)\b/i;
 const DISCUSSED = /\bwe\s+(?:just\s+)?(?:discuss(?:ed)?|talk(?:ed)?\s+about|cover(?:ed)?|decide[d]?|agree[d]?)\b/i;
 
 const DEFAULT_LIMIT = 3;

@@ -147,7 +147,8 @@ export function buildSystemPrompt({ mode = "slack", preferences = null, language
  */
 export function buildSlackAskPrompt({ botName = "", preferences = null, language = "", memories = [] } = {}) {
   const lines = (memories ?? []).map((row, index) => {
-    const text = String(row?.text ?? "").replace(/\s+/g, " ").trim();
+    // A transcript or kept line can never close the fence: "MEMORIES>>>" or "<<<" in the data is defanged.
+    const text = String(row?.text ?? "").replace(/\s+/g, " ").replace(/<{3,}|>{3,}/g, (run) => run.slice(0, 2)).trim();
     const issue = typeof row?.connectorId === "string" && row.connectorId.trim() ? ` (ticket ${row.connectorId.trim()})` : "";
     const names = memoryFileNames(row);
     const file = names.length ? ` [file: ${names.join(", ")}]` : "";
