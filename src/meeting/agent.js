@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { meetingLineShouldAnswer } from "./voice.js";
-import { clipSpoken, isEnglishSentence, lineHoldMs } from "./speech-gate.js";
+import { clipSpoken, isEnglishSentence, lineHoldMs, speechPieces } from "./speech-gate.js";
 import { voiceModels } from "./voice-models.js";
 import { canonicalClaimArgs } from "../domain/action-claims.js";
 
@@ -49,42 +49,12 @@ export function shouldRespond(session, delivery, bot = {}) {
   return meetingLineShouldAnswer(session, delivery);
 }
 
-function shieldPeriods(value) {
-  const marks = [];
-  const hide = (match) => {
-    const token = `\u0000${marks.length}\u0000`;
-    marks.push(match);
-    return token;
-  };
-  const text = value
-    .replace(/\b(?:Dr|Mr|Mrs|Ms|Prof|Sr|Jr|St|vs|etc|e\.g|i\.e|a\.m|p\.m)\./gi, hide)
-    .replace(/(\d+)\.(\d+)/g, (_match, left, right) => hide(`${left}.${right}`));
-  return {
-    text,
-    restore(sentence) {
-      return sentence.replace(/\u0000(\d+)\u0000/g, (_match, index) => marks[Number(index)] || "");
-    },
-  };
-}
-
 export function readySentences(text) {
-  const value = String(text || "")
-    .replace(/…/g, ".")
-    .replace(/\.{2,}/g, ".")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!value) return { ready: [], rest: "" };
-  const shielded = shieldPeriods(value);
-  const parts = shielded.text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [];
   const ready = [];
   let rest = "";
-  for (const part of parts) {
-    const piece = part.trim();
-    if (!piece) continue;
-    const sentence = shielded.restore(piece).trim();
-    if (!sentence) continue;
-    if (/[.!?]$/.test(piece)) ready.push(sentence);
-    else rest = sentence;
+  for (const piece of speechPieces(text)) {
+    if (piece.closed) ready.push(piece.text);
+    else rest = piece.text;
   }
   return { ready, rest };
 }

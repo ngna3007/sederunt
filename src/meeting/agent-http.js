@@ -38,6 +38,7 @@ import {
   rememberAgentTurn,
   rememberHeardLine,
   rememberSpokenTurn,
+  loadAgentSpeaker,
   resolveAgentSeat,
   settleRedisTurn,
   takeSocketSample,
@@ -110,7 +111,9 @@ export async function handleMeetingAgent(input) {
     return true;
   }
   const ear = headerValue(req.headers["x-meeting-ear"]);
-  const resolved = await resolveAgentSeat(workspace, ear, env, workspace.fetchImpl);
+  const resolved = await resolveAgentSeat(workspace, ear, env, workspace.fetchImpl, {
+    loadSpeaker: path !== "/api/meeting/agent/turn",
+  });
   if (!resolved.ok) {
     send(res, resolved.status, "text/plain; charset=utf-8", "");
     return true;
@@ -227,7 +230,8 @@ async function spokenForTurn(bag, env, fetchImpl, botId, text) {
   const local = bag.lines.get(botId)?.get(hash);
   let heard = bag.heard.get(botId);
   if (local && heard && local.turn === heard.turn) return { turn: local.turn };
-  const remoteTurn = await loadSpokenTurn(env, fetchImpl, botId, hash);
+  let remoteTurn = await loadSpokenTurn(env, fetchImpl, botId, hash);
+  if (!remoteTurn) remoteTurn = await loadSpokenTurn(env, fetchImpl, botId, hash);
   if (!heard) heard = await loadHeardLine(env, fetchImpl, botId);
   if (remoteTurn && heard && remoteTurn === heard.turn) return { turn: remoteTurn };
   return null;
@@ -312,7 +316,10 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     }
   };
   const session = sessionFor(seat.tenantId);
-  await hydrateFloor(session, env, workspace.fetchImpl, seat);
+  await Promise.all([
+    hydrateFloor(session, env, workspace.fetchImpl, seat),
+    loadAgentSpeaker(workspace, seat, env, workspace.fetchImpl),
+  ]);
   const delivery = {
     text,
     partial,
@@ -326,20 +333,25 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     await finish({ duplicate: true });
     return;
   }
-  if (key && await claimUtterance(env, workspace.fetchImpl, seat.botId, key) === false) {
-    await finish({ duplicate: true });
-    return;
-  }
   if (requested && seenTurn(bag, seat.botId, requested)) {
     await finish({ duplicate: true });
     return;
   }
-  if (requested) {
-    const won = await rememberAgentTurn(env, workspace.fetchImpl, seat.botId, requested);
-    markTurn(bag, seat.botId, requested);
-    if (!won) {
+  if (key || requested) {
+    const [claimed, won] = await Promise.all([
+      key ? claimUtterance(env, workspace.fetchImpl, seat.botId, key) : null,
+      requested ? rememberAgentTurn(env, workspace.fetchImpl, seat.botId, requested) : true,
+    ]);
+    if (key && claimed === false) {
       await finish({ duplicate: true });
       return;
+    }
+    if (requested) {
+      markTurn(bag, seat.botId, requested);
+      if (!won) {
+        await finish({ duplicate: true });
+        return;
+      }
     }
   }
   if (!answer) {
@@ -347,10 +359,13 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     return;
   }
   refreshMeetingFloor(session, delivery);
-  await rememberAgentFloor(env, workspace.fetchImpl, seat.botId, session.meetingFloor || null);
   const heard = { text, speaker, turn, roomId: seat.roomId };
   bag.heard.set(seat.botId, heard);
-  await rememberHeardLine(env, workspace.fetchImpl, seat.botId, heard);
+  await Promise.all([
+    rememberAgentFloor(env, workspace.fetchImpl, seat.botId, session.meetingFloor || null),
+    rememberHeardLine(env, workspace.fetchImpl, seat.botId, heard),
+    holdAgentTurn(env, workspace.fetchImpl, seat.botId, turn),
+  ]);
   stampClock(workspace, env, seat.botId, turn, "endpoint", Date.now());
   const previous = bag.live.get(seat.botId);
   if (previous) {
@@ -668,12 +683,60 @@ async function boundWorkspaceMember(input, participantId) {
   return row ? row.userId.trim().slice(0, 80) : "";
 }
 
+function approverUserIds(rows) {
+  const ids = [];
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const role = String(row?.role || "");
+    if (role !== "owner" && role !== "admin") continue;
+    const userId = String(row?.userId || row?.user_id || "").trim().slice(0, 80);
+    if (userId && !ids.includes(userId)) ids.push(userId);
+  }
+  return ids;
+}
+
+async function approverIds(workspace, tenantId) {
+  const id = String(tenantId || "").trim();
+  if (!id) return [];
+  if (typeof workspace?.memberships?.approvers === "function") {
+    try {
+      return approverUserIds(await workspace.memberships.approvers(id));
+    } catch {
+      return [];
+    }
+  }
+  const env = workspace?.env || {};
+  if (env.SEDERUNT_AUTH_FAKE === "1") return [];
+  const base = String(env.SUPABASE_URL || "").replace(/\/$/, "");
+  const key = env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!base || !key) return [];
+  workspace.approverCache ??= new Map();
+  const cached = workspace.approverCache.get(id);
+  if (cached && cached.until > Date.now()) return cached.ids;
+  try {
+    const response = await (workspace.fetchImpl || fetch)(
+      `${base}/rest/v1/memberships?select=user_id,role&tenant_id=eq.${encodeURIComponent(id)}&role=in.(owner,admin)`,
+      {
+        headers: { apikey: key, authorization: `Bearer ${key}`, accept: "application/json" },
+        signal: AbortSignal.timeout(3000),
+      },
+    );
+    if (!response.ok) return [];
+    const ids = approverUserIds(await response.json());
+    workspace.approverCache.set(id, { ids, until: Date.now() + 60_000 });
+    return ids;
+  } catch {
+    return [];
+  }
+}
+
 async function rememberHold(input, name, args, memberId) {
   const participantId = String(memberId || "");
   const workspaceMember = await boundWorkspaceMember(input, participantId);
   const owner = workspaceMember || participantId;
+  const sentBy = String(input.seat?.userId || "").trim().slice(0, 80);
+  const approvers = await approverIds(input.workspace, input.seat?.tenantId);
   const inviteMemberIds = [];
-  for (const id of [owner, participantId]) {
+  for (const id of [owner, participantId, sentBy, ...approvers]) {
     if (id && !inviteMemberIds.includes(id)) inviteMemberIds.push(id);
   }
   const params = heldParams(name, args);

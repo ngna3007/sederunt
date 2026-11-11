@@ -195,6 +195,12 @@ function earMatches(left, right) {
   return timingSafeEqual(a, b);
 }
 
+function cleanUserId(value) {
+  const id = String(value || "").trim();
+  if (!id || id.length > 80 || /\s/.test(id)) return "";
+  return id;
+}
+
 function seatFrom(input) {
   const ear = String(input?.ear || "");
   const botId = cleanBotId(input?.botId);
@@ -206,6 +212,7 @@ function seatFrom(input) {
     tenantId: String(input?.tenantId || ""),
     roomId: cleanBotId(input?.roomId) || botId,
     botName,
+    userId: cleanUserId(input?.userId),
     participantId: input?.participantId == null || input.participantId === "" ? null : String(input.participantId).slice(0, 40),
     ended: input?.ended === true,
   };
@@ -247,7 +254,14 @@ export async function bindAgentSeat(workspace, input, env = process.env, fetchIm
  * A well-formed ear for an unknown or ended bot is forbidden.
  * The compare does not throw when the stored ear is absent.
  */
-export async function resolveAgentSeat(workspace, ear, env = process.env, fetchImpl = fetch) {
+export async function loadAgentSpeaker(workspace, seat, env = process.env, fetchImpl = fetch) {
+  if (!seat || seat.participantId || !redisConfigured(env)) return seat?.participantId || "";
+  const speaker = await redisCommand(env, fetchImpl, ["GET", `sederunt:voice:speaker:${seat.botId}`]);
+  if (typeof speaker.result === "string" && speaker.result.trim()) seat.participantId = speaker.result.trim().slice(0, 40);
+  return seat.participantId || "";
+}
+
+export async function resolveAgentSeat(workspace, ear, env = process.env, fetchImpl = fetch, options = {}) {
   const token = String(ear || "");
   if (!validMeetingEar(token)) return { ok: false, status: 401 };
   const bag = seatBag(workspace);
@@ -266,10 +280,7 @@ export async function resolveAgentSeat(workspace, ear, env = process.env, fetchI
   const stored = seat?.ear || "0".repeat(token.length);
   const match = earMatches(token, stored);
   if (!seat || !match || seat.ended) return { ok: false, status: 403 };
-  if (!seat.participantId && redisConfigured(env)) {
-    const speaker = await redisCommand(env, fetchImpl, ["GET", `sederunt:voice:speaker:${seat.botId}`]);
-    if (typeof speaker.result === "string" && speaker.result.trim()) seat.participantId = speaker.result.trim();
-  }
+  if (options.loadSpeaker !== false) await loadAgentSpeaker(workspace, seat, env, fetchImpl);
   return { ok: true, seat };
 }
 

@@ -594,6 +594,7 @@ export function createApp(options = {}) {
     ask: options.askStore || createAskStore(env),
     openrouterFetch: options.openrouterFetch || null,
     participantBindings: options.participantBindings || createParticipantBindings(env, { fetchImpl: options.fetch || globalThis.fetch }),
+    memberships: options.memberships || null,
     meetingVoice: options.meetingVoice && typeof options.meetingVoice === "object" ? options.meetingVoice : undefined,
   };
   if (proofWarmOn(env) && workspace.companyLoaded && deps.tatum) {
@@ -1570,6 +1571,8 @@ export function createApp(options = {}) {
             botId = typeof sent?.id === "string" ? sent.id : "";
             startedAt = typeof sent?.startedAt === "string" ? sent.startedAt : (typeof sent?.started_at === "string" ? sent.started_at : "");
             if (botId && typeof sent?.ear === "string") {
+              const joiner = guardConsole(req, env).session;
+              const sentBy = joiner?.kind === "oauth" ? String(joiner.userId || joiner.memberId || "").trim() : "";
               await bindMeetingEar(workspace, sent.ear, botId, env, workspace.fetchImpl).catch(() => {});
               await bindAgentSeat(workspace, {
                 ear: sent.ear,
@@ -1577,6 +1580,7 @@ export function createApp(options = {}) {
                 tenantId: joinCompanyId || "",
                 roomId: botId,
                 botName: guest,
+                userId: sentBy,
               }, env, workspace.fetchImpl).catch(() => {});
             }
             if (!botId) {

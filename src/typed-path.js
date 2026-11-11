@@ -2681,7 +2681,7 @@ function refusal(session, reason) {
  * The room is the one stored on the action. The invite is the decision's,
  * or the member who asked when the action has no decision.
  * A meeting hold can also be confirmed by the signed-in person bound to that
- * room's Recall participant.
+ * room's Recall participant, or by a console user named on the hold.
  */
 function confirmInvite(input, session, action) {
   if (isHuddle(input.room)) return { ok: false, reason: "not-invited" };
@@ -2700,11 +2700,17 @@ function confirmInvite(input, session, action) {
     ? action.inviteMemberIds
     : inviteMemberIds;
   const identities = Array.isArray(input.principal?.identities) ? input.principal.identities : [];
-  const bound = action.source === "Google Meet" && identities.some((identity) =>
+  const meeting = action.source === "Google Meet";
+  const bound = meeting && identities.some((identity) =>
     typeof identity?.roomId === "string"
     && identity.roomId === roomId
     && checkInvite(identity.memberId, held).ok);
-  return bound ? { ok: true, reason: "invited" } : direct;
+  if (bound) return { ok: true, reason: "invited" };
+  const principalId = typeof input.principal?.memberId === "string" ? input.principal.memberId.trim() : "";
+  if (meeting && principalId && principalId === String(input.memberId || "").trim() && checkInvite(principalId, held).ok) {
+    return { ok: true, reason: "invited" };
+  }
+  return direct;
 }
 
 function writerInvite(input) {

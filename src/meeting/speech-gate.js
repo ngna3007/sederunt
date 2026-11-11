@@ -8,7 +8,7 @@ export const CONVERSATION_MS = 20_000;
 const UNFINISHED_TAIL = new Set(["about", "the", "and", "what", "who", "when", "where", "why", "how", "which"]);
 
 const ANCHORS = new Set(
-  "a an the i you we they he she it my your our me us is am are was were be been being do does did not no yes can could should would will to of in on for at and or but if so this that with from just now what who when where why how which im ill ok okay here done sure got it"
+  "a an the i you we they he she it my your our me us is am are was were be been being do does did said not no yes can could should would will to of in on for at and or but if so this that with from just now what who when where why how which im ill ok okay here done sure got it"
     .split(/\s+/),
 );
 
@@ -33,15 +33,47 @@ export function lineHoldMs(text) {
   return lineLooksUnfinished(text) ? UNFINISHED_HOLD_MS : FINISHED_HOLD_MS;
 }
 
-function splitSentences(text) {
+function shieldPeriods(value) {
+  const marks = [];
+  const hide = (match) => {
+    const token = `\u0000${marks.length}\u0000`;
+    marks.push(match);
+    return token;
+  };
+  const text = value
+    .replace(/\b(?:Dr|Mr|Mrs|Ms|Prof|Sr|Jr|St|vs|etc|e\.g|i\.e|a\.m|p\.m)\./gi, hide)
+    .replace(/(\d+)\.(\d+)/g, (_match, left, right) => hide(`${left}.${right}`));
+  return {
+    text,
+    restore(sentence) {
+      return sentence.replace(/\u0000(\d+)\u0000/g, (_match, index) => marks[Number(index)] || "");
+    },
+  };
+}
+
+/** Sentences with titles and decimals kept whole. `closed` is a real terminator. */
+export function speechPieces(text) {
   const value = String(text || "")
     .replace(/…/g, ".")
     .replace(/\.{2,}/g, ".")
     .replace(/\s+/g, " ")
     .trim();
   if (!value) return [];
-  const parts = value.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [];
-  return parts.map((part) => part.trim()).filter(Boolean);
+  const shielded = shieldPeriods(value);
+  const parts = shielded.text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [];
+  const pieces = [];
+  for (const part of parts) {
+    const piece = part.trim();
+    if (!piece) continue;
+    const sentence = shielded.restore(piece).trim();
+    if (!sentence) continue;
+    pieces.push({ text: sentence, closed: /[.!?]$/.test(piece) });
+  }
+  return pieces;
+}
+
+function splitSentences(text) {
+  return speechPieces(text).map((piece) => piece.text);
 }
 
 function hasForeignScript(text) {

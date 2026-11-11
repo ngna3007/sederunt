@@ -4,7 +4,7 @@ import { request } from "node:http";
 import test from "node:test";
 import vm from "node:vm";
 import { createSession } from "../src/session.js";
-import { acceptUtterance, endOfTurn, readySentences, spokenLines, utteranceToCommit, wordsFromTranscript, withoutBotSpeech } from "../src/meeting/agent.js";
+import { acceptUtterance, endOfTurn, linesForSpeech, readySentences, spokenLines, utteranceToCommit, wordsFromTranscript, withoutBotSpeech } from "../src/meeting/agent.js";
 import { renderCameraPage } from "../src/meeting/camera.js";
 import { meetingMetrics, resetMeetingMetrics } from "../src/meeting/metrics.js";
 import { endAgentSeat, noteAgentMember, noteAgentSpeaker } from "../src/meeting/seat.js";
@@ -130,6 +130,7 @@ function boot(fetchImpl, extra = {}) {
     deps: { memory: null, ...(extra.deps || {}) },
     sessions: extra.sessions,
     participantBindings: extra.participantBindings,
+    memberships: extra.memberships,
     fetch: fetchImpl,
   });
   return { app, session, meetingVoice };
@@ -1078,6 +1079,189 @@ test("a room binding stores the workspace member on the voice hold", async () =>
   }
 });
 
+test("the console user who sent the bot approves the voice hold without a participant binding", async () => {
+  const docs = [];
+  const memory = {
+    async remember(row) { docs.push(structuredClone(row)); return { blobId: "saved" }; },
+    async index() { return docs.map((row) => structuredClone(row)); },
+  };
+  const issues = [];
+  const linear = {
+    async createIssue(input) {
+      issues.push(input);
+      return { identifier: "ROW-9", id: "ROW-9" };
+    },
+  };
+  const secret = "console-oauth-test-secret";
+  const ownerId = "user-priya";
+  const meetingVoice = {};
+  const session = createSession();
+  session.preferences = [{ id: "pref-sender", tool: "mcp:linear:create_issue", value: "do" }];
+  const token = sealSession({
+    kind: "oauth",
+    provider: "google",
+    userId: ownerId,
+    memberId: ownerId,
+    email: "priya@example.com",
+    accessToken: "fixture-access",
+    refreshToken: "fixture-refresh",
+  }, secret);
+  const cookie = `${CONSOLE_COOKIE}=${encodeURIComponent(token)}`;
+  const { app } = boot(async (_url, init) => {
+    const payload = JSON.parse(init.body);
+    const answering = (payload.messages || []).some((message) => message.role === "tool");
+    if (answering) return { ok: true, status: 200, body: chatStream("We will keep Thursday.") };
+    return { ok: true, status: 200, body: toolCallStream("linear__create_issue", { title: "Launch note", team: "other-team" }) };
+  }, {
+    session,
+    sessions: new Map([[TENANT_C, session]]),
+    meetingVoice,
+    seats: [{ ear: EAR, botId: "bot-hold", tenantId: TENANT_C, roomId: "bot-hold", botName: "Adam", userId: ownerId }],
+    connectors: connectorStore([connected("linear", "create_issue", "write")]),
+    deps: { memory, linear },
+    env: { SEDERUNT_CONSOLE_SECRET: secret },
+    participantBindings: {
+      async record() {},
+      async forUser() { return []; },
+      async forRoom() { return []; },
+    },
+    memberships: {
+      async approvers(tenantId) {
+        if (tenantId !== TENANT_C) return [];
+        return [
+          { userId: "user-admin", role: "owner" },
+          { userId: "user-member", role: "member" },
+        ];
+      },
+    },
+  });
+  noteAgentMember({ meetingVoice }, "bot-hold", { participantId: "7", name: "Priya", memberId: "7" });
+  const port = await listen(app);
+  const board = async () => {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const response = await call(port, "GET", `/api/console?company=${TENANT_C}`, { headers: { cookie } });
+      assert.equal(response.status, 200);
+      const payload = JSON.parse(response.raw);
+      if (payload.reading !== true && payload.read !== "reading") return payload;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    }
+    throw new Error("console stayed on the reading shell");
+  };
+  try {
+    const spoken = await call(port, "POST", "/api/meeting/agent/turn", {
+      headers: { "content-type": "application/json", "x-meeting-ear": EAR },
+      body: turnBody("Adam, file the launch note.", "Priya", { participantId: "7", turn_id: "sender-hold" }),
+    });
+    assert.equal(spoken.status, 200);
+    assert.equal((meetingVoice.toolRuns || []).length, 0);
+    assert.equal(issues.length, 0);
+    const held = session.actions.find((row) => row.state === "paused");
+    assert.equal(held.memberId, "7");
+    assert.equal(held.inviteMemberIds.includes("7"), true);
+    assert.equal(held.inviteMemberIds.includes(ownerId), true);
+    assert.equal(held.inviteMemberIds.includes("user-admin"), true);
+    assert.equal(held.inviteMemberIds.includes("user-member"), false);
+    const visible = await board();
+    assert.equal(visible.waiting.some((row) => row.id === held.id && /Launch note/.test(row.statement)), true);
+    const approved = await call(port, "POST", "/api/typed", {
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ text: `confirm ${held.id}`, company: TENANT_C }),
+    });
+    assert.equal(approved.status, 200, approved.raw);
+    const result = JSON.parse(approved.raw);
+    assert.equal(result.issueId, "ROW-9", approved.raw);
+    assert.equal(issues.length, 1);
+    assert.equal(issues[0].title, "Launch note");
+    assert.equal((meetingVoice.toolRuns || []).length, 0);
+  } finally {
+    await close(app);
+  }
+});
+
+test("a person outside the tenant cannot approve the voice hold", async () => {
+  const docs = [];
+  const memory = {
+    async remember(row) { docs.push(structuredClone(row)); return { blobId: "saved" }; },
+    async index() { return docs.map((row) => structuredClone(row)); },
+  };
+  const issues = [];
+  const linear = {
+    async createIssue(input) {
+      issues.push(input);
+      return { identifier: "ROW-9", id: "ROW-9" };
+    },
+  };
+  const secret = "console-oauth-test-secret";
+  const ownerId = "user-priya";
+  const outsiderId = "user-outsider";
+  const meetingVoice = {};
+  const session = createSession();
+  session.preferences = [{ id: "pref-outsider", tool: "mcp:linear:create_issue", value: "do" }];
+  const cookieFor = (userId, email) => {
+    const token = sealSession({
+      kind: "oauth",
+      provider: "google",
+      userId,
+      memberId: userId,
+      email,
+      accessToken: "fixture-access",
+      refreshToken: "fixture-refresh",
+    }, secret);
+    return `${CONSOLE_COOKIE}=${encodeURIComponent(token)}`;
+  };
+  const { app } = boot(async (_url, init) => {
+    const payload = JSON.parse(init.body);
+    const answering = (payload.messages || []).some((message) => message.role === "tool");
+    if (answering) return { ok: true, status: 200, body: chatStream("We will keep Thursday.") };
+    return { ok: true, status: 200, body: toolCallStream("linear__create_issue", { title: "Launch note", team: "other-team" }) };
+  }, {
+    session,
+    sessions: new Map([[TENANT_C, session]]),
+    meetingVoice,
+    seats: [{ ear: EAR, botId: "bot-hold", tenantId: TENANT_C, roomId: "bot-hold", botName: "Adam", userId: ownerId }],
+    connectors: connectorStore([connected("linear", "create_issue", "write")]),
+    deps: { memory, linear },
+    env: { SEDERUNT_CONSOLE_SECRET: secret },
+    participantBindings: {
+      async record() {},
+      async forUser() { return []; },
+      async forRoom() { return []; },
+    },
+    memberships: { async approvers() { return []; } },
+  });
+  noteAgentMember({ meetingVoice }, "bot-hold", { participantId: "7", name: "Priya", memberId: "7" });
+  const port = await listen(app);
+  try {
+    const spoken = await call(port, "POST", "/api/meeting/agent/turn", {
+      headers: { "content-type": "application/json", "x-meeting-ear": EAR },
+      body: turnBody("Adam, file the launch note.", "Priya", { participantId: "7", turn_id: "outsider-hold" }),
+    });
+    assert.equal(spoken.status, 200);
+    const held = session.actions.find((row) => row.state === "paused");
+    assert.equal(held.inviteMemberIds.includes(outsiderId), false);
+    const outsiderCookie = cookieFor(outsiderId, "outsider@example.com");
+    let board = null;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const hidden = await call(port, "GET", `/api/console?company=${TENANT_C}`, { headers: { cookie: outsiderCookie } });
+      assert.equal(hidden.status, 200);
+      board = JSON.parse(hidden.raw);
+      if (board.reading !== true && board.read !== "reading") break;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    }
+    assert.equal((board.waiting || []).some((row) => row.id === held.id), false);
+    const refused = await call(port, "POST", "/api/typed", {
+      headers: { "content-type": "application/json", cookie: cookieFor(outsiderId, "outsider@example.com") },
+      body: JSON.stringify({ text: `confirm ${held.id}`, company: TENANT_C }),
+    });
+    assert.equal(refused.status, 200);
+    assert.equal(JSON.parse(refused.raw).allow, "not-invited");
+    assert.equal(issues.length, 0);
+    assert.equal((meetingVoice.toolRuns || []).length, 0);
+  } finally {
+    await close(app);
+  }
+});
+
 test("the same claim runs once and another tenant can claim the same arguments", async () => {
   const chats = [];
   const meetingVoice = {};
@@ -1381,6 +1565,13 @@ test("a title and a decimal stay in one sentence", () => {
   assert.equal(readySentences("Ask Dr.").rest, "Ask Dr.");
 });
 
+test("a title, a decimal, a version, and a morning time stay one spoken line", () => {
+  assert.deepEqual(linesForSpeech("Dr. Smith said launch Friday.", [], { done: true }), ["Dr. Smith said launch Friday."]);
+  assert.deepEqual(linesForSpeech("It is 3.5 percent higher.", [], { done: true }), ["It is 3.5 percent higher."]);
+  assert.deepEqual(linesForSpeech("Ship v2.1 on Friday.", [], { done: true }), ["Ship v2.1 on Friday."]);
+  assert.deepEqual(linesForSpeech("9 a.m. tomorrow", [], { done: true }), ["9 a.m. tomorrow"]);
+});
+
 test("the first twenty socket messages log shape and drop the rest", async () => {
   resetMeetingMetrics();
   const logs = [];
@@ -1645,10 +1836,8 @@ test("a turn reaches the page before the clock write finishes", async () => {
       body: JSON.stringify({ playback: true }),
     });
     assert.equal(logged.status, 204);
-    const seatReads = commands.slice(0, duringTurn)
-      .filter((command) => command[0] === "GET" && String(command[1]).includes(":speaker:")).length;
     const counted = meetingMetrics().turns.slice(before)
-      .filter((row) => row.redis === duringTurn - seatReads && row.redis > 0);
+      .filter((row) => row.redis === duringTurn && duringTurn > 0);
     assert.equal(counted.length >= 1, true);
   } finally {
     releaseClock();
