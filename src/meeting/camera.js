@@ -324,7 +324,7 @@ const AGENT_PAGE = `<!doctype html>
       body: JSON.stringify({ text: text, speaker: speaker, participantId: claimed, turn_id: String(Date.now()), people: Object.keys(people) })
     }).then(function (response) {
       if (!response.ok || !response.body) throw new Error("turn");
-      return readEvents(response.body, text, speaker);
+      return readEvents(response.body, text, speaker, controller);
     }).catch(function () {
       stats.errors += 1;
       if (guest.dataset.state === "thinking") setState("listening");
@@ -332,7 +332,7 @@ const AGENT_PAGE = `<!doctype html>
     });
   }
 
-  function readEvents(body, userText, speaker) {
+  function readEvents(body, userText, speaker, owner) {
     var reader = body.getReader();
     var decoder = new TextDecoder();
     var buffer = "";
@@ -370,7 +370,9 @@ const AGENT_PAGE = `<!doctype html>
             turnOpen = false;
             // A turn that ends with nothing to say goes back to listening now, not
             // after the 6 s thinking timer (which also sent a needless cancel).
-            if (!played.length && !pumping && !queue.length) {
+            // Only the current turn's stream may do this: a late "done" from an
+            // older stream must not clear a newer turn's timer or state.
+            if (!played.length && !pumping && !queue.length && (!owner || owner === turnController)) {
               clearTimeout(turnTimer);
               setState("listening");
             }

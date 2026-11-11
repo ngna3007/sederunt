@@ -116,6 +116,8 @@ export function cancelsAnswer(text, botName = "Adam") {
  */
 export function titleFromAnswer(text, botName = "Adam") {
   let value = String(text || "").replace(/\s+/g, " ").trim();
+  // "Bye Adam" or "thanks" after "What should the title be?" is not a title.
+  if (closingReply(value, botName)) return "";
   const name = String(botName || "Adam").replace(/[^\p{L}\p{N} ]+/gu, "").trim();
   const names = [name, "adam"].filter(Boolean).map((item) => item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   const wake = new RegExp(`^(?:(?:hey|hi|ok|okay|so)[,\\s]+)?(?:${names.join("|")})\\b[,.:!\\s]*`, "iu");

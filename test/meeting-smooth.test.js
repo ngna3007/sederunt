@@ -5,6 +5,7 @@ import test from "node:test";
 import vm from "node:vm";
 import { createSession } from "../src/session.js";
 import { closingReply, filedVoiceLine, imperativeTitle, titleFromAnswer } from "../src/meeting/agent.js";
+import { isEnglishSentence } from "../src/meeting/speech-gate.js";
 import { renderCameraPage } from "../src/meeting/camera.js";
 import { noteAgentMember } from "../src/meeting/seat.js";
 import { createApp } from "../src/server.js";
@@ -71,8 +72,10 @@ test("an exact retry keeps its key; other content under the same key gets anothe
   assert.equal(memoryKey(doc), memoryKey(structuredClone(doc)));
   assert.notEqual(memoryKey(doc), memoryKey({ ...doc, activity: { id: "activity-1", verb: "assign" } }));
   const action = { kind: "action", text: "action a 1", idempotencyKey: "a:action:1", actionItem: { actionRecord: { id: "a", state: "sending" } } };
-  assert.equal(memoryKey(action), memoryKey(structuredClone(action)));
-  assert.notEqual(memoryKey(action), memoryKey({ ...action, actionItem: { actionRecord: { id: "a", state: "closed" } } }));
+  // An action revision keeps its plain key: two instances writing different states
+  // as the same revision must collide (409), not fork the record.
+  assert.equal(memoryKey(action), "a:action:1");
+  assert.equal(memoryKey({ ...action, actionItem: { actionRecord: { id: "a", state: "dismissed" } } }), "a:action:1");
   // A decision keeps its plain key, so a second copy with other content is still refused.
   assert.equal(memoryKey({ kind: "decision", text: "d", idempotencyKey: "delivery-9", decision: { id: "d1" } }), "delivery-9");
   assert.equal(memoryKey(doc).length <= 255, true);
@@ -157,8 +160,9 @@ function post(port, body) {
 const sentences = (raw) => raw.split("\n\n").filter((block) => block.startsWith("event: sentence"))
   .map((block) => JSON.parse((block.match(/^data: (.+)$/m) || [])[1] || "{}").text);
 
-async function thanksTurn(people) {
+async function thanksTurn(people, text = "Thanks, Adam.", preset = null) {
   const store = new Map();
+  if (preset) store.set(`sederunt:voice:heard-line:${BOT}`, JSON.stringify(preset));
   const redis = redisFake(store);
   const chats = [];
   const fetchImpl = async (url, init) => {
@@ -181,8 +185,8 @@ async function thanksTurn(people) {
   app.listen(0, "127.0.0.1");
   await once(app, "listening");
   try {
-    const raw = await post(app.address().port, JSON.stringify({ text: "Thanks, Adam.", speaker: "Anh Nguyen", participantId: "100", turn_id: "t-thanks", people: people.map(([id]) => id) }));
-    return { raw, chats };
+    const raw = await post(app.address().port, JSON.stringify({ text, speaker: "Anh Nguyen", participantId: "100", turn_id: "t-thanks", people: people.map(([id]) => id) }));
+    return { raw, chats, store };
   } finally {
     await new Promise((resolve) => app.close(resolve));
   }
@@ -240,4 +244,49 @@ test("the page goes back to listening as soon as a turn ends with nothing to say
   assert.equal(posts.filter((row) => row.url === "/api/meeting/agent/turn").length, 1);
   assert.equal(guest.dataset.state, "listening");
   assert.equal(posts.some((row) => row.url === "/api/meeting/agent/cancel"), false);
+});
+
+test("review: the title normalizer leaves non-verb and non-leading words alone", () => {
+  for (const value of ["Fixed-price contract renewal", "Fixes for the login page", "Adding SSO to admin", "Updates page is slow",
+    "Tested", "the fixed header overlaps", "Customer added a complaint", "Fixedwidth layout bug", "fix the login bug"]) {
+    assert.equal(imperativeTitle(value), value.charAt(0).toUpperCase() + value.slice(1), value);
+  }
+  assert.equal(imperativeTitle("  FIXED   the   login bug "), "Fix the login bug");
+});
+
+test("review: closing replies stay off thanks aimed at people or carrying a request", () => {
+  for (const line of ["Thanks, Bao.", "thanks John", "thank you everyone", "thanks Adam for filing, now file the pricing bug",
+    "bye Bao", "Adam, file a bug for the thanks page", "thanks for the help Adam can you also check the deck", ""]) {
+    assert.equal(closingReply(line), "", line);
+  }
+});
+
+test("review: contraction anchors keep non-English and garbage lines out", () => {
+  assert.equal(isEnglishSentence("You're welcome."), true);
+  assert.equal(isEnglishSentence("That's all for now."), true);
+  for (const line of ["Gracias por todo amigo mío", "Merci beaucoup mon ami", "Cảm ơn bạn nhiều", "ありがとう", "danke schön vielen dank",
+    "xq zzv blorp frab qwop", "obrigado por tudo meu amigo"]) {
+    assert.equal(isEnglishSentence(line), false, line);
+  }
+});
+
+test("review: a closing line is never filed as a title answer", () => {
+  for (const line of ["bye Adam", "Bye.", "thanks", "Thanks, Adam.", "okay, thank you so much", "that's all"]) {
+    assert.equal(titleFromAnswer(line), "", line);
+  }
+  assert.equal(titleFromAnswer("fixed the bye page copy"), "Fix the bye page copy");
+});
+
+test("review: solo bare 'thanks' with no recent Adam line gets no canned reply", async () => {
+  const { raw } = await thanksTurn([["100", "Anh Nguyen"]], "thanks");
+  assert.equal(sentences(raw).includes("You're welcome."), false, raw);
+});
+
+test("review: 'thanks, Adam' while Adam waits for a title gets no canned reply and files nothing", async () => {
+  const preset = { text: "Adam, file a Linear issue", speaker: "Anh Nguyen", turn: "t-prev", roomId: BOT, assistant: "What should the title be?",
+    awaiting: { kind: "title", speaker: "Anh Nguyen", until: Date.now() + 60_000 } };
+  const { raw } = await thanksTurn([["100", "Anh Nguyen"]], "Thanks, Adam.", preset);
+  const said = sentences(raw);
+  assert.equal(said.includes("You're welcome."), false, raw);
+  assert.equal(said.some((line) => /^I filed/.test(line)), false, raw);
 });

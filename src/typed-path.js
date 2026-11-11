@@ -2874,13 +2874,15 @@ function snapshot(input, room) {
  * (Walrus answers 409). The content fingerprint keeps a true retry on one key and
  * gives a different room snapshot its own key.
  */
-const FINGERPRINTED = { room: "room", activity: "activity", action: "actionItem" };
+const FINGERPRINTED = { room: "room", activity: "activity" };
 
 export function memoryKey(document) {
   const base = String(document.idempotencyKey || document.text || "");
-  // Room snapshots, activity rows and action revisions are written in the
-  // background by more than one instance. Decisions and other records keep
-  // their plain key: a second copy with other content is refused on purpose.
+  // Room snapshots and activity rows are written in the background by more than
+  // one instance. Decisions, action revisions and other records keep their plain
+  // key: a second copy with other content is refused on purpose. For an action,
+  // "<id>:action:<revision>" is the guard that stops two instances from writing
+  // different states (say "sending" and "dismissed") as the same revision.
   const field = FINGERPRINTED[document.kind];
   const payload = field ? document[field] : null;
   if (!payload || typeof payload !== "object") return byteTrim(base, 255);
