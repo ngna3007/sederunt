@@ -6,6 +6,7 @@ import {
   approvalPlace,
   asksForWrite,
   asksHoldStatus,
+  cancelsAnswer,
   concreteTitle,
   draftedLine,
   filedVoiceLine,
@@ -418,6 +419,13 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     }
   }
   if (!answer) {
+    if (awaiting && !partial && cancelsAnswer(text, seat.botName)) {
+      // "Never mind" from the asker closes the open question, so later chatter is not an answer.
+      const closed = { ...prior, awaiting: null };
+      bag.heard.set(seat.botId, closed);
+      try { await rememberHeardLine(env, workspace.fetchImpl, seat.botId, closed); } catch {}
+      notes.awaiting = "cancelled";
+    }
     await finish();
     return;
   }
@@ -475,6 +483,11 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     }
   };
   const answeredTitle = awaiting?.kind === "title" ? titleFromAnswer(text, seat.botName) : "";
+  if (awaiting?.kind === "title" && !answeredTitle && cancelsAnswer(text, seat.botName)) {
+    await emit("Okay, I won't file it.", true);
+    await finish();
+    return;
+  }
   if (pendingHold && asksHoldStatus(text) && !answeredTitle) {
     await emit(holdStatusLine(pendingHold.title), true);
     await finish();
@@ -527,8 +540,9 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
       status: "waiting_for_approval",
       speaker: String(speaker || "").slice(0, 80),
     };
-    forgetRedis(() => rememberHeardLine(env, workspace.fetchImpl, seat.botId, heard));
   }
+  // The last word on this turn's open question. The per-line writes above are not awaited and can land out of order.
+  try { await rememberHeardLine(env, workspace.fetchImpl, seat.botId, heard); } catch {}
   await finish(abort.signal.aborted ? { aborted: true } : {});
 }
 
@@ -565,6 +579,8 @@ function awaitingAnswer(prior, speaker, roomId) {
   const left = String(row.speaker || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
   const right = String(speaker || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
   if (left && right && left !== right) return null;
+  // A title answer files an issue, so it must come from the named asker.
+  if (row.kind === "title" && (!left || !right)) return null;
   return row;
 }
 

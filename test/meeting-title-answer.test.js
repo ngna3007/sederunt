@@ -4,7 +4,7 @@ import { request } from "node:http";
 import test from "node:test";
 import vm from "node:vm";
 import { createSession } from "../src/session.js";
-import { asksForWrite, isTitleQuestion, linesForSpeech, TITLE_QUESTION, titleFromAnswer } from "../src/meeting/agent.js";
+import { asksForWrite, cancelsAnswer, isTitleQuestion, linesForSpeech, TITLE_QUESTION, titleFromAnswer } from "../src/meeting/agent.js";
 import { renderCameraPage } from "../src/meeting/camera.js";
 import { noteAgentMember } from "../src/meeting/seat.js";
 import { createApp } from "../src/server.js";
@@ -367,4 +367,83 @@ test("a line the page did not send can still be sent when it is said again", asy
   again.openFloor("Anh Nguyen");
   await again.say("fix the onboarding email before launch");
   assert.equal(again.turns().length, 1, "an earlier unsent copy of the line does not block the answer");
+});
+
+test("title answers: questions, greetings, thanks, and narration are never a title", () => {
+  for (const line of [
+    "What time is it", "how long will this take", "Can you hear me", "Is this thing on",
+    "Thank you so much", "Hello Adam how are you", "Sorry I did not catch that",
+    "Let me share my screen first", "Let's move on to the budget", "I think we should wait",
+    "I filed the Linear issue", "Sure. What should the issue say", "One second please",
+  ]) assert.equal(titleFromAnswer(line), "", line);
+  assert.equal(titleFromAnswer("Okay, fix the onboarding email"), "Fix the onboarding email");
+  assert.equal(titleFromAnswer("Yes, ship the pricing page"), "Ship the pricing page");
+  assert.equal(titleFromAnswer("Can't log in on Safari"), "Can't log in on Safari");
+  assert.equal(cancelsAnswer("Adam, never mind"), true);
+  assert.equal(cancelsAnswer("No, cancel that."), true);
+  assert.equal(cancelsAnswer(TITLE), false);
+});
+
+function pendingRig(botId, speaker = "Anh Nguyen") {
+  const issues = [];
+  const linear = { async createIssue(input) { issues.push(input); return { identifier: "ROW-9", id: "ROW-9" }; } };
+  const seats = [{ ear: EAR, botId, tenantId: TENANT, roomId: botId, botName: "Adam" }];
+  const live = rig({ seats, deps: { linear }, chatsFor: () => chatStream("Okay.") });
+  live.store.set(`sederunt:voice:heard-line:${botId}`, JSON.stringify({
+    text: "Adam, create a task on Linear.", speaker, turn: "t-q", roomId: botId,
+    assistant: TITLE_QUESTION, hold: null, awaiting: { kind: "title", speaker, until: Date.now() + 60_000 },
+  }));
+  const app = boot(live.fetchImpl, live.shared);
+  noteAgentMember({ meetingVoice: live.meetingVoice }, botId, { participantId: "7", name: "Anh Nguyen", memberId: "7" });
+  return { issues, live, app };
+}
+
+test("never mind closes the pending title question; later chatter is not filed", async () => {
+  const { issues, live, app } = pendingRig("bot-nm");
+  const port = await listen(app);
+  try {
+    await post(port, turn("Never mind.", "t-nm", ["7", "8"]));
+    assert.equal(heardLine(live.store, "bot-nm").awaiting, null);
+    await post(port, turn("Ship the pricing page by Friday.", "t-after", ["7", "8"]));
+    assert.equal(issues.length, 0);
+  } finally {
+    await close(app);
+  }
+});
+
+test("no, cancel that answers the title question without filing", async () => {
+  const { issues, live, app } = pendingRig("bot-cancel");
+  const port = await listen(app);
+  try {
+    const res = await post(port, turn("No, cancel that.", "t-cancel", ["7", "8"]));
+    assert.deepEqual(sentences(res.raw), ["Okay, I won't file it."]);
+    assert.equal(issues.length, 0);
+    assert.equal(live.chats.length, 0);
+    assert.equal(heardLine(live.store, "bot-cancel").awaiting, null);
+  } finally {
+    await close(app);
+  }
+});
+
+test("a question while the title is pending goes to the model and files nothing", async () => {
+  const { issues, live, app } = pendingRig("bot-q");
+  const port = await listen(app);
+  try {
+    await post(port, turn("What time is it", "t-q2", ["7", "8"]));
+    assert.equal(issues.length, 0);
+    assert.equal(live.chats.length, 1);
+  } finally {
+    await close(app);
+  }
+});
+
+test("a title question with no named asker does not file an unnamed speaker's line", async () => {
+  const { issues, app } = pendingRig("bot-anon", "");
+  const port = await listen(app);
+  try {
+    await post(port, turn(`${TITLE}.`, "t-anon", ["7", "8"]));
+    assert.equal(issues.length, 0);
+  } finally {
+    await close(app);
+  }
 });

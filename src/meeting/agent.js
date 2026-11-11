@@ -95,6 +95,18 @@ export function asksForWrite(text) {
     || /\b(create|file|log|open|add|make)\b.*\b(one|it|that|this)\b/.test(value);
 }
 
+/** A spoken question, greeting, thanks, apology, hesitation, or narration: never an issue title. */
+const NOT_A_TITLE = /^(?:(?:what|when|who|whom|whose|where|why|which|how|can|could|would|will|shall|should|is|are|am|was|were|do|does|did|have|has|may|might)(?!['’])\b|(?:hi|hello|hey|thanks|thank you|thx|cheers|sorry|pardon|excuse me|hmm+|hm+|good (?:morning|afternoon|evening)|nice|great|cool|perfect|got it|i see|i (?:don'?t|do not) know|(?:i'?m )?not sure|let me|let'?s|let us|one (?:sec|second|moment)|just a (?:sec|second|moment)|give me a|i'?ll (?:think|get back)|i (?:think|guess|mean|was|am|have|filed|drafted|can|could|will|would)|i'?ve|i'?m|you there|are you there|testing)\b)/i;
+
+/** The asker withdrew the request ("never mind", "no, cancel that", "forget it"). */
+export function cancelsAnswer(text, botName = "Adam") {
+  let value = String(text || "").replace(/\s+/g, " ").trim();
+  const name = String(botName || "Adam").replace(/[^\p{L}\p{N} ]+/gu, "").trim();
+  const names = [name, "adam"].filter(Boolean).map((item) => item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  value = value.replace(new RegExp(`^(?:(?:hey|hi|ok|okay|so)[,\\s]+)?(?:${names.join("|")})\\b[,.:!\\s]*`, "iu"), "");
+  return /^(?:no|nope|nah|cancel|never ?mind|forget (?:it|that|about it)|stop|skip|don'?t|do not|wait|hold on|that'?s all|that is all|not now|no thanks)\b/i.test(value);
+}
+
 /**
  * The asker's answer to a title question, without a wake word, a lead-in, or end punctuation.
  * Returns "" when nothing concrete is left.
@@ -108,8 +120,11 @@ export function titleFromAnswer(text, botName = "Adam") {
   const names = [name, "adam"].filter(Boolean).map((item) => item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   const wake = new RegExp(`^(?:(?:hey|hi|ok|okay|so)[,\\s]+)?(?:${names.join("|")})\\b[,.:!\\s]*`, "iu");
   value = value.replace(wake, "");
+  value = value.replace(/^(?:(?:ok|okay|yes|yeah|yep|sure|so|well|um+|uh+|alright|all right)\b[,.!:\s]+)+/i, "");
+  value = value.replace(wake, "");
   if (/\?\s*$/.test(value)) return "";
-  if (/^(?:no|nope|nah|cancel|never ?mind|forget (?:it|that)|stop|skip|don'?t|do not|wait|hold on)\b/i.test(value)) return "";
+  if (cancelsAnswer(value, botName)) return "";
+  if (NOT_A_TITLE.test(value)) return "";
   value = value.replace(/^(?:it should say|it says|say|call it|title it|the title is|title|the issue is|make it|name it)\b[,:\s]*/i, "");
   value = value.replace(/^["'“‘]+|["'”’]+$/g, "").replace(/[\s.!?,;:]+$/g, "").trim();
   if (value) value = value.charAt(0).toUpperCase() + value.slice(1);
