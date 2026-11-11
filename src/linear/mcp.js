@@ -11,9 +11,11 @@ const MCP_URL = "https://mcp.linear.app/mcp";
 export function createLinearClient(token, fetchImpl = globalThis.fetch, options = {}) {
   const team = String(options.team || "ROW").trim() || "ROW";
   const workspace = String(options.workspace || "").trim();
+  const project = String(options.project || "Sederunt").trim() || "Sederunt";
   let sessionId = "";
   let nextId = 1;
   let started = null;
+  let teamRef = null;
 
   async function rpc(method, params, { notify = false } = {}) {
     const headers = {
@@ -37,9 +39,10 @@ export function createLinearClient(token, fetchImpl = globalThis.fetch, options 
       throw new Error(`Linear MCP ${method} failed with HTTP ${response.status}`);
     }
     if (notify || !text.trim()) return null;
-    const payload = parseRpc(text);
+    const payload = parseRpc(text, message.id);
     if (payload.error) {
-      throw new Error(`Linear MCP ${method} failed: ${payload.error.message || "error"}`);
+      // A JSON-RPC error (for example invalid params) is a refusal: nothing was saved.
+      throw Object.assign(new Error(`Linear MCP ${method} failed: ${payload.error.message || "error"}`), { rejected: true });
     }
     return payload.result;
   }
@@ -53,6 +56,25 @@ export function createLinearClient(token, fetchImpl = globalThis.fetch, options 
     await rpc("notifications/initialized", {}, { notify: true });
   }
 
+  /**
+   * save_issue and list_issues take a team name or ID (Linear MCP schema); get_team
+   * also takes a key. Resolve the configured key to the team ID once, and fall back
+   * to the key if the lookup fails.
+   */
+  function teamFor() {
+    if (!teamRef) {
+      teamRef = callTool("get_team", { query: team }).then((result) => {
+        const parsed = parseToolJson(result);
+        const row = parsed?.team && typeof parsed.team === "object" ? parsed.team : parsed;
+        const id = typeof row?.id === "string" ? row.id.trim() : "";
+        const key = typeof row?.key === "string" ? row.key.trim().toUpperCase() : "";
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) && (!key || key === team.toUpperCase())) return id;
+        return team;
+      }, () => team);
+    }
+    return teamRef;
+  }
+
   function ensureStarted() {
     if (!started) started = start();
     return started;
@@ -63,7 +85,8 @@ export function createLinearClient(token, fetchImpl = globalThis.fetch, options 
     const result = await rpc("tools/call", { name, arguments: args });
     if (result?.isError) {
       const message = toolText(result) || "Linear tool failed";
-      throw new Error(message);
+      // Linear answered with a tool error: the call was refused, nothing was saved.
+      throw Object.assign(new Error(message), { rejected: true });
     }
     return result;
   }
@@ -90,22 +113,32 @@ export function createLinearClient(token, fetchImpl = globalThis.fetch, options 
       const open = issuesFrom(await callTool("list_issues", { team, limit: 25 }));
       return { team, trip, open };
     },
-    async createIssue({ title, idempotencyKey, description }) {
+    async createIssue({ title, description }) {
+      // save_issue takes title, team, project, description (Linear MCP schema).
+      // It has no idempotency argument: the action claim keeps a filing to one call.
       const args = {
         title,
-        team,
-        project: "Sederunt",
+        team: await teamFor(),
+        project,
         description: typeof description === "string" && description.trim() ? description.trim() : "Filed from a room.",
       };
-      if (idempotencyKey) args.idempotencyKey = idempotencyKey;
-      const result = await callTool("save_issue", args);
-      const parsed = parseToolJson(result);
-      const identifier = findIdentifier(parsed) || findIdentifier(result);
-      if (!identifier) {
-        const snippet = toolText(result).replace(/\s+/g, " ").slice(0, 500);
-        throw new Error(`Linear create returned no issue id. ${snippet}`);
+      let result;
+      try {
+        result = await callTool("save_issue", args);
+      } catch (error) {
+        // A workspace without the "Sederunt" project rejects the save. Linear
+        // created nothing, so file once more into the team alone.
+        if (!error?.rejected || !/project/i.test(String(error.message || ""))) throw error;
+        const { project: _dropped, ...teamOnly } = args;
+        result = await callTool("save_issue", teamOnly);
       }
-      const url = findUrl(parsed) || findUrl(result) || issueUrl(workspace, identifier);
+      const parsed = parseToolJson(result);
+      const identifier = findIdentifier(parsed) || findIdentifier(result) || identifierInText(toolText(result), team);
+      if (!identifier) {
+        const fields = parsed && typeof parsed === "object" ? Object.keys(parsed).slice(0, 8).join(",") : typeof parsed;
+        throw Object.assign(new Error(`Linear create returned no issue id (fields: ${fields}).`), { reason: "no-id" });
+      }
+      const url = findUrl(parsed) || findUrl(result) || urlInText(toolText(result), identifier) || issueUrl(workspace, identifier);
       return { id: identifier, identifier, url };
     },
     async assignIssue({ id, assignee }) {
@@ -145,16 +178,32 @@ export function createLinearClient(token, fetchImpl = globalThis.fetch, options 
   };
 }
 
-function parseRpc(text) {
-  const trimmed = text.trim();
-  if (trimmed.startsWith("{")) return JSON.parse(trimmed);
-  const data = trimmed
-    .split("\n")
-    .filter((line) => line.startsWith("data:"))
-    .map((line) => line.slice(5).trim())
-    .filter(Boolean);
-  if (data.length === 0) throw new Error("Linear MCP returned an empty body");
-  return JSON.parse(data[data.length - 1]);
+/**
+ * The JSON-RPC response to request `id`. A Streamable HTTP reply can be an SSE
+ * stream that also carries notifications (progress, logs) before or after the
+ * response, so the last event is not always the answer.
+ */
+export function parseRpc(text, id) {
+  const trimmed = String(text || "").trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) return pickResponse(JSON.parse(trimmed), id);
+  const events = [];
+  for (const block of trimmed.split(/\r?\n\r?\n/)) {
+    const data = block.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).replace(/^ /, ""));
+    if (!data.length) continue;
+    try { events.push(JSON.parse(data.join("\n"))); } catch {}
+  }
+  if (events.length === 0) throw new Error("Linear MCP returned an empty body");
+  return pickResponse(events.flat(), id);
+}
+
+function pickResponse(value, id) {
+  const list = Array.isArray(value) ? value : [value];
+  const answers = list.filter((row) => row && typeof row === "object" && ("result" in row || "error" in row));
+  if (id !== undefined && id !== null) {
+    const matched = answers.find((row) => row.id === id);
+    if (matched) return matched;
+  }
+  return answers[answers.length - 1] || list[list.length - 1] || {};
 }
 
 function toolText(result) {
@@ -226,6 +275,25 @@ function findIdentifier(value) {
     }
   }
   return "";
+}
+
+function identifierInText(text, team) {
+  if (typeof text !== "string" || !text) return "";
+  const url = text.match(/https:\/\/linear\.app\/[^\s/]+\/issue\/([A-Za-z][A-Za-z0-9]+-\d+)/);
+  if (url) return rowId(url[1]);
+  const key = String(team || "").trim().toUpperCase();
+  if (!/^[A-Z][A-Z0-9]+$/.test(key)) return "";
+  // A bare key in a reply that reads as a failure is not this issue's id.
+  if (/\b(error|errors|failed|failure|invalid|not found|could not|couldn'?t|unable|denied|forbidden|unauthori[sz]ed|duplicate|already exists)\b/i.test(text)) return "";
+  const named = text.match(new RegExp(`\\b${key}-\\d+\\b`));
+  return named ? rowId(named[0]) : "";
+}
+
+function urlInText(text, identifier) {
+  if (typeof text !== "string" || !identifier) return "";
+  const found = text.match(/https:\/\/linear\.app\/[^\s/]+\/issue\/[A-Za-z][A-Za-z0-9]+-\d+[^\s)"'\]]*/);
+  if (!found || rowId(found[0].split("/issue/")[1].split("/")[0]) !== identifier) return "";
+  return found[0].split("?")[0];
 }
 
 function parseMaybe(text) {

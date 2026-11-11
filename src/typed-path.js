@@ -668,14 +668,16 @@ async function callConnector(session, deps, action, auth) {
   } catch (error) {
     action.state = "outcome_unknown";
     action.connectorId = null;
-    await persistAction(deps, action);
     const message = error instanceof Error ? error.message : "";
+    noteConnectorFailure(deps, action, message, error?.rejected === true ? "rejected" : String(error?.reason || "threw"));
+    await persistAction(deps, action);
     return didNotHappen(session, deps, action, auth, message);
   }
   const issueId = connectorId(created);
   const assigning = action.edit === "assign";
   const status = itemStatus({ kind: "ticket", edit: assigning ? "update" : action.edit }, issueId);
   if (status !== "filed" && status !== "updated") {
+    noteConnectorFailure(deps, action, "", "no-id");
     action.state = "outcome_unknown";
     action.connectorId = null;
     await persistAction(deps, action);
@@ -817,6 +819,27 @@ async function runConnector(deps, action) {
       actor: { type: "person", name: action.speaker || action.memberName || "" },
     }, deps),
   });
+}
+
+/**
+ * A connector call that failed left no trace (Nov 11 2026, bot 01ccb144: the
+ * Linear save failed inside a second and nothing was logged). Log the tool and
+ * a short error with secrets and the spoken title taken out.
+ */
+function noteConnectorFailure(deps, action, message, reason) {
+  if (typeof deps?.log !== "function") return;
+  let text = String(message || "").replace(/\s+/g, " ");
+  for (const said of [action?.params?.title, action?.params?.text, action?.statement]) {
+    if (typeof said === "string" && said.trim().length >= 3) text = text.split(said.trim()).join("[title]");
+  }
+  text = text
+    .replace(/bearer\s+[^\s"']+/gi, "Bearer [redacted]")
+    .replace(/(token|secret|key|authorization)(["'\s:=]+)[^\s"',}]+/gi, "$1$2[redacted]")
+    .replace(/[A-Za-z0-9_\-]{32,}/g, "[redacted]")
+    .slice(0, 240);
+  try {
+    deps.log({ kind: "connector-failed", tool: String(action?.tool || ""), edit: String(action?.edit || "create"), reason: String(reason || ""), message: text });
+  } catch {}
 }
 
 async function didNotHappen(session, deps, action, auth, message) {

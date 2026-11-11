@@ -719,6 +719,7 @@ function toolResultLine(toolResults, existingHold) {
   const filedRow = rows.find((row) => row?.status === "filed");
   if (filedRow) return filedVoiceLine(filedRow.title || "");
   if (rows.some((row) => row?.reason === "file-failed")) return "The Linear issue did not go through.";
+  if (rows.some((row) => row?.reason === "file-unconfirmed")) return UNCONFIRMED_LINE;
   const heldRow = rows.find((row) => row?.status === "waiting_for_approval" || row?.held === true);
   if (heldRow) return draftedLine(heldRow.tool, heldRow.title);
   return "";
@@ -862,6 +863,13 @@ async function executeAgentTool(input) {
         const raw = { ok: true, status: "filed", title, tool: name, issueId: filed.issueId };
         return { raw, wrapped: wrapToolResult(raw, name) };
       }
+      if (filed?.unconfirmed) {
+        // Linear was called and gave back no issue. That is not a request for
+        // approval: say so, and do not draft a second copy (Nov 11, bot 01ccb144).
+        if (filed.rejected) await releaseWrite(input, name, args);
+        const raw = { ok: false, reason: filed.rejected ? "file-failed" : "file-unconfirmed", held: false, title };
+        return { raw, wrapped: wrapToolResult(raw, name) };
+      }
       if (filed?.allow === "not-invited") {
         undoEmptyFile(input.session, filed.deliveryId);
         await releaseWrite(input, name, args);
@@ -962,6 +970,27 @@ async function fileVoiceLinear(input, name, args, memberId) {
   const title = String(args?.title || "").replace(/\s+/g, " ").trim().slice(0, 120);
   const deliveryId = `voice-file-${input.turnId || heldActionId(input.seat.roomId, owner, name, args)}`;
   const later = deferredMemory(input, input.deps || {});
+  const linear = later.deps.linear;
+  const failure = { called: false, rejected: false };
+  const watched = linear && typeof linear === "object" ? new Proxy(linear, {
+    get(target, prop) {
+      const value = Reflect.get(target, prop, target);
+      if (prop !== "createIssue" || typeof value !== "function") return typeof value === "function" ? value.bind(target) : value;
+      return async (...rest) => {
+        failure.called = true;
+        try {
+          return await value.apply(target, rest);
+        } catch (error) {
+          // No client, or a grant that needs reconnecting: Linear was never asked.
+          // (fetch's own "fetch failed" TypeError is a real call with an unknown outcome.)
+          const missing = error instanceof TypeError && /is not a function|Cannot read properties/.test(String(error.message || ""));
+          if (missing || error?.reason === "failed") failure.called = false;
+          failure.rejected = error?.rejected === true;
+          throw error;
+        }
+      };
+    },
+  }) : linear;
   let result = null;
   try {
     result = await handleUtterance({
@@ -980,20 +1009,22 @@ async function fileVoiceLinear(input, name, args, memberId) {
       },
       participants,
       session: input.session,
-    }, later.deps);
+    }, { ...later.deps, linear: watched });
   } catch {
     later.keep();
-    return { deliveryId };
+    return failure.called ? { deliveryId, unconfirmed: true, rejected: failure.rejected } : { deliveryId };
   }
   later.keep();
   const issueId = String(result?.issueId || "").trim();
   if (issueId) return { issueId, deliveryId };
+  if (failure.called) return { deliveryId, allow: result?.allow || "", unconfirmed: true, rejected: failure.rejected };
   return { deliveryId, allow: result?.allow || "" };
 }
 
 const MEMORY_KEEP_MS = 55_000;
 const FILING_NUDGE_MS = 4000;
 const FILING_LINE = "Filing it in Linear now.";
+const UNCONFIRMED_LINE = "Linear did not confirm the issue, so please check Linear before asking again.";
 
 /**
  * A voice filing must speak inside the turn. Each Walrus Memory write takes
@@ -1045,6 +1076,28 @@ function deferredMemory(input, deps) {
     },
   };
 }
+
+const HOLD_WAIT_MS = 1500;
+
+async function settleOrKeep(input, work, kindName) {
+  const started = Date.now();
+  let timer;
+  const slow = new Promise((resolve) => { timer = setTimeout(() => resolve(SLOW), HOLD_WAIT_MS); timer.unref?.(); });
+  const quick = await Promise.race([work.then((value) => value, () => false), slow]);
+  clearTimeout(timer);
+  if (quick !== SLOW) return quick;
+  const deps = input.deps || {};
+  const log = typeof deps.log === "function" ? deps.log : (row) => console.info(JSON.stringify(row));
+  const settled = work.then(
+    (value) => noteDeferred(log, kindName, Date.now() - started, value !== false, value === false ? "not saved" : undefined),
+    (error) => noteDeferred(log, kindName, Date.now() - started, false, error),
+  );
+  const all = Promise.race([settled, new Promise((resolve) => { const t = setTimeout(resolve, MEMORY_KEEP_MS); t.unref?.(); })]);
+  keepAlive(input.workspace, input.env, all);
+  return true;
+}
+
+const SLOW = Symbol("slow");
 
 function noteDeferred(log, kindName, ms, ok, error) {
   const row = { kind: ok ? "memory-deferred" : "memory-remember-error", kindName, ms: Math.round(ms), deferred: true };
@@ -1185,7 +1238,10 @@ async function rememberHold(input, name, args, memberId) {
     status: "held",
   };
   if (!(action.revision >= 1)) {
-    const saved = await rememberHeldAction(input.deps, action);
+    // The hold's Walrus write took 22 s inside the live turn (Nov 11, bot 01ccb144).
+    // A store that refuses at once still fails the hold; a slow write finishes
+    // after the reply and is kept alive like the filing's own writes.
+    const saved = await settleOrKeep(input, rememberHeldAction(input.deps, action), "held-action");
     if (!saved) return false;
   }
   const session = input.session;
