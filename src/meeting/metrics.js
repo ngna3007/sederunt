@@ -51,10 +51,15 @@ export function noteTurnLog(clock) {
     firstByte: latency(clock?.firstByte, origin),
     playback: latency(clock?.playback, origin),
   };
+  if (typeof clock?.redis === "number" && Number.isFinite(clock.redis)) row.redis = clock.redis;
   turnRows.push(row);
   if (turnRows.length > 200) turnRows.shift();
   console.info(JSON.stringify({ meeting: "turn", ...row }));
   return row;
+}
+
+function keyNames(list) {
+  return Array.isArray(list) ? list.map((key) => String(key).slice(0, 40)).slice(0, 8) : [];
 }
 
 /** Shape of one socket message. Speaker names and word text are not stored. */
@@ -63,7 +68,12 @@ export function noteSocketShape(shape) {
     event: String(shape?.event || "").slice(0, 60),
     words: Math.max(0, Math.round(Number(shape?.words) || 0)),
     final: shape?.final === true,
-    keys: Array.isArray(shape?.keys) ? shape.keys.map((key) => String(key).slice(0, 40)).slice(0, 8) : [],
+    keys: keyNames(shape?.keys),
+    transcript: keyNames(shape?.transcript),
+    data: keyNames(shape?.data),
+    dataData: keyNames(shape?.dataData),
+    participant: keyNames(shape?.participant),
+    word: keyNames(shape?.word),
   };
   socketRows.push(row);
   if (socketRows.length > 200) socketRows.shift();
@@ -76,7 +86,15 @@ export function meetingMetrics() {
     tools: toolRows.map((row) => ({ ...row })),
     stages: stageRows.map((row) => ({ ...row })),
     turns: turnRows.map((row) => ({ ...row })),
-    sockets: socketRows.map((row) => ({ ...row, keys: [...row.keys] })),
+    sockets: socketRows.map((row) => ({
+      ...row,
+      keys: [...row.keys],
+      transcript: [...(row.transcript || [])],
+      data: [...(row.data || [])],
+      dataData: [...(row.dataData || [])],
+      participant: [...(row.participant || [])],
+      word: [...(row.word || [])],
+    })),
   };
 }
 

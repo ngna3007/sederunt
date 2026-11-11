@@ -23,11 +23,15 @@ import {
   agentMember,
   agentTurnCurrent,
   claimUtterance,
+  countRedisTurn,
+  forgetRedis,
   holdAgentTurn,
+  inRedisTurn,
   loadAgentClock,
   loadAgentFloor,
   loadHeardLine,
   loadSpokenTurn,
+  redisTurnCount,
   releaseAgentTurn,
   rememberAgentClock,
   rememberAgentFloor,
@@ -35,6 +39,7 @@ import {
   rememberHeardLine,
   rememberSpokenTurn,
   resolveAgentSeat,
+  settleRedisTurn,
   takeSocketSample,
 } from "./seat.js";
 import { openRouterSpeechStream, openRouterStream } from "../openrouter.js";
@@ -67,6 +72,7 @@ function runtime(workspace) {
 
 function writeEvent(res, name, data) {
   res.write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`);
+  if (res.socket && typeof res.socket.uncork === "function") res.socket.uncork();
 }
 
 function allowSpeak(bag, botId) {
@@ -81,11 +87,11 @@ function allowSpeak(bag, botId) {
   return true;
 }
 
-async function rememberLine(bag, env, fetchImpl, botId, turn, text) {
+function rememberLine(bag, env, fetchImpl, botId, turn, text) {
   const hash = sentenceHash(text);
   if (!bag.lines.has(botId)) bag.lines.set(botId, new Map());
   bag.lines.get(botId).set(hash, { text, turn, at: Date.now() });
-  await rememberSpokenTurn(env, fetchImpl, botId, hash, turn);
+  forgetRedis(() => rememberSpokenTurn(env, fetchImpl, botId, hash, turn));
   return hash;
 }
 
@@ -185,15 +191,16 @@ async function hydrateFloor(session, env, fetchImpl, seat) {
   if (loaded && loaded.roomId === seat.roomId) session.meetingFloor = loaded;
 }
 
-async function stampClock(workspace, env, botId, turn, field, at) {
+function stampClock(workspace, env, botId, turn, field, at) {
   const bag = runtime(workspace);
   const id = `${botId}:${turn}`;
-  let clock = bag.clocks.get(id) || await loadAgentClock(env, workspace.fetchImpl, botId, turn) || {};
+  let clock = bag.clocks.get(id) || {};
   if (field === "endpoint" && typeof clock.endpoint === "number") return clock;
   clock = { ...clock, [field]: at };
   if (field !== "endpoint" && typeof clock.endpoint !== "number") clock.endpoint = at;
   bag.clocks.set(id, clock);
-  await rememberAgentClock(env, workspace.fetchImpl, botId, turn, clock);
+  const saved = { ...clock };
+  forgetRedis(() => rememberAgentClock(env, workspace.fetchImpl, botId, turn, saved));
   if (field === "playback" && clock.logged !== true) {
     clock.logged = true;
     bag.clocks.set(id, clock);
@@ -207,7 +214,12 @@ async function notePlayback(workspace, env, seat) {
   const bag = runtime(workspace);
   const heard = bag.heard.get(seat.botId) || await loadHeardLine(env, workspace.fetchImpl, seat.botId);
   if (!heard?.turn) return;
-  await stampClock(workspace, env, seat.botId, heard.turn, "playback", Date.now());
+  const id = `${seat.botId}:${heard.turn}`;
+  if (!bag.clocks.get(id)) {
+    const loaded = await loadAgentClock(env, workspace.fetchImpl, seat.botId, heard.turn);
+    if (loaded) bag.clocks.set(id, { ...loaded });
+  }
+  stampClock(workspace, env, seat.botId, heard.turn, "playback", Date.now());
 }
 
 async function spokenForTurn(bag, env, fetchImpl, botId, text) {
@@ -221,17 +233,35 @@ async function spokenForTurn(bag, env, fetchImpl, botId, text) {
   return null;
 }
 
+function keyNames(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  return Object.keys(value).slice(0, 8).map((key) => String(key).slice(0, 40));
+}
+
 function socketShape(message) {
   const root = message && typeof message === "object" && !Array.isArray(message) ? message : {};
-  const transcript = root.transcript && typeof root.transcript === "object" ? root.transcript : null;
-  const data = root.data && typeof root.data === "object" ? root.data : null;
-  const inner = data?.data && typeof data.data === "object" ? data.data : null;
+  const transcript = root.transcript && typeof root.transcript === "object" && !Array.isArray(root.transcript) ? root.transcript : null;
+  const data = root.data && typeof root.data === "object" && !Array.isArray(root.data) ? root.data : null;
+  const inner = data?.data && typeof data.data === "object" && !Array.isArray(data.data) ? data.data : null;
   const lists = [inner?.words, data?.words, transcript?.words, root.words];
   const words = lists.find(Array.isArray);
   const keys = Object.keys(root).filter((key) => key !== "transcript" && key !== "data" && key !== "words").slice(0, 8);
   const event = String(root.event || root.type || (transcript ? "transcript" : "")).slice(0, 60);
   const final = transcript && typeof transcript.is_final === "boolean" ? transcript.is_final === true : event === "transcript.data";
-  return { event, words: Array.isArray(words) ? words.length : 0, final, keys };
+  const participant = [inner?.participant, data?.participant, transcript?.participant, root.participant]
+    .find((value) => value && typeof value === "object" && !Array.isArray(value)) || null;
+  const firstWord = Array.isArray(words) && words[0] && typeof words[0] === "object" ? words[0] : null;
+  return {
+    event,
+    words: Array.isArray(words) ? words.length : 0,
+    final,
+    keys,
+    transcript: keyNames(transcript),
+    data: keyNames(data),
+    dataData: keyNames(inner),
+    participant: keyNames(participant),
+    word: keyNames(firstWord),
+  };
 }
 
 async function logSocket(workspace, env, seat, body) {
@@ -257,6 +287,7 @@ async function cancelTurn(workspace, env, botId) {
 }
 
 async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, body) {
+  if (!inRedisTurn()) return countRedisTurn(() => streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, body));
   const bag = runtime(workspace);
   const text = String(body?.text || "").replace(/\s+/g, " ").trim().slice(0, 4000);
   const speaker = String(body?.speaker || body?.speakerName || "").trim().slice(0, 80);
@@ -269,7 +300,12 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     "cache-control": "no-store",
     "x-accel-buffering": "no",
   });
-  const finish = (extra = {}) => {
+  const finish = async (extra = {}) => {
+    await settleRedisTurn();
+    const redis = redisTurnCount();
+    const clock = bag.clocks.get(`${seat.botId}:${turn}`);
+    if (clock) clock.redis = redis;
+    console.info(JSON.stringify({ meeting: "turn", redis }));
     if (!res.writableEnded) {
       writeEvent(res, "done", { turn_id: turn, ...extra });
       res.end();
@@ -287,27 +323,27 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
   const answer = Boolean(text) && agentLive(env) && shouldRespond(session, delivery, { name: seat.botName, participantId: seat.participantId });
   const key = answer ? utteranceKey(text, speaker) : "";
   if (key && !acceptUtterance(bag.recent, seat.botId, key)) {
-    finish({ duplicate: true });
+    await finish({ duplicate: true });
     return;
   }
   if (key && await claimUtterance(env, workspace.fetchImpl, seat.botId, key) === false) {
-    finish({ duplicate: true });
+    await finish({ duplicate: true });
     return;
   }
   if (requested && seenTurn(bag, seat.botId, requested)) {
-    finish({ duplicate: true });
+    await finish({ duplicate: true });
     return;
   }
   if (requested) {
     const won = await rememberAgentTurn(env, workspace.fetchImpl, seat.botId, requested);
     markTurn(bag, seat.botId, requested);
     if (!won) {
-      finish({ duplicate: true });
+      await finish({ duplicate: true });
       return;
     }
   }
   if (!answer) {
-    finish();
+    await finish();
     return;
   }
   refreshMeetingFloor(session, delivery);
@@ -315,7 +351,7 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
   const heard = { text, speaker, turn, roomId: seat.roomId };
   bag.heard.set(seat.botId, heard);
   await rememberHeardLine(env, workspace.fetchImpl, seat.botId, heard);
-  await stampClock(workspace, env, seat.botId, turn, "endpoint", Date.now());
+  stampClock(workspace, env, seat.botId, turn, "endpoint", Date.now());
   const previous = bag.live.get(seat.botId);
   if (previous) {
     previous.abort.abort();
@@ -335,7 +371,7 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     for (const line of linesForSpeech(full, toolResults, { done })) {
       if (sent.has(line) || sent.size >= 2) continue;
       sent.add(line);
-      const hash = await rememberLine(bag, env, workspace.fetchImpl, seat.botId, turn, line);
+      const hash = rememberLine(bag, env, workspace.fetchImpl, seat.botId, turn, line);
       writeEvent(res, "sentence", { text: line, hash });
     }
   };
@@ -368,7 +404,7 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     const live = bag.live.get(seat.botId);
     if (live?.turnId === turn) bag.live.delete(seat.botId);
   }
-  finish(abort.signal.aborted ? { aborted: true } : {});
+  await finish(abort.signal.aborted ? { aborted: true } : {});
 }
 
 function userTurn(session, seat, speaker, text) {
@@ -479,7 +515,7 @@ async function streamOneRound(input) {
       if (saw && !input.tokenNoted) {
         input.tokenNoted = true;
         noteStageMetric("first-token", Date.now() - (input.startedAt || Date.now()));
-        await stampClock(input.workspace, input.env, input.botId, input.turnId, "firstToken", Date.now());
+        stampClock(input.workspace, input.env, input.botId, input.turnId, "firstToken", Date.now());
       }
       return { full, text: result?.text || "", toolCalls: toolCalls.filter((call) => input.tools.some((tool) => tool.function.name === call.name)) };
     }
@@ -612,14 +648,41 @@ function heldActionId(roomId, memberId, name, args) {
   return `action-${createHash("sha256").update(body).digest("hex").slice(0, 32)}`;
 }
 
+async function boundWorkspaceMember(input, participantId) {
+  const bindings = input.workspace?.participantBindings;
+  const tenantId = typeof input.seat?.tenantId === "string" ? input.seat.tenantId : "";
+  const roomId = typeof input.seat?.roomId === "string" ? input.seat.roomId : "";
+  const participant = String(participantId || "");
+  if (!bindings || typeof bindings.forRoom !== "function" || !tenantId || !roomId || !participant) return "";
+  let rows = [];
+  try {
+    rows = await bindings.forRoom(tenantId, roomId);
+  } catch {
+    return "";
+  }
+  if (!Array.isArray(rows)) return "";
+  const row = rows.find((item) => item
+    && String(item.memberId || "") === participant
+    && typeof item.userId === "string"
+    && item.userId.trim());
+  return row ? row.userId.trim().slice(0, 80) : "";
+}
+
 async function rememberHold(input, name, args, memberId) {
+  const participantId = String(memberId || "");
+  const workspaceMember = await boundWorkspaceMember(input, participantId);
+  const owner = workspaceMember || participantId;
+  const inviteMemberIds = [];
+  for (const id of [owner, participantId]) {
+    if (id && !inviteMemberIds.includes(id)) inviteMemberIds.push(id);
+  }
   const params = heldParams(name, args);
   const statement = String(params.title || params.text || name).slice(0, 500);
   const linear = name === "linear__create_issue";
   const action = {
-    id: heldActionId(input.seat.roomId, memberId, name, args),
+    id: heldActionId(input.seat.roomId, owner, name, args),
     roomId: input.seat.roomId,
-    memberId,
+    memberId: owner,
     tool: linear ? "linear" : name,
     callName: name,
     preference: "ask",
@@ -627,7 +690,7 @@ async function rememberHold(input, name, args, memberId) {
     params,
     missingFact: "",
     connectorId: null,
-    inviteMemberIds: [memberId],
+    inviteMemberIds,
     state: "paused",
     speaker: String(input.speaker || "").slice(0, 80),
     source: "Google Meet",
@@ -639,7 +702,7 @@ async function rememberHold(input, name, args, memberId) {
     tool: name,
     args: claimArgsFor(name, args),
     speaker: input.speaker,
-    memberId,
+    memberId: owner,
     turnId: input.turnId,
     actionId: action.id,
     status: "held",
@@ -727,6 +790,7 @@ async function invokeTool(input, name, args, signal) {
 }
 
 async function speakSentence(req, res, env, workspace, seat, body) {
+  if (!inRedisTurn()) return countRedisTurn(() => speakSentence(req, res, env, workspace, seat, body));
   const bag = runtime(workspace);
   const text = String(body?.text || "").replace(/\s+/g, " ").trim();
   if (!text || text.length > SPEAK_MAX) {
@@ -769,12 +833,14 @@ async function speakSentence(req, res, env, workspace, seat, body) {
       if (!heardAudio) {
         heardAudio = true;
         noteStageMetric("first-audio", Date.now() - speakStarted);
-        await stampClock(workspace, env, seat.botId, allowed.turn, "firstByte", Date.now());
+        stampClock(workspace, env, seat.botId, allowed.turn, "firstByte", Date.now());
       }
       res.write(chunk);
+      if (res.socket && typeof res.socket.uncork === "function") res.socket.uncork();
     }
   } catch {
     // The page stopped listening. Bytes already written are the spoken prefix.
   }
+  await settleRedisTurn();
   if (!res.writableEnded) res.end();
 }

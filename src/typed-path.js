@@ -2680,6 +2680,8 @@ function refusal(session, reason) {
  * A console confirm names the action and the member. It does not send a room.
  * The room is the one stored on the action. The invite is the decision's,
  * or the member who asked when the action has no decision.
+ * A meeting hold can also be confirmed by the signed-in person bound to that
+ * room's Recall participant.
  */
 function confirmInvite(input, session, action) {
   if (isHuddle(input.room)) return { ok: false, reason: "not-invited" };
@@ -2692,7 +2694,17 @@ function confirmInvite(input, session, action) {
   const inviteMemberIds = decision
     ? decision.inviteMemberIds
     : (typeof action.memberId === "string" && action.memberId.trim() ? [action.memberId] : []);
-  return checkInvite(input.memberId, inviteMemberIds);
+  const direct = checkInvite(input.memberId, inviteMemberIds);
+  if (direct.ok || decision) return direct;
+  const held = Array.isArray(action.inviteMemberIds) && action.inviteMemberIds.length
+    ? action.inviteMemberIds
+    : inviteMemberIds;
+  const identities = Array.isArray(input.principal?.identities) ? input.principal.identities : [];
+  const bound = action.source === "Google Meet" && identities.some((identity) =>
+    typeof identity?.roomId === "string"
+    && identity.roomId === roomId
+    && checkInvite(identity.memberId, held).ok);
+  return bound ? { ok: true, reason: "invited" } : direct;
 }
 
 function writerInvite(input) {
@@ -3343,9 +3355,33 @@ export function companyBoard(session, memberId, options = {}) {
   const waiting = [];
   let sent = 0;
   for (const action of session?.actions ?? []) {
-    if (!roomIds.has(action.roomId)) continue;
+    const meetingHold = action?.source === "Google Meet" && action?.state === "paused"
+      && typeof action.id === "string" && action.id && typeof action.roomId === "string" && action.roomId;
+    if (!meetingHold && !roomIds.has(action.roomId)) continue;
     if (action.state === "closed") {
       sent += 1;
+      continue;
+    }
+    if (meetingHold) {
+      const invite = action.inviteMemberIds?.length ? action.inviteMemberIds : [action.memberId];
+      if (!readPrincipalId(member) || !canReadRecord(member, { ...action, inviteMemberIds: invite })) continue;
+      const tool = action.tool === "linear" || action.tool === "calendar" ? action.tool : "";
+      waiting.push({
+        id: action.id,
+        roomId: action.roomId,
+        tool,
+        statement: redact(action.statement || ""),
+      });
+      if (!rooms.some((item) => item.id === action.roomId)) {
+        const setting = liveRoomSetting(session?.roomSettings, action.roomId);
+        rooms.push({
+          id: action.roomId,
+          count: 0,
+          ask: true,
+          voice: setting?.voice || "plain",
+          raiseClash: setting?.raiseClash === true,
+        });
+      }
       continue;
     }
     if (action.state !== "waiting" || typeof action.id !== "string" || !action.id) continue;

@@ -4,11 +4,12 @@ import { request } from "node:http";
 import test from "node:test";
 import vm from "node:vm";
 import { createSession } from "../src/session.js";
-import { acceptUtterance, endOfTurn, spokenLines, utteranceToCommit, wordsFromTranscript, withoutBotSpeech } from "../src/meeting/agent.js";
+import { acceptUtterance, endOfTurn, readySentences, spokenLines, utteranceToCommit, wordsFromTranscript, withoutBotSpeech } from "../src/meeting/agent.js";
 import { renderCameraPage } from "../src/meeting/camera.js";
 import { meetingMetrics, resetMeetingMetrics } from "../src/meeting/metrics.js";
 import { endAgentSeat, noteAgentMember, noteAgentSpeaker } from "../src/meeting/seat.js";
 import { openRouterSpeechStream } from "../src/openrouter.js";
+import { CONSOLE_COOKIE, sealSession } from "../src/console-auth.js";
 import { createApp } from "../src/server.js";
 import { handleUtterance, rebuildCompanyIndex } from "../src/typed-path.js";
 
@@ -128,6 +129,7 @@ function boot(fetchImpl, extra = {}) {
     connectors: extra.connectors,
     deps: { memory: null, ...(extra.deps || {}) },
     sessions: extra.sessions,
+    participantBindings: extra.participantBindings,
     fetch: fetchImpl,
   });
   return { app, session, meetingVoice };
@@ -164,6 +166,24 @@ function call(port, method, path, { headers = {}, body = "" } = {}) {
     });
     req.on("error", reject);
     if (body) req.write(body);
+    req.end();
+  });
+}
+
+function firstByte(port, path, headers, body) {
+  return new Promise((resolve, reject) => {
+    const req = request({
+      hostname: "127.0.0.1",
+      port,
+      method: "POST",
+      path,
+      headers: { ...headers, "content-length": Buffer.byteLength(body) },
+    }, (res) => {
+      res.once("data", (chunk) => resolve({ status: res.statusCode, byte: chunk[0] }));
+      res.on("error", reject);
+    });
+    req.on("error", reject);
+    req.write(body);
     req.end();
   });
 }
@@ -870,6 +890,194 @@ test("a held linear write confirms on a fresh session", async () => {
   }
 });
 
+test("a signed-in console user approves a voice hold and sees it", async () => {
+  const docs = [];
+  const memory = {
+    async remember(row) { docs.push(structuredClone(row)); return { blobId: "saved" }; },
+    async index() { return docs.map((row) => structuredClone(row)); },
+  };
+  const issues = [];
+  const linear = {
+    async createIssue(input) {
+      issues.push(input);
+      return { identifier: "ROW-9", id: "ROW-9" };
+    },
+  };
+  const secret = "console-oauth-test-secret";
+  const ownerId = "user-priya";
+  const otherId = "user-other";
+  const meetingVoice = {};
+  const session = createSession();
+  session.preferences = [{ id: "pref-oauth", tool: "mcp:linear:create_issue", value: "do" }];
+  const cookieFor = (userId, email) => {
+    const token = sealSession({
+      kind: "oauth",
+      provider: "google",
+      userId,
+      memberId: userId,
+      email,
+      accessToken: "fixture-access",
+      refreshToken: "fixture-refresh",
+    }, secret);
+    return `${CONSOLE_COOKIE}=${encodeURIComponent(token)}`;
+  };
+  const ownerCookie = cookieFor(ownerId, "priya@example.com");
+  const otherCookie = cookieFor(otherId, "other@example.com");
+  const { app } = boot(async (_url, init) => {
+    const payload = JSON.parse(init.body);
+    const answering = (payload.messages || []).some((message) => message.role === "tool");
+    if (answering) return { ok: true, status: 200, body: chatStream("We will keep Thursday.") };
+    return { ok: true, status: 200, body: toolCallStream("linear__create_issue", { title: "Launch note", team: "other-team" }) };
+  }, {
+    session,
+    sessions: new Map([[TENANT_C, session]]),
+    meetingVoice,
+    seats: [{ ear: EAR, botId: "bot-hold", tenantId: TENANT_C, roomId: "bot-hold", botName: "Adam" }],
+    connectors: connectorStore([connected("linear", "create_issue", "write")]),
+    deps: { memory, linear },
+    env: { SEDERUNT_CONSOLE_SECRET: secret },
+    participantBindings: {
+      async record() {},
+      async forUser(tenantId, memberId, email) {
+        if (tenantId === TENANT_C && memberId === ownerId && email === "priya@example.com") {
+          return [{ memberId: "7", roomId: "bot-hold" }];
+        }
+        return [];
+      },
+      async forRoom() {
+        return [{ memberId: "7", roomId: "bot-hold", email: "priya@example.com" }];
+      },
+    },
+  });
+  noteAgentMember({ meetingVoice }, "bot-hold", { participantId: "7", name: "Priya", memberId: "7" });
+  const port = await listen(app);
+  const board = async (cookie) => {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const response = await call(port, "GET", `/api/console?company=${TENANT_C}`, { headers: { cookie } });
+      assert.equal(response.status, 200);
+      const payload = JSON.parse(response.raw);
+      if (payload.reading !== true && payload.read !== "reading") return payload;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    }
+    throw new Error("console stayed on the reading shell");
+  };
+  try {
+    const spoken = await call(port, "POST", "/api/meeting/agent/turn", {
+      headers: { "content-type": "application/json", "x-meeting-ear": EAR },
+      body: turnBody("Adam, file the launch note.", "Priya", { participantId: "7", turn_id: "oauth-hold" }),
+    });
+    assert.equal(spoken.status, 200);
+    assert.equal((meetingVoice.toolRuns || []).length, 0);
+    assert.equal(issues.length, 0);
+    const held = session.actions.find((row) => row.state === "paused");
+    assert.equal(held.memberId, "7");
+    assert.equal(held.inviteMemberIds.includes("7"), true);
+    assert.match(held.statement, /Launch note/);
+    const hidden = await board(otherCookie);
+    assert.equal(hidden.waiting.some((row) => row.id === held.id), false);
+    const refused = await call(port, "POST", "/api/typed", {
+      headers: { "content-type": "application/json", cookie: otherCookie },
+      body: JSON.stringify({ text: `confirm ${held.id}`, company: TENANT_C }),
+    });
+    assert.equal(refused.status, 200);
+    const refusal = JSON.parse(refused.raw);
+    assert.equal(refusal.allow, "not-invited");
+    assert.equal(issues.length, 0);
+    const visible = await board(ownerCookie);
+    assert.equal(visible.waiting.some((row) => row.id === held.id && /Launch note/.test(row.statement)), true);
+    assert.equal(visible.rooms.some((room) => room.id === "bot-hold"), true);
+    const approved = await call(port, "POST", "/api/typed", {
+      headers: { "content-type": "application/json", cookie: ownerCookie },
+      body: JSON.stringify({ text: `confirm ${held.id}`, company: TENANT_C }),
+    });
+    assert.equal(approved.status, 200, approved.raw);
+    const result = JSON.parse(approved.raw);
+    assert.equal(result.issueId, "ROW-9", approved.raw);
+    assert.equal(issues.length, 1);
+    assert.equal(issues[0].title, "Launch note");
+    assert.equal((meetingVoice.toolRuns || []).length, 0);
+  } finally {
+    await close(app);
+  }
+});
+
+test("a room binding stores the workspace member on the voice hold", async () => {
+  const docs = [];
+  const memory = {
+    async remember(row) { docs.push(structuredClone(row)); return { blobId: "saved" }; },
+    async index() { return docs.map((row) => structuredClone(row)); },
+  };
+  const issues = [];
+  const linear = {
+    async createIssue(input) {
+      issues.push(input);
+      return { identifier: "ROW-9", id: "ROW-9" };
+    },
+  };
+  const meetingVoice = {};
+  const session = createSession();
+  session.preferences = [{ id: "pref-map", tool: "mcp:linear:create_issue", value: "do" }];
+  const { app } = boot(async (_url, init) => {
+    const payload = JSON.parse(init.body);
+    const answering = (payload.messages || []).some((message) => message.role === "tool");
+    if (answering) return { ok: true, status: 200, body: chatStream("We will keep Thursday.") };
+    return { ok: true, status: 200, body: toolCallStream("linear__create_issue", { title: "Launch note", team: "other-team" }) };
+  }, {
+    session,
+    sessions: new Map([[TENANT_A, session]]),
+    meetingVoice,
+    seats: [{ ear: EAR, botId: "bot-map", tenantId: TENANT_A, roomId: "bot-map", botName: "Adam" }],
+    connectors: connectorStore([connected("linear", "create_issue", "write")]),
+    deps: { memory, linear },
+    participantBindings: {
+      async record() {},
+      async forUser() { return []; },
+      async forRoom() {
+        return [{ memberId: "7", roomId: "bot-map", email: "priya@example.com", userId: "user-priya" }];
+      },
+    },
+  });
+  noteAgentMember({ meetingVoice }, "bot-map", { participantId: "7", name: "Priya", memberId: "7" });
+  const port = await listen(app);
+  try {
+    const spoken = await call(port, "POST", "/api/meeting/agent/turn", {
+      headers: { "content-type": "application/json", "x-meeting-ear": EAR },
+      body: turnBody("Adam, file the launch note.", "Priya", { participantId: "7", turn_id: "mapped-hold" }),
+    });
+    assert.equal(spoken.status, 200);
+    const held = session.actions.find((row) => row.state === "paused");
+    assert.equal(held.memberId, "user-priya");
+    assert.equal(held.inviteMemberIds.includes("7"), true);
+    assert.equal(held.inviteMemberIds.includes("user-priya"), true);
+    assert.equal((meetingVoice.toolRuns || []).length, 0);
+    assert.equal(issues.length, 0);
+    const asParticipant = await handleUtterance({
+      session,
+      text: `confirm ${held.id}`,
+      deliveryId: "confirm-participant",
+      memberId: "7",
+      room: { id: "bot-map", kind: "meeting", source: "recall", botPresent: true, memberIds: ["7"] },
+      participants: ["7"],
+    }, { memory, linear });
+    assert.equal(asParticipant.allow, "not-invited");
+    assert.equal(issues.length, 0);
+    const asMember = await handleUtterance({
+      session,
+      text: `confirm ${held.id}`,
+      deliveryId: "confirm-member",
+      memberId: "user-priya",
+      room: { id: "bot-map", kind: "meeting", source: "recall", botPresent: true, memberIds: ["user-priya"] },
+      participants: ["user-priya"],
+    }, { memory, linear });
+    assert.equal(asMember.issueId, "ROW-9");
+    assert.equal(issues.length, 1);
+    assert.equal(issues[0].title, "Launch note");
+    assert.equal((meetingVoice.toolRuns || []).length, 0);
+  } finally {
+    await close(app);
+  }
+});
+
 test("the same claim runs once and another tenant can claim the same arguments", async () => {
   const chats = [];
   const meetingVoice = {};
@@ -1165,6 +1373,14 @@ test("a split sentence is spoken once when the second chunk finishes it", async 
   }
 });
 
+test("a title and a decimal stay in one sentence", () => {
+  assert.deepEqual(readySentences("Ask Dr. Ada about the 3.14 launch.").ready, ["Ask Dr. Ada about the 3.14 launch."]);
+  assert.deepEqual(readySentences("See e.g. the 3.14 note.").ready, ["See e.g. the 3.14 note."]);
+  assert.deepEqual(readySentences("We asked Dr. Ada. She said yes.").ready, ["We asked Dr. Ada.", "She said yes."]);
+  assert.deepEqual(readySentences("Ask Dr.").ready, []);
+  assert.equal(readySentences("Ask Dr.").rest, "Ask Dr.");
+});
+
 test("the first twenty socket messages log shape and drop the rest", async () => {
   resetMeetingMetrics();
   const logs = [];
@@ -1179,6 +1395,7 @@ test("the first twenty socket messages log shape and drop the rest", async () =>
     const body = JSON.stringify({
       event: "transcript.data",
       transcript: { words: [{ text: "secret phrase" }], speaker: "Priya", is_final: true },
+      data: { data: { participant: { id: 7, name: "Priya", email: "priya@example.com" }, words: [{ text: "secret phrase" }] } },
     });
     for (let index = 0; index < 21; index += 1) {
       const posted = await call(port, "POST", "/api/meeting/agent/socket", {
@@ -1192,11 +1409,21 @@ test("the first twenty socket messages log shape and drop the rest", async () =>
     assert.equal(rows[0].event, "transcript.data");
     assert.equal(rows[0].words, 1);
     assert.equal(rows[0].final, true);
+    assert.equal(rows[0].transcript.includes("speaker"), true);
+    assert.equal(rows[0].transcript.includes("words"), true);
+    assert.equal(rows[0].data.includes("data"), true);
+    assert.equal(rows[0].dataData.includes("participant"), true);
+    assert.equal(rows[0].dataData.includes("words"), true);
+    assert.equal(rows[0].participant.includes("name"), true);
+    assert.equal(rows[0].participant.includes("email"), true);
+    assert.equal(rows[0].word.includes("text"), true);
     const printed = logs.filter((line) => line.includes('"meeting":"socket"')).join("\n");
     assert.equal(printed.includes("Priya"), false);
     assert.equal(printed.includes("secret phrase"), false);
+    assert.equal(printed.includes("priya@example.com"), false);
     assert.equal(JSON.stringify(rows).includes("Priya"), false);
     assert.equal(JSON.stringify(rows).includes("secret phrase"), false);
+    assert.equal(JSON.stringify(rows).includes("priya@example.com"), false);
   } finally {
     console.info = original;
     resetMeetingMetrics();
@@ -1367,6 +1594,68 @@ test("another instance speaks the sentence and continues the floor", async () =>
   }
 });
 
+test("a turn reaches the page before the clock write finishes", async () => {
+  const store = new Map();
+  const commands = [];
+  let releaseClock;
+  const clockHung = new Promise((resolve) => { releaseClock = resolve; });
+  const before = meetingMetrics().turns.length;
+  const fetchImpl = async (url, init) => {
+    const target = String(url);
+    if (target.startsWith("https://redis.test")) {
+      const command = JSON.parse(init.body);
+      commands.push(command);
+      if (command[0] === "SET" && String(command[1]).includes(":clock:")) await clockHung;
+      if (command[0] === "SET") store.set(command[1], String(command[2] ?? "1"));
+      const result = command[0] === "GET" ? (store.has(command[1]) ? store.get(command[1]) : null) : "OK";
+      return { ok: true, json: async () => ({ result }) };
+    }
+    if (target.includes("/audio/speech")) return { ok: true, status: 200, body: mp3Body([0xff, 0xfb, 0x11]) };
+    return { ok: true, status: 200, body: chatStream("We will keep Thursday.") };
+  };
+  const env = { UPSTASH_REDIS_REST_URL: "https://redis.test", UPSTASH_REDIS_REST_TOKEN: "redis-token" };
+  const { app } = boot(fetchImpl, { env });
+  const port = await listen(app);
+  const headers = { "content-type": "application/json", "x-meeting-ear": EAR };
+  const late = (label) => new Promise((_resolve, reject) => {
+    setTimeout(() => reject(new Error(label)), 2000);
+  });
+  try {
+    const opened = await openPost(port, "/api/meeting/agent/turn", headers, turnBody("Adam, keep Thursday.", "Priya", { turn_id: "redis-turn" }));
+    const raw = await Promise.race([opened.until("event: sentence"), late("sentence waited on redis")]);
+    assert.match(raw, /We will keep Thursday/);
+    let duringTurn = commands.length;
+    for (let step = 0; step < 8; step += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+      if (commands.length === duringTurn && step > 0) break;
+      duringTurn = commands.length;
+    }
+    const audio = await Promise.race([
+      firstByte(port, "/api/meeting/agent/speak", headers, JSON.stringify({ text: "We will keep Thursday." })),
+      late("audio waited on redis"),
+    ]);
+    assert.equal(audio.status, 200);
+    assert.equal(audio.byte, 0xff);
+    assert.equal(commands.some((command) => command[0] === "SET" && String(command[1]).includes(":clock:")), true);
+    assert.equal(commands.some((command) => command[0] === "SET" && String(command[1]).includes(":line:")), true);
+    releaseClock();
+    await opened.finished;
+    const logged = await call(port, "POST", "/api/meeting/agent/log", {
+      headers,
+      body: JSON.stringify({ playback: true }),
+    });
+    assert.equal(logged.status, 204);
+    const seatReads = commands.slice(0, duringTurn)
+      .filter((command) => command[0] === "GET" && String(command[1]).includes(":speaker:")).length;
+    const counted = meetingMetrics().turns.slice(before)
+      .filter((row) => row.redis === duringTurn - seatReads && row.redis > 0);
+    assert.equal(counted.length >= 1, true);
+  } finally {
+    releaseClock();
+    await close(app);
+  }
+});
+
 test("the meeting page joins a split question and asks once", async () => {
   async function drive(lines, quietMs) {
     const page = renderCameraPage();
@@ -1525,4 +1814,234 @@ test("the meeting page appends speak audio as each chunk arrives", async () => {
   assert.deepEqual(appended, [2, 1]);
   assert.equal(posts.includes("/api/meeting/agent/log"), true);
   assert.equal(typeof windowBox.__sederunt.playbackAt, "number");
+});
+
+function mpegSource() {
+  class Source {
+    constructor() { this.readyState = "open"; }
+    addEventListener(name, fn) {
+      if (name === "sourceopen") queueMicrotask(fn);
+    }
+    addSourceBuffer() {
+      return {
+        onend: null,
+        addEventListener(name, fn) { if (name === "updateend") this.onend = fn; },
+        removeEventListener() { this.onend = null; },
+        appendBuffer() {
+          const fn = this.onend;
+          this.onend = null;
+          if (fn) fn();
+        },
+      };
+    }
+    endOfStream() {}
+  }
+  Source.isTypeSupported = () => true;
+  return Source;
+}
+
+function speakBody(chunks, { hang = false } = {}) {
+  let readers = 0;
+  let index = 0;
+  let cancelled = false;
+  return {
+    readers: () => readers,
+    getReader() {
+      readers += 1;
+      return {
+        cancel() { cancelled = true; },
+        read() {
+          if (cancelled) return Promise.resolve({ done: true });
+          if (index >= chunks.length) {
+            if (hang) return new Promise(() => {});
+            return Promise.resolve({ done: true });
+          }
+          const value = chunks[index];
+          index += 1;
+          return Promise.resolve({ done: false, value });
+        },
+      };
+    },
+  };
+}
+
+async function driveCameraClips({ bodies, play }) {
+  const Source = mpegSource();
+  const timers = [];
+  const decoded = [];
+  const sources = [];
+  let plays = 0;
+  const voice = {
+    play() {
+      plays += 1;
+      return play(plays);
+    },
+    pause() {},
+  };
+  class Ctx {
+    constructor() { this.destination = {}; }
+    decodeAudioData(buffer) {
+      decoded.push(buffer.byteLength);
+      return Promise.resolve({});
+    }
+    createBufferSource() {
+      const source = {
+        connect() {},
+        start() { this.started = true; },
+        stop() {},
+        onended: null,
+      };
+      sources.push(source);
+      return source;
+    }
+  }
+  const windowBox = { MediaSource: Source, AudioContext: Ctx };
+  const posts = [];
+  let speakAt = 0;
+  let now = 1_000_000;
+  const intervals = [];
+  let socket = null;
+  const sse = [
+    "event: sentence",
+    "data: {\"text\":\"We will keep Thursday.\"}",
+    "",
+    "event: sentence",
+    "data: {\"text\":\"The note is filed.\"}",
+    "",
+    "event: done",
+    "data: {}",
+    "",
+  ].join("\n");
+  const page = renderCameraPage();
+  const start = page.indexOf("<script>");
+  const end = page.indexOf("</script>");
+  const flush = async (times = 30) => {
+    for (let step = 0; step < times; step += 1) await new Promise((resolve) => setImmediate(resolve));
+  };
+  vm.runInNewContext(page.slice(start + "<script>".length, end), {
+    URLSearchParams,
+    WebSocket: class Socket { constructor() { socket = this; } },
+    AbortController,
+    Promise,
+    JSON,
+    Math,
+    RegExp,
+    URL: { createObjectURL() { return "blob:mpeg"; } },
+    Uint8Array,
+    TextDecoder,
+    MediaSource: Source,
+    Date: { now: () => now },
+    setInterval: (fn) => { intervals.push(fn); return intervals.length; },
+    setTimeout: (fn, ms) => {
+      timers.push({ fn, ms, cleared: false });
+      return timers.length;
+    },
+    clearTimeout: (id) => {
+      const row = timers[id - 1];
+      if (row) row.cleared = true;
+    },
+    document: { getElementById: (id) => (id === "voice" ? voice : { dataset: { state: "listening" }, textContent: "" }) },
+    location: { search: `?ear=${EAR}&name=Adam` },
+    navigator: {},
+    window: windowBox,
+    fetch: (url) => {
+      const path = String(url);
+      posts.push(path);
+      if (path.endsWith("/session")) {
+        return Promise.resolve({ ok: true, json: async () => ({ botName: "Adam", participantId: "99" }), body: null });
+      }
+      if (path.endsWith("/turn")) {
+        const bytes = Uint8Array.from(Buffer.from(sse));
+        let sent = false;
+        return Promise.resolve({
+          ok: true,
+          body: {
+            getReader() {
+              return {
+                async read() {
+                  if (sent) return { done: true };
+                  sent = true;
+                  return { done: false, value: bytes };
+                },
+              };
+            },
+          },
+        });
+      }
+      if (path.endsWith("/speak")) {
+        const body = bodies[speakAt];
+        speakAt += 1;
+        return Promise.resolve({ ok: true, body });
+      }
+      return Promise.resolve({ ok: true, body: null });
+    },
+  });
+  socket.onmessage({ data: JSON.stringify({
+    event: "transcript.data",
+    data: { data: { words: [{ text: "Adam," }, { text: "keep" }, { text: "Thursday." }], participant: { id: 7, name: "Priya" } } },
+  }) });
+  now += 1500;
+  intervals.forEach((fn) => fn());
+  await flush();
+  return {
+    plays: () => plays,
+    decoded,
+    sources,
+    timers,
+    posts,
+    flush,
+  };
+}
+
+test("a rejected speak stream falls back to the audio context and the next clip plays", async () => {
+  const first = speakBody([Uint8Array.of(0xff, 0xfb)]);
+  const second = speakBody([Uint8Array.of(0x11)]);
+  const drive = await driveCameraClips({
+    bodies: [first, second],
+    play: (nth) => (nth === 1 ? Promise.reject(new Error("play")) : Promise.resolve()),
+  });
+  assert.equal(drive.plays(), 1);
+  assert.equal(drive.decoded.length >= 1, true);
+  assert.equal(drive.decoded[0] > 0, true);
+  assert.equal(first.readers(), 1);
+  drive.sources[0].onended();
+  await drive.flush();
+  assert.equal(drive.plays(), 2);
+  assert.equal(second.readers(), 1);
+});
+
+test("an empty speak body lets the next clip play", async () => {
+  const first = speakBody([]);
+  const second = speakBody([Uint8Array.of(0xff, 0xfb)]);
+  const drive = await driveCameraClips({
+    bodies: [first, second],
+    play: () => Promise.resolve(),
+  });
+  assert.equal(drive.decoded.length, 0);
+  assert.equal(drive.plays(), 1);
+  assert.equal(first.readers(), 1);
+  assert.equal(second.readers(), 1);
+});
+
+test("a stalled speak clip yields after the watchdog and the next clip plays", async () => {
+  const first = speakBody([Uint8Array.of(0xff, 0xfb), Uint8Array.of(0x11)], { hang: true });
+  const second = speakBody([Uint8Array.of(0x22)]);
+  const drive = await driveCameraClips({
+    bodies: [first, second],
+    play: () => new Promise(() => {}),
+  });
+  assert.equal(drive.plays(), 1);
+  assert.equal(drive.decoded.length, 0);
+  const watchdog = drive.timers.filter((row) => row.ms === 12000 && row.cleared !== true);
+  assert.equal(watchdog.length, 1);
+  watchdog[0].fn();
+  await drive.flush();
+  assert.equal(drive.plays(), 1);
+  assert.equal(drive.decoded.length >= 1, true);
+  assert.equal(drive.decoded[0] > 0, true);
+  assert.equal(drive.sources[0].started, true);
+  drive.sources[0].onended();
+  await drive.flush();
+  assert.equal(drive.plays(), 2);
+  assert.equal(second.readers(), 1);
 });

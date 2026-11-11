@@ -334,7 +334,37 @@ const AGENT_PAGE = `<!doctype html>
       var reader = response.body.getReader();
       var started = false;
       var pending = [];
+      var collected = [];
       var writing = false;
+      var settled = false;
+      var playing = false;
+      var timer = setTimeout(function () { giveUp(); }, 12000);
+      function giveUp() {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try { voice.pause(); } catch (error) {}
+        try { reader.cancel(); } catch (error) {}
+        if (playing) {
+          next();
+          return;
+        }
+        var total = 0;
+        var index = 0;
+        for (index = 0; index < collected.length; index += 1) total += collected[index].byteLength || collected[index].length || 0;
+        if (!total) {
+          next();
+          return;
+        }
+        var merged = new Uint8Array(total);
+        var offset = 0;
+        for (index = 0; index < collected.length; index += 1) {
+          var view = collected[index] instanceof Uint8Array ? collected[index] : new Uint8Array(collected[index]);
+          merged.set(view, offset);
+          offset += view.byteLength;
+        }
+        playBytes(merged.buffer, next);
+      }
       function writeNext() {
         if (writing || !pending.length) return;
         writing = true;
@@ -349,7 +379,7 @@ const AGENT_PAGE = `<!doctype html>
         try { source.appendBuffer(buffer); }
         catch (error) {
           writing = false;
-          next();
+          giveUp();
         }
       }
       function finish() {
@@ -363,6 +393,7 @@ const AGENT_PAGE = `<!doctype html>
         if (media.readyState === "open") {
           try { media.endOfStream(); } catch (error) {}
         }
+        if (!started) giveUp();
       }
       function pull() {
         reader.read().then(function (step) {
@@ -370,25 +401,36 @@ const AGENT_PAGE = `<!doctype html>
             finish();
             return;
           }
-          if (step.value) pending.push(step.value);
-          if (!started) {
+          if (step.value) {
+            pending.push(step.value);
+            collected.push(step.value);
+          }
+          if (!started && step.value) {
             started = true;
             setState("speaking");
             markPlayback();
             stopAudio = function () {
               try { voice.pause(); } catch (error) {}
               try { reader.cancel(); } catch (error) {}
+              clearTimeout(timer);
               playStarted = 0;
             };
             voice.onended = function () {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
               playStarted = 0;
               next();
             };
-            voice.play().catch(function () {});
+            voice.play().then(function () {
+              if (!settled) playing = true;
+            }, function () {
+              giveUp();
+            });
           }
           writeNext();
           pull();
-        }).catch(function () { next(); });
+        }).catch(function () { giveUp(); });
       }
       pull();
     });

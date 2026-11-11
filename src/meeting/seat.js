@@ -3,7 +3,42 @@
  * Vercel isolates do not share memory, so the ear also goes through Redis.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, timingSafeEqual } from "node:crypto";
+
+const redisTurn = new AsyncLocalStorage();
+const redisClients = new Map();
+
+/** Count Redis commands for one turn. Concurrent turns keep separate counts. */
+export function countRedisTurn(work) {
+  return redisTurn.run({ calls: 0, pending: [] }, work);
+}
+
+export function inRedisTurn() {
+  return Boolean(redisTurn.getStore());
+}
+
+export function redisTurnCount() {
+  return redisTurn.getStore()?.calls || 0;
+}
+
+/** Schedule a Redis write off the speech path and keep it on this turn's count. */
+export function forgetRedis(work) {
+  const job = Promise.resolve().then(() => work()).catch(() => {});
+  const store = redisTurn.getStore();
+  if (store) store.pending.push(job);
+  return job;
+}
+
+export function settleRedisTurn() {
+  const pending = redisTurn.getStore()?.pending || [];
+  return Promise.all(pending);
+}
+
+function noteRedisCall() {
+  const store = redisTurn.getStore();
+  if (store) store.calls += 1;
+}
 
 const EAR_SECONDS = 6 * 60 * 60;
 const EAR_PATTERN = /^[a-f0-9]{32,64}$/;
@@ -40,9 +75,40 @@ function redisConfigured(env) {
   return Boolean(String(env?.REDIS_URL || env?.KV_URL || "").trim());
 }
 
+async function sharedRedisClient(url) {
+  const current = redisClients.get(url);
+  if (current) {
+    try {
+      const open = await current;
+      if (open?.isOpen) return open;
+    } catch {
+      // The failed connect is replaced below.
+    }
+    if (redisClients.get(url) === current) redisClients.delete(url);
+  }
+  const connecting = (async () => {
+    const { createClient } = await import("redis");
+    const client = createClient({ url, socket: { connectTimeout: 3000 } });
+    client.on("error", () => {
+      if (redisClients.get(url) === connecting) redisClients.delete(url);
+    });
+    await client.connect();
+    if (!client.isOpen) throw new Error("redis closed");
+    return client;
+  })();
+  redisClients.set(url, connecting);
+  try {
+    return await connecting;
+  } catch (error) {
+    if (redisClients.get(url) === connecting) redisClients.delete(url);
+    throw error;
+  }
+}
+
 async function redisCall(env, fetchImpl, body) {
   const rest = restConfig(env);
   if (rest) {
+    noteRedisCall();
     const target = Array.isArray(body[0]) ? `${rest.url}/pipeline` : rest.url;
     try {
       const response = await fetchImpl(target, {
@@ -67,22 +133,16 @@ async function redisCall(env, fetchImpl, body) {
   }
   const redisUrl = String(env?.REDIS_URL || env?.KV_URL || "").trim();
   if (!redisUrl) return { ok: false, absent: true };
+  noteRedisCall();
   const commands = Array.isArray(body[0]) ? body : [body];
   try {
-    const { createClient } = await import("redis");
-    const client = createClient({ url: redisUrl, socket: { connectTimeout: 3000 } });
-    client.on("error", () => {});
-    await client.connect();
-    try {
-      const results = [];
-      for (const command of commands) {
-        results.push(await client.sendCommand(command.map((part) => String(part))));
-      }
-      if (Array.isArray(body[0])) return { ok: true, result: results.map((result) => ({ result })) };
-      return { ok: true, result: { result: results[0] } };
-    } finally {
-      await client.quit().catch(() => {});
+    const client = await sharedRedisClient(redisUrl);
+    const results = [];
+    for (const command of commands) {
+      results.push(await client.sendCommand(command.map((part) => String(part))));
     }
+    if (Array.isArray(body[0])) return { ok: true, result: results.map((result) => ({ result })) };
+    return { ok: true, result: { result: results[0] } };
   } catch {
     return { ok: false };
   }

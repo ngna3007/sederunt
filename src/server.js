@@ -1915,7 +1915,9 @@ export function createApp(options = {}) {
       const companyId = resolved.companyId;
       const hearingTenant = await hearingTenantId(workspace, req);
       const current = await prepareWorkspace(workspace, companyId, false, 0, hearingTenant);
-      const result = await handleUtterance({ ...delivery, session: current }, depsFor(workspace, companyId));
+      const utterance = { ...delivery, session: current };
+      if (caller?.kind === "oauth") utterance.principal = await consolePrincipal(workspace, req, companyId);
+      const result = await handleUtterance(utterance, depsFor(workspace, companyId));
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(result));
       return;
     }

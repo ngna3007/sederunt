@@ -49,6 +49,24 @@ export function shouldRespond(session, delivery, bot = {}) {
   return meetingLineShouldAnswer(session, delivery);
 }
 
+function shieldPeriods(value) {
+  const marks = [];
+  const hide = (match) => {
+    const token = `\u0000${marks.length}\u0000`;
+    marks.push(match);
+    return token;
+  };
+  const text = value
+    .replace(/\b(?:Dr|Mr|Mrs|Ms|Prof|Sr|Jr|St|vs|etc|e\.g|i\.e|a\.m|p\.m)\./gi, hide)
+    .replace(/(\d+)\.(\d+)/g, (_match, left, right) => hide(`${left}.${right}`));
+  return {
+    text,
+    restore(sentence) {
+      return sentence.replace(/\u0000(\d+)\u0000/g, (_match, index) => marks[Number(index)] || "");
+    },
+  };
+}
+
 export function readySentences(text) {
   const value = String(text || "")
     .replace(/…/g, ".")
@@ -56,13 +74,16 @@ export function readySentences(text) {
     .replace(/\s+/g, " ")
     .trim();
   if (!value) return { ready: [], rest: "" };
-  const parts = value.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [];
+  const shielded = shieldPeriods(value);
+  const parts = shielded.text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [];
   const ready = [];
   let rest = "";
   for (const part of parts) {
-    const sentence = part.trim();
+    const piece = part.trim();
+    if (!piece) continue;
+    const sentence = shielded.restore(piece).trim();
     if (!sentence) continue;
-    if (/[.!?]$/.test(sentence)) ready.push(sentence);
+    if (/[.!?]$/.test(piece)) ready.push(sentence);
     else rest = sentence;
   }
   return { ready, rest };
