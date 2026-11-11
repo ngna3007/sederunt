@@ -19,8 +19,12 @@ app configuration or installation is changed by this branch's tests.
    when an end user switches Sederunt workspaces or installs into another team.
 4. Enable Slack app distribution for other workspaces; register the redirect
    `${SEDERUNT_PUBLIC_ORIGIN}/console/slack/callback` and event request URL
-   `${SEDERUNT_PUBLIC_ORIGIN}/api/slack`. Subscribe to the message/app-mention
-   events the product uses plus `app_uninstalled` and `tokens_revoked`.
+   `${SEDERUNT_PUBLIC_ORIGIN}/api/slack`. Subscribe to these bot events:
+   `message.channels`, `message.groups`, `message.im`, `app_mention`,
+   `member_joined_channel`, `app_uninstalled` and `tokens_revoked`.
+   `member_joined_channel` (needs `channels:read`/`groups:read`, already in
+   the scope list) binds a channel the moment the bot is added. If it is not
+   subscribed, the first file kept in that channel binds it instead.
 5. Enable all `SLACK_BOT_SCOPES` in `src/slack/oauth.js`, including `files:write`
    for getUploadURLExternal/completeUploadExternal. Existing narrow installations
    need one explicit new consent for the expanded grant. Valid saved grants do
@@ -42,6 +46,38 @@ app configuration or installation is changed by this branch's tests.
    No Redis cleanup is required for safety: stale claims cannot grant access to
    deleted tenants or override the durable lifecycle state. Any optional cleanup
    must compare-and-delete only the exact expected owner; do not bulk-delete.
+
+8. Apply `20261111120000_slack_identity_links.sql`. It adds the only two
+   writers of `identities` (provider `slack`) and Slack `channel_bindings`:
+   `slack_identity_link` and `slack_channel_bind`, SECURITY DEFINER and
+   service-role only. No backfill is needed; rows are created on the next
+   Slack event.
+
+## Slack people and channels
+
+- **Who is asking.** On a DM, an @mention, or a file kept in a channel, the
+  server calls `users.info` with the tenant's bot token (`users:read.email`).
+  A full member (not a bot, not a guest, not deleted) whose profile email
+  Slack does not mark unconfirmed is linked when that email belongs to
+  exactly one confirmed account with a membership in the tenant that owns
+  the Slack team. The database function re-checks the team ownership, the
+  confirmation and the membership. A hit is cached five minutes, a miss one
+  minute; a Slack API failure is not cached. No email or no match removes an
+  earlier link for that Slack user.
+- **What a linked asker reads.** Their Sederunt id (so Meet rooms they ran)
+  plus their Slack id for records kept in Slack channels. An unlinked asker
+  keeps the old Slack-id-only view. An ask that finds only records the
+  asker may not read gets a short "Sorry, I can't share that with you."
+  instead of silence.
+- **Channel bindings.** A public, unarchived channel the bot is in is bound
+  to the tenant's shared Files channel (the one Console Files shows every
+  workspace member), created if missing. Private channels and DMs are never
+  bound, because their files would become workspace-wide. A live binding is
+  never moved to another tenant; a paused one is left paused.
+- **Files.** A file kept in a bound channel by a linked member is staged in
+  Files and the worker stores it to Walrus Console right away. A DM asking
+  for that file reads the Walrus copy first (as the asker) and falls back to
+  Slack only when no Walrus copy is ready.
 
 ## Safety and lifecycle
 
