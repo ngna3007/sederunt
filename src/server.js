@@ -81,6 +81,7 @@ import { createSupabaseFileStore } from "./files/supabase-store.js";
 import { createSessionFiles } from "./files/session.js";
 import { bindSlackChannel, hideDeletedSlackMessages, ingestSlackFile } from "./files/slack.js";
 import { createSlackIdentityStore, createSlackMemberResolver, slackChannelBindable, slackReadPrincipal } from "./slack/identity-link.js";
+import { accessibleMeetings, isMeetingQuestion, meetingDigestRows } from "./slack/meeting-digest.js";
 import { loadCompanyEnv, loadLocalEnv } from "./local-env.js";
 import { looksLikeOpenQuestion } from "./parse.js";
 import { createSession } from "./session.js";
@@ -2366,7 +2367,12 @@ export function createApp(options = {}) {
             }
           }
         }
-        if (question && !repeat && result?.allow === "not-invited" && slackToken) {
+        // A linked asker's question about a meeting ("the Meet we just had") reads their own
+        // recent meetings. Only in a 1:1 DM (principal is null elsewhere).
+        const meetingRows = question && principal && !repeat && isMeetingQuestion(delivery.text)
+          ? (await withinOrNull(slackMeetingMemories(workspace, current, companyId, principal).catch(() => null), 6_000)) || []
+          : [];
+        if (question && !repeat && result?.allow === "not-invited" && !meetingRows.length && slackToken) {
           // Never silent, never a hint of what is kept or where.
           const channel = delivery.room?.askChannel || (typeof event.channel === "string" ? event.channel : "");
           const claimId = delivery.deliveryId || (typeof event.ts === "string" ? event.ts : "");
@@ -2381,9 +2387,9 @@ export function createApp(options = {}) {
             });
           }
         }
-        if (question && result?.body && !repeat && result.allow !== "not-invited" && result.allow !== "missing-member") {
+        if (question && result?.body && !repeat && (result.allow !== "not-invited" || meetingRows.length) && result.allow !== "missing-member") {
           const channel = delivery.room?.askChannel || (typeof event.channel === "string" ? event.channel : "");
-          const answer = await answerSlackQuestion(result.visible, delivery.text, {
+          const answer = await answerSlackQuestion(result.allow === "not-invited" ? [] : result.visible, delivery.text, {
             env,
             fetchImpl: deps.slack?.fetch || deps.fetch,
             botName,
@@ -2392,6 +2398,7 @@ export function createApp(options = {}) {
             channel,
             excludeTs: typeof event.ts === "string" ? event.ts : "",
             memberId: delivery.memberId,
+            meetings: meetingRows,
             // MemWal.recall(query) ranks memories before the model reads them.
             recall: doorDeps.memory?.recall
               ? async (query) => doorDeps.memory.recall(query)
@@ -4283,6 +4290,25 @@ async function settleFileJobs(filesRuntime) {
   } catch {
     // Local Node: the worker pass finishes on its own.
   }
+}
+
+/**
+ * Prompt memories for the principal's most recent meetings: rooms they are a stored
+ * member of, with that room's readable decisions, activity and transcript.
+ */
+async function slackMeetingMemories(workspace, current, companyId, principal) {
+  const rooms = accessibleMeetings(current, principal, 3);
+  if (!rooms.length) return [];
+  const activity = new Map();
+  await Promise.all(rooms.map(async (room) => {
+    try {
+      activity.set(room.id, await withinOrNull(roomActivityFor(workspace, current, companyId, room.id), 3_000) || []);
+    } catch {
+      activity.set(room.id, []);
+    }
+  }));
+  const config = depsFor(workspace, companyId).app || {};
+  return meetingDigestRows(current, principal, { rooms, activity, timeZone: config.timeZone || "" });
 }
 
 /** Session rows with files the principal can read (meeting-room members included). */
