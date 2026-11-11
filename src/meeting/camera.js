@@ -63,6 +63,8 @@ const AGENT_PAGE = `<!doctype html>
   var lineWoke = false;
   var committed = null;
   var lastWordAt = 0;
+  // Last time the speaker said real words (not "um", "okay"), for dropping a held question.
+  var lastContentAt = 0;
   var playStarted = 0;
   var recentSpeech = [];
   var turnTimer = 0;
@@ -272,7 +274,9 @@ const AGENT_PAGE = `<!doctype html>
     lineSpeaker = heard.speaker || lineSpeaker;
     lineParticipant = heard.participantId || lineParticipant;
     lastWordAt = Date.now();
-    if (heldAsk && heldAsk.who && heldAsk.who === letters(heard.speaker || "")) {
+    var filler = /^(?:um+|uh+|hmm+|hm+|mm+|er+|ah+|oh|okay|ok|so|yeah|yes|yep|right|well|and|but)$/.test(String(heard.text || "").toLowerCase().replace(/[^a-z\s]/g, " ").replace(/\s+/g, " ").trim());
+    if (!filler) lastContentAt = lastWordAt;
+    if (!filler && heldAsk && heldAsk.who && heldAsk.who === letters(heard.speaker || "")) {
       heldAsk = null;
       stats.asksDropped += 1;
     }
@@ -400,7 +404,7 @@ const AGENT_PAGE = `<!doctype html>
 
   /** The asker is still talking after the commit: their next words answer the question. */
   function askerContinued(who, since) {
-    return Boolean(who && lineText && letters(lineSpeaker || "") === who && lastWordAt > since);
+    return Boolean(who && lineText && letters(lineSpeaker || "") === who && lastContentAt > since);
   }
 
   function holdAsk(text, speaker, owner) {

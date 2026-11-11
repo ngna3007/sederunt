@@ -139,7 +139,7 @@ test("dry run: the page merges 'Heads up.' with the fact into one line", async (
 test("dry run: a follow-up question is dropped when the asker keeps talking, and spoken otherwise", async () => {
   const page = renderCameraPage();
   const script = page.slice(page.indexOf("<script>") + "<script>".length, page.indexOf("</script>"));
-  const run = async (continueWithin) => {
+  const run = async (continueWithin, more = "Fix the onboarding email before launch.") => {
     const spoken = [];
     const turns = [];
     const intervals = [];
@@ -194,7 +194,7 @@ test("dry run: a follow-up question is dropped when the asker keeps talking, and
     assert.equal(turns.length, 1);
     if (continueWithin != null) {
       await tick(continueWithin);
-      say("Fix the onboarding email before launch.");
+      say(more);
     }
     await tick(4000);
     return { spoken, turns };
@@ -202,6 +202,9 @@ test("dry run: a follow-up question is dropped when the asker keeps talking, and
   const continued = await run(600);
   assert.deepEqual(continued.spoken, [], "the question is not asked over the title");
   assert.deepEqual(continued.turns, ["Adam, create a linear issue.", "Fix the onboarding email before launch."]);
+  // A filler is not the rest of the line: the question is still asked.
+  const filler = await run(600, "Um");
+  assert.deepEqual([...new Set(filler.spoken)], ["What should the issue say?"], "'um' does not drop the question");
   const silent = await run(null);
   assert.deepEqual([...new Set(silent.spoken)], ["What should the issue say?"], "with no continuation the question is asked");
 });
@@ -410,6 +413,75 @@ test("dry run: the split Linear request asks with a held question and files once
     const again = sentences((await turn(ctx.port, title, { turn_id: "lin-3" })).raw);
     assert.equal(again.some((row) => /I filed/.test(row.text)), false);
     assert.equal(issues.length, 1, "a repeat of the title does not file twice");
+  } finally {
+    await ctx.close();
+  }
+});
+
+
+// ---- Review of PR 24 (Nov 11 2026) ----
+
+test("review: the line after a bare cue is kept only when it is a statement, never a turn to Adam", () => {
+  for (const line of ["The design review moved to Thursday.", "we are moving the booth to hall B", "the budget is 400 per person", "the venue changed"]) {
+    assert.equal(keptAfterCue(line), true, line);
+  }
+  for (const line of ["Adam can you file the scanner bug", "Adam, what did we decide", "can you hear me", "thanks Adam", "Thank you", "bye", "hello", "um",
+    "okay", "so", "what time is the launch", "tell me the budget", "file a linear issue for the scanner", "schedule a sync tomorrow at 10am",
+    "who owns the booth", "Maple, note the venue", "remind me tomorrow"]) {
+    assert.equal(keptAfterCue(line), false, line);
+  }
+  assert.equal(keptAfterCue("Ravi, move it to Friday", "Ravi"), false, "a custom bot name is a turn too");
+  assert.equal(isBareKeepCue("heads up, can you file the scanner bug?"), false, "a cue with content is a normal line");
+});
+
+test("review: after 'Heads up.' a request to Adam is still answered and the cue is spent", async () => {
+  const calls = [];
+  const ctx = await boot({ model: async (url) => { calls.push(String(url)); return { ok: true, status: 200, body: chatStream("Bao owns the booth.") }; } });
+  try {
+    assert.deepEqual(sentences((await turn(ctx.port, "Heads up.", { turn_id: "r-cue-1" })).raw), []);
+    const asked = await turn(ctx.port, "Adam can you tell me who owns the booth", { turn_id: "r-cue-2" });
+    assert.deepEqual(sentences(asked.raw).map((row) => row.text), ["Bao owns the booth."]);
+    assert.equal(calls.length > 0, true);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test("review: the inviter's Calendar is never granted from the page's people list alone", async () => {
+  // Roster unknown (no signed participant event yet), page says solo, speaker not host.
+  let cal = calendarStub();
+  const asked = [];
+  let ctx = await boot({ model: scheduleModel(), seat: { userId: "inviter-1" }, deps: { calendarForPerson: async (id) => { asked.push(id); return cal; } } });
+  try {
+    const raw = (await turn(ctx.port, "Adam, schedule a launch sync tomorrow at 10am.", { turn_id: "r-cal-1", people: [HOST.participantId] })).raw;
+    assert.match(raw, /Google Calendar is not connected/);
+    assert.deepEqual(asked, []);
+    assert.equal(cal.created.length, 0);
+  } finally {
+    await ctx.close();
+  }
+  // Signed roster says solo, but the page has heard someone else: deny.
+  cal = calendarStub();
+  ctx = await boot({ model: scheduleModel(), seat: { userId: "inviter-1" }, deps: { calendarForPerson: async (id) => { asked.push(id); return cal; } } });
+  noteMeetingPerson({ meetingVoice: ctx.meetingVoice }, BOT, { participantId: HOST.participantId, name: HOST.speaker });
+  try {
+    const raw = (await turn(ctx.port, "Adam, schedule a launch sync tomorrow at 10am.", { turn_id: "r-cal-2", people: [HOST.participantId, "202"] })).raw;
+    assert.match(raw, /Google Calendar is not connected/);
+    assert.deepEqual(asked, []);
+  } finally {
+    await ctx.close();
+  }
+  // A guest renamed to the host's name is still not the host: the check is by Recall participant id.
+  cal = calendarStub();
+  ctx = await boot({ model: scheduleModel(), seat: { userId: "inviter-1" }, deps: { calendarForPerson: async (id) => { asked.push(id); return cal; } } });
+  noteMeetingHost({ meetingVoice: ctx.meetingVoice }, BOT, HOST.participantId);
+  noteMeetingPerson({ meetingVoice: ctx.meetingVoice }, BOT, { participantId: HOST.participantId, name: HOST.speaker });
+  noteMeetingPerson({ meetingVoice: ctx.meetingVoice }, BOT, { participantId: "303", name: HOST.speaker });
+  noteAgentMember({ meetingVoice: ctx.meetingVoice }, BOT, { participantId: "303", name: HOST.speaker, memberId: "303" });
+  try {
+    const raw = (await turn(ctx.port, "Adam, schedule a launch sync tomorrow at 10am.", { turn_id: "r-cal-3", participantId: "303", people: [HOST.participantId, "303"] })).raw;
+    assert.match(raw, /Google Calendar is not connected/);
+    assert.deepEqual(asked, []);
   } finally {
     await ctx.close();
   }

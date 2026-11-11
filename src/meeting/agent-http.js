@@ -385,12 +385,23 @@ async function logSocket(workspace, env, seat, body) {
 }
 
 /** The line after a bare keep cue is the fact, unless it asks or requests something. */
-export function keptAfterCue(text) {
+export function keptAfterCue(text, botName = "Adam") {
   const value = String(text || "").replace(/\s+/g, " ").trim();
   if (!value || /\?\s*$/.test(value)) return false;
+  // A line to Adam is a turn, not the fact ("Adam, can you file the scanner bug").
+  if (namesBot(value, botName) || /\b(?:adam|maple)\b/i.test(value)) return false;
+  if (closingReply(value, botName)) return false;
   if (isScheduleRequest(value) || asksForWrite(value) || directRequest(value)) return false;
+  const folded = value.toLowerCase().replace(/[\u2019']/g, "").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  const words = folded.split(" ").filter(Boolean);
+  // Fragments, fillers and greetings are not a fact worth keeping.
+  if (words.length < 3 || !/[a-z]{3,}/.test(folded)) return false;
+  if (KEPT_NOT_START.test(folded)) return false;
+  if (/\b(?:can you|could you|would you|will you|do you|are you|hear me|hear you)\b/.test(folded)) return false;
   return isQuietKeep(`Heads up, ${value}`);
 }
+
+const KEPT_NOT_START = /^(?:what|when|who|whom|whose|where|why|how|which|can|could|would|should|shall|do|does|did|is|are|am|have|has|may|might|please|tell|show|give|find|check|look|read|remind|recall|hello|hi|hey|good (?:morning|afternoon|evening)|thanks|thank you|bye|goodbye|okay|ok|um+|uh+|hmm+|er+|ah+|oh|so|well|yeah|yes|yep|no|nope|right|sorry|wait|hold on|never ?mind|testing|test)\b/;
 
 async function cancelTurn(workspace, env, botId) {
   const bag = runtime(workspace);
@@ -488,7 +499,7 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
   if (bareCue && !awaiting) {
     answer = false;
     await rememberKeepCue(workspace, seat.botId, "turn", cueSpeaker, env, workspace.fetchImpl).catch(() => {});
-  } else if (cued && !awaiting && keptAfterCue(text)) {
+  } else if (cued && !awaiting && keptAfterCue(text, seat.botName)) {
     answer = false;
   }
   const key = answer ? utteranceKey(text, speaker) : "";
@@ -1286,10 +1297,13 @@ export async function inviterForSpeaker(input, memberId) {
     loadMeetingHosts(input.workspace, seat.botId, input.env, input.fetchImpl).catch(() => false),
   ]);
   if (meetingPersonHost(input.workspace, seat.botId, participant)) return inviter;
+  // "Alone with Adam" comes from Recall's signed participant events only. The page's
+  // own people list is client-side and may miss a silent guest, so it can only deny.
   const humans = meetingHumans(input.workspace, seat.botId, bot);
-  if (humans) return humans.length === 1 && humans[0] === participant ? inviter : "";
+  if (!humans || humans.length !== 1 || humans[0] !== participant) return "";
   const reported = Array.isArray(input.reportedPeople) ? input.reportedPeople : [];
-  return reported.length === 1 && reported[0] === participant ? inviter : "";
+  if (reported.some((id) => id !== participant)) return "";
+  return inviter;
 }
 
 async function resolveCalendar(input, memberId) {
