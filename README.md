@@ -36,13 +36,15 @@ GitHub plays the video when you open that file. The picture above is the first f
 3. Read [how the record is written and proved](docs/blog/total-recall.md).
 4. Open one stored decision on Suiscan: [the booth decision](https://suiscan.xyz/mainnet/object/0xf734ea6c946482d9bf28f6443ea6529099a67cc306717562361cd463438de944).
 
-## What it does
+## The app
 
-Adam joins a Google Meet. He keeps the decision, the minutes, and the action item. Later, someone can ask what was decided, from the console or from Slack, and the answer comes from that record.
+Sederunt is the workspace a company uses for its meetings. People sign in, connect Google, Slack, and Linear, and work from one console. Each meeting is a room. The room holds who was there, what was decided, the activity, and the files.
 
-A correction is stored as its own memory. The next answer uses the correction. A preference is stored the same way, so the next draft follows it. The Why list names the memories that changed the answer.
+Adam is the agent for that room. From the console he joins the Google Meet, follows the call, and writes the record while the meeting is going. The console and Slack both read that same record after the call, so a question about the meeting is answered from the room, not from a new chat with no history.
 
-A new Linear issue or calendar event is filed during the call once the tool succeeds. A send, an update, or a delete waits until someone in the room says yes.
+The record is Walrus Memory on Sui mainnet. The room shows the proof: the blob, the transaction, and the checkpoint, read through Tatum. A missing key leaves the proof unknown.
+
+Linear and Google Calendar are connected from the room. Creating an issue or an event runs in the call when the tool succeeds. A send, an update, or a delete waits for a spoken yes in the room.
 
 ## Total Recall
 
