@@ -5188,6 +5188,23 @@ if (sessionWhen && sessionWhen.dataset.at) {
     });
   }
 
+  /** The room's media, bounded: a slow answer is abandoned, a "loading" answer asked again. */
+  function fetchRoomMedia(asked, attempt) {
+    var controller = typeof AbortController === "function" ? new AbortController() : null;
+    var timer = controller ? setTimeout(function () { controller.abort(); }, 20000) : 0;
+    return fetch("/console/rooms/" + encodeURIComponent(asked) + "/media" + consoleQuery(), controller ? { signal: controller.signal } : undefined).then(function (response) {
+      clearTimeout(timer);
+      if (response.status === 503 && attempt < 5 && fileRoom === asked) {
+        return new Promise(function (resolve) { setTimeout(resolve, 2000); }).then(function () { return fetchRoomMedia(asked, attempt + 1); });
+      }
+      if (!response.ok) throw new Error("media");
+      return response.json();
+    }, function (error) {
+      clearTimeout(timer);
+      throw error;
+    });
+  }
+
   function loadRoomMedia() {
     var room = roomOf(fileRoom);
     var channel = room && /slack/i.test(room.platform || "");
@@ -5212,10 +5229,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
     if (mediaFlight === fileRoom) return;
     var asked = fileRoom;
     mediaFlight = asked;
-    fetch("/console/rooms/" + encodeURIComponent(asked) + "/media" + consoleQuery()).then(function (response) {
-      if (!response.ok) throw new Error("media");
-      return response.json();
-    }).then(function (media) {
+    fetchRoomMedia(asked, 0).then(function (media) {
       if (!media) return;
       roomMediaState = media;
       roomMediaState.forRoom = asked;

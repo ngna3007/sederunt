@@ -543,6 +543,11 @@ function followupStillDue(row, now) {
   return !(row.data.nextAttemptAt > now);
 }
 
+// Room media bounds: a Recall bot read, a cold index wait, and how long saves stay alive.
+const RECALL_READ_MS = 8000;
+const MEDIA_INDEX_WAIT_MS = 12_000;
+const SAVE_KEEP_MS = 55_000;
+
 export function createApp(options = {}) {
   const session = options.session ?? createSession();
   const env = options.env ?? process.env;
@@ -615,6 +620,8 @@ export function createApp(options = {}) {
   workspace.calendarMcp = createFakeCalendarMcp();
   workspace.calendarSave = typeof options.calendarSave === "function" ? options.calendarSave : null;
   workspace.fetchImpl = options.fetch || globalThis.fetch;
+  workspace.recallReadMs = Number(options.recallReadMs) > 0 ? Number(options.recallReadMs) : RECALL_READ_MS;
+  workspace.mediaIndexWaitMs = Number(options.mediaIndexWaitMs) > 0 ? Number(options.mediaIndexWaitMs) : MEDIA_INDEX_WAIT_MS;
   if (Array.isArray(options.agentSeats)) {
     for (const seat of options.agentSeats) rememberAgentSeat(workspace, seat);
   }
@@ -951,7 +958,13 @@ export function createApp(options = {}) {
       const id = decodeURIComponent(url.pathname.slice("/console/rooms/".length, -"/media".length));
       const resolved = await resolveCompanyId(workspace, req, url.searchParams.get("company") || "");
       if (resolved.denied || resolved.unauthorized) { sendCompanyDenied(res, send, resolved); return; }
-      const current = await prepareWorkspace(workspace, resolved.companyId);
+      // A cold instance rebuilds the company index from Walrus Memory first. Wait a
+      // bounded time; past it the page asks again instead of the request dying at 60 s.
+      const current = await prepareWorkspace(workspace, resolved.companyId, false, workspace.mediaIndexWaitMs || MEDIA_INDEX_WAIT_MS);
+      if (workspace.companyLoaded && !current.readReport) {
+        send(res, 503, "application/json; charset=utf-8", JSON.stringify({ state: "loading", retryMs: 2000 }), { "retry-after": "2" });
+        return;
+      }
       const hearingTenant = (typeof resolved.companyId === "string" && resolved.companyId.trim()) || "local";
       // Preparing the room reads the guest again. A failed follow-up read keeps the recording closed.
       try {
@@ -3446,10 +3459,12 @@ async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0,
   const holdIndex = workspace.env?.VERCEL
     ? import("@vercel/functions").catch(() => null)
     : null;
+  let waitTimer;
   await Promise.race([
     pending,
-    new Promise((resolve) => setTimeout(resolve, waitMs)),
+    new Promise((resolve) => { waitTimer = setTimeout(resolve, waitMs); }),
   ]);
+  clearTimeout(waitTimer);
   if (!current.readReport) {
     // Home paints from the shell. Hearing waits until the index has rows.
     // The shell returns before the search finishes. waitUntil keeps that
@@ -3724,6 +3739,23 @@ async function roomMedia(workspace, id) {
   }
 }
 
+
+/** Work that outlives the response: kept alive on Vercel, bounded, never awaited by it. */
+function keepSaving(workspace, work) {
+  const bounded = Promise.race([
+    work.catch(() => {}),
+    new Promise((resolve) => { const timer = setTimeout(resolve, SAVE_KEEP_MS); timer.unref?.(); }),
+  ]);
+  workspace.mediaSaves ??= new Set();
+  workspace.mediaSaves.add(bounded);
+  bounded.finally(() => workspace.mediaSaves.delete(bounded));
+  if (workspace.env?.VERCEL) {
+    import("@vercel/functions").then(({ waitUntil }) => {
+      if (typeof waitUntil === "function") waitUntil(bounded);
+    }).catch(() => {});
+  }
+}
+
 async function recallSpokenLines(workspace, url) {
   if (typeof url !== "string" || !url.startsWith("https://")) return [];
   const fetchImpl = workspace.fetchImpl || globalThis.fetch;
@@ -3749,8 +3781,9 @@ async function loadRoomMedia(workspace, id, current, empty) {
   try {
     if (typeof reader === "function") bot = await reader(id);
     else if (key && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
-      const response = await fetch(recallBotUrl(id), {
+      const response = await (workspace.fetchImpl || globalThis.fetch)(recallBotUrl(id), {
         headers: { authorization: `Token ${key}`, accept: "application/json" },
+        signal: AbortSignal.timeout(workspace.recallReadMs || RECALL_READ_MS),
       });
       const text = await response.text();
       if (key && text.split(key).length > 1 && text.includes("\"authorization\"")) return empty;
@@ -3767,18 +3800,24 @@ async function loadRoomMedia(workspace, id, current, empty) {
     }
   }
   const tenant = typeof workspace.mediaTenantId === "string" ? workspace.mediaTenantId : "";
+  // Each of these updates the room in this process at once and then saves it to
+  // Walrus Memory, which takes 20-45 s a write. Awaited in series they ran the
+  // media request past the 60 s limit (Nov 11, /console/rooms/ae224b81.../media
+  // timed out at 08:18:16 UTC). The saves finish after the response.
+  const saves = [];
   if (body.call) {
-    await noteMeetingCall(current, depsFor(workspace, tenant), id, body.call).catch(() => {});
+    saves.push(noteMeetingCall(current, depsFor(workspace, tenant), id, body.call));
   }
   const room = (current.rooms || []).find((item) => item.id === id);
   if (Array.isArray(body.lines) && body.lines.length) {
-    await noteMeetingLines(current, depsFor(workspace, tenant), id, body.lines).catch(() => {});
+    saves.push(noteMeetingLines(current, depsFor(workspace, tenant), id, body.lines));
   } else if (Array.isArray(room?.lines) && room.lines.length) {
     body.lines = room.lines;
   }
   if (body.startedAt || body.duration > 0) {
-    await persistRecordingSpan(workspace, current, id, body.startedAt, body.duration);
+    saves.push(persistRecordingSpan(workspace, current, id, body.startedAt, body.duration));
   }
+  if (saves.length) keepSaving(workspace, Promise.allSettled(saves));
   if (body.title) {
     current.roomNames ??= {};
     if (!current.roomNames[id]) current.roomNames[id] = body.title;
