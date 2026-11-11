@@ -1275,6 +1275,19 @@ if (sessionWhen && sessionWhen.dataset.at) {
       var mark = item.querySelector(".check-state");
       if (mark) mark.textContent = hasMeeting ? "Done" : "To do";
     }
+    // The page render waits at most 400 ms for the Google grant, so a cold
+    // read printed "Connect your calendar" for a person whose grant files
+    // events (demo take-1, Nov 11). The board's own grant check marks it.
+    var calendarItem = document.getElementById("checklist-calendar");
+    if (calendarItem && !calendarItem.classList.contains("done") && state && state.doors && state.doors.calendar === true) {
+      calendarItem.classList.add("done");
+      var calendarTitle = calendarItem.querySelector(".check-title");
+      if (calendarTitle) calendarTitle.textContent = "Calendar connected";
+      var calendarMark = calendarItem.querySelector(".check-state");
+      if (calendarMark) calendarMark.textContent = "Done";
+      var calendarGo = calendarItem.querySelector(".check-go");
+      if (calendarGo) calendarGo.remove();
+    }
     var items = card.querySelectorAll(".check-item");
     var done = card.querySelectorAll(".check-item.done").length;
     var count = document.getElementById("checklist-count");
@@ -1287,7 +1300,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
   function emptyHomeNow() {
     if (workspaceKind === "personal" || sectionName !== "home") return false;
     if (state && state.read === "failed") return false;
-    if (state && state.reading === true && state.shell !== true) return false;
+    // A shell answer means the memory index is still being read on that
+    // instance: no rooms yet is not "no meetings". Home showed the empty card
+    // ("1 of 4 done") until a refresh (demo take-1, Nov 11).
+    if (!state || state.reading === true) return false;
     return roomTotal() === 0;
   }
 
@@ -1773,8 +1789,26 @@ if (sessionWhen && sessionWhen.dataset.at) {
     return (state && state.decisions || []).filter(function (item) { return item.roomId === roomId; });
   }
 
+  /** The people heard in a transcript, by name. Recall names the bot "Unknown". */
+  function lineSpeakers(lines) {
+    var names = [];
+    (Array.isArray(lines) ? lines : []).forEach(function (line) {
+      var name = line && typeof line.speaker === "string" ? line.speaker.trim() : "";
+      if (!name || /^(unknown|someone)$/i.test(name) || names.indexOf(name) !== -1 || names.length >= 12) return;
+      names.push(name);
+    });
+    return names;
+  }
+
   function peopleFor(roomId) {
     var names = [];
+    // Who Recall heard in the transcript, by name. A kept sentence only names
+    // a participant id, so it is the fallback.
+    var room = roomOf(roomId);
+    (room && Array.isArray(room.speakers) ? room.speakers : []).forEach(function (name) {
+      if (typeof name === "string" && name && names.indexOf(name) === -1) names.push(name);
+    });
+    if (names.length) return names;
     decisionsFor(roomId).forEach(function (item) {
       if (item.speaker && names.indexOf(item.speaker) === -1) names.push(item.speaker);
     });
@@ -2786,7 +2820,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       workspaceKind = next.workspace;
     }
     paintChip();
-    showHomeSkeleton(next.reading === true && !shell);
+    showHomeSkeleton(next.reading === true && (!shell || !keepRooms));
     document.body.classList.toggle("read-failed", next.read === "failed");
     document.body.classList.toggle("is-reading", next.reading === true && !shell);
     if (next.reading) {
@@ -5197,6 +5231,12 @@ if (sessionWhen && sessionWhen.dataset.at) {
         if (media.duration > 0) live.duration = media.duration;
         else if (media.state === "ready" || media.state === "novideo" || media.state === "expired" || media.state === "none") live.spanKnown = true;
         if (media.title && !live.name) live.name = media.title;
+        var named = false;
+        if (media.platform && !live.platform) { live.platform = media.platform; named = true; }
+        var heard = lineSpeakers(media.lines);
+        if (heard.length && heard.join("|") !== (live.speakers || []).join("|")) { live.speakers = heard; named = true; }
+        // A new platform or speaker list changes the row's title and faces.
+        if (named && sectionName !== "file") paintRooms();
         paintRoomProgress(live);
         if (fileRoom === asked) {
           paintPlayer(media);
@@ -5639,6 +5679,10 @@ if (sessionWhen && sessionWhen.dataset.at) {
     }).catch(function () {
       if (token !== loadToken) return;
       document.getElementById("loading").hidden = true;
+      // The server painted the empty card before any read. A failed first
+      // read is an error with a retry, not "Your meetings will show up here".
+      var firstEmpty = document.getElementById("home-empty");
+      if (firstEmpty && !state) firstEmpty.hidden = true;
       showRetry(true, homeErrorCopy("The account could not be read."));
       text("status", "");
     });

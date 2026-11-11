@@ -1,4 +1,4 @@
-import { canReadRecord, readPrincipalId, readableSession } from "./domain/read-access.js";
+import { canReadInSession, canReadRecord, meetingRoomReaders, readPrincipalId, readableSession } from "./domain/read-access.js";
 import { createHash, randomBytes } from "node:crypto";
 import { displayName, logAction, logFailure, logRequest, logUndo, renderActivity, undoRefusal } from "./activity.js";
 import { formatActivitySentence, selectActivity } from "./activity-feed.js";
@@ -2681,7 +2681,8 @@ async function answerRecall(input, session, deps) {
   const candidates = session.decisions.filter((decision) =>
     !decision.deleted && (!roomId || decision.roomId === roomId) && keptInWorkspace(decision, scope));
   const principal = input.readPrincipal || memberId;
-  const visible = candidates.filter((decision) => canReadRecord(principal, decision));
+  const readers = meetingRoomReaders(session);
+  const visible = candidates.filter((decision) => canReadInSession(principal, decision, readers));
   if (visible.length === 0) {
     const reason = candidates.length === 0 ? "there are no notes yet" : "not-invited";
     if (reason === "not-invited") await noteOutsideAsk(session, deps, input, candidates);
@@ -2728,7 +2729,8 @@ async function answerRecall(input, session, deps) {
 
 function renderVisible(session, memberId, roomId, proofs, failed = false, scope = "", question = "") {
   const preference = resolvePreference(session.preferences, "linear", roomId);
-  const statuses = clashStatuses(session.decisions.filter((decision) => keptInWorkspace(decision, scope) && canReadRecord(memberId, decision)));
+  const readers = meetingRoomReaders(session);
+  const statuses = clashStatuses(session.decisions.filter((decision) => keptInWorkspace(decision, scope) && canReadInSession(memberId, decision, readers)));
   const statusOf = new Map(statuses.map((row) => [row.id, row.status]));
   const lines = [];
   const visible = [];
@@ -2740,7 +2742,7 @@ function renderVisible(session, memberId, roomId, proofs, failed = false, scope 
   for (const decision of session.decisions) {
     if (decision.deleted || !keptInWorkspace(decision, scope)) continue;
     if (roomId && decision.roomId !== roomId) continue;
-    if (!canReadRecord(memberId, decision)) continue;
+    if (!canReadInSession(memberId, decision, readers)) continue;
     const proof = proofs?.get(decision.id);
     if (proof?.failed) {
       lines.push("unknown");
@@ -3461,13 +3463,29 @@ export async function endMeeting(session, deps, roomId) {
  * @param {ReturnType<import("./session.js").createSession>} session
  * @param {string} [memberId]
  */
+/**
+ * The people heard in a room's transcript, first heard first. Recall names the
+ * bot itself "Unknown"; that is not a speaker the console lists.
+ */
+export function lineSpeakers(lines) {
+  const names = [];
+  for (const line of Array.isArray(lines) ? lines : []) {
+    const name = typeof line?.speaker === "string" ? line.speaker.trim().slice(0, 80) : "";
+    if (!name || /^(unknown|someone)$/i.test(name) || names.includes(name)) continue;
+    names.push(name);
+    if (names.length >= 12) break;
+  }
+  return names;
+}
+
 export function companyBoard(session, memberId, options = {}) {
+  const readers = meetingRoomReaders(session);
   if (typeof memberId === "object") session = readableSession(session, memberId);
   const member = typeof memberId === "object" ? memberId : readPrincipalId(memberId);
   const visible = [];
   for (const decision of session?.decisions ?? []) {
     if (decision.deleted || decision.account === "personal" || decision.kind === "note") continue;
-    if (!readPrincipalId(member) || !canReadRecord(member, decision)) continue;
+    if (!readPrincipalId(member) || !canReadInSession(member, decision, readers)) continue;
     visible.push(decision);
   }
   const statuses = new Map(clashStatuses(visible).map((row) => [row.id, row.status]));
@@ -3524,6 +3542,8 @@ export function companyBoard(session, memberId, options = {}) {
     if (typeof opened.startedAt === "string" && opened.startedAt) room.startedAt = opened.startedAt;
     if (Number.isFinite(opened.duration) && opened.duration > 0) room.duration = Math.round(opened.duration);
     if (meetingCallRank(opened.call)) room.call = opened.call;
+    const speakers = lineSpeakers(opened.lines);
+    if (speakers.length) room.speakers = speakers;
     if (typeof opened.calendarEventId === "string" && opened.calendarEventId.trim()) {
       room.calendarEventId = opened.calendarEventId.trim();
     }
@@ -3545,7 +3565,7 @@ export function companyBoard(session, memberId, options = {}) {
     }
     if (meetingHold) {
       const invite = action.inviteMemberIds?.length ? action.inviteMemberIds : [action.memberId];
-      if (!readPrincipalId(member) || !canReadRecord(member, { ...action, inviteMemberIds: invite })) continue;
+      if (!readPrincipalId(member) || !canReadInSession(member, { ...action, inviteMemberIds: invite }, readers)) continue;
       const tool = action.tool === "linear" || action.tool === "calendar" ? action.tool : "";
       waiting.push({
         id: action.id,
@@ -3578,7 +3598,7 @@ export function companyBoard(session, memberId, options = {}) {
   for (const action of session?.actions ?? []) {
     if (action.state !== "closed" || action.tool !== "linear" || typeof action.connectorId !== "string" || !action.connectorId) continue;
     const invite = action.inviteMemberIds?.length ? action.inviteMemberIds : [action.memberId];
-    if (!readPrincipalId(member) || !canReadRecord(member, { ...action, inviteMemberIds: invite })) continue;
+    if (!readPrincipalId(member) || !canReadInSession(member, { ...action, inviteMemberIds: invite }, readers)) continue;
     tickets.push({
       actionId: action.id,
       connectorId: action.connectorId,

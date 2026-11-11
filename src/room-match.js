@@ -71,6 +71,14 @@ const LIVE_ROOM_CALLS = new Set([
 
 const ROOM_TEXT_FIELDS = ["startedAt", "recordingStart", "platform", "name", "call", "channel"];
 
+// Same order as MEETING_CALLS in src/meeting/recall.js. This module also runs
+// in the page, so it keeps its own copy.
+const ROOM_CALL_ORDER = ["joining_call", "in_waiting_room", "in_call_not_recording", "in_call_recording", "fatal", "call_ended", "done"];
+
+function roomCallRank(code) {
+  return ROOM_CALL_ORDER.indexOf(code) + 1;
+}
+
 function roomText(value) {
   return typeof value === "string" && value.trim() ? value : "";
 }
@@ -97,6 +105,16 @@ function mergeRoomRecord(prior, incoming) {
       if (prevValue) room[key] = prevValue;
     }
   }
+  // A later phase is never replaced by an earlier one. The page learns "done"
+  // from Recall while the list can still carry an older "in_call_recording"
+  // row from another instance (demo take-1, Nov 11).
+  const priorCall = roomText(prior?.call);
+  if (priorCall && roomCallRank(priorCall) > roomCallRank(room.call)) room.call = priorCall;
+  const speakers = [];
+  for (const name of [...(Array.isArray(prior?.speakers) ? prior.speakers : []), ...(Array.isArray(incoming?.speakers) ? incoming.speakers : [])]) {
+    if (typeof name === "string" && name.trim() && !speakers.includes(name)) speakers.push(name);
+  }
+  if (speakers.length) room.speakers = speakers;
   const nextDuration = Number(incoming?.duration);
   const prevDuration = Number(prior?.duration);
   if (nextDuration > 0) room.duration = nextDuration;

@@ -442,10 +442,26 @@ function wordStamp(word) {
  * @param {unknown} bot
  * @param {number} [now]
  */
+const PLATFORM_NAMES = Object.freeze({
+  google_meet: "Google Meet",
+  zoom: "Zoom",
+  microsoft_teams: "Teams",
+  microsoft_teams_live: "Teams",
+  webex: "Webex",
+});
+
+/** The console's platform name for a Recall bot's meeting_url, or "". */
+export function meetingPlatformName(bot) {
+  const url = bot && typeof bot === "object" ? bot.meeting_url : null;
+  const code = url && typeof url === "object" && typeof url.platform === "string" ? url.platform : "";
+  return Object.prototype.hasOwnProperty.call(PLATFORM_NAMES, code) ? PLATFORM_NAMES[code] : "";
+}
+
 export function mediaFromBot(bot, now = Date.now()) {
   const blank = {
     state: "none",
     title: "",
+    platform: "",
     videoUrl: "",
     transcriptUrl: "",
     participantsUrl: "",
@@ -477,6 +493,7 @@ export function mediaFromBot(bot, now = Date.now()) {
   const duration = secondsBetween(started, completed);
   const urls = {
     title,
+    platform: meetingPlatformName(root),
     videoUrl: stringField(video, "download_url"),
     transcriptUrl: stringField(transcript, "download_url"),
     participantsUrl: stringField(people, "participants_download_url"),
