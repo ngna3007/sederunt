@@ -8,7 +8,7 @@ export const CONVERSATION_MS = 20_000;
 const UNFINISHED_TAIL = new Set(["about", "the", "and", "what", "who", "when", "where", "why", "how", "which"]);
 
 const ANCHORS = new Set(
-  "a an the i you we they he she it my your our me us is am are was were be been being do does did said not no yes can could should would will to of in on for at and or but if so this that with from just now what who when where why how which im ill ok okay here done sure got it"
+  "a an the i you we they he she it my your our me us is am are was were be been being do does did said not no yes can could should would will to of in on for at and or but if so this that with from just now what who when where why how which im ill ok okay here done sure got it youre youll youve thats theres lets dont cant wont ive id"
     .split(/\s+/),
 );
 

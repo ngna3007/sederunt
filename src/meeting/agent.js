@@ -116,6 +116,8 @@ export function cancelsAnswer(text, botName = "Adam") {
  */
 export function titleFromAnswer(text, botName = "Adam") {
   let value = String(text || "").replace(/\s+/g, " ").trim();
+  // "Bye Adam" or "thanks" after "What should the title be?" is not a title.
+  if (closingReply(value, botName)) return "";
   const name = String(botName || "Adam").replace(/[^\p{L}\p{N} ]+/gu, "").trim();
   const names = [name, "adam"].filter(Boolean).map((item) => item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   const wake = new RegExp(`^(?:(?:hey|hi|ok|okay|so)[,\\s]+)?(?:${names.join("|")})\\b[,.:!\\s]*`, "iu");
@@ -127,7 +129,7 @@ export function titleFromAnswer(text, botName = "Adam") {
   if (NOT_A_TITLE.test(value)) return "";
   value = value.replace(/^(?:it should say|it says|say|call it|title it|the title is|title|the issue is|make it|name it)\b[,:\s]*/i, "");
   value = value.replace(/^["'“‘]+|["'”’]+$/g, "").replace(/[\s.!?,;:]+$/g, "").trim();
-  if (value) value = value.charAt(0).toUpperCase() + value.slice(1);
+  value = imperativeTitle(value);
   return concreteTitle(value);
 }
 
@@ -196,10 +198,63 @@ export function concreteTitle(value) {
 }
 
 /** Spoken after a voice Linear write is filed. Approval is not required. */
-export function filedVoiceLine(title) {
+export function filedVoiceLine(title, issueId = "") {
   const clean = String(title || "").replace(/['"]/g, "").replace(/\s+/g, " ").trim();
+  const id = String(issueId || "").trim().toUpperCase();
+  const key = /^[A-Z][A-Z0-9]{0,9}-\d{1,7}$/.test(id) ? id : "";
+  if (key) return clean ? `I filed ${key}, '${clean}'.` : `I filed ${key}.`;
   if (!clean) return "I filed the Linear issue.";
   return `I filed the Linear issue '${clean}'.`;
+}
+
+// Speech-to-text often hears a spoken imperative as past tense ("fix" -> "fixed").
+// Only these verbs, and only as the first word of a longer title.
+const IMPERATIVE_SLIPS = new Map([
+  ["fixed", "Fix"], ["added", "Add"], ["updated", "Update"], ["created", "Create"], ["removed", "Remove"],
+  ["changed", "Change"], ["deleted", "Delete"], ["renamed", "Rename"], ["moved", "Move"], ["cleaned", "Clean"],
+  ["improved", "Improve"], ["replaced", "Replace"], ["tested", "Test"], ["checked", "Check"], ["reviewed", "Review"],
+  ["refactored", "Refactor"], ["upgraded", "Upgrade"], ["migrated", "Migrate"], ["documented", "Document"],
+]);
+
+/**
+ * A spoken title as an issue title: first letter upper case, and a leading
+ * past-tense verb that is an obvious slip for its imperative put back.
+ */
+export function imperativeTitle(value) {
+  let title = String(value || "").replace(/\s+/g, " ").trim();
+  const match = title.match(/^([A-Za-z]+)(\s+\S.*)$/);
+  if (match && IMPERATIVE_SLIPS.has(match[1].toLowerCase())) title = IMPERATIVE_SLIPS.get(match[1].toLowerCase()) + match[2];
+  return title ? title.charAt(0).toUpperCase() + title.slice(1) : "";
+}
+
+/**
+ * A thanks or goodbye addressed to Adam, and the short reply to it. Returns ""
+ * for anything else. The caller decides whether the room is a solo call.
+ */
+export function closingReply(text, botName = "Adam") {
+  const name = String(botName || "Adam").replace(/[^\p{L}\p{N} ]+/gu, "").trim();
+  const names = [name, "adam"].filter(Boolean).map((item) => item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const who = `(?:${names.join("|")})`;
+  const value = String(text || "").replace(/\s+/g, " ").trim().replace(/[.!,\s]+$/g, "");
+  const bare = value
+    .replace(new RegExp(`^(?:(?:hey|hi|ok|okay|great|perfect|cool|awesome|alright|all right)[,\\s]+)*`, "i"), "")
+    .replace(new RegExp(`^${who}[,\\s]+`, "iu"), "")
+    .replace(new RegExp(`[,\\s]+${who}$`, "iu"), "")
+    .trim();
+  if (/^(?:thanks|thank you|thank you so much|thanks so much|thanks a lot|many thanks|cheers|thx|ty)(?:[,\s]+(?:that'?s all|that is all|that'?s it))?$/i.test(bare)) {
+    return "You're welcome.";
+  }
+  if (/^(?:bye|goodbye|good bye|bye bye|see you|see ya|talk (?:to you )?(?:soon|later)|that'?s all(?: for now)?|that is all)$/i.test(bare)) {
+    return "Bye for now.";
+  }
+  return "";
+}
+
+/** True when the line names Adam (or the room's bot name). */
+export function namesBot(text, botName = "Adam") {
+  const name = String(botName || "Adam").replace(/[^\p{L}\p{N} ]+/gu, "").trim();
+  const names = [name, "adam"].filter(Boolean).map((item) => item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(`\\b(?:${names.join("|")})\\b`, "iu").test(String(text || ""));
 }
 
 /** The spoken hold. Linear and the built-in act tool read the title back. */
@@ -699,7 +754,7 @@ export function linesForSpeech(text, results = [], options = {}) {
   const rows = Array.isArray(results) ? results : [];
   const filedRow = rows.find((row) => row?.status === "filed");
   if (options.done === true && filedRow) {
-    return [filedVoiceLine(filedRow.title || filedRow.data?.title || "")];
+    return [filedVoiceLine(filedRow.title || filedRow.data?.title || "", filedRow.issueId || "")];
   }
   const slow = rows.find((row) => row?.reason === "slow");
   const heldRow = rows.find((row) => row?.status === "waiting_for_approval" || row?.held === true);

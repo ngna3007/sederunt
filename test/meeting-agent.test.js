@@ -860,7 +860,7 @@ test("a voice linear write files the issue without approval", async () => {
     assert.equal(issues[0].title, "Launch the Friday note");
     assert.equal(session.actions.filter((row) => row.state === "paused").length, 0);
     assert.equal(session.actions.some((row) => row.state === "closed" && row.connectorId === "ROW-9"), true);
-    assert.match(spoken.raw, /I filed the Linear issue 'Launch the Friday note'/);
+    assert.match(spoken.raw, /I filed ROW-9, 'Launch the Friday note'./);
     assert.equal(/Approve it in the Sederunt console/.test(spoken.raw), false);
     const fresh = createSession();
     assert.equal(fresh === session, false);
@@ -966,7 +966,7 @@ test("a signed-in console user approves a voice hold and sees it", async () => {
     assert.equal((meetingVoice.toolRuns || []).length, 0);
     assert.equal(issues.length, 1);
     assert.equal(issues[0].title, "Launch the Friday note");
-    assert.match(spoken.raw, /I filed the Linear issue 'Launch the Friday note'/);
+    assert.match(spoken.raw, /I filed ROW-9, 'Launch the Friday note'./);
     const filed = session.actions.find((row) => row.state === "closed");
     assert.equal(filed.memberId, "7");
     assert.equal(filed.connectorId, "ROW-9");

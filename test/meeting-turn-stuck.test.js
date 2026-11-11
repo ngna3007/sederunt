@@ -213,7 +213,7 @@ test("a title answer files and speaks while slow memory writes are still running
     ]);
     assert.notEqual(reply, "TIMEOUT", "the turn waited on memory writes");
     assert.equal(Date.now() - started < 3000, true);
-    assert.deepEqual(sentences(reply), [`I filed the Linear issue '${TITLE}'.`]);
+    assert.deepEqual(sentences(reply), [`I filed ROW-77, '${TITLE}'.`]);
     assert.equal(issues.length, 1);
     assert.equal(issues[0].title, TITLE);
     assert.equal(releases.length >= 2, true, "memory writes were started, not dropped");
