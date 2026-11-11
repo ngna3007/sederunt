@@ -30,7 +30,8 @@ test("the linear client updates state, labels, and assignee through save_issue",
   assert.deepEqual(tools[4][1].labels, ["design"]);
   assert.deepEqual(tools[5], ["save_issue", { id: "ROW-1", assignee: null }]);
   assert.equal(tools[6][0], "save_issue");
-  assert.equal(tools[6][1].idempotencyKey, "req-1");
+  // save_issue has no idempotency argument; the action claim keeps one call per filing.
+  assert.equal("idempotencyKey" in tools[6][1], false);
   assert.equal(tools[6][1].title, "Banner");
   const other = await linear.updateIssue({ id: "ENG-12", state: "Done" });
   assert.equal(other.id, "ENG-12");

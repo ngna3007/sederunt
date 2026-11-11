@@ -11,6 +11,7 @@ const MCP_URL = "https://mcp.linear.app/mcp";
 export function createLinearClient(token, fetchImpl = globalThis.fetch, options = {}) {
   const team = String(options.team || "ROW").trim() || "ROW";
   const workspace = String(options.workspace || "").trim();
+  const project = String(options.project || "Sederunt").trim() || "Sederunt";
   let sessionId = "";
   let nextId = 1;
   let started = null;
@@ -39,7 +40,8 @@ export function createLinearClient(token, fetchImpl = globalThis.fetch, options 
     if (notify || !text.trim()) return null;
     const payload = parseRpc(text);
     if (payload.error) {
-      throw new Error(`Linear MCP ${method} failed: ${payload.error.message || "error"}`);
+      // A JSON-RPC error (for example invalid params) is a refusal: nothing was saved.
+      throw Object.assign(new Error(`Linear MCP ${method} failed: ${payload.error.message || "error"}`), { rejected: true });
     }
     return payload.result;
   }
@@ -63,7 +65,8 @@ export function createLinearClient(token, fetchImpl = globalThis.fetch, options 
     const result = await rpc("tools/call", { name, arguments: args });
     if (result?.isError) {
       const message = toolText(result) || "Linear tool failed";
-      throw new Error(message);
+      // Linear answered with a tool error: the call was refused, nothing was saved.
+      throw Object.assign(new Error(message), { rejected: true });
     }
     return result;
   }
@@ -90,22 +93,32 @@ export function createLinearClient(token, fetchImpl = globalThis.fetch, options 
       const open = issuesFrom(await callTool("list_issues", { team, limit: 25 }));
       return { team, trip, open };
     },
-    async createIssue({ title, idempotencyKey, description }) {
+    async createIssue({ title, description }) {
+      // save_issue takes title, team, project, description (Linear MCP schema).
+      // It has no idempotency argument: the action claim keeps a filing to one call.
       const args = {
         title,
         team,
-        project: "Sederunt",
+        project,
         description: typeof description === "string" && description.trim() ? description.trim() : "Filed from a room.",
       };
-      if (idempotencyKey) args.idempotencyKey = idempotencyKey;
-      const result = await callTool("save_issue", args);
-      const parsed = parseToolJson(result);
-      const identifier = findIdentifier(parsed) || findIdentifier(result);
-      if (!identifier) {
-        const snippet = toolText(result).replace(/\s+/g, " ").slice(0, 500);
-        throw new Error(`Linear create returned no issue id. ${snippet}`);
+      let result;
+      try {
+        result = await callTool("save_issue", args);
+      } catch (error) {
+        // A workspace without the "Sederunt" project rejects the save. Linear
+        // created nothing, so file once more into the team alone.
+        if (!error?.rejected || !/project/i.test(String(error.message || ""))) throw error;
+        const { project: _dropped, ...teamOnly } = args;
+        result = await callTool("save_issue", teamOnly);
       }
-      const url = findUrl(parsed) || findUrl(result) || issueUrl(workspace, identifier);
+      const parsed = parseToolJson(result);
+      const identifier = findIdentifier(parsed) || findIdentifier(result) || identifierInText(toolText(result), team);
+      if (!identifier) {
+        const fields = parsed && typeof parsed === "object" ? Object.keys(parsed).slice(0, 8).join(",") : typeof parsed;
+        throw Object.assign(new Error(`Linear create returned no issue id (fields: ${fields}).`), { reason: "no-id" });
+      }
+      const url = findUrl(parsed) || findUrl(result) || urlInText(toolText(result), identifier) || issueUrl(workspace, identifier);
       return { id: identifier, identifier, url };
     },
     async assignIssue({ id, assignee }) {
@@ -226,6 +239,23 @@ function findIdentifier(value) {
     }
   }
   return "";
+}
+
+function identifierInText(text, team) {
+  if (typeof text !== "string" || !text) return "";
+  const url = text.match(/https:\/\/linear\.app\/[^\s/]+\/issue\/([A-Za-z][A-Za-z0-9]+-\d+)/);
+  if (url) return rowId(url[1]);
+  const key = String(team || "").trim().toUpperCase();
+  if (!/^[A-Z][A-Z0-9]+$/.test(key)) return "";
+  const named = text.match(new RegExp(`\\b${key}-\\d+\\b`));
+  return named ? rowId(named[0]) : "";
+}
+
+function urlInText(text, identifier) {
+  if (typeof text !== "string" || !identifier) return "";
+  const found = text.match(/https:\/\/linear\.app\/[^\s/]+\/issue\/[A-Za-z][A-Za-z0-9]+-\d+[^\s)"'\]]*/);
+  if (!found || rowId(found[0].split("/issue/")[1].split("/")[0]) !== identifier) return "";
+  return found[0].split("?")[0];
 }
 
 function parseMaybe(text) {
