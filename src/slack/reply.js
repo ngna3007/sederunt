@@ -744,7 +744,8 @@ async function slackDownload(fetchFn, token, url, hops = 0) {
 }
 
 async function postSlackFile({ token, channel, text, thread, file, fetchImpl }) {
-  const bytes = String(file.bytes);
+  // A Walrus read returns raw bytes (a PDF or image must not pass through a string).
+  const bytes = Buffer.isBuffer(file.bytes) || file.bytes instanceof Uint8Array ? Buffer.from(file.bytes) : String(file.bytes);
   const opened = await slackForm(fetchImpl, token, "files.getUploadURLExternal", {
     filename: file.name,
     length: Buffer.byteLength(bytes),

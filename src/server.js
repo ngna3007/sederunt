@@ -79,7 +79,8 @@ import { createFileRuntime } from "./files/runtime.js";
 import { createFileStore } from "./files/store.js";
 import { createSupabaseFileStore } from "./files/supabase-store.js";
 import { createSessionFiles } from "./files/session.js";
-import { hideDeletedSlackMessages, ingestSlackFile } from "./files/slack.js";
+import { bindSlackChannel, hideDeletedSlackMessages, ingestSlackFile } from "./files/slack.js";
+import { createSlackIdentityStore, createSlackMemberResolver, slackChannelBindable, slackReadPrincipal } from "./slack/identity-link.js";
 import { loadCompanyEnv, loadLocalEnv } from "./local-env.js";
 import { looksLikeOpenQuestion } from "./parse.js";
 import { createSession } from "./session.js";
@@ -692,6 +693,13 @@ export function createApp(options = {}) {
     : ((isDirectRun() || process.env.VERCEL) ? createSupabaseFollowupStore(env, { fetchImpl: options.fetch || globalThis.fetch }) : null);
   workspace.followupStore = followupStore;
   workspace.slackMatches = options.slackMatches || null;
+  // Slack user -> verified member of the tenant that owns the team (users.info email).
+  workspace.slackMembers = createSlackMemberResolver({
+    store: Object.prototype.hasOwnProperty.call(options, "slackIdentities")
+      ? options.slackIdentities
+      : createSlackIdentityStore(env, { fetchImpl: options.fetch || globalThis.fetch }),
+  });
+  workspace.slackBound = new Map();
   workspace.followups = options.followups && typeof options.followups.enqueue === "function"
     ? options.followups
     : (followupStore ? liveFollowups(workspace, followupStore) : null);
@@ -2146,6 +2154,24 @@ export function createApp(options = {}) {
         SLACK_BOT_TOKEN: slackToken,
         SLACK_BOT_USER_ID: slackRoute.botUserId || (slackRoute.source === "install" ? "" : env.SLACK_BOT_USER_ID),
       };
+      // The bot was added to a channel: bind it to this tenant's Files space now,
+      // so the first file posted there reaches Walrus. Other joins are ignored.
+      if (event.type === "member_joined_channel") {
+        const joined = typeof event.user === "string" ? event.user.trim().toUpperCase() : "";
+        const isBot = Boolean(joined) && slackBotUserIds(parsed, slackEnv).some((id) => id.toUpperCase() === joined);
+        let bound = null;
+        if (isBot && companyId) {
+          try {
+            bound = await bindSlackChannelOnce(workspace, filesRuntime, {
+              tenantId: companyId, teamId: slackTeam, channel: slackChannel, token: slackToken, fetchImpl: deps.slack?.fetch,
+            });
+          } catch {
+            bound = null;
+          }
+        }
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify({ slack: bound ? "bound" : "ignored" }));
+        return;
+      }
       const subtype = typeof event.subtype === "string" ? event.subtype : "";
       const changedFiles = subtype === "message_changed" && slackEventHasFiles(event);
       const noise = subtype
@@ -2184,10 +2210,19 @@ export function createApp(options = {}) {
         // A DM, or a channel @mention, recalls. Other channel lines are stored.
         const question = delivery.ask === true;
         const huddle = delivery.room?.kind === "huddle" || delivery.room?.source === "slack-huddle";
+        const hasFiles = (Array.isArray(delivery.files) && delivery.files.length > 0) || Boolean(delivery.file);
+        // The Slack person as a verified member of this tenant, when their Slack email says so.
+        const asker = (question || hasFiles) && delivery.intent !== "delete" && !huddle
+          ? await slackAskerLink(workspace, filesRuntime, { tenantId: companyId, teamId: slackTeam, slackUserId: delivery.memberId, token: slackToken, fetchImpl: deps.slack?.fetch })
+          : null;
+        // The Meet-room view answers only in a one-to-one DM: a channel or group DM
+        // reply is read by everyone there, so it keeps the Slack-id-only view.
+        const principal = question && !slackOneToOne(event) ? null : slackReadPrincipal(asker);
         let storedFile = null;
         let incoming = [];
         let storedFiles = [];
         let downloadFailed = false;
+        let ingestedFiles = 0;
         if (!question && delivery.intent !== "delete" && !huddle) {
           const channel = delivery.room?.askChannel || "";
           const people = await slackPeople(slackEnv, deps, channel, options.deps?.slack);
@@ -2212,6 +2247,16 @@ export function createApp(options = {}) {
             replyHttp(200, "application/json; charset=utf-8", JSON.stringify({ body: "not-invited" }));
             return;
           }
+          // First keep in a channel the bot is in binds it (member_joined_channel may not be subscribed).
+          if (filesRuntime && hasFiles) {
+            try {
+              await withinMs(bindSlackChannelOnce(workspace, filesRuntime, {
+                tenantId: companyId, teamId: slackTeam, channel, token: slackToken, fetchImpl: deps.slack?.fetch,
+              }), 4_000);
+            } catch {
+              // Unbound: the file is still kept by name and resent from Slack.
+            }
+          }
           delivery.participants = memberIds;
           delivery.room.memberIds = memberIds;
           incoming = Array.isArray(delivery.files) && delivery.files.length
@@ -2232,8 +2277,8 @@ export function createApp(options = {}) {
             storedFiles.push({ ...loaded, id: slackFileId });
             if (filesRuntime) {
               try {
-                await withinMs(ingestSlackFile(filesRuntime, {
-                  externalWorkspaceId: slackScopeId(parsed.team_id),
+                const ingested = await withinMs(ingestSlackFile(filesRuntime, {
+                  externalWorkspaceId: slackScopeId(parsed.team_id) || slackTeam,
                   externalChannelId: channel,
                   slackUserId: delivery.memberId,
                   slackName: delivery.memberId,
@@ -2243,12 +2288,16 @@ export function createApp(options = {}) {
                   bytes: loaded.bytes,
                   externalMessageId: delivery.deliveryId,
                 }), 4_000);
+                if (ingested && ingested.skipped === false) ingestedFiles += 1;
+                if (typeof deps.log === "function") deps.log({ kind: "slack-file-ingest", skipped: ingested?.skipped !== false, reason: ingested?.reason || "" });
               } catch {
                 // The Slack reply still goes out. A stashed upload retries from the worker.
               }
             }
           }
           if (incoming.length && !storedFiles.length) downloadFailed = true;
+          // Durable uploads are queued; run the worker now so the Walrus copy exists before anyone asks.
+          if (ingestedFiles) await settleFileJobs(filesRuntime);
           if (storedFiles.length) {
             storedFile = storedFiles[0];
             delivery.file = storedFiles[0];
@@ -2264,6 +2313,7 @@ export function createApp(options = {}) {
         const result = await handleUtterance({
           ...delivery,
           intent,
+          ...(question && principal ? { readPrincipal: principal } : {}),
           session: current,
         }, doorDeps);
         // "Kept <file>" when this utterance recorded a new decision with files,
@@ -2316,6 +2366,21 @@ export function createApp(options = {}) {
             }
           }
         }
+        if (question && !repeat && result?.allow === "not-invited" && slackToken) {
+          // Never silent, never a hint of what is kept or where.
+          const channel = delivery.room?.askChannel || (typeof event.channel === "string" ? event.channel : "");
+          const claimId = delivery.deliveryId || (typeof event.ts === "string" ? event.ts : "");
+          if (channel && await claimSlackAsk(env, claimId, deps.slack?.fetch || deps.fetch)) {
+            await postSlackReply({
+              token: slackToken,
+              fetchImpl: deps.slack?.fetch,
+              channel,
+              text: SLACK_NOT_SHARED,
+              thread: typeof event.thread_ts === "string" ? event.thread_ts : "",
+              username: botName,
+            });
+          }
+        }
         if (question && result?.body && !repeat && result.allow !== "not-invited" && result.allow !== "missing-member") {
           const channel = delivery.room?.askChannel || (typeof event.channel === "string" ? event.channel : "");
           const answer = await answerSlackQuestion(result.visible, delivery.text, {
@@ -2339,7 +2404,7 @@ export function createApp(options = {}) {
           // fails) so "District 7 floor brief" pins northline-d7-floor-brief.txt
           // instead of a leftover floor-plan.txt.
           const catalog = [
-            ...invitedFileRows(current.decisions, delivery.memberId),
+            ...(principal ? readableFileRows(current, principal) : invitedFileRows(current.decisions, delivery.memberId)),
             ...(Array.isArray(result.visible) ? result.visible : []),
           ];
           const named = findReplyFile(catalog, delivery.text);
@@ -2349,7 +2414,8 @@ export function createApp(options = {}) {
           }
           answer.text = prepareSlackCaption(answer.text, answer.file);
           const hint = named?.name ? named : answer.fileMeta;
-          const bytes = answer.file ? await storedFileBytes(current, answer.file, depsFor(workspace, companyId), slackEnv, hint) : null;
+          const walrus = principal && filesRuntime ? walrusFileReader(filesRuntime, principal.memberId, companyId, deps.log) : null;
+          const bytes = answer.file ? await storedFileBytes(current, answer.file, depsFor(workspace, companyId), slackEnv, hint, { walrus }) : null;
           const reply = {
             channel,
             text: answer.text,
@@ -4169,6 +4235,86 @@ function withinOrNull(promise, ms) {
   ]).finally(() => clearTimeout(timer));
 }
 
+const SLACK_NOT_SHARED = "Sorry, I can't share that with you.";
+
+/** A one-to-one Slack DM (not a group DM, not a channel). */
+function slackOneToOne(event) {
+  const kind = typeof event?.channel_type === "string" ? event.channel_type.toLowerCase() : "";
+  if (kind) return kind === "im";
+  return typeof event?.channel === "string" && event.channel.startsWith("D");
+}
+
+/** Linked Slack asker, or null. Never throws and never waits long on Slack. */
+async function slackAskerLink(workspace, filesRuntime, { tenantId, teamId, slackUserId, token, fetchImpl }) {
+  if (!workspace.slackMembers || !tenantId || !teamId || !token || !slackUserId) return null;
+  try {
+    const link = await withinMs(workspace.slackMembers.resolve({ tenantId, teamId, slackUserId, token, fetchImpl }), 5_000);
+    // The in-memory Files store keeps its own identity map; the database one is written by the link function.
+    if (link && filesRuntime?.store && !filesRuntime.store.durable && typeof filesRuntime.store.linkExternalUser === "function") {
+      filesRuntime.store.linkExternalUser({ provider: "slack", externalUserId: slackUserId, userId: link.memberId });
+    }
+    return link;
+  } catch {
+    return null;
+  }
+}
+
+/** Bind a public Slack channel to the tenant's Files space, at most once per ten minutes per channel. */
+async function bindSlackChannelOnce(workspace, filesRuntime, { tenantId, teamId, channel, token, fetchImpl }) {
+  if (!filesRuntime?.store?.bindSlackChannel || !tenantId || !teamId || !channel || !token) return null;
+  const key = `${tenantId}|${teamId}|${channel}`;
+  const cached = workspace.slackBound?.get(key);
+  if (cached && cached.until > Date.now()) return cached.channel;
+  const allowed = await slackChannelBindable({ token, channel, fetchImpl });
+  const bound = allowed.ok
+    ? await bindSlackChannel(filesRuntime, { tenantId, teamId, externalChannelId: channel, name: allowed.name })
+    : null;
+  workspace.slackBound?.set(key, { channel: bound, until: Date.now() + (bound ? 10 * 60_000 : 60_000) });
+  return bound;
+}
+
+/** Run queued file jobs now; on Vercel the pass outlives the response through waitUntil. */
+async function settleFileJobs(filesRuntime) {
+  if (typeof filesRuntime?.kick !== "function") return;
+  const pass = Promise.resolve(filesRuntime.kick()).catch(() => {});
+  try {
+    const { waitUntil } = await import("@vercel/functions");
+    if (typeof waitUntil === "function") waitUntil(pass);
+  } catch {
+    // Local Node: the worker pass finishes on its own.
+  }
+}
+
+/** Session rows with files the principal can read (meeting-room members included). */
+function readableFileRows(session, principal) {
+  const readers = meetingRoomReaders(session);
+  return (session?.decisions || []).filter((row) => row && row.deleted !== true && canReadInSession(principal, row, readers));
+}
+
+/**
+ * Bytes of the Files row stored from a Slack file, as that member sees it.
+ * A still-uploading row gets one bounded worker pass before giving up.
+ */
+function walrusFileReader(filesRuntime, userId, tenantId, log) {
+  return async ({ slackFileId }) => {
+    if (!userId || !slackFileId || typeof filesRuntime?.store?.listVisible !== "function") return null;
+    const find = async () => (await filesRuntime.store.listVisible(userId))
+      .find((row) => row.slackFileId === slackFileId && row.status === "active" && row.consoleFileId && (!tenantId || row.tenantId === tenantId)) || null;
+    let row = await find();
+    if (!row && typeof filesRuntime.kick === "function") {
+      await withinOrNull(filesRuntime.kick(), 20_000);
+      row = await find();
+    }
+    if (!row) {
+      if (typeof log === "function") log({ kind: "slack-file-resend", source: "slack", reason: "no-walrus-copy" });
+      return null;
+    }
+    const { bytes } = await filesRuntime.service.download(userId, row.id);
+    if (typeof log === "function") log({ kind: "slack-file-resend", source: "walrus", fileId: row.id });
+    return bytes;
+  };
+}
+
 function withinMs(promise, ms) {
   let timer;
   return Promise.race([
@@ -4181,7 +4327,7 @@ function withinMs(promise, ms) {
 
 // Console copy first; when it is missing (upload failed or timed out), the
 // bytes are fetched again from Slack by the stored Slack file id.
-export async function storedFileBytes(session, name, deps, env = {}, hint = null) {
+export async function storedFileBytes(session, name, deps, env = {}, hint = null, options = {}) {
   const wanted = String(name || "").trim().toLowerCase();
   const decision = wanted
     ? (session?.decisions ?? []).find((item) =>
@@ -4194,6 +4340,15 @@ export async function storedFileBytes(session, name, deps, env = {}, hint = null
   const slackFileId = file.slackFileId || hint?.slackFileId;
   const folderId = file.folderId || hint?.folderId;
   const fileName = file.name || hint?.name || name;
+  // The Walrus copy the Files worker stored from this Slack file, read as the asker.
+  if (slackFileId && typeof options.walrus === "function") {
+    try {
+      const bytes = await options.walrus({ slackFileId, name: fileName });
+      if (bytes != null && bytes.length) return Buffer.isBuffer(bytes) || bytes instanceof Uint8Array ? Buffer.from(bytes) : String(bytes);
+    } catch {
+      // Fall through to the Console id on the decision, then Slack.
+    }
+  }
   if (consoleFileId && typeof deps.console?.download === "function") {
     try {
       const bytes = await deps.console.download({
