@@ -15,24 +15,18 @@
   <a href="https://docs.tatum.io"><img src="https://img.shields.io/badge/Tatum-Sui_gRPC-111111" alt="Tatum Sui gRPC"></a>
 </p>
 
-<p align="center">
-  <a href="docs/media/sederunt-promo.mp4"><img src="docs/media/promo-poster.png" alt="Play the Sederunt promo" width="820"></a>
-</p>
+https://github.com/user-attachments/assets/63f84845-ff8a-435d-ae00-6054b085571f
 
 <p align="center">
-  <a href="docs/media/sederunt-promo.mp4"><strong>Watch the promo</strong></a>
-  &nbsp;·&nbsp;
   <a href="https://sederunt.vercel.app"><strong>Open the app</strong></a>
   &nbsp;·&nbsp;
   <a href="docs/blog/total-recall.md"><strong>Read the write-up</strong></a>
 </p>
 
-GitHub plays the video when you open that file. The picture above is the first frame.
-
 ## Start here
 
 1. Open [sederunt.vercel.app](https://sederunt.vercel.app) and sign in.
-2. Watch the [promo](docs/media/sederunt-promo.mp4).
+2. Watch the promo above.
 3. Read [how the record is written and proved](docs/blog/total-recall.md).
 4. Open one stored decision on Suiscan: [the booth decision](https://suiscan.xyz/mainnet/object/0xf734ea6c946482d9bf28f6443ea6529099a67cc306717562361cd463438de944).
 
@@ -55,7 +49,7 @@ The agent is the meeting. Walrus Memory is where the decision lives after the ca
 | Piece | Where to look |
 | --- | --- |
 | Working demo | [sederunt.vercel.app](https://sederunt.vercel.app) |
-| Promo | [docs/media/sederunt-promo.mp4](docs/media/sederunt-promo.mp4) |
+| Promo | [the video at the top of this page](https://github.com/user-attachments/assets/63f84845-ff8a-435d-ae00-6054b085571f) |
 | Blog post | [docs/blog/total-recall.md](docs/blog/total-recall.md) |
 | Mainnet proof | [docs/hackathon/mainnet-seed-proof.json](docs/hackathon/mainnet-seed-proof.json) |
 | Public repo | [github.com/ngna3007/sederunt](https://github.com/ngna3007/sederunt) |
