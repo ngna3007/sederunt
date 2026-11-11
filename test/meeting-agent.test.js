@@ -1688,8 +1688,9 @@ test("a vague linear request asks for a title, then that title is the hold", asy
     assert.equal(meetingVoice.agentHolds.length, 1);
     assert.equal(meetingVoice.agentHolds[0].args.title, "Fix the onboarding email");
     assert.equal(session.actions.filter((row) => row.state === "paused").length, 1);
+    // The answer to Adam's title question is the title. It is filed without asking the model again.
     const follow = chats.find((payload) => String(payload.messages?.find((message) => message.role === "user")?.content || "").includes("Fix the onboarding email"));
-    assert.match(follow.messages.find((message) => message.role === "user").content, /What should the issue say\?/);
+    assert.equal(follow, undefined);
   } finally {
     await close(first.app);
     await close(second.app);

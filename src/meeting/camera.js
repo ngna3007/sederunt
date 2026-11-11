@@ -143,9 +143,20 @@ const AGENT_PAGE = `<!doctype html>
     }).catch(function () {});
   }
 
-  function noteAnswer(speaker, now) {
+  function noteGate(gate, text) {
+    if (!ear) return;
+    var words = String(text || "").split(/\\s+/).filter(Boolean).length;
+    fetch("/api/meeting/agent/log", {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ gate: gate, words: words, floor: Date.now() < floorUntil, direct: direct })
+    }).catch(function () {});
+  }
+
+  function noteAnswer(speaker, now, asked) {
+    var clock = typeof now === "number" ? now : Date.now();
     floorSpeaker = speaker || "";
-    floorUntil = (typeof now === "number" ? now : Date.now()) + 20000;
+    floorUntil = clock + (asked ? 90000 : 20000);
   }
 
   function setState(state) {
@@ -209,11 +220,11 @@ const AGENT_PAGE = `<!doctype html>
   function onTranscript(message) {
     var heard = utteranceToCommit(committed, message, { name: botName, participantId: participantId });
     if (!heard) return;
-    notePerson(heard.participantId, heard.speaker);
     if (echoShare(heard.text, spokenNow()) >= 0.6) {
       noteEcho();
       return;
     }
+    notePerson(heard.participantId, heard.speaker);
     if (heard.barge && playStarted && Date.now() - playStarted >= 300) barge(wokeIn(heard.text) ? "name" : "word");
     if (!heard.open) return;
     var who = letters(heard.speaker || "");
@@ -240,11 +251,17 @@ const AGENT_PAGE = `<!doctype html>
     lineText = "";
     lineWoke = false;
     lastWordAt = 0;
-    committed = { text: text, speaker: speaker };
     var ownName = letters(speaker) && letters(speaker) === letters(botName);
     var ownId = participantId && claimed && String(claimed) === String(participantId);
-    if (ownName || ownId) return;
-    if (!woke && !shouldRespond(text, speaker, Date.now(), claimed)) return;
+    if (ownName || ownId) {
+      committed = { text: text, speaker: speaker };
+      return;
+    }
+    if (!woke && !shouldRespond(text, speaker, Date.now(), claimed)) {
+      noteGate("skip", text);
+      return;
+    }
+    committed = { text: text, speaker: speaker };
     ask(text, speaker, claimed);
   }
 
@@ -297,7 +314,7 @@ const AGENT_PAGE = `<!doctype html>
             if (payload.text) {
               played.push(payload.text);
               noteSpoken(payload.text, Date.now());
-              noteAnswer(speaker, Date.now());
+              noteAnswer(speaker, Date.now(), /\\?\\s*$/.test(String(payload.text)));
               enqueue(payload.text);
             }
           }

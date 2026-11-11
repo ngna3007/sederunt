@@ -4,7 +4,7 @@ import test from "node:test";
 import { meetingContext } from "../src/meeting/speech-gate.js";
 import { createApp } from "../src/server.js";
 import { createSession } from "../src/session.js";
-import { companyBoard, noteMeetingLines, rebuildCompanyIndex } from "../src/typed-path.js";
+import { companyBoard, noteMeetingCall, noteMeetingLines, rebuildCompanyIndex } from "../src/typed-path.js";
 
 const ROOM = "8d988983-1111-4111-8111-111111111111";
 
@@ -41,7 +41,7 @@ test("the transcript stays on the meeting and off the room list", async () => {
   assert.equal(remembered.length, 1);
   assert.equal(remembered[0].text, `${ROOM} meeting transcript`);
   assert.equal(remembered[0].text.includes("7 pm"), false);
-  assert.equal(remembered[0].idempotencyKey, `${ROOM}:transcript:2`);
+  assert.match(remembered[0].idempotencyKey, new RegExp(`^${ROOM}:transcript:2:[0-9a-f]{12}$`));
   assert.equal(remembered[0].room.lines[0].text.includes("7 pm today"), true);
   assert.equal(remembered[0].room.exchanges.length, 2);
   const listed = companyBoard(session, "mina").rooms.find((room) => room.id === ROOM);
@@ -145,4 +145,32 @@ test("room media stores the spoken lines and a later load still has them", async
   } finally {
     next.close();
   }
+});
+
+test("two isolates' different room snapshots do not reuse one memory key", async () => {
+  // Walrus Memory answers 409 when an idempotency key comes back with different content.
+  const keys = new Map();
+  const errors = [];
+  const memory = {
+    async remember(input) {
+      const body = JSON.stringify(input.room);
+      const prior = keys.get(input.idempotencyKey);
+      if (prior != null && prior !== body) {
+        errors.push(input.idempotencyKey);
+        throw new Error("Walrus Memory server error (409): idempotency_key was already used for a request with different content");
+      }
+      keys.set(input.idempotencyKey, body);
+      return { blobId: `blob-${keys.size}` };
+    },
+  };
+  const statusIsolate = createSession();
+  statusIsolate.rooms.push({ id: ROOM, kind: "meeting", platform: "google_meet", botPresent: true, call: "in_call_not_recording", startedAt: "2026-11-11T06:02:07.000Z" });
+  const transcriptIsolate = createSession();
+  assert.equal(await noteMeetingCall(statusIsolate, { memory }, ROOM, "in_call_recording"), true);
+  assert.equal(await noteMeetingCall(transcriptIsolate, { memory }, ROOM, "in_call_recording"), true);
+  const retry = createSession();
+  assert.equal(await noteMeetingCall(retry, { memory }, ROOM, "in_call_recording"), true);
+  assert.deepEqual(errors, []);
+  assert.equal(keys.size, 2);
+  for (const key of keys.keys()) assert.match(key, new RegExp(`^${ROOM}:call:in_call_recording:[0-9a-f]{12}$`));
 });

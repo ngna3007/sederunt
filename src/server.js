@@ -3669,7 +3669,7 @@ async function persistRecordingSpan(workspace, current, id, startedAt, duration)
       account: "company",
       kind: "room",
       text: `${room.id} meeting`,
-      idempotencyKey: `${room.id}:span`,
+      idempotencyKey: `${room.id}:span:${createHash("sha256").update(JSON.stringify([room.platform || "", room.call || "", room.startedAt || "", room.duration || 0]), "utf8").digest("hex").slice(0, 12)}`,
       room: {
         id: room.id,
         kind: "meeting",
