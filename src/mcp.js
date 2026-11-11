@@ -269,6 +269,8 @@ export async function handleMcpRequest(message, deps, context) {
       signal: context?.signal,
       timeoutMs: context?.toolTimeoutMs,
       persistHold: context?.persistHold,
+      runNow: context?.runNow === true,
+      confirmed: context?.confirmed === true,
     });
   }
   return {

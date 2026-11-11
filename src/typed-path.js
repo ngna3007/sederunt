@@ -17,6 +17,7 @@ import { addressesHearing, isRememberThisKeep, normalizeHearing, splitAddressedK
 import { learnedKey, memoriesFor, parseLearnedUtterance, shapeAnswer } from "./memory/learn.js";
 import { draftMinutes, rememberMeetingOutcome } from "./memory/outcome.js";
 import { looksLikeOpenQuestion, parseUtterance } from "./parse.js";
+import { isDeclarativeFact, isQuietKeep, stripKeepCue } from "./meeting/voice-write.js";
 import { meetingCallRank } from "./meeting/recall.js";
 import { publicProof } from "./tatum/proof.js";
 
@@ -101,7 +102,10 @@ function roomHearingArmed(session, roomId) {
 }
 
 function meetingRememberKeep(text, hearing) {
-  return isRememberThisKeep(text) || isRememberThisKeep(stripHearing(text, hearing));
+  return isQuietKeep(text)
+    || isQuietKeep(stripHearing(text, hearing))
+    || isRememberThisKeep(text)
+    || isRememberThisKeep(stripHearing(text, hearing));
 }
 
 export async function handleUtterance(input, deps = {}) {
@@ -234,7 +238,12 @@ export async function handleUtterance(input, deps = {}) {
   // A Slack channel line that is not an ask is kept. Its words never turn it
   // into a recall or a read; the ask/keep split is where the message arrived.
   // Ticket commands (writes) still go through their allow first.
-  if (parsed.type === "write") return requestWrite(input, session, deps, parsed);
+  if (parsed.type === "write") {
+    if (input.door === "meeting" && input.voiceFile !== true && parsed.tool === "calendar" && parsed.edit === "create") {
+      return silence();
+    }
+    return requestWrite(input, session, deps, parsed);
+  }
   if (input.intent === "keep") {
     const note = parsed.type === "note"
       ? parsed
@@ -319,6 +328,7 @@ function enters(input) {
   // A clear remember-this keep enters on the meeting door even when STT
   // dropped Maple/Adam. Slack channel keep does not use this door.
   if (meetingRememberKeep(input.text, hearing)) return true;
+  if (input.meetingDirect === true && isDeclarativeFact(input.text)) return true;
   const roomId = meetingRoomId(input);
   if (!roomId) return false;
   const until = input.session?.hearingHold?.roomId === roomId ? input.session.hearingHold.until : 0;
@@ -490,7 +500,7 @@ async function defaultFollowupCall(connector, tool, args) {
 
 async function requestWrite(input, session, deps, parsed) {
   const invited = writerInvite(input);
-  const preference = input.voiceFile === true && parsed.tool === "linear"
+  const preference = input.voiceFile === true && (parsed.tool === "linear" || parsed.tool === "calendar")
     ? "do"
     : resolvePreference(session.preferences, parsed.tool, invited.room?.id || input.room?.id);
   if (!invited.ok) {
@@ -789,7 +799,10 @@ async function runConnector(deps, action) {
       return deps.calendar.updateEventDetails({ id: action.params.eventId || action.params.id, description: action.params.description });
     }
     const tools = await deps.calendar.listTools();
-    const writeTool = (tools ?? []).find((tool) => tool.write === true && tool.name);
+    const wanted = action.edit === "create"
+      ? (tools ?? []).find((tool) => tool.name === "create_event")
+      : (tools ?? []).find((tool) => tool.write === true && tool.name);
+    const writeTool = wanted || (tools ?? []).find((tool) => tool.write === true && tool.name);
     if (!writeTool) return { id: "" };
     return deps.calendar.call(writeTool.name, action.params);
   }
@@ -996,6 +1009,49 @@ function actionFromEvent(event, changes) {
 }
 
 async function storeActivity(session, deps, event) {
+  await remember(deps, {
+    account: "company",
+    kind: "activity",
+    text: renderActivity(event),
+    idempotencyKey: event.id,
+    activity: event,
+  });
+  return event;
+}
+
+/**
+ * A completed in-call write is recorded on the session and, when present, the
+ * room activity mirror the meeting detail page reads.
+ */
+export async function recordVoiceActivity(session, deps, input = {}) {
+  if (!session || typeof session !== "object") return null;
+  const eventInput = {
+    id: input.id || `activity-${randomBytes(8).toString("hex")}`,
+    requestId: input.requestId || input.deliveryId || "",
+    actor: { type: "sederunt", name: "Sederunt", via: "MCP: meeting" },
+    verb: input.verb || "create",
+    target: {
+      system: String(input.system || "tool"),
+      type: String(input.type || "tool"),
+      id: String(input.entityId || ""),
+      title: String(input.title || ""),
+      url: String(input.url || ""),
+    },
+    tool: { name: String(input.toolName || "act"), server: "sederunt-mcp" },
+    origin: {
+      roomId: String(input.roomId || ""),
+      sourceDeliveryId: String(input.deliveryId || ""),
+      roomName: String(input.roomName || input.roomId || ""),
+      at: null,
+    },
+    outcome: "ok",
+  };
+  let event;
+  try {
+    event = logAction(session, eventInput);
+  } catch {
+    return null;
+  }
   await remember(deps, {
     account: "company",
     kind: "activity",
@@ -1698,6 +1754,10 @@ async function storeDecision(input, session, deps, parsed) {
       allow: "read",
       preference: "ask",
     });
+  }
+  if (isQuietKeep(input.text) || isQuietKeep(parsed?.text)) {
+    const cue = stripKeepCue(withoutAddress(input.text, input.session?.hearing) || parsed?.text || "");
+    if (cue) parsed = { type: "note", private: parsed?.private === true, text: cue };
   }
   const guest = normalizeHearing(input.session?.hearing).name;
   const speaker = typeof input.memberId === "string" ? input.memberId : "";

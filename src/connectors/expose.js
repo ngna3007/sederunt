@@ -106,7 +106,11 @@ export async function callCustomTool(input) {
   if (!connector || connector.status !== "connected" || connector.enabled === false || !tool || tool.enabled !== true || tool.changed === true) {
     return unavailable(name);
   }
-  const preference = preferenceFor(tool, connector.slug, input.session);
+  const preference = input.runNow === true && tool.actionClass !== "delete"
+    ? "do"
+    : (input.runNow === true && (input.confirmed === true || input.meta?.confirmed === true)
+      ? "do"
+      : preferenceFor(tool, connector.slug, input.session));
   const confirmId = confirmIdFrom(input);
   let confirmedId = "";
   if (confirmId && tool.actionClass !== "read") {
@@ -145,6 +149,26 @@ export async function callCustomTool(input) {
       actionClass: tool.actionClass,
       text: `Needs confirmation before ${name} runs.`,
     };
+  }
+  if (typeof connector.invoke === "function") {
+    try {
+      const invoked = await connector.invoke(tool.name, input.args || {});
+      const row = invoked && typeof invoked === "object" ? invoked : { text: String(invoked ?? "") };
+      return {
+        ok: row.ok !== false,
+        held: false,
+        needsConfirmation: false,
+        text: String(row.text || row.title || row.summary || "").slice(0, TEXT_CAP),
+        tool: name,
+        ...(row.id || row.identifier ? { id: row.id || row.identifier } : {}),
+        ...(row.title || row.summary ? { title: row.title || row.summary } : {}),
+        ...(row.url || row.link ? { url: row.url || row.link } : {}),
+        ...(row.structuredContent ? { structuredContent: row.structuredContent } : row),
+      };
+    } catch (error) {
+      const detail = String(error instanceof Error ? error.message : error || "The tool call failed.").slice(0, 240);
+      return failed(name, detail || "The tool call failed.", "invoke");
+    }
   }
   const calendarPreset = connector.preset === "google-calendar";
   const fakeCalendar = calendarPreset && calendarFakeEnabled(input.env);
