@@ -1,5 +1,6 @@
 import { echoShare, utteranceToCommit } from "./agent.js";
 import { directRequest } from "./voice.js";
+import { lineWaitsForMore } from "./speech-gate.js";
 
 /**
  * Output Media shows this page as the meeting camera.
@@ -41,6 +42,7 @@ const AGENT_PAGE = `<!doctype html>
   ${utteranceToCommit.toString()}
   ${directRequest.toString()}
   ${echoShare.toString()}
+  ${lineWaitsForMore.toString()}
   var params = new URLSearchParams(location.search);
   var guest = document.getElementById("guest");
   var voice = document.getElementById("voice");
@@ -78,7 +80,12 @@ const AGENT_PAGE = `<!doctype html>
   var turnController = null;
   // Past the server's own 25 s turn cap, so a slow answer ends with its own done event first.
   var TURN_CAP_MS = 32000;
-  var stats = { msgs: 0, opened: 0, own: 0, echo: 0, commits: 0, asked: 0, skipped: 0, busy: 0, done: 0, errors: 0, stuck: 0, sentences: 0, spoken: 0, speakRetries: 0, speakFailed: 0, socketOpens: 0, socketCloses: 0 };
+  // A follow-up question ("What should the issue say?") waits this long. If the asker
+  // keeps talking, the rest of their line is the answer and the question is dropped
+  // (Nov 11 dry run, bot b38fa40d: Recall split the request at the comma).
+  var ASK_HOLD_MS = 1500;
+  var heldAsk = null;
+  var stats = { asksHeld: 0, asksDropped: 0, msgs: 0, opened: 0, own: 0, echo: 0, commits: 0, asked: 0, skipped: 0, busy: 0, done: 0, errors: 0, stuck: 0, sentences: 0, spoken: 0, speakRetries: 0, speakFailed: 0, socketOpens: 0, socketCloses: 0 };
 
   function letters(value) {
     return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -87,6 +94,7 @@ const AGENT_PAGE = `<!doctype html>
   function unfinished(text) {
     var value = String(text || "").trim();
     if (!value || /\\?$/.test(value)) return false;
+    if (lineWaitsForMore(value)) return true;
     var words = value.toLowerCase().replace(/['’]/g, "").replace(/[.,!]+$/g, "").split(/[^a-z0-9]+/).filter(Boolean);
     var tail = words[words.length - 1] || "";
     return tail === "about" || tail === "the" || tail === "and" || tail === "what" || tail === "who" || tail === "when" || tail === "where" || tail === "why" || tail === "how" || tail === "which";
@@ -264,6 +272,10 @@ const AGENT_PAGE = `<!doctype html>
     lineSpeaker = heard.speaker || lineSpeaker;
     lineParticipant = heard.participantId || lineParticipant;
     lastWordAt = Date.now();
+    if (heldAsk && heldAsk.who && heldAsk.who === letters(heard.speaker || "")) {
+      heldAsk = null;
+      stats.asksDropped += 1;
+    }
   }
 
   function maybeCommit() {
@@ -355,7 +367,9 @@ const AGENT_PAGE = `<!doctype html>
             clearTimeout(turnTimer);
             var payload = {};
             try { payload = JSON.parse(data); } catch (error) { payload = {}; }
-            if (payload.text) {
+            if (payload.text && payload.ask && !played.length) {
+              holdAsk(payload.text, speaker, owner);
+            } else if (payload.text) {
               stats.sentences += 1;
               played.push(payload.text);
               noteSpoken(payload.text, Date.now());
@@ -382,6 +396,45 @@ const AGENT_PAGE = `<!doctype html>
       });
     }
     return pump();
+  }
+
+  /** The asker is still talking after the commit: their next words answer the question. */
+  function askerContinued(who, since) {
+    return Boolean(who && lineText && letters(lineSpeaker || "") === who && lastWordAt > since);
+  }
+
+  function holdAsk(text, speaker, owner) {
+    var who = letters(speaker || "");
+    var since = turnStartedAt;
+    // The floor stays with the asker either way, so the rest of their line is heard.
+    noteAnswer(speaker, Date.now(), true);
+    if (askerContinued(who, since)) {
+      stats.asksDropped += 1;
+      return;
+    }
+    stats.asksHeld += 1;
+    var mine = { text: text, who: who, since: since };
+    heldAsk = mine;
+    setTimeout(function () {
+      if (heldAsk !== mine) return;
+      heldAsk = null;
+      if (owner && owner !== turnController) return;
+      if (askerContinued(who, since)) {
+        stats.asksDropped += 1;
+        return;
+      }
+      stats.sentences += 1;
+      noteSpoken(text, Date.now());
+      noteAnswer(speaker, Date.now(), true);
+      enqueue(text);
+      if (ear) {
+        fetch("/api/meeting/agent/log", {
+          method: "POST",
+          headers: headers(),
+          body: JSON.stringify({ sentences: [text] })
+        }).catch(function () {});
+      }
+    }, ASK_HOLD_MS);
   }
 
   function logPlayed(userText, sentences) {
@@ -728,6 +781,7 @@ const AGENT_PAGE = `<!doctype html>
   window.__sederunt = {
     shouldRespond: shouldRespond,
     endOfTurn: endOfTurn,
+    lineWaitsForMore: lineWaitsForMore,
     noteAnswer: noteAnswer,
     notePerson: notePerson,
     noteSpoken: noteSpoken,

@@ -30,7 +30,7 @@ import {
 } from "./agent.js";
 import { meetingContext, rememberMeetingExchange } from "./speech-gate.js";
 import { voiceModels } from "./voice-models.js";
-import { refreshMeetingFloor } from "./voice.js";
+import { directRequest, refreshMeetingFloor } from "./voice.js";
 import { handleMcpRequest } from "../mcp.js";
 import { handleUtterance, recordVoiceActivity, rememberHeldAction } from "../typed-path.js";
 import {
@@ -47,6 +47,7 @@ import {
   isCalendarCreateTool,
   isDestructiveTool,
   isLinearCreateTool,
+  isBareKeepCue,
   isQuietKeep,
   isScheduleRequest,
   isWhenQuestion,
@@ -77,10 +78,15 @@ import {
   rememberEchoLines,
   rememberAgentTurn,
   rememberHeardLine,
+  rememberKeepCue,
   rememberSpokenTurn,
+  takeKeepCue,
   loadAgentSpeaker,
+  loadMeetingHosts,
   loadMeetingPeople,
+  meetingHumans,
   meetingPeopleDirect,
+  meetingPersonHost,
   resolveAgentSeat,
   settleRedisTurn,
   takeSocketSample,
@@ -378,6 +384,14 @@ async function logSocket(workspace, env, seat, body) {
   noteSocketShape(socketShape(body));
 }
 
+/** The line after a bare keep cue is the fact, unless it asks or requests something. */
+export function keptAfterCue(text) {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (!value || /\?\s*$/.test(value)) return false;
+  if (isScheduleRequest(value) || asksForWrite(value) || directRequest(value)) return false;
+  return isQuietKeep(`Heads up, ${value}`);
+}
+
 async function cancelTurn(workspace, env, botId) {
   const bag = runtime(workspace);
   const live = bag.live.get(botId);
@@ -429,7 +443,11 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
   };
   const session = sessionFor(seat.tenantId);
   let prior = bag.heard.get(seat.botId) || null;
+  const cueSpeaker = floorSpeaker(participantId, speaker);
+  const bareCue = Boolean(text) && !partial && isBareKeepCue(text);
+  let cued = false;
   await Promise.all([
+    bareCue || partial || !text ? null : takeKeepCue(workspace, seat.botId, "turn", cueSpeaker, env, workspace.fetchImpl).then((value) => { cued = value === true; }, () => {}),
     hydrateFloor(session, env, workspace.fetchImpl, seat),
     loadAgentSpeaker(workspace, seat, env, workspace.fetchImpl),
     loadMeetingPeople(workspace, seat.botId, env, workspace.fetchImpl),
@@ -464,6 +482,15 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
   const closing = live && meetingDirect && !partial && !awaiting ? closingReply(text, seat.botName) : "";
   const thanked = Boolean(closing) && (namesBot(text, seat.botName) || Boolean(prior?.assistant));
   if (thanked) answer = true;
+  // "Heads up." alone is a cue, not a turn: the fact follows (Nov 11 dry run, bot b38fa40d,
+  // Adam answered "I hear you." to the first half). The next line from that speaker is
+  // kept quietly unless it asks something.
+  if (bareCue && !awaiting) {
+    answer = false;
+    await rememberKeepCue(workspace, seat.botId, "turn", cueSpeaker, env, workspace.fetchImpl).catch(() => {});
+  } else if (cued && !awaiting && keptAfterCue(text)) {
+    answer = false;
+  }
   const key = answer ? utteranceKey(text, speaker) : "";
   if (key && !acceptUtterance(bag.recent, seat.botId, key)) {
     await finish({ duplicate: true });
@@ -563,7 +590,8 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
       // Recorded before the page hears of the line: its /speak may reach another instance.
       const hash = await rememberLine(bag, env, workspace.fetchImpl, seat.botId, turn, line);
       if (res.writableEnded) continue;
-      writeEvent(res, "sentence", { text: line, hash });
+      // A follow-up question is marked so the page can hold it while the asker finishes.
+      writeEvent(res, "sentence", { text: line, hash, ...(pendingKind && pendingKind !== "destroy" ? { ask: pendingKind } : {}) });
     }
   };
   const answeredTitle = awaiting?.kind === "title" ? titleFromAnswer(text, seat.botName) : "";
@@ -610,6 +638,7 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
       existingHold: pendingHold,
       toolResults,
       pending: awaiting || null,
+      reportedPeople: reportedHumans(body, seat),
       writeEvent: (name, data) => {
         if (!res.writableEnded) writeEvent(res, name, data);
       },
@@ -1070,6 +1099,8 @@ async function executeAgentTool(input) {
     if (scheduleAsk) {
       const filed = await fileVoiceCalendar(input, name, args, member.memberId);
       if (filed?.notConnected) {
+        // Nothing was written: a later ask, after Calendar is connected, may run.
+        await releaseWrite(input, name, args);
         const raw = { ok: false, reason: "not-connected", tool: name, kind: "calendar" };
         return { raw, wrapped: wrapToolResult(raw, name) };
       }
@@ -1218,17 +1249,54 @@ function undoEmptyFile(session, deliveryId) {
   session.deliveries?.delete(deliveryId);
 }
 
+/**
+ * Whose calendar an in-call create goes on.
+ * 1. The speaker's own bound workspace account.
+ * 2. With no binding (Recall sends no email for a bot that was not invited through a
+ *    calendar), the console user who added Adam to this meeting, recorded on the seat at
+ *    join in this same tenant. Only when the speaker is the meeting host (Recall's signed
+ *    webhook said so) or the only person besides the bot. Anyone else stays not connected.
+ */
+async function resolveCalendarOwner(input, memberId) {
+  if (typeof input.deps?.calendarForPerson === "function") {
+    const bound = await boundWorkspaceMember(input, memberId);
+    const inviter = bound ? "" : await inviterForSpeaker(input, memberId);
+    const personId = bound || inviter;
+    if (!personId) return { calendar: null };
+    try {
+      const calendar = (await input.deps.calendarForPerson(personId)) || null;
+      return { calendar, onBehalf: inviter ? "inviter" : "" };
+    } catch {
+      return { calendar: null };
+    }
+  }
+  return { calendar: await resolveCalendar(input, memberId) };
+}
+
+/** The seat's inviter, when this speaker may act through that person's grant. */
+export async function inviterForSpeaker(input, memberId) {
+  const seat = input?.seat || {};
+  const inviter = String(seat.userId || "").trim();
+  const tenantId = String(seat.tenantId || "").trim();
+  const participant = String(memberId || input?.participantId || "").trim();
+  if (!inviter || !tenantId || !participant) return "";
+  const bot = { participantId: seat.participantId, name: seat.botName };
+  await Promise.all([
+    loadMeetingPeople(input.workspace, seat.botId, input.env, input.fetchImpl).catch(() => false),
+    loadMeetingHosts(input.workspace, seat.botId, input.env, input.fetchImpl).catch(() => false),
+  ]);
+  if (meetingPersonHost(input.workspace, seat.botId, participant)) return inviter;
+  const humans = meetingHumans(input.workspace, seat.botId, bot);
+  if (humans) return humans.length === 1 && humans[0] === participant ? inviter : "";
+  const reported = Array.isArray(input.reportedPeople) ? input.reportedPeople : [];
+  return reported.length === 1 && reported[0] === participant ? inviter : "";
+}
+
 async function resolveCalendar(input, memberId) {
   // The speaker's own Google grant in this tenant. When the server provides this
   // resolver there is no fallback to a process-wide calendar.
   if (typeof input.deps?.calendarForPerson === "function") {
-    const personId = await boundWorkspaceMember(input, memberId);
-    if (!personId) return null;
-    try {
-      return (await input.deps.calendarForPerson(personId)) || null;
-    } catch {
-      return null;
-    }
+    return (await resolveCalendarOwner(input, memberId)).calendar;
   }
   if (typeof input.deps?.calendarFor === "function") {
     try {
@@ -1241,27 +1309,55 @@ async function resolveCalendar(input, memberId) {
   return input.deps?.calendar || null;
 }
 
+/** Google Calendar's day view for the event's date, when the tool gave no event link. */
+export function calendarDayLink(startTime, timeZone) {
+  const value = String(startTime || "");
+  let day = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (!day) {
+    const ms = Date.parse(value);
+    if (!Number.isFinite(ms)) return "";
+    let stamp = "";
+    try {
+      stamp = new Intl.DateTimeFormat("en-CA", { timeZone: timeZone || "UTC", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ms));
+    } catch {
+      stamp = new Date(ms).toISOString().slice(0, 10);
+    }
+    day = /^(\d{4})-(\d{2})-(\d{2})/.exec(stamp);
+    if (!day) return "";
+  }
+  return `https://calendar.google.com/calendar/r/day/${day[1]}/${Number(day[2])}/${Number(day[3])}`;
+}
+
 async function fileVoiceCalendar(input, name, args, memberId) {
-  const calendar = await resolveCalendar(input, memberId);
+  const resolved = await resolveCalendarOwner(input, memberId);
+  const calendar = resolved.calendar;
   if (!calendar || typeof calendar.call !== "function") return { notConnected: true };
   try {
     if (typeof calendar.listTools === "function") {
       const tools = await calendar.listTools();
       if (Array.isArray(tools) && tools.length === 0) return { notConnected: true };
     }
-    const created = await calendar.call("create_event", {
+    // Only the Calendar MCP's create_event fields, on the grant owner's primary calendar.
+    // Extra keys (title, start, end) are refused by a strict tool schema.
+    const startTime = args.startTime || args.start;
+    const fields = {
+      calendarId: "primary",
       summary: args.summary || args.title,
-      title: args.title || args.summary,
-      startTime: args.startTime || args.start,
+      startTime,
       endTime: args.endTime || args.end,
-      start: args.startTime || args.start,
-      end: args.endTime || args.end,
-      timeZone: args.timeZone,
-    });
+      ...(args.timeZone ? { timeZone: args.timeZone } : {}),
+      ...(typeof args.description === "string" && args.description ? { description: args.description } : {}),
+    };
+    const created = await calendar.call("create_event", fields);
     const id = String(created?.id || created?.eventId || "").trim();
     if (!id) return { unconfirmed: true, created };
     const link = String(created?.url || created?.htmlLink || created?.link || "").trim();
-    return { eventId: id, title: args.summary || args.title || created?.title || "", link: /^https:\/\//i.test(link) ? link : "" };
+    return {
+      eventId: id,
+      title: args.summary || args.title || created?.title || "",
+      link: /^https:\/\//i.test(link) ? link : calendarDayLink(startTime, args.timeZone),
+      ...(resolved.onBehalf ? { onBehalf: resolved.onBehalf } : {}),
+    };
   } catch (error) {
     if (error?.code === "not-connected" || error?.reason === "not-connected") return { notConnected: true };
     return { failed: true };

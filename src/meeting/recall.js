@@ -356,6 +356,7 @@ export function recallParticipantChange(payload) {
     participantId,
     name: typeof participant.name === "string" ? participant.name : "",
     present,
+    ...(participant.is_host === true ? { host: true } : {}),
   };
 }
 

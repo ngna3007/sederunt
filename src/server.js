@@ -28,9 +28,10 @@ import { loadLinearToken } from "./linear/token.js";
 import { createLinearInstallationStore } from "./linear/installations.js";
 import { handleLinearOAuth, linearClientMetadata, tenantLinearClient } from "./linear/oauth.js";
 import { renderCameraPage } from "./meeting/camera.js";
-import { handleMeetingAgent } from "./meeting/agent-http.js";
+import { handleMeetingAgent, keptAfterCue } from "./meeting/agent-http.js";
+import { isBareKeepCue } from "./meeting/voice-write.js";
 import { loadSpikeShapes, measureSpeechProbe, pushSpikeShape, readSpikeShapes, saveSpikeShape, spikeAuthorized, spikeEnabled, transcriptEventShape } from "./meeting/spike.js";
-import { bindAgentSeat, bindMeetingEar, finishAgentSeat, rememberAgentMember, rememberAgentSeat, rememberAgentSpeaker, rememberMeetingPerson, sharedRedisCommand, validMeetingEar } from "./meeting/seat.js";
+import { bindAgentSeat, bindMeetingEar, finishAgentSeat, rememberAgentMember, rememberAgentSeat, rememberAgentSpeaker, rememberKeepCue, rememberMeetingHost, rememberMeetingPerson, sharedRedisCommand, takeKeepCue, validMeetingEar } from "./meeting/seat.js";
 import { createMeetingAdapter, mediaFromBot, meetingCallUpdate, meetingDoorReady, meetingEnded, recallBotUrl, recallParticipantChange, recallTranscriptDelivery, transcriptLines, verifyRecallRequest } from "./meeting/recall.js";
 import { claimMeetingEvent, claimMeetingEventLocal, meetingEventKey, releaseMeetingEvent, releaseMeetingEventLocal } from "./meeting/events.js";
 import { keepRoomTranscript, rememberMeetingLine } from "./meeting/speech-gate.js";
@@ -1794,8 +1795,25 @@ export function createApp(options = {}) {
                   saved = true;
                   return;
                 }
-                if (!current.readReport?.ok) current = await prepareWorkspace(workspace, companyId);
-                await handleUtterance({ ...heardDelivery, session: current }, depsFor(workspace, companyId));
+                if (participant?.is_host === true && botId && delivery.memberId) {
+                  // The signed webhook names the host; an in-call Calendar create may use it.
+                  await rememberMeetingHost(workspace, botId, delivery.memberId, env, workspace.fetchImpl).catch(() => {});
+                }
+                // Recall can split "Heads up, <fact>" into two finals. The cue alone is not
+                // stored; the speaker's next line is kept as the heads-up fact.
+                const bareCue = Boolean(botId && delivery.memberId) && isBareKeepCue(delivery.text);
+                let lineDelivery = heardDelivery;
+                if (bareCue) {
+                  await rememberKeepCue(workspace, botId, "line", delivery.memberId, env, workspace.fetchImpl).catch(() => {});
+                } else if (botId && delivery.memberId
+                  && await takeKeepCue(workspace, botId, "line", delivery.memberId, env, workspace.fetchImpl).catch(() => false)
+                  && keptAfterCue(delivery.text)) {
+                  lineDelivery = { ...heardDelivery, text: `Heads up, ${delivery.text}` };
+                }
+                if (!bareCue) {
+                  if (!current.readReport?.ok) current = await prepareWorkspace(workspace, companyId);
+                  await handleUtterance({ ...lineDelivery, session: current }, depsFor(workspace, companyId));
+                }
                 saved = true;
                 if (delivery.room?.id) {
                   await noteMeetingCall(current, depsFor(workspace, companyId), delivery.room.id, "in_call_recording").catch(() => {});

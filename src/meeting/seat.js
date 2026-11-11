@@ -385,6 +385,21 @@ function humanIds(row, bot = {}) {
   return humans;
 }
 
+/** Present people besides the bot. Null until a join or leave has been seen. */
+export function meetingHumans(workspace, botId, bot = {}) {
+  const row = peopleRow(workspace, botId, false);
+  if (!row?.known) return null;
+  return humanIds(row, bot);
+}
+
+/** Recall's signed webhook said this participant hosts the meeting. */
+export function meetingPersonHost(workspace, botId, participantId) {
+  const row = peopleRow(workspace, botId, false);
+  const id = String(participantId || "").trim();
+  if (!row || !id) return false;
+  return row.list.get(id)?.host === true || row.hosts?.has(id) === true;
+}
+
 /** One present person besides the bot. Null until a join or leave has been seen. */
 export function meetingPeopleDirect(workspace, botId, bot = {}) {
   const row = peopleRow(workspace, botId, false);
@@ -399,8 +414,33 @@ export function noteMeetingPerson(workspace, botId, person) {
   if (!row || !participantId) return false;
   row.known = true;
   if (person?.present === false) row.list.delete(participantId);
-  else row.list.set(participantId, { name: String(person?.name || "").slice(0, 80) });
+  else row.list.set(participantId, { name: String(person?.name || "").slice(0, 80), ...(person?.host === true ? { host: true } : {}) });
   return true;
+}
+
+/**
+ * Remember the host from a signed transcript line without marking the roster known:
+ * one speaking host is not a full list of who is present.
+ */
+export function noteMeetingHost(workspace, botId, participantId) {
+  const id = String(participantId || "").trim().slice(0, 40);
+  const row = peopleRow(workspace, botId, true);
+  if (!row || !id) return false;
+  if (!(row.hosts instanceof Set)) row.hosts = new Set();
+  if (row.hosts.has(id)) return false;
+  row.hosts.add(id);
+  return true;
+}
+
+export async function rememberMeetingHost(workspace, botId, participantId, env = process.env, fetchImpl = fetch) {
+  const id = cleanBotId(botId);
+  const participant = String(participantId || "").trim().slice(0, 40);
+  if (!id || !participant || !noteMeetingHost(workspace, id, participant)) return false;
+  if (!redisConfigured(env)) return true;
+  const key = `sederunt:voice:hosts:${id}`;
+  const saved = await redisCommand(env, fetchImpl, ["SADD", key, participant]);
+  if (saved.ok) await redisCommand(env, fetchImpl, ["EXPIRE", key, String(EAR_SECONDS)]);
+  return saved.ok === true;
 }
 
 function peopleFromHash(result) {
@@ -424,17 +464,19 @@ function applyPersonField(row, participantId, raw) {
   if (!row || !id) return;
   let name = "";
   let present = true;
+  let host = false;
   try {
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object") {
       name = String(parsed.name || "");
       present = parsed.present !== false;
+      host = parsed.host === true;
     } else name = String(raw || "");
   } catch {
     name = String(raw || "");
   }
   if (!present) row.list.delete(id);
-  else row.list.set(id, { name: name.slice(0, 80) });
+  else row.list.set(id, { name: name.slice(0, 80), ...(host ? { host: true } : {}) });
 }
 
 /** Read the shared roster and merge it onto this instance. One field does not replace the others. */
@@ -452,6 +494,16 @@ export async function loadMeetingPeople(workspace, botId, env = process.env, fet
   return true;
 }
 
+/** Hosts a signed transcript line named, shared across instances. */
+export async function loadMeetingHosts(workspace, botId, env = process.env, fetchImpl = fetch) {
+  const id = cleanBotId(botId);
+  if (!id || !redisConfigured(env)) return false;
+  const loaded = await redisCommand(env, fetchImpl, ["SMEMBERS", `sederunt:voice:hosts:${id}`]);
+  if (!loaded.ok || !Array.isArray(loaded.result)) return false;
+  for (const participant of loaded.result) noteMeetingHost(workspace, id, participant);
+  return loaded.result.length > 0;
+}
+
 export async function rememberMeetingPerson(workspace, botId, person, env = process.env, fetchImpl = fetch) {
   const id = cleanBotId(botId);
   const participantId = String(person?.participantId || "").trim().slice(0, 40);
@@ -463,6 +515,7 @@ export async function rememberMeetingPerson(workspace, botId, person, env = proc
   const body = JSON.stringify({
     name: String(person?.name || "").slice(0, 80),
     present: person?.present !== false,
+    ...(person?.host === true ? { host: true } : {}),
   });
   const saved = await redisCommand(env, fetchImpl, ["HSET", key, participantId, body]);
   if (saved.ok) await redisCommand(env, fetchImpl, ["EXPIRE", key, String(EAR_SECONDS)]);
@@ -741,4 +794,40 @@ export async function takeSocketSample(env, fetchImpl, botId) {
   if (!saved.ok || typeof saved.result !== "number") return null;
   if (saved.result === 1) await redisCommand(env, fetchImpl, ["EXPIRE", key, String(EAR_SECONDS)]);
   return saved.result;
+}
+
+const CUE_SECONDS = 12;
+
+function cueKey(botId, lane, speaker) {
+  const id = cleanBotId(botId);
+  const who = String(speaker || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "").slice(0, 60);
+  if (!id || !who || !/^[a-z]+$/.test(String(lane || ""))) return "";
+  return `sederunt:voice:cue:${lane}:${id}:${createHash("sha256").update(who).digest("hex").slice(0, 24)}`;
+}
+
+/**
+ * A bare "Heads up." from this speaker: the next line from them is the fact to keep.
+ * Each lane (the page turn, the Recall webhook) takes its own cue once.
+ */
+export async function rememberKeepCue(workspace, botId, lane, speaker, env = process.env, fetchImpl = fetch) {
+  const key = cueKey(botId, lane, speaker);
+  const bag = bagOf(workspace);
+  if (!key || !bag) return false;
+  if (!(bag.cues instanceof Map)) bag.cues = new Map();
+  bag.cues.set(key, Date.now() + CUE_SECONDS * 1000);
+  if (!redisConfigured(env)) return true;
+  const saved = await redisCommand(env, fetchImpl, ["SET", key, "1", "EX", String(CUE_SECONDS)]);
+  return saved.ok === true;
+}
+
+export async function takeKeepCue(workspace, botId, lane, speaker, env = process.env, fetchImpl = fetch) {
+  const key = cueKey(botId, lane, speaker);
+  const bag = bagOf(workspace);
+  if (!key || !bag) return false;
+  const local = bag.cues instanceof Map ? bag.cues.get(key) : undefined;
+  if (bag.cues instanceof Map) bag.cues.delete(key);
+  if (!redisConfigured(env)) return typeof local === "number" && local > Date.now();
+  const taken = await redisCommand(env, fetchImpl, ["GETDEL", key]);
+  if (taken.ok) return taken.result === "1";
+  return typeof local === "number" && local > Date.now();
 }

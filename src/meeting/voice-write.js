@@ -27,6 +27,18 @@ export function isQuietKeep(text) {
   return false;
 }
 
+const BARE_CUE = /^(?:(?:just |a |quick )?heads\s*up|fyi|note that|remember this|quick (?:update|note)|just so you know|for the record)$/;
+
+/**
+ * A keep cue with nothing after it yet: "Heads up." Recall's realtime transcript can
+ * split "Heads up, the design review moved to Thursday" at the comma (Nov 11 dry run,
+ * bot b38fa40d). The cue is not a turn; the next line from that speaker is the fact.
+ */
+export function isBareKeepCue(text) {
+  const folded = stripLead(text).toLowerCase().replace(/[’]/g, "'").replace(/[^a-z\s']/g, " ").replace(/\s+/g, " ").trim();
+  return Boolean(folded) && BARE_CUE.test(folded);
+}
+
 /** The fact without the keep cue, for storage. */
 export function stripKeepCue(text) {
   let value = String(text || "").replace(/\s+/g, " ").trim();
@@ -250,7 +262,11 @@ export const WHEN_QUESTION = "When should it be?";
  */
 export function filedConfirmation(toolName, result, args = {}) {
   const name = String(toolName || "");
-  if (isLinearCreateTool(name) && !isCalendarCreateTool(name)) {
+  // The built-in act tool also makes calendar events on a schedule request. A row
+  // with a start time or an event id is that event, not a Linear issue.
+  const calendarRow = isCalendarCreateTool(name)
+    || (name === "act" && Boolean(args.startTime || result?.eventId || result?.kind === "calendar"));
+  if (isLinearCreateTool(name) && !calendarRow) {
     const title = sanitize(args.title || args.summary || resultTitle(result));
     const id = String(resultId(result, "issue") || "").trim().toUpperCase();
     const key = /^[A-Z][A-Z0-9]{0,9}-\d{1,7}$/.test(id) ? id : "";
@@ -258,7 +274,7 @@ export function filedConfirmation(toolName, result, args = {}) {
     if (!title) return "I filed the Linear issue.";
     return `I filed the Linear issue '${title}'.`;
   }
-  if (isCalendarCreateTool(name) || (name === "act" && args.startTime)) {
+  if (calendarRow) {
     return scheduledLine({
       title: args.title || args.summary || resultTitle(result) || "the event",
       start: args.startTime || args.start || "",
