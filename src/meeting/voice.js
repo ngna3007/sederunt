@@ -1,4 +1,5 @@
 import { addressesHearing, DEFAULT_HEARING_ALIASES, normalizeHearing } from "../hearing.js";
+import { isDeclarativeFact, isQuietKeep } from "./voice-write.js";
 import { CONVERSATION_MS } from "./speech-gate.js";
 
 /** A solo line is worth an answer when it asks or requests something. Narration is not. */
@@ -28,6 +29,8 @@ export function meetingLineShouldAnswer(session, delivery) {
   const hearing = session?.hearing;
   if (sameGuest(delivery?.speakerName, hearing?.name)) return false;
   if (isBackchannel(text, hearing) || isDismiss(text, hearing)) return false;
+  // A keep or a solo-call fact is stored, not answered, even while the floor is open.
+  if (isQuietKeep(text)) return false;
   const roomId = typeof delivery?.room?.id === "string" ? delivery.room.id : "";
   const addressed = delivery?.addressed === true || addressesHearing(text, hearing);
   const speaker = speakerKey(delivery);
@@ -38,7 +41,10 @@ export function meetingLineShouldAnswer(session, delivery) {
   if (addressed || direct) return true;
   const floor = session?.meetingFloor;
   const floorOpen = Boolean(roomId && floor?.roomId === roomId && floor.speaker && typeof floor.until === "number" && floor.until > Date.now());
-  if (!composing && floorOpen && speaker && speaker === floor.speaker) return true;
+  if (!composing && floorOpen && speaker && speaker === floor.speaker) {
+    if (session?.meetingDirect === true && isDeclarativeFact(text)) return false;
+    return true;
+  }
   if (composing && speaker && speaker === compose.speaker) return true;
   const hold = session?.hearingHold;
   const held = Boolean(roomId && hold?.roomId === roomId && typeof hold.until === "number" && hold.until > Date.now());

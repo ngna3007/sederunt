@@ -77,7 +77,9 @@ test("one person with the bot is answered without the name", () => {
   assert.equal(meetingLineShouldAnswer(session, line("Adam, keep Thursday.")), true);
   assert.equal(meetingLineShouldAnswer(session, line("the launch is Thursday", "9", "Adam")), false);
   refreshMeetingFloor(session, line("what time is the launch"));
-  assert.equal(meetingLineShouldAnswer(session, line("Fix the onboarding email")), true);
+  // A solo-call fact stays silent even while the floor is open.
+  assert.equal(meetingLineShouldAnswer(session, line("Fix the onboarding email")), false);
+  assert.equal(meetingLineShouldAnswer(session, line("what time is the launch")), true);
   session.meetingDirect = false;
   assert.equal(meetingLineShouldAnswer(session, line("where should we meet", "200", "Lan")), false);
 });

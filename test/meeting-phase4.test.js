@@ -219,7 +219,7 @@ test("recall and act return at most three sourced facts and keep the full record
   }
   const voice = await meetingTools({ env: {}, deps: {}, context: { tenantId: "" } });
   assert.match(voice.find((tool) => tool.name === "recall").description, /launch/);
-  assert.match(voice.find((tool) => tool.name === "act").description, /approval/);
+  assert.match(voice.find((tool) => tool.name === "act").description, /filed during the call/);
   let created = 0;
   await handleUtterance({ text: "set linear to ask", session, memberId: "rowan", room: here, deliveryId: "ask-linear" }, {});
   const acted = await dispatchMcp({
