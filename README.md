@@ -24,6 +24,18 @@ A meeting ends. A week later, someone asks, “What did we decide about the laun
 
 Sederunt was built for the **Tatum × Walrus Total Recall hackathon**, Track 2: Smart Agents for Real Life. It uses Walrus Memory to keep decisions and Tatum to read their Sui proofs. [Read the project write-up](docs/blog/total-recall.md).
 
+## Track 02 · Smart Agents for Real Life
+
+Sederunt is submitted to **Track 02: Smart Agents for Real Life**. This track is for agents that monitor inboxes, expenses, habits, or workflows and use portable memory to pick up where they left off across tools and sessions.
+
+It is a fit for AI builders and anyone who has wished their assistant remembered last Tuesday. Track examples include a research agent with source trust scores, an expense watchdog with long-term memory, and a workflow bot that learns escalation rules.
+
+| Track prize | Amount |
+| --- | ---: |
+| 1st place | $500 |
+| 2nd place | $300 |
+| 3rd place | $200 |
+
 ## From a meeting to an answer
 
 1. **Bring the agent into a meeting.** Connect your calendar or add the agent using a meeting link. Address it to keep a decision or request a change.
