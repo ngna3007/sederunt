@@ -7,7 +7,7 @@ import { drainMemoryRetries, withRateLimitRetry } from "./memory/retry.js";
 import { scopeAskStore } from "./ask/context.js";
 import { createParticipantBindings } from "./participant-bindings.js";
 import { consolePrincipal } from "./console-principal.js";
-import { canReadOpenedMeeting, canReadRecord, readPrincipalId, readableSession } from "./domain/read-access.js";
+import { canReadInSession, canReadOpenedMeeting, canReadRecord, meetingRoomReaders, readPrincipalId, readableSession } from "./domain/read-access.js";
 import { createServer } from "node:http";
 import { readRequestBytes } from "./http-body.js";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
@@ -365,6 +365,30 @@ async function calendarForRequest(workspace, { companyId = "", personId = "", re
   return { adapter: workspace.deps.calendar, personGrant: false, tenantId, personId: person, connected: calendarPresentedConnected(env) };
 }
 
+const CALENDAR_GRANT_CACHE_MS = 5 * 60 * 1000;
+
+/**
+ * The person's Google Calendar grant, as the voice path checks it. A granted
+ * answer is kept for five minutes in this process, so the page render's short
+ * wait does not print "Connect your calendar" when the grant read is slow. A
+ * missing grant is not kept: connecting shows on the next load.
+ */
+export async function personCalendarGranted(workspace, tenantId, person) {
+  const grants = workspace.googleGrants;
+  const key = `${tenantId}:${person}`;
+  workspace.calendarGrantCache ??= new Map();
+  const cached = workspace.calendarGrantCache.get(key);
+  if (cached && cached.until > Date.now()) return true;
+  const ok = await grants.granted(person, { tenantId, scopes: CALENDAR_SCOPES }) === true;
+  if (ok) {
+    if (workspace.calendarGrantCache.size >= 1000) workspace.calendarGrantCache.clear();
+    workspace.calendarGrantCache.set(key, { until: Date.now() + CALENDAR_GRANT_CACHE_MS });
+  } else {
+    workspace.calendarGrantCache.delete(key);
+  }
+  return ok;
+}
+
 async function doorsForRequest(workspace, { companyId = "", personId = "", req } = {}) {
   const env = workspace.env;
   const doors = doorReport(env, workspace.linearReady === true);
@@ -373,8 +397,7 @@ async function doorsForRequest(workspace, { companyId = "", personId = "", req }
   const grants = workspace.googleGrants;
   if (tenantId && person && grants && typeof grants.granted === "function") {
     try {
-      const ok = await grants.granted(person, { tenantId, scopes: CALENDAR_SCOPES });
-      doors.calendar = ok === true;
+      doors.calendar = await personCalendarGranted(workspace, tenantId, person);
     } catch {
       doors.calendar = false;
     }
@@ -997,7 +1020,8 @@ export function createApp(options = {}) {
       const roomDecisions = (current.decisions || []).filter((row) => row.roomId === id && !row.deleted);
       const opened = (current.rooms || []).find((item) => item.id === id);
       if (roomDecisions.length) {
-        if (!roomDecisions.every((row) => canReadRecord(principal, row))) {
+        const readers = meetingRoomReaders(current);
+        if (!roomDecisions.every((row) => canReadInSession(principal, row, readers))) {
           send(res, 404, "application/json; charset=utf-8", JSON.stringify({ error: "That room is not available." }));
           return;
         }
@@ -2426,7 +2450,8 @@ export function createApp(options = {}) {
       if (resolved.denied || resolved.unauthorized) { sendCompanyDenied(res, send, resolved); return; }
       const current = await prepareWorkspace(workspace, resolved.companyId);
       const principal = await consolePrincipal(workspace, req, resolved.companyId);
-      if (!current.decisions.some((row) => row.objectId === id && canReadRecord(principal, row))) {
+      const readers = meetingRoomReaders(current);
+      if (!current.decisions.some((row) => row.objectId === id && canReadInSession(principal, row, readers))) {
         send(res, 404, "text/plain; charset=utf-8", "Not found"); return;
       }
       try {
@@ -2860,7 +2885,7 @@ async function handleAsk(workspace, req, res, url) {
           fetchImpl: workspace.openrouterFetch || undefined,
           botName: bot?.name || "",
           // withMemWal ask path: MemWal.recall(query) before generate.
-          recall: doorDeps.memory?.recall ? async (query) => (await doorDeps.memory.recall(query)).filter((hit) => canReadRecord(principal, hit.decision))
+          recall: doorDeps.memory?.recall ? async (query) => (await doorDeps.memory.recall(query)).filter((hit) => canReadInSession(principal, hit.decision, meetingRoomReaders(current)))
             .map((hit) => ({ ...hit, decision: { ...hit.decision, inviteMemberIds: [memberId] } })) : undefined,
           // The signed-in board member, not a client-supplied id and not only SEDERUNT_MEMBER.
           retrieval: () => chatReply(workspace, { text: question, workspace: scope, company: companyId }, principal),
@@ -4015,6 +4040,10 @@ async function loadRoomMedia(workspace, id, current, empty) {
     await noteMeetingCall(current, collecting, id, body.call).catch(() => {});
   }
   const room = (current.rooms || []).find((item) => item.id === id);
+  // A room this instance first heard of from a Recall webhook has no platform
+  // or start yet, and the list named it "Room" (demo take-1, Nov 11).
+  if (room && !room.platform && body.platform) room.platform = body.platform;
+  if (room && !room.startedAt && body.startedAt) room.startedAt = body.startedAt;
   if (Array.isArray(body.lines) && body.lines.length) {
     await noteMeetingLines(current, collecting, id, body.lines).catch(() => {});
   } else if (Array.isArray(room?.lines) && room.lines.length) {
@@ -4205,7 +4234,7 @@ async function calendarGranted(workspace, tenantId, personId) {
   const grants = workspace.googleGrants;
   if (id && person && grants && typeof grants.granted === "function") {
     try {
-      return await grants.granted(person, { tenantId: id, scopes: CALENDAR_SCOPES }) === true;
+      return await personCalendarGranted(workspace, id, person);
     } catch {
       return false;
     }
