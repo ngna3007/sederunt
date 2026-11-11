@@ -366,7 +366,15 @@ const AGENT_PAGE = `<!doctype html>
           if (event === "tool_started") setState("tool");
           if (event === "done") stats.done += 1;
           if (event === "error") stats.errors += 1;
-          if (event === "done" || event === "error") turnOpen = false;
+          if (event === "done" || event === "error") {
+            turnOpen = false;
+            // A turn that ends with nothing to say goes back to listening now, not
+            // after the 6 s thinking timer (which also sent a needless cancel).
+            if (!played.length && !pumping && !queue.length) {
+              clearTimeout(turnTimer);
+              setState("listening");
+            }
+          }
         }
         return pump();
       });

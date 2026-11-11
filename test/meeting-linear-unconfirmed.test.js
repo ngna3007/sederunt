@@ -189,7 +189,7 @@ test("a workspace without the Sederunt project still files into team ROW", async
     : args.project
     ? toolError("Project not found: Sederunt")
     : toolJson({ id: "6f1c0d1e-0000-4000-8000-000000000001", identifier: "ROW-12", url: "https://linear.app/rowan3007/issue/ROW-12/fixed" })));
-  assert.deepEqual(sentences(run.reply), [`I filed the Linear issue '${TITLE}'.`]);
+  assert.deepEqual(sentences(run.reply), [`I filed ROW-12, 'Fix the onboarding email before launch'.`]);
   const saves = run.calls.filter(([name]) => name === "save_issue").map(([, args]) => args);
   assert.equal(saves.length, 2);
   assert.equal(saves[0].project, "Sederunt");
@@ -201,7 +201,7 @@ test("a workspace without the Sederunt project still files into team ROW", async
 
 test("a save_issue answer in plain text still yields the issue id", async () => {
   const run = await answerTitle(() => ({ content: [{ type: "text", text: "Created issue ROW-13: see https://linear.app/rowan3007/issue/ROW-13/fixed" }] }));
-  assert.deepEqual(sentences(run.reply), [`I filed the Linear issue '${TITLE}'.`]);
+  assert.deepEqual(sentences(run.reply), [`I filed ROW-13, 'Fix the onboarding email before launch'.`]);
   const actions = run.docs.filter((row) => row.kind === "action" && row.actionItem?.actionRecord).map((row) => row.actionItem.actionRecord);
   assert.equal(actions.some((row) => row.state === "closed" && row.connectorId === "ROW-13"), true);
 });

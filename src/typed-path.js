@@ -511,7 +511,7 @@ async function requestWrite(input, session, deps, parsed) {
     tool: parsed.tool,
     preference,
     statement: redact(parsed.statement),
-    params: parsed.params,
+    params: spokenParams(input, parsed),
     missingFact: parsed.missingFact || "",
     connectorId: null,
     edit: parsed.edit,
@@ -814,11 +814,21 @@ async function runConnector(deps, action) {
   return deps.linear.createIssue({
     title: action.params.title,
     idempotencyKey: action.id,
-    description: issueDescription({
+    description: [issueDescription({
       origin: { roomId: action.roomId, roomName: action.roomName, at: action.offset },
       actor: { type: "person", name: action.speaker || action.memberName || "" },
-    }, deps),
+    }, deps), action.params?.heard ? `Heard: "${action.params.heard}"` : ""].filter(Boolean).join("\n\n"),
   });
+}
+
+/** A voice title answer keeps the words as heard when the title was cleaned up. */
+function spokenParams(input, parsed) {
+  const params = parsed.params;
+  if (input.voiceFile !== true || parsed.tool !== "linear" || !params || typeof params !== "object") return params;
+  const heard = redact(String(input.spokenTitle || "").replace(/\s+/g, " ").trim()).slice(0, 200);
+  const fold = (value) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  if (!heard || fold(heard) === fold(params.title)) return params;
+  return { ...params, heard };
 }
 
 /**
@@ -829,8 +839,12 @@ async function runConnector(deps, action) {
 function noteConnectorFailure(deps, action, message, reason) {
   if (typeof deps?.log !== "function") return;
   let text = String(message || "").replace(/\s+/g, " ");
-  for (const said of [action?.params?.title, action?.params?.text, action?.statement]) {
-    if (typeof said === "string" && said.trim().length >= 3) text = text.split(said.trim()).join("[title]");
+  for (const said of [action?.params?.title, action?.params?.text, action?.params?.heard, action?.statement]) {
+    if (typeof said !== "string") continue;
+    for (const form of [said.trim(), said.trim().replace(/[\s.!?,;:]+$/g, "")]) {
+      if (form.length < 3) continue;
+      text = text.replace(new RegExp(form.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), "[title]");
+    }
   }
   text = text
     .replace(/bearer\s+[^\s"']+/gi, "Bearer [redacted]")
@@ -909,7 +923,9 @@ async function noteActivity(session, deps, action, fields) {
   }
   const kind = fields.role === "failure" ? "failure" : (fields.role === "request" ? "request" : "action");
   const input = {
-    id: nextId(session, "activity"),
+    // A session counter restarts in every function instance, so "activity-N" from
+    // two instances named two different events (Walrus 409, Nov 11, bot ae224b81).
+    id: activityIdentity(),
     requestId: action.id,
     actor: {
       type: fields.actorKind === "sederunt" ? "sederunt" : "person",
@@ -2858,11 +2874,18 @@ function snapshot(input, room) {
  * (Walrus answers 409). The content fingerprint keeps a true retry on one key and
  * gives a different room snapshot its own key.
  */
-function memoryKey(document) {
+const FINGERPRINTED = { room: "room", activity: "activity", action: "actionItem" };
+
+export function memoryKey(document) {
   const base = String(document.idempotencyKey || document.text || "");
-  if (document.kind !== "room" || !document.room || typeof document.room !== "object") return byteTrim(base, 255);
+  // Room snapshots, activity rows and action revisions are written in the
+  // background by more than one instance. Decisions and other records keep
+  // their plain key: a second copy with other content is refused on purpose.
+  const field = FINGERPRINTED[document.kind];
+  const payload = field ? document[field] : null;
+  if (!payload || typeof payload !== "object") return byteTrim(base, 255);
   let body = "";
-  try { body = JSON.stringify(document.room); } catch { body = ""; }
+  try { body = JSON.stringify(payload); } catch { body = ""; }
   const print = createHash("sha256").update(`${document.text || ""}\n${body}`, "utf8").digest("hex").slice(0, 12);
   return `${byteTrim(base, 242)}:${print}`;
 }

@@ -22,6 +22,8 @@ import {
   sentenceHash,
   shouldRespond,
   titleFromAnswer,
+  closingReply,
+  namesBot,
   toolIsWrite,
   utteranceKey,
   wrapToolResult,
@@ -394,6 +396,7 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
       answered: notes.answered,
       awaiting: notes.awaiting || null,
       outcomes: notes.outcomes.slice(0, 4),
+      ...(notes.closing ? { closing: true } : {}),
     }));
     if (!res.writableEnded) {
       writeEvent(res, "done", { turn_id: turn, ...extra });
@@ -428,6 +431,11 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     const floor = { roomId: seat.roomId, speaker: floorSpeaker(participantId, speaker), until: Date.now() + 1000 };
     answer = shouldRespond({ ...session, meetingDirect, meetingFloor: floor }, delivery, bot);
   }
+  // Solo call: a thanks or goodbye to Adam gets a short fixed reply, no model round
+  // trip (Nov 11, bot ae224b81: "Thanks, Adam" went unanswered). Group calls stay quiet.
+  const closing = live && meetingDirect && !partial && !awaiting ? closingReply(text, seat.botName) : "";
+  const thanked = Boolean(closing) && (namesBot(text, seat.botName) || Boolean(prior?.assistant));
+  if (thanked) answer = true;
   const key = answer ? utteranceKey(text, speaker) : "";
   if (key && !acceptUtterance(bag.recent, seat.botId, key)) {
     await finish({ duplicate: true });
@@ -531,6 +539,12 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     await finish();
     return;
   }
+  if (thanked) {
+    notes.closing = true;
+    await emit(closing, true);
+    await finish();
+    return;
+  }
   const place = approvalPlace(text);
   if (answer && place && !answeredTitle) {
     await emit(place, true);
@@ -560,7 +574,7 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
         if (!res.writableEnded) writeEvent(res, name, data);
       },
     };
-    if (answeredTitle) await fileAnsweredTitle(voiceInput, answeredTitle);
+    if (answeredTitle) await fileAnsweredTitle({ ...voiceInput, heardTitle: text }, answeredTitle);
     else await streamVoice(voiceInput);
   } catch {
     if (!res.writableEnded) writeEvent(res, "error", { reason: "unavailable" });
@@ -738,7 +752,7 @@ function toolResultLine(toolResults, existingHold) {
   const needsTitle = rows.some((row) => row?.reason === "needs_title");
   if (needsTitle && existingHold?.title) return holdStatusLine(existingHold.title);
   const filedRow = rows.find((row) => row?.status === "filed");
-  if (filedRow) return filedVoiceLine(filedRow.title || "");
+  if (filedRow) return filedVoiceLine(filedRow.title || "", filedRow.issueId || "");
   if (rows.some((row) => row?.reason === "file-failed")) return "The Linear issue did not go through.";
   if (rows.some((row) => row?.reason === "file-unconfirmed")) return UNCONFIRMED_LINE;
   const heldRow = rows.find((row) => row?.status === "waiting_for_approval" || row?.held === true);
@@ -1017,6 +1031,7 @@ async function fileVoiceLinear(input, name, args, memberId) {
     result = await handleUtterance({
       text: `file the ${title}`,
       voiceFile: true,
+      spokenTitle: String(input.heardTitle || "").replace(/\s+/g, " ").trim().slice(0, 200),
       door: "mcp",
       clientName: "meeting",
       memberId: owner,

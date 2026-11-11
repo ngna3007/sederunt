@@ -187,7 +187,7 @@ test("greeting, vague Linear ask, late imperative title: Adam files once and con
     assert.equal(answered.status, 200);
     assert.equal(issues.length, 1);
     assert.equal(issues[0].title, TITLE);
-    assert.deepEqual(sentences(answered.raw), [`I filed the Linear issue '${TITLE}'.`]);
+    assert.deepEqual(sentences(answered.raw), [`I filed ROW-42, '${TITLE}'.`]);
     assert.equal(live.chats.length, chatsBefore, "the answered title does not go back to the model");
     assert.equal(heardLine(live.store, "bot-live").awaiting, null);
 
