@@ -185,6 +185,10 @@ async function logPlayed(workspace, sessionFor, env, seat, body) {
     noteEchoDrop(seat.botId);
     return;
   }
+  if (body?.beat && typeof body.beat === "object") {
+    console.info(JSON.stringify({ meeting: "page", bot: String(seat.botId).slice(0, 12), ...pageBeat(body.beat) }));
+    return;
+  }
   if (body?.gate === "skip") {
     console.info(JSON.stringify({
       meeting: "gate",
@@ -221,6 +225,19 @@ async function logPlayed(workspace, sessionFor, env, seat, body) {
     user: heard.text,
     assistant: played.join(" "),
   });
+}
+
+const BEAT_COUNTS = ["msgs", "opened", "own", "echo", "commits", "asked", "skipped", "busy", "done", "errors", "stuck", "sentences", "socketOpens", "socketCloses", "turnMs", "people"];
+const BEAT_FLAGS = ["turnOpen", "waiting", "floor", "direct", "playing"];
+const BEAT_STATES = new Set(["listening", "thinking", "tool", "speaking"]);
+
+/** The page heartbeat: whitelisted counts and flags only. */
+export function pageBeat(raw) {
+  const row = {};
+  for (const key of BEAT_COUNTS) row[key] = Math.max(0, Math.min(1e7, Math.round(Number(raw?.[key]) || 0)));
+  for (const key of BEAT_FLAGS) row[key] = raw?.[key] === true;
+  row.state = BEAT_STATES.has(raw?.state) ? raw.state : "";
+  return row;
 }
 
 async function hydrateFloor(session, env, fetchImpl, seat) {
@@ -716,7 +733,14 @@ async function fileAnsweredTitle(input, title) {
   const tool = { name: "act", actionClass: "write" };
   input.writeEvent("tool_started", { name: call.name });
   const started = Date.now();
-  const outcome = await runAgentTool({ ...input, call, tool, allowed: new Map([["act", tool]]) });
+  // A slow connector still gets a spoken acknowledgement while the turn is open.
+  const nudge = setTimeout(() => { input.onText(FILING_LINE, true).catch(() => {}); }, FILING_NUDGE_MS);
+  let outcome;
+  try {
+    outcome = await runAgentTool({ ...input, call, tool, allowed: new Map([["act", tool]]) });
+  } finally {
+    clearTimeout(nudge);
+  }
   stampClock(input.workspace, input.env, input.botId, input.turnId, "tool", Math.max(1, Date.now() - started));
   input.toolResults.push(outcome.raw);
   const line = toolResultLine(input.toolResults, input.existingHold);
@@ -937,6 +961,7 @@ async function fileVoiceLinear(input, name, args, memberId) {
   }
   const title = String(args?.title || "").replace(/\s+/g, " ").trim().slice(0, 120);
   const deliveryId = `voice-file-${input.turnId || heldActionId(input.seat.roomId, owner, name, args)}`;
+  const later = deferredMemory(input, input.deps || {});
   let result = null;
   try {
     result = await handleUtterance({
@@ -955,13 +980,88 @@ async function fileVoiceLinear(input, name, args, memberId) {
       },
       participants,
       session: input.session,
-    }, input.deps || {});
+    }, later.deps);
   } catch {
+    later.keep();
     return { deliveryId };
   }
+  later.keep();
   const issueId = String(result?.issueId || "").trim();
   if (issueId) return { issueId, deliveryId };
   return { deliveryId, allow: result?.allow || "" };
+}
+
+const MEMORY_KEEP_MS = 55_000;
+const FILING_NUDGE_MS = 4000;
+const FILING_LINE = "Filing it in Linear now.";
+
+/**
+ * A voice filing must speak inside the turn. Each Walrus Memory write takes
+ * 20-30 s and the typed path awaits several of them before and after the
+ * Linear call, so the live turn ran past the 60 s function limit and Adam never
+ * answered (Nov 11, bot e75fb7eb). Memory writes from this filing start at once,
+ * run side by side, and are kept alive after the reply. The Linear call is still
+ * claimed once and carries its idempotency key.
+ */
+function deferredMemory(input, deps) {
+  const memory = deps?.memory;
+  const pending = [];
+  if (!memory || typeof memory.remember !== "function") return { deps, keep() {}, pending };
+  const log = typeof deps.log === "function" ? deps.log : (row) => console.info(JSON.stringify(row));
+  const track = (work, kindName) => {
+    const started = Date.now();
+    const settled = Promise.resolve().then(work).then(
+      () => noteDeferred(log, kindName, Date.now() - started, true),
+      (error) => noteDeferred(log, kindName, Date.now() - started, false, error),
+    );
+    pending.push(settled);
+  };
+  const remember = (document) => {
+    track(() => memory.remember(document), String(document?.kind || ""));
+    return Promise.resolve({ blobId: null, deferred: true });
+  };
+  const attachConnector = (...rest) => {
+    track(() => memory.attachConnector(...rest), "attach");
+    return Promise.resolve(null);
+  };
+  const wrapped = new Proxy(memory, {
+    get(target, prop) {
+      if (prop === "remember") return remember;
+      if (prop === "attachConnector" && typeof target.attachConnector === "function") return attachConnector;
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return {
+    deps: { ...deps, memory: wrapped },
+    pending,
+    keep() {
+      if (!pending.length) return;
+      const all = Promise.race([
+        Promise.allSettled(pending),
+        new Promise((resolve) => { const timer = setTimeout(resolve, MEMORY_KEEP_MS); timer.unref?.(); }),
+      ]);
+      keepAlive(input.workspace, input.env, all);
+    },
+  };
+}
+
+function noteDeferred(log, kindName, ms, ok, error) {
+  const row = { kind: ok ? "memory-deferred" : "memory-remember-error", kindName, ms: Math.round(ms), deferred: true };
+  if (!ok) row.message = String(error instanceof Error ? error.message : error || "").slice(0, 240);
+  try { log(row); } catch {}
+}
+
+function keepAlive(workspace, env, work) {
+  const bag = runtime(workspace);
+  if (!(bag.background instanceof Set)) bag.background = new Set();
+  bag.background.add(work);
+  work.finally(() => bag.background.delete(work));
+  if (env?.VERCEL) {
+    import("@vercel/functions").then(({ waitUntil }) => {
+      if (typeof waitUntil === "function") waitUntil(work);
+    }).catch(() => {});
+  }
 }
 
 function heldParams(name, args) {

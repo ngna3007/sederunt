@@ -72,6 +72,11 @@ const AGENT_PAGE = `<!doctype html>
   var wsWait = 500;
   var socket;
   var socketPosts = 0;
+  var turnStartedAt = 0;
+  var busyFlagged = false;
+  var lastBeat = "";
+  var TURN_CAP_MS = 25000;
+  var stats = { msgs: 0, opened: 0, own: 0, echo: 0, commits: 0, asked: 0, skipped: 0, busy: 0, done: 0, errors: 0, stuck: 0, sentences: 0, socketOpens: 0, socketCloses: 0 };
 
   function letters(value) {
     return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -219,11 +224,16 @@ const AGENT_PAGE = `<!doctype html>
 
   function onTranscript(message) {
     var heard = utteranceToCommit(committed, message, { name: botName, participantId: participantId });
-    if (!heard) return;
+    if (!heard) {
+      stats.own += 1;
+      return;
+    }
     if (echoShare(heard.text, spokenNow()) >= 0.6) {
+      stats.echo += 1;
       noteEcho();
       return;
     }
+    if (heard.open) stats.opened += 1;
     notePerson(heard.participantId, heard.speaker);
     if (heard.barge && playStarted && Date.now() - playStarted >= 300) barge(wokeIn(heard.text) ? "name" : "word");
     if (!heard.open) return;
@@ -242,8 +252,22 @@ const AGENT_PAGE = `<!doctype html>
   }
 
   function maybeCommit() {
-    if (!lineText || !lastWordAt || turnOpen) return;
+    if (turnOpen && turnStartedAt && Date.now() - turnStartedAt > TURN_CAP_MS) {
+      // A turn that never ends must not keep the page deaf for the rest of the call.
+      stats.stuck += 1;
+      cancelTurn();
+    }
+    if (!lineText || !lastWordAt) return;
     if (!endOfTurn(lineText, Date.now() - lastWordAt)) return;
+    if (turnOpen) {
+      if (!busyFlagged) {
+        busyFlagged = true;
+        stats.busy += 1;
+      }
+      return;
+    }
+    busyFlagged = false;
+    stats.commits += 1;
     var text = lineText;
     var speaker = lineSpeaker;
     var claimed = lineParticipant;
@@ -258,6 +282,7 @@ const AGENT_PAGE = `<!doctype html>
       return;
     }
     if (!woke && !shouldRespond(text, speaker, Date.now(), claimed)) {
+      stats.skipped += 1;
       noteGate("skip", text);
       return;
     }
@@ -267,6 +292,8 @@ const AGENT_PAGE = `<!doctype html>
 
   function ask(text, speaker, claimed) {
     if (!ear) return;
+    stats.asked += 1;
+    turnStartedAt = Date.now();
     turnOpen = true;
     setState("thinking");
     clearTimeout(turnTimer);
@@ -283,6 +310,7 @@ const AGENT_PAGE = `<!doctype html>
       if (!response.ok || !response.body) throw new Error("turn");
       return readEvents(response.body, text, speaker);
     }).catch(function () {
+      stats.errors += 1;
       if (guest.dataset.state === "thinking") setState("listening");
       turnOpen = false;
     });
@@ -312,6 +340,7 @@ const AGENT_PAGE = `<!doctype html>
             var payload = {};
             try { payload = JSON.parse(data); } catch (error) { payload = {}; }
             if (payload.text) {
+              stats.sentences += 1;
               played.push(payload.text);
               noteSpoken(payload.text, Date.now());
               noteAnswer(speaker, Date.now(), /\\?\\s*$/.test(String(payload.text)));
@@ -319,6 +348,8 @@ const AGENT_PAGE = `<!doctype html>
             }
           }
           if (event === "tool_started") setState("tool");
+          if (event === "done") stats.done += 1;
+          if (event === "error") stats.errors += 1;
           if (event === "done" || event === "error") turnOpen = false;
         }
         return pump();
@@ -552,8 +583,9 @@ const AGENT_PAGE = `<!doctype html>
       wsWait = Math.min(wsWait * 2, 8000);
       return;
     }
-    socket.onopen = function () { wsWait = 500; };
+    socket.onopen = function () { wsWait = 500; stats.socketOpens += 1; };
     socket.onmessage = function (ev) {
+      stats.msgs += 1;
       if (socketPosts < 20 && ear) {
         socketPosts += 1;
         var raw = "";
@@ -571,6 +603,7 @@ const AGENT_PAGE = `<!doctype html>
     };
     socket.onerror = function () {};
     socket.onclose = function () {
+      stats.socketCloses += 1;
       setTimeout(connectSocket, wsWait);
       wsWait = Math.min(wsWait * 2, 8000);
     };
@@ -600,6 +633,31 @@ const AGENT_PAGE = `<!doctype html>
   }
 
   setInterval(maybeCommit, 200);
+
+  /** Counts and flags only, never words. Sent when something changed. */
+  function beat() {
+    if (!ear) return;
+    var now = Date.now();
+    var row = {};
+    for (var key in stats) row[key] = stats[key];
+    row.turnOpen = turnOpen;
+    row.turnMs = turnOpen && turnStartedAt ? now - turnStartedAt : 0;
+    row.waiting = Boolean(lineText);
+    row.floor = now < floorUntil;
+    row.direct = direct;
+    row.people = Object.keys(people).length;
+    row.playing = Boolean(playStarted);
+    row.state = guest.dataset.state || "";
+    var encoded = JSON.stringify(row);
+    if (encoded === lastBeat) return;
+    lastBeat = encoded;
+    fetch("/api/meeting/agent/log", {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ beat: row })
+    }).catch(function () {});
+  }
+  setInterval(beat, 5000);
   function applySession(body) {
     if (!body) return;
     if (body.botName) botName = String(body.botName);
@@ -632,7 +690,9 @@ const AGENT_PAGE = `<!doctype html>
     noteAnswer: noteAnswer,
     notePerson: notePerson,
     noteSpoken: noteSpoken,
-    markPlaying: function (now) { playStarted = typeof now === "number" ? now : Date.now(); }
+    markPlaying: function (now) { playStarted = typeof now === "number" ? now : Date.now(); },
+    stats: function () { return JSON.parse(JSON.stringify(stats)); },
+    beat: beat
   };
 })();
 </script>
