@@ -184,7 +184,9 @@ test("a Linear answer with no issue id is spoken as unconfirmed and keeps the cl
 });
 
 test("a workspace without the Sederunt project still files into team ROW", async () => {
-  const run = await answerTitle((_name, args) => (args.project
+  const run = await answerTitle((name, args) => (name === "get_team"
+    ? toolJson({ id: "11111111-2222-4333-8444-555555555555", key: "ROW", name: "Rowan" })
+    : args.project
     ? toolError("Project not found: Sederunt")
     : toolJson({ id: "6f1c0d1e-0000-4000-8000-000000000001", identifier: "ROW-12", url: "https://linear.app/rowan3007/issue/ROW-12/fixed" })));
   assert.deepEqual(sentences(run.reply), [`I filed the Linear issue '${TITLE}'.`]);
@@ -192,7 +194,9 @@ test("a workspace without the Sederunt project still files into team ROW", async
   assert.equal(saves.length, 2);
   assert.equal(saves[0].project, "Sederunt");
   assert.equal("project" in saves[1], false);
-  assert.equal(saves.every((args) => args.team === "ROW" && !("idempotencyKey" in args)), true);
+  // save_issue takes a team name or ID: the ROW key is resolved to the team ID once.
+  assert.equal(saves.every((args) => args.team === "11111111-2222-4333-8444-555555555555" && !("idempotencyKey" in args)), true);
+  assert.equal(run.calls.filter(([name]) => name === "get_team").length, 1);
 });
 
 test("a save_issue answer in plain text still yields the issue id", async () => {
