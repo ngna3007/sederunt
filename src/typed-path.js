@@ -1,4 +1,4 @@
-import { canReadInSession, canReadRecord, meetingRoomReaders, readPrincipalId, readableSession } from "./domain/read-access.js";
+import { canReadInSession, canReadOpenedMeeting, canReadRecord, meetingRoomReaders, readPrincipalId, readableSession } from "./domain/read-access.js";
 import { createHash, randomBytes } from "node:crypto";
 import { displayName, logAction, logFailure, logRequest, logUndo, renderActivity, undoRefusal } from "./activity.js";
 import { formatActivitySentence, selectActivity } from "./activity-feed.js";
@@ -3542,7 +3542,8 @@ export function companyBoard(session, memberId, options = {}) {
     if (typeof opened.startedAt === "string" && opened.startedAt) room.startedAt = opened.startedAt;
     if (Number.isFinite(opened.duration) && opened.duration > 0) room.duration = Math.round(opened.duration);
     if (meetingCallRank(opened.call)) room.call = opened.call;
-    const speakers = lineSpeakers(opened.lines);
+    // Names heard in the transcript only for a room this person can open.
+    const speakers = room.count > 0 || canReadOpenedMeeting(member, opened) ? lineSpeakers(opened.lines) : [];
     if (speakers.length) room.speakers = speakers;
     if (typeof opened.calendarEventId === "string" && opened.calendarEventId.trim()) {
       room.calendarEventId = opened.calendarEventId.trim();

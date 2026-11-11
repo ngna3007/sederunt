@@ -239,3 +239,39 @@ test("demo home: a granted calendar is remembered briefly so a slow grant read d
   assert.equal(await personCalendarGranted(workspace, "t1", "p2"), false, "a missing grant is read every time");
   assert.equal(workspace.calendarGrantCache.has("t1:p2"), false);
 });
+
+// ---- Review of PR 28 (Nov 11 2026) ----
+
+test("review: meeting readers never widen notes, private records, other rooms or other tenants' sessions", async () => {
+  const session = await demoSession();
+  const readers = meetingRoomReaders(session);
+  const note = { roomId: ROOM, account: "company", kind: "note", inviteMemberIds: [HOST_PARTICIPANT] };
+  assert.equal(canReadInSession(OWNER, note, readers), false, "a note kept in the meeting stays its writer's");
+  assert.equal(canReadInSession(OWNER, { roomId: ROOM, account: "company", private: true, inviteMemberIds: [HOST_PARTICIPANT] }, readers), false);
+  assert.equal(canReadInSession(OWNER, { roomId: ROOM, account: "personal", kind: "decision", inviteMemberIds: [HOST_PARTICIPANT] }, readers), false);
+  assert.equal(canReadInSession(OWNER, { roomId: "another-room", account: "company", inviteMemberIds: [HOST_PARTICIPANT] }, readers), false);
+  // Another tenant's session has its own rooms: the owner of this meeting is not a reader there.
+  const other = createSession();
+  other.rooms.push({ id: ROOM, kind: "meeting", memberIds: ["other-tenant-member"] });
+  other.decisions.push({ id: "d-other", roomId: ROOM, account: "company", kind: "decision", text: "other tenant fact", inviteMemberIds: [HOST_PARTICIPANT] });
+  assert.equal(companyBoard(other, OWNER).decisions.length, 0, "same room id in another tenant does not widen to this tenant's inviter");
+  assert.equal(companyBoard(other, { memberId: OWNER, identities: [] }).decisions.length, 0);
+  // Reading in this tenant never reaches the other tenant's records.
+  assert.equal(companyBoard(session, OWNER).decisions.some((row) => row.text === "other tenant fact"), false);
+});
+
+test("review: a personal note in the meeting is not shown to the inviter, and transcript speakers only show for readable rooms", async () => {
+  const session = await demoSession();
+  session.decisions.push({ id: "d-private", roomId: ROOM, account: "personal", kind: "note", text: "my private note", inviteMemberIds: [HOST_PARTICIPANT] });
+  session.rooms.push({ id: "closed-room", kind: "meeting", botPresent: true, memberIds: ["someone-else"], lines: [{ speaker: "Bao Tran", text: "secret plan" }] });
+  const room = session.rooms.find((item) => item.id === ROOM);
+  room.lines = [{ speaker: "Anh Nguyen", text: "heads up" }];
+  for (const principal of [OWNER, { memberId: OWNER, identities: [] }]) {
+    const board = companyBoard(session, principal);
+    assert.equal(board.decisions.some((row) => row.text === "my private note"), false);
+    const closed = board.rooms.find((item) => item.id === "closed-room");
+    assert.equal(Boolean(closed?.speakers?.length), false, "no names from a room this person cannot open");
+    assert.deepEqual(board.rooms.find((item) => item.id === ROOM).speakers, ["Anh Nguyen"]);
+    assert.equal(roomLedger(session, ROOM, principal).decisions.some((row) => row.text === "my private note"), false);
+  }
+});

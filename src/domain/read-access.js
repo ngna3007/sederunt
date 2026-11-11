@@ -70,7 +70,8 @@ export function meetingRoomReaders(session) {
  * @returns {T}
  */
 export function withMeetingReaders(record, readers) {
-  if (!record || record.account === "personal" || !readers?.size) return record;
+  // Personal records and notes are never widened, whatever room they were kept in.
+  if (!record || record.account === "personal" || record.kind === "note" || record.private === true || !readers?.size) return record;
   const extra = readers.get(typeof record.roomId === "string" ? record.roomId : "");
   if (!extra?.length) return record;
   const invited = Array.isArray(record.inviteMemberIds) ? record.inviteMemberIds : [];
