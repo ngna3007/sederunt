@@ -10,7 +10,10 @@ export function directRequest(text) {
   if (/^(hmm+|hm+|uh+|um+|er+|ah+)$/.test(folded)) return false;
   if (folded === "okay thanks" || folded === "ok thanks" || folded === "thanks okay" || folded === "okay thank you" || folded === "so yeah" || folded === "let me think") return false;
   if (/\?\s*$/.test(value)) return true;
-  return /^(what|when|who|where|why|how|can|could|would|should|do|does|is|are|please|create|remind|note|recall|tell)\b/i.test(value);
+  // A write said as a command. Recall's low-latency stream can drop a leading
+  // "Adam," after a pause, so the one person in the room said "schedule a
+  // launch sync tomorrow at 10 am" and the page skipped it (demo take 2, Nov 11).
+  return /^(what|when|who|where|why|how|can|could|would|should|do|does|is|are|please|create|remind|note|recall|tell|schedule|reschedule|book|file|add|log|open|send|set|move|invite|assign|update|draft|find|look up|show|list)\b/i.test(value);
 }
 
 /**
