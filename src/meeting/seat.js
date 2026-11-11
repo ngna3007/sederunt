@@ -148,6 +148,12 @@ async function redisCall(env, fetchImpl, body) {
   }
 }
 
+/** One Redis command (or a pipeline) for callers outside the meeting seat. */
+export async function sharedRedisCommand(env, fetchImpl, command) {
+  if (!redisConfigured(env)) return { ok: false, absent: true };
+  return redisCall(env, fetchImpl, command);
+}
+
 async function redisCommand(env, fetchImpl, command) {
   const called = await redisCall(env, fetchImpl, command);
   if (!called.ok) return called;
@@ -543,12 +549,35 @@ export async function loadSpokenTurn(env, fetchImpl, botId, hash) {
 }
 
 /** Adam asked the speaker a question and waits for the answer until `until`. */
+const AWAITING_KINDS = new Set(["title", "answer", "when", "arg", "destroy"]);
+const AWAITING_BLOCKED_ARGS = new Set(["memberId", "session", "token", "authorization", "confirmActionId", "confirmed", "channel", "channelId", "roomId", "tenantId", "room", "botId"]);
+
+/**
+ * The open question, as stored between instances. A pending write keeps its
+ * tool, field, and arguments, so "tomorrow at 10" or "yes" can finish it on any
+ * instance (the kinds and args were dropped before, so the follow-up never landed).
+ */
 function cleanAwaiting(value) {
   if (!value || typeof value !== "object") return null;
-  const kind = value.kind === "title" ? "title" : (value.kind === "answer" ? "answer" : "");
+  const kind = AWAITING_KINDS.has(value.kind) ? value.kind : "";
   const until = Number(value.until);
   if (!kind || !Number.isFinite(until) || until <= 0) return null;
-  return { kind, speaker: String(value.speaker || "").slice(0, 80), until };
+  const row = { kind, speaker: String(value.speaker || "").slice(0, 80), until };
+  const tool = typeof value.tool === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(value.tool) ? value.tool : "";
+  if (tool) row.tool = tool;
+  const field = typeof value.field === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(value.field) ? value.field : "";
+  if (field) row.field = field;
+  if (value.args && typeof value.args === "object" && !Array.isArray(value.args)) {
+    const args = {};
+    for (const [key, item] of Object.entries(value.args)) {
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(key) || AWAITING_BLOCKED_ARGS.has(key)) continue;
+      if (item == null || ["string", "number", "boolean"].includes(typeof item) || typeof item === "object") args[key] = item;
+    }
+    let body = "";
+    try { body = JSON.stringify(args); } catch { body = ""; }
+    if (body && body.length <= 4000) row.args = args;
+  }
+  return row;
 }
 
 export async function rememberHeardLine(env, fetchImpl, botId, row) {

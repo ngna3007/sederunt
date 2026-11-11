@@ -80,7 +80,7 @@ function connectorStore(rows) {
   return { async list() { return rows; } };
 }
 
-function connected(slug, name, actionClass) {
+function connected(slug, name, actionClass, extra = {}) {
   return {
     id: `${slug}-1`,
     slug,
@@ -89,14 +89,22 @@ function connected(slug, name, actionClass) {
     url: "",
     authType: "bearer",
     hasToken: false,
+    invoke: extra.invoke,
     tools: [{
       name,
-      description: name,
+      description: extra.description || name,
       enabled: true,
       changed: false,
       actionClass,
-      inputSchema: { type: "object", properties: { title: { type: "string" }, query: { type: "string" } } },
+      inputSchema: extra.inputSchema || { type: "object", properties: { title: { type: "string" }, query: { type: "string" } } },
     }],
+  };
+}
+
+function notesInvoke(calls = []) {
+  return async (tool, args) => {
+    calls.push({ tool, args });
+    return { ok: true, id: "note-1", title: args?.title || "note" };
   };
 }
 
@@ -755,9 +763,11 @@ test("a mapped speaker recalls this room only and an unmapped speaker cannot act
   }
 });
 
-test("a write is held before the model speaks and is not described as done", async () => {
+test("a write runs during the call and is confirmed, not described as done by the model", async () => {
   const chats = [];
   const urls = [];
+  const invoked = [];
+  const chat = [];
   const meetingVoice = {};
   const session = createSession();
   session.preferences = [{ id: "pref-2", tool: "mcp:notes:create_note", value: "do" }];
@@ -784,32 +794,38 @@ test("a write is held before the model speaks and is not described as done", asy
     sessions: new Map([[TENANT_A, session]]),
     meetingVoice,
     seats: [{ ear: EAR, botId: "bot-1", tenantId: TENANT_A, roomId: "bot-1", botName: "Adam" }],
-    connectors: connectorStore([connected("notes", "create_note", "write")]),
+    connectors: connectorStore([connected("notes", "create_note", "write", { invoke: notesInvoke(invoked) })]),
+    deps: {
+      meeting: {
+        async sendChatMessage(input) { chat.push(input); return { ok: true }; },
+      },
+    },
   });
   noteAgentMember({ meetingVoice }, "bot-1", { participantId: "7", name: "Priya", memberId: "7" });
   const port = await listen(app);
   try {
     const spoken = await call(port, "POST", "/api/meeting/agent/turn", {
       headers: { "content-type": "application/json", "x-meeting-ear": EAR },
-      body: turnBody("Adam, file the launch note.", "Priya", { participantId: "7", turn_id: "write-hold" }),
+      body: turnBody("Adam, file the launch note.", "Priya", { participantId: "7", turn_id: "write-run" }),
     });
-    assert.equal(meetingVoice.agentHolds[0].status, "held");
-    assert.equal(meetingVoice.agentHolds[0].tool, "notes__create_note");
-    assert.equal(meetingVoice.agentHolds[0].tenantId, TENANT_A);
-    assert.equal(meetingVoice.agentHolds[0].roomId, "bot-1");
-    assert.equal(meetingVoice.agentHolds[0].args.title, "Launch the Friday booth");
-    assert.equal(meetingVoice.agentHolds[0].args.channel, undefined);
-    assert.equal(meetingVoice.agentHolds[0].args.token, undefined);
-    assert.equal((meetingVoice.toolRuns || []).length, 0);
-    assert.equal(session.actions.length, 1);
-    assert.equal(session.actions[0].state, "paused");
-    assert.equal(JSON.stringify(meetingVoice.agentHolds).includes("other-tenant"), false);
-    assert.equal(JSON.stringify(meetingVoice.agentHolds).includes("secret-token"), false);
+    assert.equal((meetingVoice.agentHolds || []).length, 0);
+    assert.equal((meetingVoice.toolRuns || []).length, 1);
+    assert.equal(meetingVoice.toolRuns[0].name, "notes__create_note");
+    assert.equal(meetingVoice.toolRuns[0].tenantId, TENANT_A);
+    assert.equal(meetingVoice.toolRuns[0].args.title, "Launch the Friday booth");
+    assert.equal(meetingVoice.toolRuns[0].args.channel, undefined);
+    assert.equal(meetingVoice.toolRuns[0].args.token, undefined);
+    assert.equal(invoked.length, 1);
+    assert.equal(JSON.stringify(meetingVoice.toolRuns).includes("other-tenant"), false);
+    assert.equal(JSON.stringify(meetingVoice.toolRuns).includes("secret-token"), false);
     assert.equal(urls.every((url) => url.startsWith("https://openrouter.ai/")), true);
-    assert.equal(chats.some((payload) => (payload.messages || []).some((message) => message.role === "tool")), false);
     assert.equal(spoken.raw.includes("the write ran"), false);
-    assert.equal(/created/i.test(spoken.raw), false);
-    assert.match(spoken.raw, /I've drafted that request/);
+    assert.match(spoken.raw, /I ran create note: 'Launch the Friday booth'/);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(chat.length, 1);
+    assert.equal(chat[0].to, "everyone");
+    assert.equal(chat[0].botId, "bot-1");
+    assert.match(chat[0].message, /Ran create note: Launch the Friday booth/);
   } finally {
     await close(app);
   }
@@ -1266,7 +1282,7 @@ test("the same claim runs once and another tenant can claim the same arguments",
       { ear: EAR, botId: "bot-1", tenantId: TENANT_A, roomId: "room-1", botName: "Adam" },
       { ear: EAR_B, botId: "bot-2", tenantId: TENANT_B, roomId: "room-1", botName: "Adam" },
     ],
-    connectors: connectorStore([connected("notes", "create_note", "write")]),
+    connectors: connectorStore([connected("notes", "create_note", "write", { invoke: notesInvoke() })]),
   });
   noteAgentMember({ meetingVoice }, "bot-1", { participantId: "7", name: "Priya", memberId: "7" });
   noteAgentMember({ meetingVoice }, "bot-2", { participantId: "7", name: "Priya", memberId: "7" });
@@ -1283,19 +1299,19 @@ test("the same claim runs once and another tenant can claim the same arguments",
     });
     assert.equal(again.status, 200);
     assert.match(toolContents(chats).at(-1), /claimed/);
-    assert.equal((meetingVoice.toolRuns || []).length, 0);
-    assert.equal(meetingVoice.agentHolds.length, 1);
+    assert.equal((meetingVoice.toolRuns || []).length, 1);
+    assert.equal((meetingVoice.agentHolds || []).length, 0);
     await call(port, "POST", "/api/meeting/agent/turn", {
       headers: { "content-type": "application/json", "x-meeting-ear": EAR_B },
       body: turnBody("Adam, file the launch note.", "Priya", { participantId: "7", turn_id: "claim-3" }),
     });
-    assert.equal((meetingVoice.toolRuns || []).length, 0);
-    assert.equal(meetingVoice.agentHolds[0].tenantId, TENANT_A);
-    assert.equal(meetingVoice.agentHolds[1].tenantId, TENANT_B);
-    assert.equal(meetingVoice.agentHolds[0].roomId, "room-1");
-    assert.equal(meetingVoice.agentHolds.length, 2);
-    assert.equal(JSON.stringify(meetingVoice.agentHolds).includes("other-tenant"), false);
-    assert.equal(JSON.stringify(meetingVoice.agentHolds).includes("other-room"), false);
+    assert.equal((meetingVoice.toolRuns || []).length, 2);
+    assert.equal(meetingVoice.toolRuns[0].tenantId, TENANT_A);
+    assert.equal(meetingVoice.toolRuns[1].tenantId, TENANT_B);
+    assert.equal(meetingVoice.toolRuns[0].roomId, "room-1");
+    assert.equal((meetingVoice.agentHolds || []).length, 0);
+    assert.equal(JSON.stringify(meetingVoice.toolRuns).includes("other-tenant"), false);
+    assert.equal(JSON.stringify(meetingVoice.toolRuns).includes("other-room"), false);
   } finally {
     await close(app);
   }
@@ -1391,7 +1407,7 @@ test("cancelling aborts a hanging read and leaves a held write in place", async 
   }, {
     meetingVoice: writing,
     seats: [{ ear: EAR, botId: "bot-1", tenantId: TENANT_A, roomId: "bot-1", botName: "Adam" }],
-    connectors: connectorStore([connected("notes", "create_note", "write")]),
+    connectors: connectorStore([connected("notes", "create_note", "write", { invoke: notesInvoke() })]),
   });
   noteAgentMember({ meetingVoice: writing }, "bot-1", { participantId: "7", name: "Priya", memberId: "7" });
   const writePort = await listen(writeApp.app);
@@ -1418,7 +1434,8 @@ test("cancelling aborts a hanging read and leaves a held write in place", async 
     await call(writePort, "POST", "/api/meeting/agent/cancel", { headers: { "x-meeting-ear": EAR } });
     await write.finished;
     assert.equal(Date.now() - writeStarted < 5000, true);
-    assert.equal(writing.agentHolds.some((row) => row.tool === "notes__create_note" && row.status === "held"), true);
+    assert.equal((writing.agentHolds || []).length, 0);
+    assert.equal((writing.toolRuns || []).some((row) => row.name === "notes__create_note"), true);
     assert.equal(urls.every((url) => url.startsWith("https://openrouter.ai/")), true);
   } finally {
     await close(readApp.app);
@@ -1646,6 +1663,8 @@ test("a vague linear request asks for a title, then that title is the hold", asy
   };
   const env = { UPSTASH_REDIS_REST_URL: "https://redis.test", UPSTASH_REDIS_REST_TOKEN: "redis-token" };
   const seat = { ear: EAR, botId: "bot-1", tenantId: TENANT_A, roomId: "bot-1", botName: "Adam" };
+  const issues = [];
+  const linear = { async createIssue(input) { issues.push(input); return { identifier: "ROW-42", id: "ROW-42" }; } };
   const shared = {
     meetingVoice,
     session,
@@ -1653,6 +1672,7 @@ test("a vague linear request asks for a title, then that title is the hold", asy
     seats: [seat],
     connectors: connectorStore([connected("linear", "create_issue", "write")]),
     env,
+    deps: { linear },
   };
   const first = boot(fetchImpl, shared);
   const second = boot(fetchImpl, { ...shared, sessions: new Map([[TENANT_A, session]]) });
@@ -1683,11 +1703,11 @@ test("a vague linear request asks for a title, then that title is the hold", asy
       body: turnBody("Fix the onboarding email", "Priya", { participantId: "7", turn_id: "got-title" }),
     });
     assert.equal(filed.status, 200);
-    assert.match(filed.raw, /I've drafted the Linear issue 'Fix the onboarding email'/);
-    assert.match(filed.raw, /under Activity/);
-    assert.equal(meetingVoice.agentHolds.length, 1);
-    assert.equal(meetingVoice.agentHolds[0].args.title, "Fix the onboarding email");
-    assert.equal(session.actions.filter((row) => row.state === "paused").length, 1);
+    assert.match(filed.raw, /I filed ROW-42, 'Fix the onboarding email'/);
+    assert.equal((meetingVoice.agentHolds || []).length, 0);
+    assert.equal(issues.length, 1);
+    assert.equal(issues[0].title, "Fix the onboarding email");
+    assert.equal(session.actions.filter((row) => row.state === "paused").length, 0);
     // The answer to Adam's title question is the title. It is filed without asking the model again.
     const follow = chats.find((payload) => String(payload.messages?.find((message) => message.role === "user")?.content || "").includes("Fix the onboarding email"));
     assert.equal(follow, undefined);
@@ -1738,18 +1758,27 @@ test("an agent turn still answers a follow-up that shares Adam's words", async (
   }
 });
 
-test("a held title is not asked for again", async () => {
+test("a filed voice write is not asked for a title again", async () => {
   const chats = [];
   const meetingVoice = {};
   const session = createSession();
+  const issues = [];
+  const linear = { async createIssue(input) { issues.push(input); return { identifier: "ROW-7", id: "ROW-7" }; } };
   const { app } = boot(async (url, init) => {
-    if (String(url).includes("openrouter.ai")) chats.push(JSON.parse(init.body));
-    return { ok: true, status: 200, body: toolCallStream("act", { title: "Fix the onboarding email" }) };
+    if (String(url).includes("openrouter.ai")) {
+      const payload = JSON.parse(init.body);
+      chats.push(payload);
+      const answering = (payload.messages || []).some((message) => message.role === "tool");
+      if (answering) return { ok: true, status: 200, body: chatStream("The launch stays Thursday.") };
+      return { ok: true, status: 200, body: toolCallStream("act", { title: "Fix the onboarding email" }) };
+    }
+    return { ok: true, status: 200, body: chatStream("The launch stays Thursday.") };
   }, {
     session,
     sessions: new Map([[TENANT_A, session]]),
     meetingVoice,
     seats: [{ ear: EAR, botId: "bot-1", tenantId: TENANT_A, roomId: "bot-1", botName: "Adam" }],
+    deps: { linear },
   });
   noteAgentMember({ meetingVoice }, "bot-1", { participantId: "7", name: "Priya", memberId: "7" });
   const port = await listen(app);
@@ -1759,20 +1788,20 @@ test("a held title is not asked for again", async () => {
       headers,
       body: turnBody("Adam, file the launch note.", "Priya", { participantId: "7", turn_id: "hold-title" }),
     });
-    assert.match(filed.raw, /I've drafted the Linear issue 'Fix the onboarding email'/);
+    assert.match(filed.raw, /I filed ROW-7, 'Fix the onboarding email'/);
+    assert.equal(issues.length, 1);
     const pushed = await call(port, "POST", "/api/meeting/agent/turn", {
       headers,
       body: turnBody("can you push it", "Priya", { participantId: "7", turn_id: "hold-push" }),
     });
-    assert.match(pushed.raw, /It's drafted as 'Fix the onboarding email'/);
-    assert.match(pushed.raw, /Only a person can approve it, in the Sederunt console under Activity/);
+    assert.equal(pushed.raw.includes("What should the issue say?"), false);
+    assert.equal(issues.length, 1);
     const again = await call(port, "POST", "/api/meeting/agent/turn", {
       headers,
-      body: turnBody("create a task on Linear", "Priya", { participantId: "7", turn_id: "hold-again" }),
+      body: turnBody("thanks Adam", "Priya", { participantId: "7", turn_id: "hold-again" }),
     });
     assert.equal(again.raw.includes("What should the issue say?"), false);
-    assert.equal(session.actions.filter((row) => row.state === "paused").length, 1);
-    assert.equal(chats.length, 3);
+    assert.equal(session.actions.filter((row) => row.state === "paused").length, 0);
   } finally {
     await close(app);
   }
@@ -1821,7 +1850,8 @@ test("one person with the bot is answered without the name", async () => {
       body: turnBody("what time is the launch", "Priya", { participantId: "7", turn_id: "alone-yes", people: ["7"] }),
     });
     assert.equal(sseEvents(alone.raw).some((event) => event.data?.text === "We will keep Thursday."), true);
-    assert.equal(session.meetingDirect, undefined);
+    // The solo/group flag is per turn; it is not written onto the tenant's shared session.
+    assert.notEqual(session.meetingDirect, true);
     const back = await call(port, "POST", "/api/meeting/agent/turn", {
       headers,
       body: turnBody("okay", "Priya", { participantId: "7", turn_id: "alone-okay", people: ["7"] }),
@@ -2046,18 +2076,13 @@ test("a turn logs the endpoint, the first token, the first byte, and playback", 
   }
 });
 
-test("a write that cannot be saved releases the claim", async () => {
+test("a write that fails releases the claim so a retry can run", async () => {
   let down = true;
-  const memory = {
-    async remember() {
-      if (down) throw new Error("store down");
-      return { blobId: "saved" };
-    },
-  };
   const session = createSession();
   session.preferences = [{ id: "pref-2", tool: "mcp:notes:create_note", value: "do" }];
   const meetingVoice = {};
   const chats = [];
+  const invoked = [];
   const { app } = boot(async (_url, init) => {
     const payload = JSON.parse(init.body);
     chats.push(payload);
@@ -2069,8 +2094,13 @@ test("a write that cannot be saved releases the claim", async () => {
     sessions: new Map([[TENANT_A, session]]),
     meetingVoice,
     seats: [{ ear: EAR, botId: "bot-1", tenantId: TENANT_A, roomId: "bot-1", botName: "Adam" }],
-    connectors: connectorStore([connected("notes", "create_note", "write")]),
-    deps: { memory },
+    connectors: connectorStore([connected("notes", "create_note", "write", {
+      invoke: async (tool, args) => {
+        invoked.push(args);
+        if (down) throw new Error("store down");
+        return { ok: true, id: "note-1", title: args?.title || "note" };
+      },
+    })]),
   });
   noteAgentMember({ meetingVoice }, "bot-1", { participantId: "7", name: "Priya", memberId: "7" });
   const port = await listen(app);
@@ -2081,21 +2111,18 @@ test("a write that cannot be saved releases the claim", async () => {
       body: turnBody("Adam, file the launch note.", "Priya", { participantId: "7", turn_id: "hold-fail" }),
     });
     assert.equal(failed.status, 200);
-    assert.match(toolContents(chats).at(-1), /hold-failed/);
-    assert.doesNotMatch(toolContents(chats).at(-1), /waiting_for_approval/);
+    assert.match(failed.raw, /That did not go through/);
     assert.equal((meetingVoice.agentHolds || []).length, 0);
-    assert.equal(session.actions.length, 0);
-    assert.equal((meetingVoice.toolRuns || []).length, 0);
+    assert.equal(invoked.length, 1);
     down = false;
     const saved = await call(port, "POST", "/api/meeting/agent/turn", {
       headers,
       body: turnBody("Adam, file the launch note again.", "Priya", { participantId: "7", turn_id: "hold-retry" }),
     });
     assert.equal(saved.status, 200);
-    assert.match(saved.raw, /I've drafted that request/);
-    assert.equal(meetingVoice.agentHolds.length, 1);
-    assert.equal(session.actions.length, 1);
-    assert.equal((meetingVoice.toolRuns || []).length, 0);
+    assert.match(saved.raw, /I ran create note: 'Launch the Friday booth'/);
+    assert.equal((meetingVoice.agentHolds || []).length, 0);
+    assert.equal(invoked.length, 2);
   } finally {
     await close(app);
   }

@@ -158,6 +158,35 @@ export function createMeetingAdapter(env = process.env, options = {}) {
       if (response.status === 404 || response.status === 400) return { ok: true, reason: "absent" };
       return { ok: false, reason: `http-${response.status}` };
     },
+    /**
+     * POST /api/v1/bot/{id}/send_chat_message/ on the same ap-northeast-1 host.
+     * Google Meet caps messages at 500 characters. The caller trims first.
+     * A missing key or a network error is returned, never thrown, so speech is not delayed.
+     */
+    async sendChatMessage(input = {}) {
+      calls.push("sendChatMessage");
+      const key = typeof env.RECALL_API_KEY === "string" ? env.RECALL_API_KEY : "";
+      const id = typeof input.botId === "string" ? input.botId.trim() : "";
+      const message = String(input.message || "").replace(/\s+/g, " ").trim();
+      if (!key || !id || !message) return { ok: false, reason: "missing" };
+      let response;
+      try {
+        response = await fetchImpl(`${BOT_URL}${encodeURIComponent(id)}/send_chat_message/`, {
+          method: "POST",
+          headers: {
+            authorization: `Token ${key}`,
+            "content-type": "application/json",
+            accept: "application/json",
+          },
+          body: JSON.stringify({ message, to: input.to || "everyone" }),
+          signal: AbortSignal.timeout(Number(input.timeoutMs) > 0 ? input.timeoutMs : 4000),
+        });
+      } catch {
+        return { ok: false, reason: "network" };
+      }
+      if (response.ok) return { ok: true };
+      return { ok: false, reason: `http-${response.status}` };
+    },
   };
 }
 

@@ -86,6 +86,29 @@ export function createFakeCalendarAdapter(env = {}, options = {}) {
     },
     async call(name, params) {
       requireConnected();
+      if (name === "create_event") {
+        const summary = String(params?.summary || params?.title || "").trim() || "Meeting";
+        const start = String(params?.startTime || params?.start || "").trim();
+        let end = String(params?.endTime || params?.end || "").trim();
+        if (!start) return { id: "" };
+        if (!end) {
+          const ms = Date.parse(start);
+          if (!Number.isFinite(ms)) return { id: "" };
+          end = new Date(ms + 30 * 60_000).toISOString();
+        }
+        const id = `fake-created-${events.length + 1}`;
+        events.push({
+          id,
+          title: summary,
+          start: toUtcIso(start),
+          end: toUtcIso(end),
+          description: String(params?.description || ""),
+          readOnly: false,
+          attendees: [],
+        });
+        calls.push({ name, arguments: { summary, startTime: start, endTime: end, timeZone: params?.timeZone || zone } });
+        return { id, title: summary, summary };
+      }
       if (name !== "update_event") return { id: "" };
       const id = String(params?.id || params?.eventId || "").trim();
       const start = String(params?.start || params?.startTime || "").trim();

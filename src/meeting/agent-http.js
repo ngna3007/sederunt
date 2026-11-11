@@ -32,7 +32,31 @@ import { meetingContext, rememberMeetingExchange } from "./speech-gate.js";
 import { voiceModels } from "./voice-models.js";
 import { refreshMeetingFloor } from "./voice.js";
 import { handleMcpRequest } from "../mcp.js";
-import { handleUtterance, rememberHeldAction } from "../typed-path.js";
+import { handleUtterance, recordVoiceActivity, rememberHeldAction } from "../typed-path.js";
+import {
+  actionChatLine,
+  applyScheduleDefaults,
+  argFromAnswer,
+  argQuestion,
+  destroyQuestion,
+  confirmQuestion,
+  writeRisk,
+  fillAliasedArgs,
+  filedConfirmation,
+  isArgQuestion,
+  isCalendarCreateTool,
+  isDestructiveTool,
+  isLinearCreateTool,
+  isQuietKeep,
+  isScheduleRequest,
+  isWhenQuestion,
+  isDestroyQuestion,
+  kindForField,
+  missingRequired,
+  parseWhenAnswer,
+  yesFromAnswer,
+  WHEN_QUESTION,
+} from "./voice-write.js";
 import {
   agentMember,
   agentTurnCurrent,
@@ -426,10 +450,14 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
   };
   const bot = { name: seat.botName, participantId: seat.participantId };
   const live = Boolean(text) && agentLive(env);
-  let answer = live && shouldRespond({ ...session, meetingDirect }, delivery, bot);
-  if (!answer && live && awaiting) {
-    const floor = { roomId: seat.roomId, speaker: floorSpeaker(participantId, speaker), until: Date.now() + 1000 };
-    answer = shouldRespond({ ...session, meetingDirect, meetingFloor: floor }, delivery, bot);
+  // While Adam waits on an answer, a statement is that answer, not a fact to keep quiet about.
+  let answer = live && shouldRespond({ ...session, meetingDirect, meetingAwaiting: Boolean(awaiting) }, delivery, bot);
+  if (!answer && live && awaiting && !isQuietKeep(text)) {
+    if (pendingAnswered(awaiting, text, seat.botName)) answer = true;
+    else {
+      const floor = { roomId: seat.roomId, speaker: floorSpeaker(participantId, speaker), until: Date.now() + 1000 };
+      answer = shouldRespond({ ...session, meetingDirect, meetingAwaiting: true, meetingFloor: floor }, delivery, bot);
+    }
   }
   // Solo call: a thanks or goodbye to Adam gets a short fixed reply, no model round
   // trip (Nov 11, bot ae224b81: "Thanks, Adam" went unanswered). Group calls stay quiet.
@@ -511,9 +539,19 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
     for (const line of linesForSpeech(full, toolResults, { done, holdTitle: pendingHold?.title || "", titleAsk })) {
       if (sent.has(line) || sent.size >= 2) continue;
       sent.add(line);
-      if (isTitleQuestion(line)) {
-        heard.awaiting = { kind: "title", speaker: String(speaker || "").slice(0, 80), until: Date.now() + ANSWER_WAIT_MS };
-      } else if (/\?\s*$/.test(line) && heard.awaiting?.kind !== "title") {
+      const pendingKind = isTitleQuestion(line) ? "title"
+        : isWhenQuestion(line) ? "when"
+        : isDestroyQuestion(line) ? "destroy"
+        : isArgQuestion(line) ? "arg"
+        : "";
+      if (pendingKind) {
+        heard.awaiting = {
+          ...(heard.awaiting && heard.awaiting.kind === pendingKind ? heard.awaiting : {}),
+          kind: pendingKind,
+          speaker: String(speaker || "").slice(0, 80),
+          until: Date.now() + ANSWER_WAIT_MS,
+        };
+      } else if (/\?\s*$/.test(line) && !["title", "when", "arg", "destroy"].includes(heard.awaiting?.kind)) {
         heard.awaiting = { kind: "answer", speaker: String(speaker || "").slice(0, 80), until: Date.now() + ANSWER_WAIT_MS };
       } else if (heard.awaiting?.kind === "answer") {
         heard.awaiting = null;
@@ -565,17 +603,20 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
       participantId,
       deps: typeof depsFor === "function" ? depsFor(seat.tenantId) : {},
       system: agentPersona(seat.botName),
+      utterance: text,
       messages: [{ role: "user", content: userTurn(session, seat, speaker, text, prior) }],
       startedAt: Date.now(),
       onText: emit,
       existingHold: pendingHold,
       toolResults,
+      pending: awaiting || null,
       writeEvent: (name, data) => {
         if (!res.writableEnded) writeEvent(res, name, data);
       },
     };
-    if (answeredTitle) await fileAnsweredTitle({ ...voiceInput, heardTitle: text }, answeredTitle);
-    else await streamVoice(voiceInput);
+    if (awaiting && pendingAnswered(awaiting, text, seat.botName)) {
+      await fileAnsweredPending({ ...voiceInput, heardTitle: text }, awaiting, text);
+    } else await streamVoice(voiceInput);
   } catch {
     if (!res.writableEnded) writeEvent(res, "error", { reason: "unavailable" });
   } finally {
@@ -585,6 +626,21 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
   }
   notes.outcomes = toolResults.map((row) => String(row?.status || row?.reason || (row?.ok === false ? "failed" : "ok")).slice(0, 24));
   notes.awaiting = heard.awaiting?.kind || "";
+  const pendingRow = toolResults.find((row) => /^needs_/.test(String(row?.reason || "")) && row?.question);
+  if (pendingRow) {
+    const kind = pendingRow.reason === "needs_when" ? "when"
+      : pendingRow.reason === "needs_destroy" ? "destroy"
+      : pendingRow.reason === "needs_title" ? "title"
+      : "arg";
+    heard.awaiting = {
+      kind,
+      speaker: String(speaker || "").slice(0, 80),
+      until: Date.now() + ANSWER_WAIT_MS,
+      tool: pendingRow.tool || pendingRow.source || "",
+      args: pendingRow.args && typeof pendingRow.args === "object" ? pendingRow.args : {},
+      field: pendingRow.field || "",
+    };
+  }
   const held = toolResults.find((row) => row?.status === "waiting_for_approval" && row?.title);
   if (held) {
     heard.hold = {
@@ -622,17 +678,26 @@ function noteEchoSpoken(bag, botId, text) {
   bag.echo.set(botId, list.slice(-12));
 }
 
+function pendingAnswered(awaiting, text, botName) {
+  if (!awaiting || !["title", "when", "arg", "destroy"].includes(awaiting.kind)) return false;
+  if (cancelsAnswer(text, botName)) return true;
+  if (awaiting.kind === "destroy") return yesFromAnswer(text, botName) || /^(?:no|nope|nah)\b/i.test(String(text || "").replace(/\s+/g, " ").trim());
+  if (awaiting.kind === "when") return Boolean(parseWhenAnswer(text)?.start);
+  if (awaiting.kind === "title") return Boolean(titleFromAnswer(text, botName));
+  return Boolean(argFromAnswer(text, botName));
+}
+
 /** Adam's open question to this speaker in this room, if it has not expired. */
 function awaitingAnswer(prior, speaker, roomId) {
   const row = prior?.awaiting;
-  if (!row || (row.kind !== "title" && row.kind !== "answer")) return null;
+  if (!row || !["title", "answer", "when", "arg", "destroy"].includes(row.kind)) return null;
   if (!(Number(row.until) > Date.now())) return null;
   if (prior.roomId && roomId && prior.roomId !== roomId) return null;
   const left = String(row.speaker || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
   const right = String(speaker || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
   if (left && right && left !== right) return null;
-  // A title answer files an issue, so it must come from the named asker.
-  if (row.kind === "title" && (!left || !right)) return null;
+  // A pending write answer must come from the named asker.
+  if (["title", "when", "arg", "destroy"].includes(row.kind) && (!left || !right)) return null;
   return row;
 }
 
@@ -697,6 +762,7 @@ async function streamVoice(input) {
     deps: input.deps,
     context: { tenantId: input.seat.tenantId },
     tenantTools: input.seat.voiceTools,
+    utterance: input.utterance || "",
   });
   const allowed = new Map(listed.map((tool) => [tool.name, tool]));
   const tools = listed.map((tool) => ({
@@ -726,9 +792,20 @@ async function streamVoice(input) {
       })),
     });
     let toolMs = 0;
+    let wrote = false;
     for (const call of result.toolCalls) {
       if (input.signal.aborted && !toolIsWrite(allowed.get(call.name) || call.name)) break;
       const tool = allowed.get(call.name);
+      // One spoken request is one write. A second write call in the same round
+      // (or one steered by meeting chatter) is not run.
+      if (toolIsWrite(tool || call.name)) {
+        if (wrote) {
+          const raw = { ok: false, reason: "one-write", tool: call.name };
+          messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(wrapToolResult(raw, call.name)) });
+          continue;
+        }
+        wrote = true;
+      }
       input.writeEvent("tool_started", { name: call.name });
       const started = Date.now();
       const outcome = await runAgentTool({ ...input, call, tool, allowed });
@@ -749,31 +826,87 @@ async function streamVoice(input) {
 /** The fixed line after a write tool ran, or "" when the model should speak. */
 function toolResultLine(toolResults, existingHold) {
   const rows = Array.isArray(toolResults) ? toolResults : [];
+  const asked = rows.find((row) => /^needs_/.test(String(row?.reason || "")) && row?.question);
+  if (asked?.question) return String(asked.question);
   const needsTitle = rows.some((row) => row?.reason === "needs_title");
   if (needsTitle && existingHold?.title) return holdStatusLine(existingHold.title);
   const filedRow = rows.find((row) => row?.status === "filed");
-  if (filedRow) return filedVoiceLine(filedRow.title || "", filedRow.issueId || "");
+  if (filedRow) {
+    return filedConfirmation(filedRow.tool || filedRow.source || "", filedRow, {
+      title: filedRow.title,
+      summary: filedRow.summary,
+      startTime: filedRow.startTime,
+      timeZone: filedRow.timeZone,
+      now: filedRow.now,
+    });
+  }
+  if (rows.some((row) => row?.reason === "not-connected")) return "Google Calendar is not connected.";
+  if (rows.some((row) => row?.reason === "file-failed" && (isCalendarCreateTool(row.tool) || row.kind === "calendar"))) {
+    return "The calendar event did not go through.";
+  }
   if (rows.some((row) => row?.reason === "file-failed")) return "The Linear issue did not go through.";
   if (rows.some((row) => row?.reason === "file-unconfirmed")) return UNCONFIRMED_LINE;
+  if (rows.some((row) => row?.reason === "tool-failed")) return "That did not go through.";
   const heldRow = rows.find((row) => row?.status === "waiting_for_approval" || row?.held === true);
   if (heldRow) return draftedLine(heldRow.tool, heldRow.title);
   return "";
 }
 
 /**
- * Adam asked this speaker for a title and the line answers it.
+ * Adam asked this speaker for a missing field, a time, or a delete confirmation.
  * The write runs once with the speaker's words. The model is not asked again.
  */
-async function fileAnsweredTitle(input, title) {
-  const call = { id: `title-${input.turnId}`, name: "act", arguments: { title } };
-  const tool = { name: "act", actionClass: "write" };
+async function fileAnsweredPending(input, awaiting, text) {
+  const botName = input.seat?.botName || "Adam";
+  if (cancelsAnswer(text, botName) || (awaiting?.kind === "destroy" && !yesFromAnswer(text, botName))) {
+    await input.onText("Okay, I won't.", true);
+    return;
+  }
+  const toolName = String(awaiting?.tool || "act");
+  const args = awaiting?.args && typeof awaiting.args === "object" ? { ...awaiting.args } : {};
+  if (awaiting?.kind === "title") {
+    const title = titleFromAnswer(text, botName);
+    if (!title) {
+      await input.onText("What should the issue say?", true);
+      return;
+    }
+    args.title = title;
+    if (!args.summary) args.summary = title;
+  } else if (awaiting?.kind === "when") {
+    const when = parseWhenAnswer(text, { env: input.env, timeZone: args.timeZone || input.deps?.app?.timeZone });
+    if (!when?.start) {
+      await input.onText(WHEN_QUESTION, true);
+      return;
+    }
+    args.startTime = when.start;
+    args.start = when.start;
+    args.endTime = when.end;
+    args.end = when.end;
+    if (when.timeZone) args.timeZone = when.timeZone;
+  } else if (awaiting?.kind === "arg") {
+    const field = String(awaiting.field || "value");
+    const value = argFromAnswer(text, botName);
+    if (!value) {
+      await input.onText(argQuestion(field, { name: toolName }), true);
+      return;
+    }
+    args[field] = value;
+  }
+  const tool = input.pending?.toolObject || { name: toolName, actionClass: "write", parameters: { type: "object", required: Object.keys(args) } };
+  const call = { id: `pending-${input.turnId}`, name: toolName, arguments: args };
   input.writeEvent("tool_started", { name: call.name });
   const started = Date.now();
-  // A slow connector still gets a spoken acknowledgement while the turn is open.
-  const nudge = setTimeout(() => { input.onText(FILING_LINE, true).catch(() => {}); }, FILING_NUDGE_MS);
+  const nudge = setTimeout(() => { input.onText(filingNudge(toolName), true).catch(() => {}); }, FILING_NUDGE_MS);
   let outcome;
   try {
-    outcome = await runAgentTool({ ...input, call, tool, allowed: new Map([["act", tool]]) });
+    outcome = await runAgentTool({
+      ...input,
+      call,
+      tool,
+      allowed: new Map([[toolName, tool]]),
+      confirmedDestroy: awaiting?.kind === "destroy",
+      heardTitle: text,
+    });
   } finally {
     clearTimeout(nudge);
   }
@@ -784,9 +917,14 @@ async function fileAnsweredTitle(input, title) {
     await input.onText(line, true);
     return;
   }
-  const reason = outcome.raw?.reason;
-  if (reason === "claimed") return;
-  await input.onText("The Linear issue did not go through.", true);
+  if (outcome.raw?.reason === "claimed") return;
+  await input.onText(toolResultLine([{ reason: "tool-failed", tool: toolName }], null) || "That did not go through.", true);
+}
+
+function filingNudge(name) {
+  if (isCalendarCreateTool(name) || isScheduleRequest(name)) return "Scheduling it now.";
+  if (isLinearCreateTool(name)) return FILING_LINE;
+  return "Working on it.";
 }
 
 async function streamOneRound(input) {
@@ -881,45 +1019,132 @@ async function executeAgentTool(input) {
     return { raw, wrapped: wrapToolResult(raw, name) };
   }
   if (write) {
-    const title = concreteTitle(args?.title || args?.text || "");
-    if (!title) {
-      const raw = { ok: false, reason: "needs_title", held: false };
+    const tool = input.tool || { name };
+    const utterance = String(input.utterance || input.heardTitle || "");
+    const filled = fillAliasedArgs(args);
+    Object.assign(args, filled);
+    // Only a calendar create (or the built-in act tool on a schedule request) is
+    // turned into a calendar event; another tool the model picked stays that tool.
+    const scheduleAsk = isCalendarCreateTool(name) || (name === "act" && isScheduleRequest(utterance));
+    if (scheduleAsk) {
+      const applied = applyScheduleDefaults(args, utterance, {
+        now: input.now,
+        timeZone: args.timeZone || input.deps?.app?.timeZone,
+        env: input.env,
+      });
+      Object.assign(args, applied.args);
+    }
+    const risk = writeRisk(tool);
+    if (risk !== "run" && input.confirmedDestroy !== true) {
+      // Deletes, sends, payments, updates and unknown writes wait for a spoken yes.
+      const question = risk === "destroy" ? destroyQuestion(args, name) : confirmQuestion(args, name);
+      const raw = { ok: false, reason: "needs_destroy", question, tool: name, title: args.title || args.summary || args.id || "", args: { ...args } };
       return { raw, wrapped: wrapToolResult(raw, name) };
     }
-    args.title = title;
+    if (isLinearCreateTool(name) && !scheduleAsk) {
+      const title = concreteTitle(args.title || args.text || args.summary || "");
+      if (!title) {
+        const raw = { ok: false, reason: "needs_title", question: "What should the issue say?", held: false, tool: name, args: { ...args } };
+        return { raw, wrapped: wrapToolResult(raw, name) };
+      }
+      args.title = title;
+    }
+    if (scheduleAsk && !args.startTime && !args.start) {
+      const raw = { ok: false, reason: "needs_when", question: WHEN_QUESTION, tool: name, title: args.title || args.summary || "", args: { ...args } };
+      return { raw, wrapped: wrapToolResult(raw, name) };
+    }
+    const missing = missingRequired(tool, args);
+    if (missing.length) {
+      const field = missing[0];
+      const kind = kindForField(field);
+      const question = argQuestion(field, tool);
+      const reason = kind === "when" ? "needs_when" : kind === "title" ? "needs_title" : "needs_arg";
+      const raw = { ok: false, reason, question, field, tool: name, title: args.title || args.summary || "", args: { ...args } };
+      return { raw, wrapped: wrapToolResult(raw, name) };
+    }
     const claimed = await claimWrite(input, name, args);
     if (!claimed) {
       const raw = { ok: false, reason: "claimed", held: false };
       return { raw, wrapped: wrapToolResult(raw, name) };
     }
-    if (filesWithoutApproval(name) && input.deps?.linear?.connected !== false && typeof input.deps?.linear?.createIssue === "function") {
-      const filed = await fileVoiceLinear(input, name, args, member.memberId);
-      if (filed?.issueId) {
-        const raw = { ok: true, status: "filed", title, tool: name, issueId: filed.issueId };
+    if (scheduleAsk) {
+      const filed = await fileVoiceCalendar(input, name, args, member.memberId);
+      if (filed?.notConnected) {
+        const raw = { ok: false, reason: "not-connected", tool: name, kind: "calendar" };
         return { raw, wrapped: wrapToolResult(raw, name) };
       }
-      if (filed?.unconfirmed) {
-        // Linear was called and gave back no issue. That is not a request for
-        // approval: say so, and do not draft a second copy (Nov 11, bot 01ccb144).
-        if (filed.rejected) await releaseWrite(input, name, args);
-        const raw = { ok: false, reason: filed.rejected ? "file-failed" : "file-unconfirmed", held: false, title };
+      if (filed?.eventId) {
+        const raw = {
+          ok: true,
+          status: "filed",
+          tool: name,
+          title: args.title || args.summary || filed.title || "",
+          summary: args.summary || args.title || "",
+          startTime: args.startTime || args.start || "",
+          timeZone: args.timeZone || "",
+          eventId: filed.eventId,
+          id: filed.eventId,
+          url: filed.link || "",
+        };
+        announceVoiceChat(input, raw, name, args);
+        noteFiledActivity(input, raw, name, args);
         return { raw, wrapped: wrapToolResult(raw, name) };
       }
-      if (filed?.allow === "not-invited") {
-        undoEmptyFile(input.session, filed.deliveryId);
-        await releaseWrite(input, name, args);
-        const raw = { ok: false, reason: "file-failed", held: false, title };
-        return { raw, wrapped: wrapToolResult(raw, name) };
-      }
-      undoEmptyFile(input.session, filed?.deliveryId);
-    }
-    const held = await rememberHold(input, name, args, member.memberId);
-    if (!held) {
       await releaseWrite(input, name, args);
-      const raw = { ok: false, reason: "hold-failed", held: false };
+      const raw = { ok: false, reason: "file-failed", tool: name, kind: "calendar" };
       return { raw, wrapped: wrapToolResult(raw, name) };
     }
-    const raw = { ok: true, status: "waiting_for_approval", title, tool: name };
+    if (isLinearCreateTool(name)) {
+      const title = args.title;
+      const canFile = input.deps?.linear?.connected !== false && typeof input.deps?.linear?.createIssue === "function";
+      if (canFile) {
+        const filed = await fileVoiceLinear(input, name, args, member.memberId);
+        if (filed?.issueId) {
+          const raw = { ok: true, status: "filed", title, tool: name, issueId: filed.issueId, url: filed.link || "" };
+          announceVoiceChat(input, raw, name, args);
+          return { raw, wrapped: wrapToolResult(raw, name) };
+        }
+        if (filed?.unconfirmed) {
+          if (filed.rejected) await releaseWrite(input, name, args);
+          const raw = { ok: false, reason: filed.rejected ? "file-failed" : "file-unconfirmed", held: false, title, tool: name };
+          return { raw, wrapped: wrapToolResult(raw, name) };
+        }
+        if (filed?.allow === "not-invited") {
+          undoEmptyFile(input.session, filed.deliveryId);
+          await releaseWrite(input, name, args);
+          const raw = { ok: false, reason: "file-failed", held: false, title, tool: name };
+          return { raw, wrapped: wrapToolResult(raw, name) };
+        }
+        // Linear was never asked (no client, or a disconnected grant): hold a draft
+        // for approval instead of reporting a failed filing.
+        undoEmptyFile(input.session, filed?.deliveryId);
+      }
+      const held = await rememberHold(input, name, args, member.memberId);
+      if (!held) {
+        await releaseWrite(input, name, args);
+        const raw = { ok: false, reason: "hold-failed", held: false, title, tool: name };
+        return { raw, wrapped: wrapToolResult(raw, name) };
+      }
+      const raw = { ok: true, status: "waiting_for_approval", title, tool: name };
+      return { raw, wrapped: wrapToolResult(raw, name) };
+    }
+    const filed = await fileVoiceTool(input, name, args);
+    if (filed?.ok) {
+      const raw = {
+        ok: true,
+        status: "filed",
+        tool: name,
+        title: args.title || args.summary || args.name || filed.title || "",
+        id: filed.id || "",
+        url: filed.url || "",
+        ...(filed.result && typeof filed.result === "object" ? { data: filed.result } : {}),
+      };
+      announceVoiceChat(input, raw, name, args);
+      noteFiledActivity(input, raw, name, args);
+      return { raw, wrapped: wrapToolResult(raw, name) };
+    }
+    await releaseWrite(input, name, args);
+    const raw = { ok: false, reason: "tool-failed", tool: name };
     return { raw, wrapped: wrapToolResult(raw, name) };
   }
   const child = new AbortController();
@@ -991,6 +1216,155 @@ function undoEmptyFile(session, deliveryId) {
     session.activity = session.activity.filter((row) => !removed.has(row.requestId));
   }
   session.deliveries?.delete(deliveryId);
+}
+
+async function resolveCalendar(input, memberId) {
+  // The speaker's own Google grant in this tenant. When the server provides this
+  // resolver there is no fallback to a process-wide calendar.
+  if (typeof input.deps?.calendarForPerson === "function") {
+    const personId = await boundWorkspaceMember(input, memberId);
+    if (!personId) return null;
+    try {
+      return (await input.deps.calendarForPerson(personId)) || null;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof input.deps?.calendarFor === "function") {
+    try {
+      const opened = await input.deps.calendarFor(memberId);
+      if (opened) return opened;
+    } catch {
+      // Fall through to the workspace adapter.
+    }
+  }
+  return input.deps?.calendar || null;
+}
+
+async function fileVoiceCalendar(input, name, args, memberId) {
+  const calendar = await resolveCalendar(input, memberId);
+  if (!calendar || typeof calendar.call !== "function") return { notConnected: true };
+  try {
+    if (typeof calendar.listTools === "function") {
+      const tools = await calendar.listTools();
+      if (Array.isArray(tools) && tools.length === 0) return { notConnected: true };
+    }
+    const created = await calendar.call("create_event", {
+      summary: args.summary || args.title,
+      title: args.title || args.summary,
+      startTime: args.startTime || args.start,
+      endTime: args.endTime || args.end,
+      start: args.startTime || args.start,
+      end: args.endTime || args.end,
+      timeZone: args.timeZone,
+    });
+    const id = String(created?.id || created?.eventId || "").trim();
+    if (!id) return { unconfirmed: true, created };
+    const link = String(created?.url || created?.htmlLink || created?.link || "").trim();
+    return { eventId: id, title: args.summary || args.title || created?.title || "", link: /^https:\/\//i.test(link) ? link : "" };
+  } catch (error) {
+    if (error?.code === "not-connected" || error?.reason === "not-connected") return { notConnected: true };
+    return { failed: true };
+  }
+}
+
+async function fileVoiceTool(input, name, args) {
+  try {
+    const result = await invokeTool({ ...input, runNow: true }, name, args, input.signal || AbortSignal.timeout(agentToolBudgetMs(input.env)));
+    if (result?.held || result?.needsConfirmation) return { held: true, result };
+    if (result?.ok === false) return { failed: true, result };
+    const id = String(result?.id || result?.identifier || result?.structuredContent?.id || "").trim();
+    const title = String(result?.title || result?.summary || result?.structuredContent?.title || "").trim();
+    const url = String(result?.url || result?.link || result?.structuredContent?.url || "").trim();
+    return { ok: true, id, title, url: /^https:\/\//i.test(url) ? url : "", result };
+  } catch {
+    return { failed: true };
+  }
+}
+
+function chatDedupeKey(input, name, args) {
+  const body = JSON.stringify([input.seat?.tenantId || "", input.seat?.roomId || "", name, claimArgsFor(name, args)]);
+  return `chat-${body}`;
+}
+
+function noteFiledActivity(input, raw, name, args) {
+  if (!raw || raw.status !== "filed") return;
+  const roomId = String(input.seat?.roomId || "");
+  const target = activityTarget(name, raw, args);
+  const work = recordVoiceActivity(input.session, input.deps || {}, {
+    requestId: input.turnId || "",
+    deliveryId: `voice-file-${input.turnId || ""}`,
+    roomId,
+    roomName: roomId,
+    toolName: name,
+    ...target,
+  }).catch(() => null);
+  keepAlive(input.workspace, input.env, work);
+}
+
+function activityTarget(name, raw, args) {
+  if (isCalendarCreateTool(name) || (name === "act" && (args?.startTime || args?.start))) {
+    return {
+      system: "calendar",
+      type: "event",
+      verb: "schedule",
+      entityId: raw.eventId || raw.id || "",
+      title: raw.title || raw.summary || args?.summary || args?.title || "",
+      url: raw.url || "",
+    };
+  }
+  if (isLinearCreateTool(name)) {
+    return {
+      system: "linear",
+      type: "issue",
+      verb: "create",
+      entityId: raw.issueId || raw.id || "",
+      title: raw.title || args?.title || "",
+      url: raw.url || "",
+    };
+  }
+  const slug = String(name || "").includes("__") ? String(name).split("__")[0] : "tool";
+  return {
+    system: slug,
+    type: "tool",
+    verb: "call",
+    entityId: raw.id || "",
+    title: raw.title || args?.title || args?.summary || args?.name || "",
+    url: raw.url || "",
+  };
+}
+
+function announceVoiceChat(input, raw, name, args) {
+  if (!raw || raw.status !== "filed") return;
+  const meeting = input.deps?.meeting;
+  if (typeof meeting?.sendChatMessage !== "function") return;
+  const botId = String(input.seat?.botId || "").trim();
+  if (!botId) return;
+  const key = chatDedupeKey(input, name, args);
+  const bag = runtime(input.workspace);
+  bag.chatted = bag.chatted instanceof Set ? bag.chatted : new Set();
+  if (bag.chatted.has(key)) return;
+  bag.chatted.add(key);
+  const message = actionChatLine({
+    toolName: name,
+    result: raw,
+    args,
+    linearWorkspace: input.deps?.app?.linearWorkspace || "",
+    timeZone: args?.timeZone || input.deps?.app?.timeZone,
+    now: input.now,
+  });
+  if (!message) return;
+  const work = Promise.resolve()
+    .then(() => meeting.sendChatMessage({ botId, message, to: "everyone" }))
+    .then((row) => {
+      const ok = row?.ok === true;
+      console.info(JSON.stringify({ meeting: "chat", bot: botId.slice(0, 12), tool: name, ok, reason: ok ? undefined : (row?.reason || "failed") }));
+    })
+    .catch((error) => {
+      console.info(JSON.stringify({ meeting: "chat", bot: botId.slice(0, 12), tool: name, ok: false, reason: "threw" }));
+      return error;
+    });
+  keepAlive(input.workspace, input.env, work);
 }
 
 async function fileVoiceLinear(input, name, args, memberId) {
@@ -1355,6 +1729,8 @@ async function invokeTool(input, name, args, signal) {
   }, { ...input.deps, connectors: input.deps?.connectors, tenantId: input.seat.tenantId }, {
     ...context,
     persistHold: (action) => rememberHeldAction(input.deps, action),
+    runNow: input.runNow === true,
+    confirmed: input.confirmedDestroy === true,
   });
 }
 
