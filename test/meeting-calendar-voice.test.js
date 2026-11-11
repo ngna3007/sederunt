@@ -628,3 +628,174 @@ test("recordVoiceActivity writes through the room activity mirror hook", async (
   assert.equal(mirrored[0].id, event.id);
   assert.equal(mirrored[0].target.title, "Launch sync");
 });
+
+// ---- Review of PR 22 (Nov 11 2026) ----
+
+function twoCallStream(first, second) {
+  const payload = `data: ${JSON.stringify({
+    choices: [{ delta: { tool_calls: [
+      { index: 0, id: "call_a", function: { name: first[0], arguments: JSON.stringify(first[1]) } },
+      { index: 1, id: "call_b", function: { name: second[0], arguments: JSON.stringify(second[1]) } },
+    ] } }],
+  })}\n\ndata: [DONE]\n\n`;
+  return { async *[Symbol.asyncIterator]() { yield Buffer.from(payload); } };
+}
+
+test("review: write risk classes — creates run, sends/payments/updates/unknown ask, deletes ask", async () => {
+  const { writeRisk, confirmQuestion } = await import("../src/meeting/voice-write.js");
+  for (const name of ["act", "linear__create_issue", "google-calendar__create_event", "notes__create_note", "warehouse__open_ticket", "crm__add_contact"]) {
+    assert.equal(writeRisk(name), "run", name);
+  }
+  for (const name of ["gmail__send_email", "slack__post_message", "stripe__create_payment", "bank__transfer_funds", "linear__update_issue",
+    "docs__replace_text", "shop__place_order", "x__frobnicate", "crm__create_message"]) {
+    assert.equal(writeRisk(name), "confirm", name);
+  }
+  assert.equal(writeRisk("github__delete_repo"), "destroy");
+  assert.equal(writeRisk({ name: "notes__create_note", annotations: { destructiveHint: true } }), "destroy");
+  assert.equal(confirmQuestion({ subject: "Launch plan" }, "gmail__send_email"), "Should I go ahead and send email 'Launch plan'?");
+});
+
+test("review: a send tool waits for a spoken yes; 'no' runs nothing; 'yes' runs it once", async () => {
+  for (const reply of ["no", "yes, go ahead"]) {
+    const meetingVoice = {};
+    const sent = [];
+    const { app } = boot(async (_url, init) => {
+      const payload = JSON.parse(init.body);
+      if ((payload.messages || []).some((message) => message.role === "tool")) return { ok: true, status: 200, body: chatStream("Done.") };
+      return { ok: true, status: 200, body: toolCallStream("mail__send_email", { subject: "Launch plan", to: "team@example.com" }) };
+    }, {
+      meetingVoice,
+      connectors: connectorStore([connected("mail", "send_email", "write", {
+        inputSchema: { type: "object", required: ["subject", "to"], properties: { subject: { type: "string" }, to: { type: "string" } } },
+        invoke: async (name, args) => { sent.push({ name, args }); return { ok: true, id: "m-1", title: args.subject }; },
+      })]),
+    });
+    noteAgentMember({ meetingVoice }, "bot-1", { participantId: "7", name: "Priya", memberId: "7" });
+    const port = await listen(app);
+    try {
+      const headers = { "content-type": "application/json", "x-meeting-ear": EAR };
+      const asked = await call(port, "POST", "/api/meeting/agent/turn", { headers, body: turnBody("Adam, email the team the launch plan", "Priya", { participantId: "7", turn_id: `send-1-${reply}` }) });
+      assert.match(asked.raw, /Should I go ahead and send email 'Launch plan'\?/);
+      assert.equal(sent.length, 0, "nothing is sent before the yes");
+      const answered = await call(port, "POST", "/api/meeting/agent/turn", { headers, body: turnBody(reply, "Priya", { participantId: "7", turn_id: `send-2-${reply}` }) });
+      if (reply === "no") {
+        assert.equal(sent.length, 0);
+        assert.match(answered.raw, /Okay, I won't/);
+      } else {
+        assert.equal(sent.length, 1);
+        assert.equal(sent[0].args.to, "team@example.com");
+      }
+    } finally {
+      await close(app);
+    }
+  }
+});
+
+test("review: two write calls in one model round run only the first", async () => {
+  const meetingVoice = {};
+  const ran = [];
+  const { app } = boot(async (_url, init) => {
+    const payload = JSON.parse(init.body);
+    if ((payload.messages || []).some((message) => message.role === "tool")) return { ok: true, status: 200, body: chatStream("Done.") };
+    return { ok: true, status: 200, body: twoCallStream(["notes__create_note", { title: "Launch note" }], ["notes__create_note", { title: "Injected second note" }]) };
+  }, {
+    meetingVoice,
+    connectors: connectorStore([connected("notes", "create_note", "write", {
+      invoke: async (_name, args) => { ran.push(args.title); return { ok: true, id: `n-${ran.length}`, title: args.title }; },
+    })]),
+  });
+  noteAgentMember({ meetingVoice }, "bot-1", { participantId: "7", name: "Priya", memberId: "7" });
+  const port = await listen(app);
+  try {
+    await call(port, "POST", "/api/meeting/agent/turn", { headers: { "content-type": "application/json", "x-meeting-ear": EAR }, body: turnBody("Adam, add a launch note", "Priya", { participantId: "7", turn_id: "two-writes" }) });
+    assert.deepEqual(ran, ["Launch note"]);
+  } finally {
+    await close(app);
+  }
+});
+
+test("review: an open question's kind, tool and args survive the Redis heard line", async () => {
+  const { rememberHeardLine, loadHeardLine } = await import("../src/meeting/seat.js");
+  const store = new Map();
+  const fetchImpl = async (_url, init) => {
+    const [op, key, value] = JSON.parse(init.body);
+    if (op === "SET") store.set(key, value);
+    return { ok: true, json: async () => ({ result: op === "GET" ? (store.get(key) ?? null) : "OK" }) };
+  };
+  const env = { UPSTASH_REDIS_REST_URL: "https://redis.test", UPSTASH_REDIS_REST_TOKEN: "t" };
+  const until = Date.now() + 60_000;
+  for (const awaiting of [
+    { kind: "when", speaker: "Priya", until, tool: "google-calendar__create_event", args: { summary: "Launch sync", token: "nope" } },
+    { kind: "destroy", speaker: "Priya", until, tool: "mail__send_email", args: { subject: "Plan", to: "a@b.c" } },
+    { kind: "arg", speaker: "Priya", until, tool: "warehouse__open_ticket", field: "detail", args: { queue: "ops" } },
+  ]) {
+    assert.equal(await rememberHeardLine(env, fetchImpl, "bot-1", { text: "x", turn: "t1", awaiting }), true);
+    const row = await loadHeardLine(env, fetchImpl, "bot-1");
+    assert.equal(row.awaiting.kind, awaiting.kind);
+    assert.equal(row.awaiting.tool, awaiting.tool);
+    assert.equal(row.awaiting.args.token, undefined, "identity args are not kept");
+    if (awaiting.field) assert.equal(row.awaiting.field, "detail");
+    if (awaiting.kind === "when") assert.equal(row.awaiting.args.summary, "Launch sync");
+  }
+});
+
+test("review: solo silence keeps questions, requests, greetings, hear-checks and fragments answered", () => {
+  for (const line of ["I want to file a bug about login", "I cannot hear you at all", "Can you hear me now", "Okay so I am going to test the bot now",
+    "and then the", "Hello there everyone how are things", "We should ship the pricing page", "Thanks Adam that was great",
+    "what time is the launch", "Fixed the onboarding email before launch", "Let's create a task for the booth", "Tomorrow at 10am works"]) {
+    assert.equal(isDeclarativeFact(line), false, line);
+  }
+  for (const line of ["The design review moved to Thursday", "The booth opens at nine on Friday", "The budget is four hundred dollars per person"]) {
+    assert.equal(isDeclarativeFact(line), true, line);
+  }
+  // While Adam waits on an answer, a statement from the asker is answered.
+  const floor = { roomId: "room-1", speaker: "id:7", until: Date.now() + 10_000 };
+  const delivery = { text: "The design team owns the booth", room: { id: "room-1" }, memberId: "7", speakerName: "Priya" };
+  assert.equal(meetingLineShouldAnswer({ meetingDirect: true, meetingAwaiting: true, meetingFloor: floor }, delivery), true);
+});
+
+test("review: an arg follow-up ignores fillers and keeps", async () => {
+  const { argFromAnswer } = await import("../src/meeting/voice-write.js");
+  for (const line of ["hmm", "let me think", "wait", "thanks", "bye Adam", "Heads up, the venue changed", "I don't know"]) {
+    assert.equal(argFromAnswer(line), "", line);
+  }
+  assert.equal(argFromAnswer("the scanner in bay 3 is jammed"), "the scanner in bay 3 is jammed");
+});
+
+test("review: schedule times — bare hours are afternoon, noon, same-day weekday, 'next' stripped", () => {
+  const now = new Date("2026-11-11T08:00:00Z"); // Wed 15:00 ICT
+  assert.equal(parseScheduleUtterance("schedule a call at 3", { now }).start, "2026-11-12T15:00:00+07:00");
+  assert.equal(parseScheduleUtterance("schedule a review on Friday at 3", { now }).start, "2026-11-13T15:00:00+07:00");
+  assert.equal(parseScheduleUtterance("Adam, schedule a meeting tomorrow at 10am", { now }).start, "2026-11-12T10:00:00+07:00");
+  assert.equal(parseScheduleUtterance("book a meeting at noon tomorrow", { now }).start, "2026-11-12T12:00:00+07:00");
+  assert.equal(parseScheduleUtterance("schedule the launch for Wednesday at 5pm", { now }).start, "2026-11-11T17:00:00+07:00");
+  assert.equal(parseScheduleUtterance("schedule a retro next Wednesday at 5pm", { now }).start, "2026-11-18T17:00:00+07:00");
+  const bao = parseScheduleUtterance("schedule a meeting with Bao next Monday at 2 pm", { now });
+  assert.equal(bao.title, "Meeting with Bao");
+  assert.equal(bao.start, "2026-11-16T14:00:00+07:00");
+  assert.equal(parseScheduleUtterance("schedule a sync at 9", { now }).start, "2026-11-12T09:00:00+07:00");
+});
+
+test("review: with a per-person calendar resolver, an unbound speaker gets 'not connected' and no shared calendar is used", async () => {
+  const meetingVoice = {};
+  const calendar = createFakeCalendarAdapter({ SEDERUNT_CALENDAR_FAKE: "1" }, { now: NOW, timeZone: "Asia/Ho_Chi_Minh" });
+  const asked = [];
+  const { app } = boot(async (_url, init) => {
+    const payload = JSON.parse(init.body);
+    if ((payload.messages || []).some((message) => message.role === "tool")) return { ok: true, status: 200, body: chatStream("Okay.") };
+    return { ok: true, status: 200, body: toolCallStream("act", { title: "Launch sync" }) };
+  }, {
+    meetingVoice,
+    deps: { calendar, calendarForPerson: async (personId) => { asked.push(personId); return calendar; }, app: { timeZone: "Asia/Ho_Chi_Minh" } },
+  });
+  noteAgentMember({ meetingVoice }, "bot-1", { participantId: "7", name: "Priya", memberId: "7" });
+  const port = await listen(app);
+  try {
+    const raw = (await call(port, "POST", "/api/meeting/agent/turn", { headers: { "content-type": "application/json", "x-meeting-ear": EAR }, body: turnBody("Adam, schedule a launch sync tomorrow at 10am", "Priya", { participantId: "7", turn_id: "cal-unbound" }) })).raw;
+    assert.match(raw, /Google Calendar is not connected/);
+    assert.deepEqual(asked, [], "no person, no calendar lookup");
+    assert.equal(calendar.calls.filter((row) => row.name === "create_event").length, 0);
+  } finally {
+    await close(app);
+  }
+});

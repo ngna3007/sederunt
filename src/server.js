@@ -1343,7 +1343,17 @@ export function createApp(options = {}) {
         env,
         workspace,
         sessionFor: (tenantId) => sessionFor(workspace, tenantId),
-        depsFor: (tenantId) => depsFor(workspace, tenantId),
+        depsFor: (tenantId) => ({
+          ...depsFor(workspace, tenantId),
+          // With sign-in on, in-call calendar writes use only the speaker's own
+          // Google grant in this tenant, never the process-wide calendar.
+          ...(identityConfigured(env) ? {
+            calendarForPerson: async (personId) => {
+              const opened = await calendarForRequest(workspace, { companyId: tenantId, personId });
+              return opened.personGrant ? opened.adapter : null;
+            },
+          } : {}),
+        }),
         headerValue,
         readJson,
         send,

@@ -107,6 +107,9 @@ function stripWhenWords(value) {
   text = text.replace(TIME_AT, " ");
   text = text.replace(TIME_AMPM, " ");
   text = text.replace(TIME_BARE, " ");
+  text = text.replace(/\b(?:at\s+)?noon\b/gi, " ");
+  text = text.replace(/\b(?:next|this|coming)\b(?=\s*$|\s+(?:at|on|for)\b)/gi, " ");
+  text = text.replace(/\b(?:next|this|coming)\s*$/gi, " ");
   text = text.replace(/\b(?:at|on|for|starting)\b/gi, " ");
   return text.replace(/\s+/g, " ").replace(/^[,.\s]+|[,.\s]+$/g, "").trim();
 }
@@ -126,11 +129,21 @@ function readWhen(body, now, timeZone) {
       : candidate;
     return { start, rest: stripWhenWords(rest) };
   }
-  const parts = day || localParts(now, timeZone);
+  let parts = day || localParts(now, timeZone);
+  const named = WEEKDAY.exec(body);
+  if (named && !/\bnext\s+(?:week\s+)?(?:on\s+)?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i.test(body)) {
+    // "Wednesday at 5pm" said on a Wednesday before 5pm is today, not next week.
+    const today = localParts(now, timeZone);
+    if (WEEKDAYS.indexOf(named[1].toLowerCase()) === today.weekday) {
+      const sameDay = zonedIso(timeZone, today.year, today.month, today.day, clock.hour, clock.minute);
+      if (Date.parse(sameDay) > now.getTime()) parts = today;
+    }
+  }
   return { start: zonedIso(timeZone, parts.year, parts.month, parts.day, clock.hour, clock.minute), rest: stripWhenWords(rest) };
 }
 
 function readClock(text) {
+  if (/\b(?:at\s+)?noon\b/i.test(text)) return { hour: 12, minute: 0 };
   const at = TIME_AT.exec(text);
   const ampm = !at && TIME_AMPM.exec(text);
   const bare = !at && !ampm && TIME_BARE.exec(text);
@@ -143,6 +156,9 @@ function readClock(text) {
   if (mer === "am" || mer === "pm") {
     hour %= 12;
     if (mer === "pm") hour += 12;
+  } else if (hour >= 1 && hour <= 7) {
+    // "at 3" in a work meeting means 3 PM, not 3 AM.
+    hour += 12;
   }
   return { hour, minute };
 }

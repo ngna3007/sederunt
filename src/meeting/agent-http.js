@@ -39,6 +39,8 @@ import {
   argFromAnswer,
   argQuestion,
   destroyQuestion,
+  confirmQuestion,
+  writeRisk,
   fillAliasedArgs,
   filedConfirmation,
   isArgQuestion,
@@ -439,7 +441,6 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
   const awaiting = awaitingAnswer(prior, speaker, seat.roomId);
   const roster = meetingPeopleDirect(workspace, seat.botId, { participantId: seat.participantId, name: seat.botName });
   const meetingDirect = roster === true || (roster == null && reportedHumans(body, seat).length === 1);
-  session.meetingDirect = meetingDirect === true;
   const delivery = {
     text,
     partial,
@@ -449,12 +450,13 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
   };
   const bot = { name: seat.botName, participantId: seat.participantId };
   const live = Boolean(text) && agentLive(env);
-  let answer = live && shouldRespond({ ...session, meetingDirect }, delivery, bot);
+  // While Adam waits on an answer, a statement is that answer, not a fact to keep quiet about.
+  let answer = live && shouldRespond({ ...session, meetingDirect, meetingAwaiting: Boolean(awaiting) }, delivery, bot);
   if (!answer && live && awaiting && !isQuietKeep(text)) {
     if (pendingAnswered(awaiting, text, seat.botName)) answer = true;
     else {
       const floor = { roomId: seat.roomId, speaker: floorSpeaker(participantId, speaker), until: Date.now() + 1000 };
-      answer = shouldRespond({ ...session, meetingDirect, meetingFloor: floor }, delivery, bot);
+      answer = shouldRespond({ ...session, meetingDirect, meetingAwaiting: true, meetingFloor: floor }, delivery, bot);
     }
   }
   // Solo call: a thanks or goodbye to Adam gets a short fixed reply, no model round
@@ -790,9 +792,20 @@ async function streamVoice(input) {
       })),
     });
     let toolMs = 0;
+    let wrote = false;
     for (const call of result.toolCalls) {
       if (input.signal.aborted && !toolIsWrite(allowed.get(call.name) || call.name)) break;
       const tool = allowed.get(call.name);
+      // One spoken request is one write. A second write call in the same round
+      // (or one steered by meeting chatter) is not run.
+      if (toolIsWrite(tool || call.name)) {
+        if (wrote) {
+          const raw = { ok: false, reason: "one-write", tool: call.name };
+          messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(wrapToolResult(raw, call.name)) });
+          continue;
+        }
+        wrote = true;
+      }
       input.writeEvent("tool_started", { name: call.name });
       const started = Date.now();
       const outcome = await runAgentTool({ ...input, call, tool, allowed });
@@ -1010,7 +1023,9 @@ async function executeAgentTool(input) {
     const utterance = String(input.utterance || input.heardTitle || "");
     const filled = fillAliasedArgs(args);
     Object.assign(args, filled);
-    const scheduleAsk = isScheduleRequest(utterance) || isCalendarCreateTool(name);
+    // Only a calendar create (or the built-in act tool on a schedule request) is
+    // turned into a calendar event; another tool the model picked stays that tool.
+    const scheduleAsk = isCalendarCreateTool(name) || (name === "act" && isScheduleRequest(utterance));
     if (scheduleAsk) {
       const applied = applyScheduleDefaults(args, utterance, {
         now: input.now,
@@ -1019,8 +1034,10 @@ async function executeAgentTool(input) {
       });
       Object.assign(args, applied.args);
     }
-    if (isDestructiveTool(tool) && input.confirmedDestroy !== true) {
-      const question = destroyQuestion(args, name);
+    const risk = writeRisk(tool);
+    if (risk !== "run" && input.confirmedDestroy !== true) {
+      // Deletes, sends, payments, updates and unknown writes wait for a spoken yes.
+      const question = risk === "destroy" ? destroyQuestion(args, name) : confirmQuestion(args, name);
       const raw = { ok: false, reason: "needs_destroy", question, tool: name, title: args.title || args.summary || args.id || "", args: { ...args } };
       return { raw, wrapped: wrapToolResult(raw, name) };
     }
@@ -1202,6 +1219,17 @@ function undoEmptyFile(session, deliveryId) {
 }
 
 async function resolveCalendar(input, memberId) {
+  // The speaker's own Google grant in this tenant. When the server provides this
+  // resolver there is no fallback to a process-wide calendar.
+  if (typeof input.deps?.calendarForPerson === "function") {
+    const personId = await boundWorkspaceMember(input, memberId);
+    if (!personId) return null;
+    try {
+      return (await input.deps.calendarForPerson(personId)) || null;
+    } catch {
+      return null;
+    }
+  }
   if (typeof input.deps?.calendarFor === "function") {
     try {
       const opened = await input.deps.calendarFor(memberId);

@@ -45,14 +45,21 @@ export function isDeclarativeFact(text) {
   if (isQuietKeep(value)) return true;
   if (/\?\s*$/.test(value)) return false;
   if (isScheduleRequest(value)) return false;
-  const folded = stripLead(value).toLowerCase().replace(/[^a-z\s']/g, " ").replace(/\s+/g, " ").trim();
+  const folded = stripLead(value).toLowerCase().replace(/[’]/g, "'").replace(/[^a-z0-9\s']/g, " ").replace(/\s+/g, " ").trim();
   if (!folded) return false;
-  if (/^(what|when|who|where|why|how|can|could|would|should|do|does|is|are|please|create|remind|recall|tell|file|schedule|book|add|make|open|log)\b/.test(folded)) {
-    return false;
-  }
-  if (/^(hmm+|hm+|uh+|um+|er+|ah+|okay|ok|thanks|thank you|yes|yeah|yep|no|nope)$/.test(folded)) return false;
-  return /[a-z]{3,}/i.test(value) && value.split(/\s+/).filter(Boolean).length >= 3;
+  const words = folded.split(" ").filter(Boolean);
+  // STT fragments and one-liners are never facts; neither are very long monologues.
+  if (words.length < 5 || words.length > 40) return false;
+  // Questions without a question mark, requests, and lines about the speaker or Adam.
+  if (FACT_NOT_START.test(folded)) return false;
+  if (FACT_NOT_ANYWHERE.test(folded)) return false;
+  // A fact states something about the work: a state, a change, a date, a number.
+  return FACT_VERB.test(folded);
 }
+
+const FACT_NOT_START = /^(?:what|when|who|whom|whose|where|why|how|which|can|could|would|should|shall|will|do|does|did|is|are|am|was|were|have|has|had|may|might|any|anything|please|create|remind|recall|tell|file|schedule|book|add|make|open|log|send|post|delete|remove|set|put|let'?s|let me|let us|i|i'm|im|i'd|id|i'll|ill|i've|ive|you|you're|youre|your|my|me|hello|hi|hey|good (?:morning|afternoon|evening)|thanks|thank you|bye|goodbye|okay|ok|so|um+|uh+|hmm+|well|and|but|or|because|yes|yeah|no|nope|sorry|wait|hold on|never ?mind|testing|test)\b/;
+const FACT_NOT_ANYWHERE = /\b(?:adam|maple|you|your|you're|youre|hear|can you|could you|would you|please|need|needs|want|wants|would like|wanna|gonna|going to|try|trying|ticket|issue|task|bug|linear|calendar|schedule|reminder|remind|email|e mail|message|send|file|create|delete|remove)\b/;
+const FACT_VERB = /\b(?:is|are|was|were|will|moved|moves|changed|changes|starts|started|opens|opened|closes|closed|ends|ended|decided|agreed|approved|confirmed|due|ships|shipped|launches|launched|costs|budget|deadline|stays|stay|happens|happened|is now|has been|have been)\b/;
 
 export function isScheduleRequest(text) {
   return parseScheduleUtterance(text) != null;
@@ -83,6 +90,36 @@ export function isDestructiveTool(tool) {
   if (notes && notes.destructiveHint === true) return true;
   const leaf = toolLeaf(name);
   return DESTROY_NAME.test(name) || DESTROY_WORD.test(leaf);
+}
+
+const CONFIRM_WORD = /(?:^|_)(?:send|post|reply|email|mail|message|messages|dm|notify|invite|share|publish|pay|payment|payments|charge|transfer|refund|invoice|purchase|order|buy|checkout|withdraw|deposit|update|edit|modify|patch|set|replace|overwrite|move|archive|cancel|close|merge|deploy|execute|exec|run|trigger|approve|reject|assign|unassign|grant|rename|upsert|sync|import|export|forward|transfer|book|subscribe|unsubscribe)(?:_|$)/i;
+const RUN_LEAD = /^(?:create|add|new|open|log|record|note|save|file|insert|append|draft|upload|start)(?:_|$)/i;
+
+/**
+ * How a write tool may run from a spoken request:
+ *  - "destroy": delete-like, or annotated destructive. Needs a spoken yes.
+ *  - "confirm": sends, payments, updates, overwrites, and anything unknown. Needs a spoken yes.
+ *  - "run": creates a new record (Linear issue, calendar event, note). Runs at once.
+ */
+export function writeRisk(tool) {
+  const name = typeof tool === "string" ? tool : String(tool?.name || "");
+  if (isDestructiveTool(tool)) return "destroy";
+  const notes = typeof tool === "object" && tool
+    ? (tool.annotations || tool.parameters?.annotations || null)
+    : null;
+  if (name === "act" || isLinearCreateTool(name) || isCalendarCreateTool(name)) return "run";
+  const leaf = toolLeaf(name);
+  if (CONFIRM_WORD.test(leaf)) return "confirm";
+  if (notes && notes.openWorldHint === true && notes.idempotentHint !== true && !RUN_LEAD.test(leaf)) return "confirm";
+  if (RUN_LEAD.test(leaf)) return "run";
+  return "confirm";
+}
+
+/** The spoken yes/no before a send, update, or unknown write runs. */
+export function confirmQuestion(args, name) {
+  const title = String(args?.title || args?.summary || args?.subject || args?.name || "").replace(/['"]/g, "").replace(/\s+/g, " ").trim().slice(0, 80);
+  const leaf = toolLeaf(name).replace(/[_-]+/g, " ").trim() || "do that";
+  return title ? `Should I go ahead and ${leaf} '${title}'?` : `Should I go ahead and ${leaf}?`;
 }
 
 export function requiredFields(tool) {
@@ -186,7 +223,7 @@ export function isWhenQuestion(text) {
 
 export function isDestroyQuestion(text) {
   const value = String(text || "").replace(/\s+/g, " ").trim();
-  return /^should i (?:delete|remove|destroy|drop|revoke)\b/i.test(value);
+  return /^should i (?:delete|remove|destroy|drop|revoke|go ahead and)\b/i.test(value);
 }
 
 export function destroyQuestion(args, name) {
@@ -401,6 +438,9 @@ export function argFromAnswer(text, botName = "Adam") {
   value = value.replace(new RegExp(`^(?:(?:hey|hi|ok|okay|so)[,\\s]+)?(?:${names.join("|")})\\b[,.:!\\s]*`, "iu"), "");
   value = value.replace(/^(?:(?:ok|okay|yes|yeah|yep|sure|so|well|um+|uh+|alright|all right)\b[,.!:\s]+)+/i, "");
   if (/\?\s*$/.test(value)) return "";
+  // Fillers, thanks/bye, and keeps are not an answer to "What should the X be?"
+  if (/^(?:hmm+|hm+|uh+|um+|er+|ah+|wait|hold on|let me (?:think|see|check)|one (?:sec|second|moment)|just a (?:sec|second|moment)|i (?:don'?t|do not) know|not sure|no idea|thanks|thank you|bye|goodbye|good bye|cheers|that'?s all|that is all)\b/i.test(value)) return "";
+  if (isQuietKeep(value)) return "";
   value = value.replace(/^(?:it should be|make it|set it(?: to)?|use|call it|the \w+ is)\b[,:\s]*/i, "");
   value = value.replace(/^["'\u201c\u2018]+|["'\u201d\u2019]+$/g, "").replace(/[\s.!?,;:]+$/g, "").trim();
   return value.slice(0, 200);

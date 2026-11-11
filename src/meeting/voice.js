@@ -42,7 +42,7 @@ export function meetingLineShouldAnswer(session, delivery) {
   const floor = session?.meetingFloor;
   const floorOpen = Boolean(roomId && floor?.roomId === roomId && floor.speaker && typeof floor.until === "number" && floor.until > Date.now());
   if (!composing && floorOpen && speaker && speaker === floor.speaker) {
-    if (session?.meetingDirect === true && isDeclarativeFact(text)) return false;
+    if (session?.meetingDirect === true && session?.meetingAwaiting !== true && isDeclarativeFact(text)) return false;
     return true;
   }
   if (composing && speaker && speaker === compose.speaker) return true;

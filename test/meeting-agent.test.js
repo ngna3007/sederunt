@@ -1850,7 +1850,8 @@ test("one person with the bot is answered without the name", async () => {
       body: turnBody("what time is the launch", "Priya", { participantId: "7", turn_id: "alone-yes", people: ["7"] }),
     });
     assert.equal(sseEvents(alone.raw).some((event) => event.data?.text === "We will keep Thursday."), true);
-    assert.equal(session.meetingDirect, true);
+    // The solo/group flag is per turn; it is not written onto the tenant's shared session.
+    assert.notEqual(session.meetingDirect, true);
     const back = await call(port, "POST", "/api/meeting/agent/turn", {
       headers,
       body: turnBody("okay", "Priya", { participantId: "7", turn_id: "alone-okay", people: ["7"] }),
