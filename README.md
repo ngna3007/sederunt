@@ -9,6 +9,10 @@
 </p>
 
 <p align="center">
+  <a href="https://sederunt.vercel.app"><img src="https://img.shields.io/badge/Live_app-sederunt.vercel.app-081428" alt="Live app: sederunt.vercel.app"></a>
+</p>
+
+<p align="center">
   <a href="https://sederunt.vercel.app"><strong>Open Sederunt</strong></a>
   &nbsp;·&nbsp;
   <a href="docs/blog/total-recall.md">How it works</a>
@@ -21,6 +25,8 @@
 https://github.com/user-attachments/assets/63f84845-ff8a-435d-ae00-6054b085571f
 
 A meeting ends. A week later, someone asks, “What did we decide about the launch?” Sederunt keeps the decision with its meeting, so the people who were there can find it again in the app or ask from Slack.
+
+**Live app:** [sederunt.vercel.app](https://sederunt.vercel.app)
 
 Submitted to **Track 02: Smart Agents for Real Life** at the Tatum × Walrus Total Recall hackathon. It uses Walrus Memory to keep decisions and Tatum to read their Sui proofs. [Read the project write-up](docs/blog/total-recall.md).
 
