@@ -586,3 +586,136 @@ test("a hanging Recall bot read is cut off instead of holding room media", async
     app.close();
   }
 });
+
+// Review of PR 21 (Nov 11 2026): polls must not repeat Walrus saves, and a
+// just-finished meeting must show its activity on any instance.
+
+function sharedRedis() {
+  const store = new Map();
+  const calls = [];
+  const run = ([op, key, ...rest]) => {
+    calls.push(op);
+    if (op === "SET") {
+      if (rest.includes("NX") && store.has(key)) return null;
+      store.set(key, String(rest[0] ?? "1"));
+      return "OK";
+    }
+    if (op === "GET") return store.has(key) ? store.get(key) : null;
+    if (op === "DEL") return store.delete(key) ? 1 : 0;
+    if (op === "RPUSH") { const list = store.get(key) || []; list.push(...rest); store.set(key, list); return list.length; }
+    if (op === "LTRIM") { const list = store.get(key) || []; const start = Number(rest[0]); store.set(key, start < 0 ? list.slice(start) : list.slice(start)); return "OK"; }
+    if (op === "EXPIRE") return 1;
+    if (op === "LRANGE") return [...(store.get(key) || [])];
+    return null;
+  };
+  return {
+    store,
+    calls,
+    async fetch(url, init) {
+      const command = JSON.parse(init.body);
+      if (String(url).endsWith("/pipeline")) return { ok: true, json: async () => command.map((item) => ({ result: run(item) })) };
+      return { ok: true, json: async () => ({ result: run(command) }) };
+    },
+  };
+}
+
+const REDIS_ENV = { UPSTASH_REDIS_REST_URL: "https://redis.test", UPSTASH_REDIS_REST_TOKEN: "redis-token" };
+
+async function mediaInstance({ redis, memory, id, tenant = "", activity = [] }) {
+  const { createSession } = await import("../src/session.js");
+  const session = createSession();
+  session.rooms.push({ id, kind: "meeting", platform: "Google Meet", botPresent: true, call: "in_call_recording" });
+  session.readReport = { ok: true, empty: false };
+  session.activity = activity;
+  const app = createApp({
+    companyLoaded: true,
+    session,
+    ...(tenant ? { sessions: new Map([[tenant, session]]) } : {}),
+    env: { RECALL_API_KEY: KEY, SEDERUNT_MEMBER: "mina", ...REDIS_ENV },
+    deps: { memory },
+    recall: { async readBot() { return botPayload({ id, status_changes: [{ code: "in_call_recording" }, { code: "done" }] }); } },
+    fetch: async (url, init) => {
+      if (String(url).startsWith("https://redis.test")) return redis.fetch(url, init);
+      if (String(url) === "https://example.test/transcript.json") {
+        return new Response(JSON.stringify([
+          { participant: { name: "Hai" }, words: [{ text: "file", start_timestamp: { relative: 1 }, end_timestamp: { relative: 1.3 } }, { text: "it", start_timestamp: { relative: 1.4 }, end_timestamp: { relative: 1.6 } }] },
+        ]), { status: 200 });
+      }
+      return new Response("no", { status: 404 });
+    },
+  });
+  const port = await listen(app);
+  return { app, port, session };
+}
+
+test("review: a second instance's media poll does not repeat saves already made", async () => {
+  const redis = sharedRedis();
+  const saved = [];
+  const memory = { async index() { return []; }, async recall() { return []; }, async remember(input) { saved.push(input); return { blobId: `blob-${saved.length}` }; } };
+  const id = "ae224b81-f5db-4049-bf97-9e4152f70f02";
+  const first = await mediaInstance({ redis, memory, id });
+  try {
+    assert.equal((await fetch(`http://127.0.0.1:${first.port}/console/rooms/${id}/media?member=mina`)).status, 200);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  } finally { first.app.close(); }
+  const kinds = saved.map((row) => row.text);
+  assert.ok(saved.length >= 2, `first poll saves the room: ${kinds}`);
+  assert.ok(saved.some((row) => /meeting$/.test(row.text)), `the recording span is saved: ${kinds}`);
+  const before = saved.length;
+  const second = await mediaInstance({ redis, memory, id });
+  try {
+    const body = await (await fetch(`http://127.0.0.1:${second.port}/console/rooms/${id}/media?member=mina`)).json();
+    assert.equal(body.call, "done");
+    assert.equal(body.lines[0].text, "file it");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  } finally { second.app.close(); }
+  assert.equal(saved.length, before, "same content is not written again");
+});
+
+test("review: a refused save is released so a later poll writes it", async () => {
+  const redis = sharedRedis();
+  let calls = 0;
+  const memory = { async index() { return []; }, async recall() { return []; }, async remember() { calls += 1; return { blobId: null }; } };
+  const id = "ae224b81-f5db-4049-bf97-9e4152f70f03";
+  for (let round = 0; round < 2; round += 1) {
+    const instance = await mediaInstance({ redis, memory, id });
+    try {
+      await fetch(`http://127.0.0.1:${instance.port}/console/rooms/${id}/media?member=mina`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } finally { instance.app.close(); }
+  }
+  assert.ok(calls >= 4, `both rounds tried (${calls})`);
+  assert.equal([...redis.store.keys()].some((key) => key.startsWith("sederunt:media-saved:")), false);
+});
+
+test("review: a meeting that just ended shows its in-call Linear activity on another instance", async () => {
+  const { handleUtterance } = await import("../src/typed-path.js");
+  const { createSession } = await import("../src/session.js");
+  const { mirrorRoomActivity } = await import("../src/server.js");
+  const redis = sharedRedis();
+  const tenant = "2ecffdbc-314e-4a72-ae26-b73a7b535738";
+  const id = "ae224b81-f5db-4049-bf97-9e4152f70f04";
+  const memory = { async index() { return []; }, async recall() { return []; }, async remember() { return { blobId: "b" }; } };
+  // The voice instance files the issue; its activity goes to Walrus and the mirror.
+  const voice = { env: REDIS_ENV, fetchImpl: redis.fetch };
+  const filed = await handleUtterance({
+    text: "file the Fix the onboarding email", voiceFile: true, door: "mcp", clientName: "meeting", memberId: "100", deliveryId: "voice-file-9",
+    room: { id, botPresent: true, source: "recall", kind: "meeting", memberIds: ["100"] }, participants: ["100"], session: createSession(),
+  }, {
+    memory, tenantId: tenant,
+    mirrorActivity: (event) => mirrorRoomActivity(voice, tenant, event),
+    linear: { async createIssue() { return { identifier: "ROW-71", id: "ROW-71" }; } },
+  });
+  assert.equal(filed.issueId, "ROW-71");
+  // A warm console instance whose index predates the call.
+  const consoleApp = await mediaInstance({ redis, memory, id, tenant });
+  try {
+    const body = await (await fetch(`http://127.0.0.1:${consoleApp.port}/console/rooms/${id}/media?member=mina&company=${tenant}`)).json();
+    assert.ok(Array.isArray(body.activity) && body.activity.length >= 1, JSON.stringify(body.activity));
+    assert.ok(body.activity.some((row) => row.target?.id === "ROW-71" || JSON.stringify(row).includes("ROW-71")), JSON.stringify(body.activity));
+    assert.ok(body.activity.every((row) => row.origin?.roomId === id));
+    // Another tenant's mirror is not read.
+    const other = await (await fetch(`http://127.0.0.1:${consoleApp.port}/console/rooms/${id}/media?member=mina&company=someone-else`)).json().catch(() => ({}));
+    assert.equal(JSON.stringify(other).includes("ROW-71"), false);
+  } finally { consoleApp.app.close(); }
+});

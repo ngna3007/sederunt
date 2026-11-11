@@ -30,7 +30,7 @@ import { handleLinearOAuth, linearClientMetadata, tenantLinearClient } from "./l
 import { renderCameraPage } from "./meeting/camera.js";
 import { handleMeetingAgent } from "./meeting/agent-http.js";
 import { loadSpikeShapes, measureSpeechProbe, pushSpikeShape, readSpikeShapes, saveSpikeShape, spikeAuthorized, spikeEnabled, transcriptEventShape } from "./meeting/spike.js";
-import { bindAgentSeat, bindMeetingEar, finishAgentSeat, rememberAgentMember, rememberAgentSeat, rememberAgentSpeaker, rememberMeetingPerson, validMeetingEar } from "./meeting/seat.js";
+import { bindAgentSeat, bindMeetingEar, finishAgentSeat, rememberAgentMember, rememberAgentSeat, rememberAgentSpeaker, rememberMeetingPerson, sharedRedisCommand, validMeetingEar } from "./meeting/seat.js";
 import { createMeetingAdapter, mediaFromBot, meetingCallUpdate, meetingDoorReady, meetingEnded, recallBotUrl, recallParticipantChange, recallTranscriptDelivery, transcriptLines, verifyRecallRequest } from "./meeting/recall.js";
 import { claimMeetingEvent, claimMeetingEventLocal, meetingEventKey, releaseMeetingEvent, releaseMeetingEventLocal } from "./meeting/events.js";
 import { keepRoomTranscript, rememberMeetingLine } from "./meeting/speech-gate.js";
@@ -86,7 +86,7 @@ import { ASK_UNAVAILABLE, askSpendsQuota, humanAskText, runAsk } from "./ask/run
 import { openRouterConfig } from "./openrouter.js";
 import { answerSlackQuestion, claimSlackAsk, findReplyFile, invitedFileRows, postSlackReply, prepareSlackCaption, slackChannelMembers, slackFileBytes } from "./slack/reply.js";
 import { slackBotUserIds, slackDelivery, slackEventHasFiles, verifySlackRequest } from "./slack/sign.js";
-import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, noteMeetingCall, noteMeetingLines, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded, warmProofs } from "./typed-path.js";
+import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, noteMeetingCall, noteMeetingLines, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, roomPublicActivity, searchPublishedActivity, undoRecorded, warmProofs, absorbActivityRows } from "./typed-path.js";
 import { wireCalls } from "./tatum/client.js";
 import { createTenantBind, requiresDurableBind } from "./tenant-bind.js";
 import { createAdminStore } from "./admin-store.js";
@@ -547,6 +547,13 @@ function followupStillDue(row, now) {
 const RECALL_READ_MS = 8000;
 const MEDIA_INDEX_WAIT_MS = 12_000;
 const SAVE_KEEP_MS = 55_000;
+// A media save already made is not made again for a week (per content fingerprint).
+const MEDIA_SAVED_TTL_S = 7 * 24 * 3600;
+// Room activity mirrored in Redis so a just-finished meeting shows its rows
+// on any instance, without waiting for a Walrus Memory search.
+const ROOM_ACTIVITY_TTL_S = 14 * 24 * 3600;
+const ROOM_ACTIVITY_CAP = 100;
+const ROOM_ACTIVITY_WAIT_MS = 1500;
 
 export function createApp(options = {}) {
   const session = options.session ?? createSession();
@@ -986,7 +993,10 @@ export function createApp(options = {}) {
         send(res, 404, "application/json; charset=utf-8", JSON.stringify({ error: "That room is not available." }));
         return;
       }
-      const body = await roomMedia({ ...workspace, session: current, mediaTenantId: resolved.companyId, sessionReady: true }, id);
+      const media = await roomMedia({ ...workspace, session: current, mediaTenantId: resolved.companyId, sessionReady: true }, id);
+      // Activity rows for this room from the Redis mirror, so a meeting that just
+      // ended shows what Adam did even when this instance's index predates it.
+      const body = { ...media, activity: await roomActivityFor(workspace, current, resolved.companyId, id) };
       const secret = typeof env.RECALL_API_KEY === "string" ? env.RECALL_API_KEY : "";
       const raw = secret.length >= 12 ? JSON.stringify(body).split(secret).join("") : JSON.stringify(body);
       send(res, 200, "application/json; charset=utf-8", raw);
@@ -3149,6 +3159,7 @@ function depsFor(workspace, companyId, unfiltered = false) {
   const appBase = slackOn ? { ...(workspace.deps.app || {}), slackChannel: "" } : workspace.deps.app;
   const slackScoped = slackOn ? { slack: tenantSlackClient(workspace, tenantId) } : {};
   const linearScoped = linearDeps(workspace, tenantId, appBase);
+  if (tenantId) deletionDeps.mirrorActivity = (event) => mirrorRoomActivity(workspace, tenantId, event);
   if (workspace.companies) {
     return { ...workspace.deps, ...slackScoped, ...linearScoped, ...deletionDeps, memory: filtered(workspace.companies[id]), tenantId };
   }
@@ -3666,7 +3677,7 @@ function bindMember(env, supplied) {
   return { ok: true, memberId: bound.message.params.arguments.memberId };
 }
 
-async function persistRecordingSpan(workspace, current, id, startedAt, duration) {
+async function persistRecordingSpan(workspace, current, id, startedAt, duration, memoryOverride) {
   const seconds = Number.isFinite(duration) && duration > 0 ? Math.round(duration) : 0;
   const room = (current?.rooms || []).find((item) => item.id === id);
   if (!room || /slack/i.test(room.platform || "")) return;
@@ -3676,7 +3687,9 @@ async function persistRecordingSpan(workspace, current, id, startedAt, duration)
   if (!hadStart && nextStart) room.startedAt = nextStart;
   if (!hadLength && seconds) room.duration = seconds;
   if ((hadStart || !nextStart) && (hadLength || !seconds)) return;
-  const memory = workspace.deps?.memory;
+  // The tenant-bound memory: an unbound production write fails closed, so the
+  // span was never saved and every cold instance asked Recall for it again.
+  const memory = memoryOverride || workspace.deps?.memory;
   if (typeof memory?.remember !== "function") return;
   const platform = typeof room.platform === "string" ? room.platform : "";
   try {
@@ -3756,6 +3769,102 @@ function keepSaving(workspace, work) {
   }
 }
 
+/**
+ * Tenant deps whose memory skips a write already made with the same content.
+ * The claim is a Redis SET NX on a content fingerprint (shared by instances),
+ * with an in-process set as the fallback; a failed write releases it.
+ */
+function onceSavedDeps(workspace, tenant) {
+  const deps = depsFor(workspace, tenant);
+  const memory = deps.memory;
+  if (!memory || typeof memory.remember !== "function") return deps;
+  const env = workspace.env || {};
+  const fetchImpl = workspace.fetchImpl || globalThis.fetch;
+  const gated = Object.create(memory);
+  gated.remember = async (input) => {
+    const print = createHash("sha256").update(JSON.stringify([
+      deps.tenantId || "", input?.kind || "", input?.text || "", input?.idempotencyKey || "", input?.room ?? null,
+    ]), "utf8").digest("hex").slice(0, 32);
+    workspace.mediaSaved ??= new Set();
+    if (workspace.mediaSaved.has(print)) return { blobId: null, skipped: true };
+    if (workspace.mediaSaved.size >= 5000) workspace.mediaSaved.clear();
+    workspace.mediaSaved.add(print);
+    const key = `sederunt:media-saved:${print}`;
+    const claim = await within(sharedRedisCommand(env, fetchImpl, ["SET", key, "1", "NX", "EX", String(MEDIA_SAVED_TTL_S)]), 1500, { ok: false });
+    if (claim?.ok && claim.result && Object.prototype.hasOwnProperty.call(claim.result, "result") && claim.result.result === null) {
+      return { blobId: null, skipped: true };
+    }
+    const release = () => {
+      workspace.mediaSaved.delete(print);
+      if (claim?.ok) sharedRedisCommand(env, fetchImpl, ["DEL", key]).catch(() => {});
+    };
+    let saved;
+    try {
+      saved = await memory.remember(input);
+    } catch (error) {
+      release();
+      throw error;
+    }
+    if (!saved || saved.ok === false || !saved.blobId) release();
+    return saved;
+  };
+  return { ...deps, memory: gated };
+}
+
+function roomActivityKey(tenantId, roomId) {
+  const room = String(roomId || "");
+  if (!tenantId || !/^[A-Za-z0-9_.:-]{1,120}$/.test(room)) return "";
+  return `sederunt:room-activity:${tenantId}:${room}`;
+}
+
+/** Append one activity row to its room's Redis mirror. Never throws. */
+export async function mirrorRoomActivity(workspace, tenantId, event) {
+  const key = roomActivityKey(tenantId, event?.origin?.roomId);
+  if (!key || typeof event?.id !== "string" || !event.id) return false;
+  let row = "";
+  try { row = JSON.stringify(event); } catch { return false; }
+  if (!row || row.length > 16_000) return false;
+  const done = await within(sharedRedisCommand(workspace.env || {}, workspace.fetchImpl || globalThis.fetch, [
+    ["RPUSH", key, row],
+    ["LTRIM", key, String(-ROOM_ACTIVITY_CAP), "-1"],
+    ["EXPIRE", key, String(ROOM_ACTIVITY_TTL_S)],
+  ]), ROOM_ACTIVITY_WAIT_MS, { ok: false });
+  return Boolean(done?.ok);
+}
+
+/**
+ * The room's activity rows as the page shows them: this instance's rows plus the
+ * Redis mirror, without anything a deletion record covers.
+ */
+async function roomActivityFor(workspace, current, companyId, roomId) {
+  const deps = depsFor(workspace, companyId);
+  const key = roomActivityKey(deps.tenantId, roomId);
+  if (key) {
+    const loaded = await within(sharedRedisCommand(workspace.env || {}, workspace.fetchImpl || globalThis.fetch, ["LRANGE", key, "0", "-1"]), ROOM_ACTIVITY_WAIT_MS, { ok: false });
+    const raw = loaded?.ok && Array.isArray(loaded.result?.result) ? loaded.result.result : [];
+    const rows = [];
+    for (const item of raw) {
+      try {
+        const row = JSON.parse(String(item));
+        if (row && typeof row.id === "string" && row.origin?.roomId === roomId) rows.push(row);
+      } catch { /* a bad row is skipped */ }
+    }
+    let fresh = rows.filter((row) => !(current.activity || []).some((known) => known.id === row.id));
+    if (fresh.length && workspace.deletions) {
+      const intents = await within(workspace.deletions.list(deps.deletionTenantId), ROOM_ACTIVITY_WAIT_MS, null);
+      // Without the deletion record nothing new is shown.
+      fresh = Array.isArray(intents)
+        ? fresh.filter((row) => !intents.some((intent) => deletionMatches(intent, {
+          tenantId: deps.deletionTenantId, roomId: row.origin?.roomId, sourceIds: [row.origin?.sourceDeliveryId].filter(Boolean), decisionIds: [],
+        })))
+        : [];
+    }
+    if (fresh.length) absorbActivityRows(current, fresh);
+  }
+  const config = deps.app || {};
+  return roomPublicActivity(current, roomId, { timeZone: config.timeZone || "", slackChannel: config.slackChannel || "" });
+}
+
 async function recallSpokenLines(workspace, url) {
   if (typeof url !== "string" || !url.startsWith("https://")) return [];
   const fetchImpl = workspace.fetchImpl || globalThis.fetch;
@@ -3804,18 +3913,21 @@ async function loadRoomMedia(workspace, id, current, empty) {
   // Walrus Memory, which takes 20-45 s a write. Awaited in series they ran the
   // media request past the 60 s limit (Nov 11, /console/rooms/ae224b81.../media
   // timed out at 08:18:16 UTC). The saves finish after the response.
+  // Polls repeat these saves from every instance; a save whose content was
+  // already written (by any instance) is skipped, so polls do not spam Walrus.
+  const saving = onceSavedDeps(workspace, tenant);
   const saves = [];
   if (body.call) {
-    saves.push(noteMeetingCall(current, depsFor(workspace, tenant), id, body.call));
+    saves.push(noteMeetingCall(current, saving, id, body.call));
   }
   const room = (current.rooms || []).find((item) => item.id === id);
   if (Array.isArray(body.lines) && body.lines.length) {
-    saves.push(noteMeetingLines(current, depsFor(workspace, tenant), id, body.lines));
+    saves.push(noteMeetingLines(current, saving, id, body.lines));
   } else if (Array.isArray(room?.lines) && room.lines.length) {
     body.lines = room.lines;
   }
   if (body.startedAt || body.duration > 0) {
-    saves.push(persistRecordingSpan(workspace, current, id, body.startedAt, body.duration));
+    saves.push(persistRecordingSpan(workspace, current, id, body.startedAt, body.duration, saving.memory));
   }
   if (saves.length) keepSaving(workspace, Promise.allSettled(saves));
   if (body.title) {

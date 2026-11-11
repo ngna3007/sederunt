@@ -3549,7 +3549,15 @@ if (sessionWhen && sessionWhen.dataset.at) {
   }
 
   function activityRows(roomId) {
-    return ((state && state.activity) || []).filter(function (row) {
+    var rows = (state && state.activity) || [];
+    // The room's media answer carries its activity (a Redis mirror), so a meeting
+    // that just ended shows what Adam did before the board's index catches up.
+    if (roomId && roomMediaState && roomMediaState.forRoom === roomId && Array.isArray(roomMediaState.activity) && roomMediaState.activity.length) {
+      var seen = {};
+      rows.forEach(function (row) { if (row && row.id) seen[row.id] = true; });
+      rows = rows.concat(roomMediaState.activity.filter(function (row) { return row && row.id && !seen[row.id]; }));
+    }
+    return rows.filter(function (row) {
       if (!row) return false;
       if (!roomId) return true;
       var origin = row.origin || {};
@@ -5191,7 +5199,9 @@ if (sessionWhen && sessionWhen.dataset.at) {
   /** The room's media, bounded: a slow answer is abandoned, a "loading" answer asked again. */
   function fetchRoomMedia(asked, attempt) {
     var controller = typeof AbortController === "function" ? new AbortController() : null;
-    var timer = controller ? setTimeout(function () { controller.abort(); }, 20000) : 0;
+    // The server bounds its own work (index 12 s, Recall 8 s, transcript 4 s), so
+    // 30 s is past its worst answer; one timed-out ask is tried again.
+    var timer = controller ? setTimeout(function () { controller.abort(); }, 30000) : 0;
     return fetch("/console/rooms/" + encodeURIComponent(asked) + "/media" + consoleQuery(), controller ? { signal: controller.signal } : undefined).then(function (response) {
       clearTimeout(timer);
       if (response.status === 503 && attempt < 5 && fileRoom === asked) {
@@ -5201,6 +5211,7 @@ if (sessionWhen && sessionWhen.dataset.at) {
       return response.json();
     }, function (error) {
       clearTimeout(timer);
+      if (attempt < 1 && fileRoom === asked && controller && controller.signal.aborted) return fetchRoomMedia(asked, attempt + 1);
       throw error;
     });
   }

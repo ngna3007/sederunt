@@ -148,6 +148,12 @@ async function redisCall(env, fetchImpl, body) {
   }
 }
 
+/** One Redis command (or a pipeline) for callers outside the meeting seat. */
+export async function sharedRedisCommand(env, fetchImpl, command) {
+  if (!redisConfigured(env)) return { ok: false, absent: true };
+  return redisCall(env, fetchImpl, command);
+}
+
 async function redisCommand(env, fetchImpl, command) {
   const called = await redisCall(env, fetchImpl, command);
   if (!called.ok) return called;

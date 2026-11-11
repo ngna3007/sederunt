@@ -2893,6 +2893,10 @@ export function memoryKey(document) {
 }
 
 async function remember(deps, document) {
+  if (document?.kind === "activity" && document.activity && typeof deps?.mirrorActivity === "function") {
+    // A room-scoped copy any instance can read at once; Walrus search lags.
+    try { await deps.mirrorActivity(document.activity); } catch { /* the Walrus write below still runs */ }
+  }
   if (!deps.memory?.remember) return { blobId: null };
   try {
     const saved = await deps.memory.remember({
@@ -3603,6 +3607,16 @@ function publishedUndo(row, now = Date.now()) {
  */
 export function searchPublishedActivity(session, rooms, query = {}, options = {}) {
   return selectActivity(publicActivity(session, rooms, options), query);
+}
+
+/** Rows from the room activity mirror, merged like indexed rows. */
+export function absorbActivityRows(session, rows) {
+  for (const row of rows || []) absorbActivity(session, row);
+}
+
+/** One room's published activity rows. */
+export function roomPublicActivity(session, roomId, options = {}) {
+  return publicActivity(session, [{ id: roomId }], options).filter((row) => row.origin?.roomId === roomId);
 }
 
 function absorbActivity(session, activity) {
