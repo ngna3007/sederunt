@@ -51,7 +51,7 @@ function pageRig(sessionBody, replies) {
     window: windowBox,
     fetch: (url, init) => {
       const target = String(url);
-      posts.push({ url: target, body: init && init.body ? String(init.body) : "" });
+      posts.push({ url: target, body: init && init.body ? String(init.body) : "", at: now });
       if (target === "/api/meeting/agent/turn") {
         const reply = replies.shift();
         if (reply === "hang") return Promise.resolve({ ok: true, body: hang() });
@@ -96,7 +96,7 @@ test("the real e75fb socket sequence: the page sends the title answer", async ()
 
 test("a turn that never ends does not leave the page deaf", async () => {
   const page = pageRig({ botName: "Adam", participantId: "", direct: true }, ["Yes, I can hear you.", TITLE_QUESTION, "hang", TITLE_QUESTION]);
-  await page.replay(FIXTURE.events, 27_000);
+  await page.replay(FIXTURE.events, 34_000);
   const stats = page.window.__sederunt.stats();
   assert.equal(stats.stuck, 1);
   assert.equal(stats.asked, 3);
@@ -229,4 +229,15 @@ test("a title answer files and speaks while slow memory writes are still running
   } finally {
     await new Promise((resolve) => app.close(resolve));
   }
+});
+
+test("a slow turn past the server's 25 s cap ends on its own before the page cuts it", async () => {
+  const page = pageRig({ botName: "Adam", participantId: "", direct: true }, ["hang"]);
+  await page.replay(FIXTURE.events, 34_000);
+  const first = page.posts.find((row) => row.url === "/api/meeting/agent/turn");
+  const cancel = page.posts.find((row) => row.url === "/api/meeting/agent/cancel");
+  assert.ok(first && cancel);
+  // The server ends a slow turn at 25 s with its own done event; the page waits longer than that.
+  assert.equal(cancel.at - first.at >= 32_000, true, String(cancel.at - first.at));
+  assert.equal(page.window.__sederunt.stats().stuck, 1);
 });

@@ -75,7 +75,9 @@ const AGENT_PAGE = `<!doctype html>
   var turnStartedAt = 0;
   var busyFlagged = false;
   var lastBeat = "";
-  var TURN_CAP_MS = 25000;
+  var turnController = null;
+  // Past the server's own 25 s turn cap, so a slow answer ends with its own done event first.
+  var TURN_CAP_MS = 32000;
   var stats = { msgs: 0, opened: 0, own: 0, echo: 0, commits: 0, asked: 0, skipped: 0, busy: 0, done: 0, errors: 0, stuck: 0, sentences: 0, socketOpens: 0, socketCloses: 0 };
 
   function letters(value) {
@@ -197,6 +199,19 @@ const AGENT_PAGE = `<!doctype html>
     fetch("/api/meeting/agent/cancel", { method: "POST", headers: headers(), signal: controller.signal }).catch(function () {});
   }
 
+  /** Close a turn that never ended. Audio already queued keeps playing. */
+  function unstickTurn() {
+    turnOpen = false;
+    turnStartedAt = 0;
+    if (turnController) {
+      try { turnController.abort(); } catch (error) {}
+      turnController = null;
+    }
+    if (guest.dataset.state === "thinking" || guest.dataset.state === "tool") setState(playStarted ? "speaking" : "listening");
+    if (!ear) return;
+    fetch("/api/meeting/agent/cancel", { method: "POST", headers: headers() }).catch(function () {});
+  }
+
   function wokeIn(text) {
     return new RegExp("\\\\b(" + letters(botName) + "|adam|maple)\\\\b", "i").test(String(text || ""));
   }
@@ -255,7 +270,7 @@ const AGENT_PAGE = `<!doctype html>
     if (turnOpen && turnStartedAt && Date.now() - turnStartedAt > TURN_CAP_MS) {
       // A turn that never ends must not keep the page deaf for the rest of the call.
       stats.stuck += 1;
-      cancelTurn();
+      unstickTurn();
     }
     if (!lineText || !lastWordAt) return;
     if (!endOfTurn(lineText, Date.now() - lastWordAt)) return;
@@ -301,6 +316,7 @@ const AGENT_PAGE = `<!doctype html>
       if (guest.dataset.state === "thinking") cancelTurn();
     }, 6000);
     var controller = track(new AbortController());
+    turnController = controller;
     fetch("/api/meeting/agent/turn", {
       method: "POST",
       headers: headers(),
