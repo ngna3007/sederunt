@@ -9,7 +9,8 @@ test/
 docs/
 research/
 prototype/
-clips/
+# Root Remotion project only. A bare clips/ also drops public/clips (landing videos).
+/clips/
 qa/
 openspec/
 coverage/
