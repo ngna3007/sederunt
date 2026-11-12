@@ -5,7 +5,11 @@
 <h1 align="center">Sederunt</h1>
 
 <p align="center">
-  A meeting agent that keeps decisions and helps your team find them later.
+  The assistant that remembers what you agreed.
+</p>
+
+<p align="center">
+  Decisions, announcements and files, kept on Walrus for the whole team.
 </p>
 
 <p align="center">
@@ -24,33 +28,50 @@
 
 https://github.com/user-attachments/assets/63f84845-ff8a-435d-ae00-6054b085571f
 
-A meeting ends. A week later, someone asks, “What did we decide about the launch?” Sederunt keeps the decision with its meeting, so the people who were there can find it again in the app or ask from Slack.
+Sederunt is the assistant that remembers what your team agreed. It keeps decisions, announcements, and files on Walrus Memory so the people who should see them can find them later in the app or ask from Slack. Slack channels, shared files, and calls all feed that same team memory — a meeting is one source, not the whole product.
 
 **Live app:** [sederunt.vercel.app](https://sederunt.vercel.app)
 
 Submitted to **Track 02: Smart Agents for Real Life** at the Tatum × Walrus Total Recall hackathon. It uses Walrus Memory to keep decisions and Tatum to read their Sui proofs. [Read the project write-up](docs/blog/total-recall.md).
 
-## From a meeting to an answer
+## Team memory
 
-1. **Bring the agent into a meeting.** Connect your calendar or add the agent using a meeting link. Address it to keep a decision or request a change.
-2. **Find the record.** Open the meeting room to see its decisions, activity, and files. Ask a question in **Ask AI** or in Slack; access to a decision follows its recorded invitation.
+```mermaid
+flowchart LR
+  slack[Slack channels and files]
+  dms[Direct messages]
+  calls[Calls]
+  mem[Team memory on Walrus]
+  ask[Ask in the app or Slack]
+  proof[Walrus and Sui proof]
+  slack --> mem
+  dms --> mem
+  calls --> mem
+  mem --> ask
+  mem --> proof
+```
+
+1. **Keep what the team agreed.** Posts and files in a Slack channel are stored for that channel. An announcement can name a file, and the file stays in Walrus Console. A call is another source: connect a calendar or add the assistant with a meeting link, then address it to keep a decision or request a change.
+2. **Ask later.** Open a room in the app to see its decisions, activity, and files, or ask in **Ask AI** or Slack. @mention the assistant in a channel to ask there. In a DM, you can ask about any channel you are a member of. Access to a decision follows its stored invitation.
 3. **Follow through.** Connect tools such as Linear and Google Calendar. Explicit requests follow the tool's setting: **Run automatically** is on by default, and turning it off makes the request wait for approval. Suggested follow-ups require the requester's approval.
 4. **Check the source.** Open a decision's proof to see the available Walrus and Sui details. Related files are kept through Walrus Console.
 
-> **Project status:** Sederunt is a hackathon project. A full live Slack and Google meeting rehearsal is still needed to validate the end-to-end follow-up flow. A connected status or passing test suite alone does not prove that a meeting was heard or a ticket was filed. See the [demo runbook](docs/runbooks/new-user-live-demo.md) for the checks.
+Each Slack team maps to one Sederunt space. Private notes stay on the personal account.
+
+> **Project status:** Sederunt is a hackathon project. A full live Slack and call rehearsal is still needed to validate the end-to-end follow-up flow. A connected status or passing test suite alone does not prove that a record was kept or a ticket was filed. See the [demo runbook](docs/runbooks/new-user-live-demo.md) for the checks.
 
 ## What is connected
 
 | Part | Role in Sederunt |
 | --- | --- |
-| **Google Meet and Recall.ai** | Bring the meeting agent into a call and receive meeting events. |
-| **Slack** | Keep channel context, answer questions, and deliver eligible meeting follow-ups. |
-| **Linear and Google Calendar** | Carry out supported requests through connected tools. |
 | **Walrus Memory and Walrus Console** | Store decision records and related files. |
 | **Sui and Tatum** | Read the on-chain object and checkpoint used to verify a record. |
+| **Slack** | Keep channel context and files, answer questions, and deliver eligible follow-ups. |
+| **Google Meet and Recall.ai** | Bring the assistant into a call and receive meeting events. |
+| **Linear and Google Calendar** | Carry out supported requests through connected tools. |
 | **Supabase and Redis** | Support identity, workspace data, and durable application state. |
 
-A decision is available only to an authorized reader. The agent checks the room and requester before returning a record; a tool write passes through the common allow gate. Inferred proposals do not become authorized writes by themselves. See the [requirements](docs/requirements/sederunt.md) and [access design](docs/design/access.md) for the full rules.
+A decision is available only to an authorized reader. The assistant checks the room and requester before returning a record; a tool write passes through the common allow gate. Inferred proposals do not become authorized writes by themselves. See the [requirements](docs/requirements/sederunt.md) and [access design](docs/design/access.md) for the full rules.
 
 ## Run locally
 
@@ -65,7 +86,7 @@ npm ci
 SEDERUNT_AUTH_FAKE=1 npm start
 ```
 
-Open **[http://127.0.0.1:8787/console](http://127.0.0.1:8787/console)**. In the sign-in screen, click **Continue with Google** to use the local fake identity and follow the workspace setup. This is a development profile: it uses local identities and a fake calendar. It does not connect a real meeting, Slack workspace, Linear account, or Walrus storage. Without a configured company memory account, the console may say the account is not loaded.
+Open **[http://127.0.0.1:8787/console](http://127.0.0.1:8787/console)**. In the sign-in screen, click **Continue with Google** to use the local fake identity and follow the workspace setup. This is a development profile: it uses local identities and a fake calendar. It does not connect a real Slack workspace, meeting, Linear account, or Walrus storage. Without a configured company memory account, the console may say the account is not loaded.
 
 To configure real integrations, copy [`.env.example`](.env.example) to `.env` and provide your own credentials, then start the server:
 
@@ -94,10 +115,10 @@ The regular test suite can skip tests that require external services. The integr
 | Path | Start here for… |
 | --- | --- |
 | [`src/server.js`](src/server.js) | The Node server and HTTP routes |
-| [`src/meeting/`](src/meeting/) and [`src/slack/`](src/slack/) | Meeting events and Slack interactions |
-| [`src/ask/`](src/ask/) and [`src/memory/`](src/memory/) | Questions, decision storage, and recovery |
+| [`src/memory/`](src/memory/) and [`src/ask/`](src/ask/) | Decision storage, recovery, and questions |
+| [`src/slack/`](src/slack/) and [`src/files/`](src/files/) | Slack interactions, file access, and background jobs |
+| [`src/meeting/`](src/meeting/) | Meeting events |
 | [`src/domain/`](src/domain/) | Invitation checks and the allow gate |
-| [`src/files/`](src/files/) | File access, storage, and background jobs |
 | [`src/tatum/`](src/tatum/) | Tatum gRPC reads and proof verification |
 | [`docs/`](docs/README.md) | Requirements, design notes, and operations |
 
