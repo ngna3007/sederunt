@@ -66,6 +66,17 @@ test("the landing shows the meeting and does not post", () => {
   assert.match(html, /Welcome back John Doe!/);
   assert.match(html, /john\.doe@example\.com/);
   assert.match(html, /Hear what was decided\./);
+  assert.match(html, /Ask what was decided/);
+  assert.match(html, /Get the decision in words/);
+  const remember = html.slice(html.indexOf('id="remember"'), html.indexOf('id="tenants"'));
+  assert.match(remember, /aria-label="Workspace chat apps"/);
+  assert.match(remember, />Slack<\/span>/);
+  assert.match(remember, />Microsoft Teams<\/span>/);
+  assert.match(remember, />Google Chat<\/span>/);
+  assert.match(remember, />Discord<\/span>/);
+  assert.match(remember, /Works in Slack today · more chat apps coming/);
+  assert.doesNotMatch(remember, /Works in (Microsoft )?Teams/);
+  assert.doesNotMatch(remember, /Telegram|WhatsApp/);
   assert.match(html, /Ask in the group that heard it\./);
   assert.match(html, /It stays with the group/);
   assert.match(html, /Or the people invited/);
