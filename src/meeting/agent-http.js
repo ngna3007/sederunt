@@ -59,6 +59,7 @@ import {
   yesFromAnswer,
   WHEN_QUESTION,
 } from "./voice-write.js";
+import { scheduleClock } from "./schedule.js";
 import {
   agentMember,
   agentTurnCurrent,
@@ -439,6 +440,7 @@ async function cancelTurn(workspace, env, botId, named = "") {
 
 async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, body) {
   if (!inRedisTurn()) return countRedisTurn(() => streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, body));
+  const now = scheduleClock(workspace?.now);
   const bag = runtime(workspace);
   const text = String(body?.text || "").replace(/\s+/g, " ").trim().slice(0, 4000);
   const speaker = String(body?.speaker || body?.speakerName || "").trim().slice(0, 80);
@@ -602,7 +604,7 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
   const titleAsk = asksForWrite(text) || awaiting?.kind === "title";
   const emit = async (full, done = false) => {
     if (abort.signal.aborted) return;
-    for (const line of linesForSpeech(full, toolResults, { done, holdTitle: pendingHold?.title || "", titleAsk })) {
+    for (const line of linesForSpeech(full, toolResults, { done, holdTitle: pendingHold?.title || "", titleAsk, now })) {
       if (sent.has(line) || sent.size >= 2) continue;
       sent.add(line);
       let pendingKind = isTitleQuestion(line) ? "title"
@@ -682,6 +684,7 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
       toolResults,
       pending: awaiting || null,
       reportedPeople: reportedHumans(body, seat),
+      now,
       writeEvent: (name, data) => {
         if (!res.writableEnded) writeEvent(res, name, data);
       },
@@ -974,7 +977,7 @@ async function fileAnsweredPending(input, awaiting, text) {
     args.title = title;
     if (!args.summary) args.summary = title;
   } else if (awaiting?.kind === "when") {
-    const when = parseWhenAnswer(text, { env: input.env, timeZone: args.timeZone || input.deps?.app?.timeZone });
+    const when = parseWhenAnswer(text, { env: input.env, timeZone: args.timeZone || input.deps?.app?.timeZone, now: input.now });
     if (!when?.start) {
       await input.onText(WHEN_QUESTION, true);
       return;
@@ -1198,6 +1201,7 @@ async function executeAgentTool(input) {
           summary: args.summary || args.title || "",
           startTime: args.startTime || args.start || "",
           timeZone: args.timeZone || "",
+          now: input.now,
           eventId: filed.eventId,
           id: filed.eventId,
           url: filed.link || "",

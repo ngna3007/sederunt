@@ -637,6 +637,7 @@ export function createApp(options = {}) {
     participantBindings: options.participantBindings || createParticipantBindings(env, { fetchImpl: options.fetch || globalThis.fetch }),
     memberships: options.memberships || null,
     meetingVoice: options.meetingVoice && typeof options.meetingVoice === "object" ? options.meetingVoice : undefined,
+    now: options.now,
   };
   if (proofWarmOn(env) && workspace.companyLoaded && deps.tatum) {
     // Verify proofs already on this process. Rebuilding the unbound company
@@ -1409,6 +1410,7 @@ export function createApp(options = {}) {
         headerValue,
         readJson,
         send,
+        now: workspace.now,
       });
       if (handled) return;
     }

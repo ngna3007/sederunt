@@ -18,11 +18,34 @@ const WEEKDAY = /\b(?:on\s+)?(sunday|monday|tuesday|wednesday|thursday|friday|sa
 const DATE_MD = /\b(?:on\s+)?(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:st|nd|rd|th)?\b/i;
 
 /**
+ * A Date, unix-ms timestamp, ISO string, or a function that returns one of those.
+ * Anything else is the wall clock.
+ * @param {unknown} value
+ * @returns {Date}
+ */
+export function scheduleClock(value) {
+  let clock = value;
+  if (typeof clock === "function") {
+    try { clock = clock(); } catch { clock = undefined; }
+  }
+  if (clock instanceof Date && Number.isFinite(clock.getTime())) return clock;
+  if (typeof clock === "number" && Number.isFinite(clock)) {
+    const date = new Date(clock);
+    if (Number.isFinite(date.getTime())) return date;
+  }
+  if (typeof clock === "string" && clock.trim()) {
+    const ms = Date.parse(clock);
+    if (Number.isFinite(ms)) return new Date(ms);
+  }
+  return new Date();
+}
+
+/**
  * A spoken request to create a calendar event, with a title and optional start.
  * Time is interpreted in `timeZone` (default Asia/Ho_Chi_Minh, same as Asia/Saigon).
  *
  * @param {string} text
- * @param {{ now?: Date, timeZone?: string, env?: NodeJS.ProcessEnv }} [options]
+ * @param {{ now?: Date | number | string | (() => Date | number | string), timeZone?: string, env?: NodeJS.ProcessEnv }} [options]
  * @returns {{ title: string, start: string, end: string, timeZone: string, missing: string } | null}
  */
 export function parseScheduleUtterance(text, options = {}) {
@@ -39,7 +62,7 @@ export function parseScheduleUtterance(text, options = {}) {
   if (!body) return null;
 
   const timeZone = String(options.timeZone || calendarTimeZone(options.env) || "Asia/Ho_Chi_Minh");
-  const now = options.now instanceof Date ? options.now : new Date();
+  const now = scheduleClock(options.now);
   const when = readWhen(body, now, timeZone);
   const title = eventTitle(when.rest || body);
   const missing = when.start ? "" : "when";
@@ -51,7 +74,7 @@ export function parseScheduleUtterance(text, options = {}) {
 /**
  * A reply to "When should it be?" — a day and time, without a schedule verb.
  * @param {string} text
- * @param {{ now?: Date, timeZone?: string, env?: NodeJS.ProcessEnv }} [options]
+ * @param {{ now?: Date | number | string | (() => Date | number | string), timeZone?: string, env?: NodeJS.ProcessEnv }} [options]
  */
 export function parseWhenAnswer(text, options = {}) {
   let value = String(text || "").replace(/\s+/g, " ").trim();
@@ -61,7 +84,7 @@ export function parseWhenAnswer(text, options = {}) {
   value = value.replace(/[.!?]+$/g, "").trim();
   if (!value) return null;
   const timeZone = String(options.timeZone || calendarTimeZone(options.env) || "Asia/Ho_Chi_Minh");
-  const now = options.now instanceof Date ? options.now : new Date();
+  const now = scheduleClock(options.now);
   const when = readWhen(value, now, timeZone);
   if (!when.start) return { start: "", end: "", timeZone, missing: "when" };
   return { start: when.start, end: addMinutesIso(when.start, DEFAULT_DURATION_MIN, timeZone), timeZone, missing: "" };
@@ -74,13 +97,13 @@ export function isScheduleRequest(text) {
 
 /**
  * A spoken confirmation after a calendar event is created.
- * @param {{ title?: string, start?: string, timeZone?: string, now?: Date }} input
+ * @param {{ title?: string, start?: string, timeZone?: string, now?: Date | number | string | (() => Date | number | string) }} input
  */
 export function scheduledVoiceLine(input = {}) {
   const title = String(input.title || "").replace(/['"]/g, "").replace(/\s+/g, " ").trim() || "the meeting";
   const start = String(input.start || "").trim();
   const timeZone = String(input.timeZone || "Asia/Ho_Chi_Minh");
-  const now = input.now instanceof Date ? input.now : new Date();
+  const now = scheduleClock(input.now);
   if (!start) return `I scheduled ${title}.`;
   const when = formatWhen(start, timeZone, now);
   // The time is said once: a title that still carries it is cut back first.

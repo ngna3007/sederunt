@@ -117,6 +117,7 @@ function boot(fetchImpl, extra = {}) {
     connectors: extra.connectors,
     deps: { memory: extra.memory || { async remember() { return { blobId: "saved" }; }, async index() { return []; } }, ...(extra.deps || {}) },
     sessions: extra.sessions || new Map([[TENANT, session]]),
+    now: extra.now !== undefined ? extra.now : NOW,
     fetch: fetchImpl,
   });
   return { app, session, meetingVoice };
@@ -128,6 +129,7 @@ test("schedule utterances parse a title, Asia/Saigon time, and a 30 minute end",
   assert.equal(parsed.start, "2026-11-12T10:00:00+07:00");
   assert.equal(parsed.end, "2026-11-12T10:30:00+07:00");
   assert.equal(parsed.missing, "");
+  assert.equal(parseScheduleUtterance("Adam, schedule a launch sync tomorrow at 10am", { now: NOW.getTime(), timeZone: "Asia/Ho_Chi_Minh" }).start, "2026-11-12T10:00:00+07:00");
   assert.equal(scheduledVoiceLine({ title: parsed.title, start: parsed.start, timeZone: parsed.timeZone, now: NOW }), "I scheduled Launch sync for tomorrow at 10 AM.");
   const waiting = parseScheduleUtterance("schedule a launch sync", { now: NOW, timeZone: "Asia/Ho_Chi_Minh" });
   assert.equal(waiting.missing, "when");
