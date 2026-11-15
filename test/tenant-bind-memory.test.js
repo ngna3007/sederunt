@@ -102,8 +102,7 @@ test("REST releaseTenants scans keys and drops matching owners", async () => {
     UPSTASH_REDIS_REST_TOKEN: "token",
   }, {
     memory: new Map([["sederunt:tenant-bind:slack:T1:C1", TENANT_A]]),
-    fetchImpl: async (url, init = {}) => {
-      const href = String(url);
+    fetchImpl: async (_url, init = {}) => {
       const command = JSON.parse(String(init.body || "[]"))[0] || [];
       if (command[0] === "SCAN") {
         return { ok: true, async json() { return [{ result: ["0", [...keys.keys()]] }]; } };
