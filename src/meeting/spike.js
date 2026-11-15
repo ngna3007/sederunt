@@ -19,7 +19,12 @@ function spikeNonce(env) {
   return value;
 }
 
-/** Preview spike only. A short or missing nonce leaves the meeting path unchanged. */
+/**
+ * Preview spike only. Kept because test/meeting-spike.test.js and the camera
+ * page drive /api/meeting/spike/*; production stays dark unless
+ * SEDERUNT_MEETING_SPIKE=1 and a 16+ char SEDERUNT_SPIKE_NONCE are set.
+ * A short or missing nonce leaves the meeting path unchanged.
+ */
 export function spikeEnabled(env) {
   return env?.SEDERUNT_MEETING_SPIKE === "1" && spikeNonce(env).length > 0;
 }

@@ -2788,9 +2788,8 @@ if (isDirectRun() || process.env.VERCEL) {
 }
 if (isDirectRun() && !process.env.VERCEL && publicServer) {
   publicServer.listen(port, "127.0.0.1", () => {
-    console.log(`Sederunt typed path http://127.0.0.1:${port}`);
-    console.log('POST /api/typed {"text":"..."}');
-    console.log("A Linear create waits until that tool's preference allows it.");
+    console.log(`Sederunt http://127.0.0.1:${port}`);
+    console.log(`Console http://127.0.0.1:${port}/console`);
   });
 }
 

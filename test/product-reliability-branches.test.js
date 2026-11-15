@@ -186,7 +186,7 @@ test("a direct boot opens the local server when production mode is off", async (
   let stdout = "";
   child.stdout.on("data", (chunk) => {
     stdout += chunk;
-    if (stdout.includes("Sederunt typed path")) heard = true;
+    if (stdout.includes("Sederunt http://")) heard = true;
   });
   const timer = setTimeout(() => child.kill("SIGTERM"), 8000);
   await new Promise((resolve) => {
