@@ -7,11 +7,12 @@ import { logAction, logFailure } from "../src/activity.js";
 import { sealSession, sessionCookie } from "../src/console-auth.js";
 import { createApp } from "../src/server.js";
 import { createSession } from "../src/session.js";
+import { consolePageSource } from "./console-source.js";
 
 const SECRET = "pass05-secret";
 
 test("meeting words separate live, ended, channel, and silence", () => {
-  const page = readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
+  const page = consolePageSource();
   const word = page.slice(page.indexOf("function meetingWord"), page.indexOf("function failedActions"));
   assert.match(word, /word: "In call"/);
   assert.match(word, /word: "Channel"/);

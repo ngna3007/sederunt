@@ -7,6 +7,7 @@ import { logAction, logFailure } from "../src/activity.js";
 import { undoPrompt } from "../src/activity-feed.js";
 import { sealSession, sessionCookie } from "../src/console-auth.js";
 import { ROOM_COLUMNS, renderConsolePage } from "../src/console-page.js";
+import { consolePageSource } from "./console-source.js";
 import { rankDecisions } from "../src/room-match.js";
 import { createApp } from "../src/server.js";
 import { createSession } from "../src/session.js";
@@ -14,7 +15,7 @@ import { createSession } from "../src/session.js";
 const SECRET = "pass04-secret";
 
 test("missing room copy is a card and the shell stays hidden", () => {
-  const page = readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
+  const page = consolePageSource();
   const css = readFileSync(new URL("../src/console.css", import.meta.url), "utf8");
   assert.match(page, /id="room-missing-link"[^>]*>[\s\S]*Back to rooms</);
   assert.doesNotMatch(page, /Back to Rooms/);
@@ -50,7 +51,7 @@ test("focus rings and a skip link are in the console", () => {
 });
 
 test("a narrow decision row keeps only the clashing badge", () => {
-  const page = readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
+  const page = consolePageSource();
   const css = readFileSync(new URL("../src/console.css", import.meta.url), "utf8");
   assert.match(page, /badge-inline/);
   assert.match(page, /badge\.textContent = clashing \? "Clashing" : ""/);
@@ -114,7 +115,7 @@ test("undo confirm names the inverse change", () => {
     changes: [{ field: "assignee", to: "Mina" }],
   }, "UTC", "UTC");
   assert.equal(clear.ask, "Clear the assignee on ROW-131?");
-  const page = readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
+  const page = consolePageSource();
   assert.match(page, /function confirmUndo/);
   assert.match(page, /Undo change/);
   assert.match(page, /textContent = "Undone"/);
@@ -123,7 +124,7 @@ test("undo confirm names the inverse change", () => {
 });
 
 test("room status describes the meeting and failures are a separate chip", () => {
-  const page = readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
+  const page = consolePageSource();
   const css = readFileSync(new URL("../src/console.css", import.meta.url), "utf8");
   assert.match(page, /function meetingWord/);
   assert.match(page, /No recording/);
@@ -160,7 +161,7 @@ test("a clash answer leads with one sentence and keeps room cite labels", () => 
   assert.match(result.lead, /^Two decisions disagree: the booth opens at nine and badge pickup stays at the north entrance \(rowan, \d{1,2}:\d{2} [AP]M\) vs ten so setup is not rushed \(tomas, \d{1,2}:\d{2} [AP]M\)\.$/);
   assert.equal(result.clash[0].speaker, "rowan");
   assert.match(result.clash[0].clock, /^\d{1,2}:\d{2} [AP]M$/);
-  const page = readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
+  const page = consolePageSource();
   assert.match(page, /relativeWhen\(cite\.spokenAt\) \|\| whenLabel\(cite\.spokenAt\)/);
   assert.match(page, /Open room/);
   assert.match(page, /more decisions/);
@@ -169,7 +170,7 @@ test("a clash answer leads with one sentence and keeps room cite labels", () => 
 
 test("list columns share a grid and cap avatar stacks", () => {
   assert.deepEqual(ROOM_COLUMNS, ["Room", "Platform", "Speakers", "Status", "Started", "Length", ""]);
-  const page = readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
+  const page = consolePageSource();
   const css = readFileSync(new URL("../src/console.css", import.meta.url), "utf8");
   assert.match(page, /people\.slice\(0, 2\)/);
   assert.match(page, /whenText: ident\.when \? \(relativeWhen\(ident\.when\) \|\| ""\) : ""/);

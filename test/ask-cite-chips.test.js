@@ -4,9 +4,9 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { speakerLabel } from "../src/console-page.js";
+import { consolePageSource } from "./console-source.js";
 
-const root = dirname(fileURLToPath(import.meta.url));
-const page = readFileSync(join(root, "../src/console-page.js"), "utf8");
+const page = consolePageSource();
 
 test("speakerLabel blanks Slack user ids in any case", () => {
   assert.equal(speakerLabel("U0CE7CM2N8Z", "Anh", "member-1"), "");

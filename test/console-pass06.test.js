@@ -6,6 +6,7 @@ import test from "node:test";
 import { logAction, logFailure, logRequest } from "../src/activity.js";
 import { sealSession, sessionCookie } from "../src/console-auth.js";
 import { renderConsolePage } from "../src/console-page.js";
+import { consolePageSource } from "./console-source.js";
 import { createApp } from "../src/server.js";
 import { createSession } from "../src/session.js";
 
@@ -28,10 +29,13 @@ function serial(name, fn) {
 }
 
 test("history script keeps whitespace escapes", () => {
-  const src = readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
+  const src = consolePageSource();
   const start = src.indexOf("return `<!DOCTYPE html>");
   const end = src.indexOf("</html>`;");
-  const tpl = src.slice(start, end);
+  const clientStart = src.indexOf("export function renderConsoleClient");
+  const clientTick = src.indexOf("return `", clientStart);
+  const clientEnd = src.lastIndexOf("`;");
+  const tpl = `${src.slice(start, end)}\n${src.slice(clientTick, clientEnd)}`;
   const valid = new Set(["'", '"', "\\", "`", "$", "n", "r", "t", "f", "v", "0", "x", "u"]);
   for (let i = 0; i < tpl.length; i += 1) {
     if (tpl[i] !== "\\") continue;

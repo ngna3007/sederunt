@@ -10,10 +10,11 @@ import { consolePrincipal } from "./console-principal.js";
 import { canReadInSession, canReadOpenedMeeting, canReadRecord, meetingRoomReaders, readPrincipalId, readableSession } from "./domain/read-access.js";
 import { createServer } from "node:http";
 import { readRequestBytes } from "./http-body.js";
+import { send, redirect } from "./http/send.js";
+import { handleStaticRoutes } from "./http/static.js";
+import { dispatch } from "./http/dispatch.js";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { createRequire } from "node:module";
-import { dirname, extname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { redact } from "./domain/redact.js";
 import { handleCalendarEvent } from "./calendar/route.js";
@@ -73,7 +74,7 @@ import { authorizeBotWrite, canEditBot, handleBotSettings, hearingTenantFor, rea
 import { handleToolPref, loadAccountProfile, loadToolAsk } from "./console-account.js";
 import { handleConsoleInvites, handleInvite, handleJoinLink, handleSpaceSwitch, handleWelcome, loadChecklist, loadSpaceView, welcomePath } from "./console-flow.js";
 import { roleLabel } from "./identity/onboarding.js";
-import { renderLanding } from "./landing.js";
+
 import { handleFileRequest } from "./files/routes.js";
 import { createFileRuntime } from "./files/runtime.js";
 import { createFileStore } from "./files/store.js";
@@ -787,58 +788,13 @@ export function createApp(options = {}) {
       send(res, 200, "application/json", JSON.stringify(await recover(limit)));
       return;
     }
-    if (await handleAdmin(req, res, url, { send, redirect })) return;
     if (identity) rememberRefreshCookie(res, await refreshOAuthSession(req, identity, env));
-    if (filesRuntime && await handleFileRequest(req, res, url, filesRuntime, { send })) return;
-    if (await handleNodeForms(req, res, { forms: workspace.forms, env, url })) return;
-    if (req.method === "GET" && url.pathname.startsWith("/media/")) {
-      if (await sendMedia(res, url.pathname)) return;
-      send(res, 404, "text/plain; charset=utf-8", "Not found");
-      return;
-    }
-    if (req.method === "GET" && url.pathname.startsWith("/clips/")) {
-      if (await sendClip(req, res, url.pathname)) return;
-      send(res, 404, "text/plain; charset=utf-8", "Not found");
-      return;
-    }
-    if (req.method === "GET" && (url.pathname === "/favicon.ico" || url.pathname === "/favicon.svg")) {
-      const icon = await readFile(resolve("public/favicon.svg"));
-      res.writeHead(200, { "content-type": "image/svg+xml", "cache-control": "no-store" });
-      res.end(icon);
-      return;
-    }
-    if (req.method === "GET" && url.pathname.startsWith("/models/")) {
-      const name = url.pathname.slice("/models/".length);
-      if (!/^CEREBRIUM_[A-Za-z0-9_]+\.glb$/.test(name)) {
-        send(res, 404, "text/plain; charset=utf-8", "Not found");
-        return;
-      }
-      const file = resolve("public/models", name);
-      send(res, 200, "model/gltf-binary", await readFile(file));
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/hold.js") {
-      send(res, 200, "text/javascript; charset=utf-8", await readFile(new URL("./hold.js", import.meta.url), "utf8"));
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/") {
-      send(res, 200, "text/html; charset=utf-8", renderLanding());
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/console.css") {
-      send(res, 200, "text/css; charset=utf-8", await consoleStyles(), { "cache-control": "public, max-age=3600" });
-      return;
-    }
-    if (req.method === "GET" && (url.pathname === "/fonts/Geist-Variable.woff2" || url.pathname === "/fonts/GeistMono-Variable.woff2")) {
-      const file = url.pathname.endsWith("GeistMono-Variable.woff2")
-        ? "geist-mono/GeistMono-Variable.woff2"
-        : "geist-sans/Geist-Variable.woff2";
-      const fontDir = resolve(dirname(createRequire(import.meta.url).resolve("geist/font")), "fonts");
-      const bytes = await readFile(resolve(fontDir, file));
-      res.writeHead(200, { "content-type": "font/woff2", "cache-control": "public, max-age=86400" });
-      res.end(bytes);
-      return;
-    }
+    if (await dispatch([
+      ["admin", () => handleAdmin(req, res, url, { send, redirect })],
+      ["files", () => filesRuntime ? handleFileRequest(req, res, url, filesRuntime, { send }) : false],
+      ["forms", () => handleNodeForms(req, res, { forms: workspace.forms, env, url })],
+      ["static", () => handleStaticRoutes(req, res, url)],
+    ], req, res, url)) return;
     if (url.pathname === "/console/auth" || url.pathname.startsWith("/console/auth/")) {
       await handleAuthRoute({ req, res, url, env, identity, send, redirect, googleGrants: workspace.googleGrants, calendarSave: workspace.calendarSave, fetchImpl: options.fetch || globalThis.fetch });
       return;
@@ -1075,26 +1031,7 @@ export function createApp(options = {}) {
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({ id, name }));
       return;
     }
-    if (req.method === "GET" && (url.pathname === "/console/activity.js" || url.pathname === "/console/activity-feed.js")) {
-      const source = await readFile(resolve("src/activity-feed.js"));
-      send(res, 200, "text/javascript; charset=utf-8", source);
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/console/room-match.js") {
-      const source = await readFile(resolve("src/room-match.js"));
-      send(res, 200, "text/javascript; charset=utf-8", source);
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/console/bot-identity.js") {
-      const source = await readFile(resolve("src/bot/identity.js"));
-      send(res, 200, "text/javascript; charset=utf-8", source);
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/console/bot-card.js") {
-      const source = await readFile(resolve("src/console/bot-card.js"));
-      send(res, 200, "text/javascript; charset=utf-8", source);
-      return;
-    }
+
     if (url.pathname === "/api/bot") {
       await handleBotSettings({
         req, res, url, env, identity, send, readJson, store: workspace.botPreferences,
@@ -4400,13 +4337,6 @@ function headerValue(value) {
   return typeof value === "string" ? value : "";
 }
 
-let consoleCss = "";
-
-async function consoleStyles() {
-  if (!consoleCss) consoleCss = await readFile(new URL("./console.css", import.meta.url), "utf8");
-  return consoleCss;
-}
-
 async function calendarGranted(workspace, tenantId, personId) {
   const env = workspace.env;
   const id = typeof tenantId === "string" ? tenantId.trim() : "";
@@ -4441,84 +4371,6 @@ async function pageSlack(workspace, env, spaces, connectedDoors) {
     slackConfigured: connectedDoors.slack === true,
   }, spaces.activeId);
   return { linked: claim.linked === true, teamName: "" };
-}
-
-function send(res, status, type, body, extra = {}) {
-  const headers = { "content-type": type, ...extra };
-  if (type.startsWith("text/html") || type.startsWith("application/json")) headers["cache-control"] = "no-store";
-  res.writeHead(status, headers);
-  res.end(body);
-}
-
-function redirect(res, location, extra = {}) {
-  res.writeHead(302, { location, "cache-control": "no-store", ...extra });
-  res.end();
-}
-
-const mediaRoot = resolve("public/media");
-const mediaTypes = { ".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp" };
-const clipRoot = resolve("public/clips");
-
-async function sendMedia(res, pathname) {
-  const name = pathname.slice("/media/".length);
-  const type = mediaTypes[extname(name).toLowerCase()];
-  if (!type || !/^[a-z0-9.-]+$/i.test(name)) return false;
-  const file = resolve(mediaRoot, name);
-  if (!file.startsWith(`${mediaRoot}/`)) return false;
-  try {
-    const body = await readFile(file);
-    res.writeHead(200, { "content-type": type, "cache-control": "public, max-age=3600" });
-    res.end(body);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function sendClip(req, res, pathname) {
-  const name = pathname.slice("/clips/".length);
-  if (extname(name).toLowerCase() !== ".mp4" || !/^[a-z0-9.-]+$/i.test(name)) return false;
-  const file = resolve(clipRoot, name);
-  if (!file.startsWith(`${clipRoot}/`)) return false;
-  let body;
-  try {
-    body = await readFile(file);
-  } catch {
-    return false;
-  }
-  const total = body.length;
-  const headers = {
-    "content-type": "video/mp4",
-    "accept-ranges": "bytes",
-    "cache-control": "public, max-age=3600",
-  };
-  const range = req.headers.range;
-  if (!range) {
-    res.writeHead(200, { ...headers, "content-length": total });
-    res.end(body);
-    return true;
-  }
-  const match = /^bytes=(\d*)-(\d*)$/.exec(range);
-  if (!match) {
-    res.writeHead(416, { "content-range": `bytes */${total}` });
-    res.end();
-    return true;
-  }
-  const start = match[1] === "" ? 0 : Number(match[1]);
-  const end = match[2] === "" ? total - 1 : Number(match[2]);
-  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || start >= total) {
-    res.writeHead(416, { "content-range": `bytes */${total}` });
-    res.end();
-    return true;
-  }
-  const last = Math.min(end, total - 1);
-  res.writeHead(206, {
-    ...headers,
-    "content-range": `bytes ${start}-${last}/${total}`,
-    "content-length": last - start + 1,
-  });
-  res.end(body.subarray(start, last + 1));
-  return true;
 }
 
 async function readBody(req) {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { renderConsolePage } from "../src/console-page.js";
+import { consolePageSource } from "./console-source.js";
 
 test("Ask AI is live in the rail: no Coming soon, no MCP gate, a daily quota pill", () => {
   const html = renderConsolePage({
@@ -25,7 +26,7 @@ test("Ask AI is live in the rail: no Coming soon, no MCP gate, a daily quota pil
   assert.match(html, /id="ask-ai-connectors"/);
   assert.doesNotMatch(html, /OpenRouter|paid model|blockchain/i);
 
-  const page = readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
+  const page = consolePageSource();
   assert.match(page, /fetch\("\/api\/ask"/);
   assert.match(page, /new EventSource\("\/api\/ask\/"/);
   assert.match(page, /if \(name === "chat"\) loadAsks\(\);/);
