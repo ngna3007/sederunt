@@ -135,7 +135,7 @@ const ICON = {
  * @param {ReturnType<typeof activityEvent>} event
  * @param {number} [now]
  */
-export function renderActivity(event, now = Date.now()) {
+export function renderActivity(event, _now = Date.now()) {
   const kind = KINDS.has(event?.kind) ? event.kind : "action";
   if (kind === "resolve" || kind === "supersede") return "";
   const verb = VERBS.includes(event?.verb) ? event.verb : "create";
@@ -468,17 +468,17 @@ function collapse(text) {
   return text.replace(/\s+/g, " ").replace(" :", ":").trim();
 }
 
-function stamp(event) {
+function _stamp(event) {
   const at = Date.parse(event?.ts || "");
   return Number.isNaN(at) ? 0 : at;
 }
 
-function touches(row, room) {
+function _touches(row, room) {
   const origin = row?.origin || {};
   return origin.roomId === room || origin.roomName === room;
 }
 
-function originPhrase(event) {
+function _originPhrase(event) {
   const name = event?.origin?.roomName || "";
   if (!name) return "";
   if (Number.isFinite(event?.origin?.at)) return `${name} ${clock(event.origin.at)}`;

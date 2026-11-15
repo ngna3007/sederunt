@@ -203,6 +203,80 @@ test("two clients on the real clock share one gateway throttle", async () => {
   assert.ok(Date.now() - started >= 140, "four calls at 20 rps across two clients take at least three gaps");
 });
 
+test("several objects and their certifying transactions are one batch each", async () => {
+  const other = `0x${"ab".repeat(32)}`;
+  const digest = "HMNM1usyR6SbipnmP2d7Ds7NpcmqQE4cEA83QiAMYKfs";
+  const paths = [];
+  const client = createTatumClient({
+    apiKey: KEY,
+    retries: 0,
+    rps: 1000,
+    exchange: async (call) => {
+      const method = call.path.split("/").pop();
+      paths.push(method);
+      if (method === "BatchGetObjects") {
+        return {
+          grpcStatus: "0",
+          body: frameMessage(GrpcTypes.BatchGetObjectsResponse.toBinary({
+            objects: [
+              { result: { oneofKind: "object", object: { objectId: OBJECT_ID, version: 4n, digest: "GfKGew", objectType: "pkg::blob::Blob", previousTransaction: digest } } },
+              { result: { oneofKind: "error", error: { code: 5, message: "not found", details: [] } } },
+            ],
+          })),
+        };
+      }
+      assert.equal(method, "BatchGetTransactions");
+      return {
+        grpcStatus: "0",
+        body: frameMessage(GrpcTypes.BatchGetTransactionsResponse.toBinary({
+          transactions: [{
+            result: {
+              oneofKind: "transaction",
+              transaction: {
+                digest,
+                checkpoint: 338404221n,
+                timestamp: { seconds: 1761500403n, nanos: 65000000 },
+                signatures: [],
+                balanceChanges: [],
+              },
+            },
+          }],
+        })),
+      };
+    },
+  });
+  const objects = await client.getObjects([OBJECT_ID, other, OBJECT_ID]);
+  assert.deepEqual(paths, ["BatchGetObjects", "BatchGetTransactions"]);
+  assert.equal(objects[0].objectId, OBJECT_ID);
+  assert.equal(objects[0].checkpoint, 338404221);
+  assert.equal(objects[0].checkpointTime, "2025-10-26T17:40:03.065Z");
+  assert.equal(objects[1], null);
+  assert.equal(objects[2].checkpoint, 338404221);
+  assert.equal(client.wireCalls(), 2);
+
+  const many = Array.from({ length: 51 }, (_, index) => `0x${index.toString(16).padStart(64, "0")}`);
+  const wide = createTatumClient({
+    apiKey: KEY,
+    retries: 0,
+    rps: 1000,
+    exchange: async (call) => {
+      const request = GrpcTypes.BatchGetObjectsRequest.fromBinary(call.body.subarray(5));
+      return {
+        grpcStatus: "0",
+        body: frameMessage(GrpcTypes.BatchGetObjectsResponse.toBinary({
+          objects: request.requests.map((item) => ({
+            result: { oneofKind: "object", object: { objectId: item.objectId, version: 1n, digest: "GfKGew", objectType: "pkg::blob::Blob" } },
+          })),
+        })),
+      };
+    },
+  });
+  const page = await wide.getObjects(many);
+  assert.equal(page.length, 51);
+  assert.equal(page[50].objectId, many[50]);
+  assert.equal(wide.wireCalls(), 2);
+});
+
 test("a transaction read returns the certifying checkpoint and time from the ledger response", async () => {
   const paths = [];
   const client = createTatumClient({

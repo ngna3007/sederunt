@@ -150,6 +150,11 @@ export function createSupabaseFileStore({ env = {}, fetch: fetchImpl = globalThi
       const rows = await table("channel_bindings", `provider=eq.${encodeURIComponent(provider)}&external_channel_id=eq.${encodeURIComponent(externalId)}&external_workspace_id=eq.${encodeURIComponent(scope.externalWorkspaceId)}&status=eq.active&limit=2`);
       return rows.length === 1 ? store.channel(rows[0].channelId) : null;
     },
+    async bindSlackChannel({ tenantId, teamId, externalChannelId, channelId }) {
+      // The function re-checks that the team belongs to the tenant and never moves a live binding.
+      const bound = await request("rpc/slack_channel_bind", { method: "POST", body: { p_tenant: tenantId, p_team: teamId, p_channel: externalChannelId, p_channel_id: channelId } });
+      return typeof bound === "string" && bound ? store.channel(bound) : null;
+    },
     async userByExternal(provider, externalId, scope = {}) {
       if (!scope.externalWorkspaceId || !scope.tenantId) return null;
       const identity = await one("identities", `provider=eq.${encodeURIComponent(provider)}&external_user_id=eq.${encodeURIComponent(externalId)}&external_workspace_id=eq.${encodeURIComponent(scope.externalWorkspaceId)}`);

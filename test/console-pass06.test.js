@@ -6,6 +6,7 @@ import test from "node:test";
 import { logAction, logFailure, logRequest } from "../src/activity.js";
 import { sealSession, sessionCookie } from "../src/console-auth.js";
 import { renderConsolePage } from "../src/console-page.js";
+import { consolePageSource } from "./console-source.js";
 import { createApp } from "../src/server.js";
 import { createSession } from "../src/session.js";
 
@@ -28,10 +29,13 @@ function serial(name, fn) {
 }
 
 test("history script keeps whitespace escapes", () => {
-  const src = readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
+  const src = consolePageSource();
   const start = src.indexOf("return `<!DOCTYPE html>");
   const end = src.indexOf("</html>`;");
-  const tpl = src.slice(start, end);
+  const clientStart = src.indexOf("export function renderConsoleClient");
+  const clientTick = src.indexOf("return `", clientStart);
+  const clientEnd = src.lastIndexOf("`;");
+  const tpl = `${src.slice(start, end)}\n${src.slice(clientTick, clientEnd)}`;
   const valid = new Set(["'", '"', "\\", "`", "$", "n", "r", "t", "f", "v", "0", "x", "u"]);
   for (let i = 0; i < tpl.length; i += 1) {
     if (tpl[i] !== "\\") continue;
@@ -310,9 +314,9 @@ serial("empty home and chat offer a next step", async (t) => {
   await page.goto(`http://127.0.0.1:${opened.port}/console`, { waitUntil: "networkidle" });
   await page.waitForSelector("#home-add-meeting", { timeout: 45000 });
   await page.click("#home-add-meeting");
-  await page.waitForSelector("#create-dialog:not([hidden])", { timeout: 45000 });
-  const dialog = await page.locator("#create-title").textContent();
-  assert.match(dialog, /room|Meeting/i);
+  await page.waitForSelector("#join-dialog:not([hidden])", { timeout: 45000 });
+  const dialog = await page.locator("#join-title").textContent();
+  assert.match(dialog, /Add to a meeting/);
   assert.deepEqual(errors, []);
 });
 
@@ -406,9 +410,12 @@ serial("setup and account keep their actions in the right cards", async (t) => {
       const headTool = Math.round(document.querySelector('#tools-card .status-head [data-col="tool"]').getBoundingClientRect().x);
       const switchX = asks.map((row) => Math.round(row.querySelector(".conn-ask").getBoundingClientRect().x));
       const doc = document.documentElement;
-      const clipped = [...document.querySelectorAll("#tools-card .conn, #tools-card .tool-ask")].filter((node) => {
+      const clipped = [...document.querySelectorAll("#tools-card .conn, #tools-card .tool-ask, #overview .card-help, #hearing-help, #members-card .card-help, #members-card .wait-actions button")].filter((node) => {
+        if (!node.getClientRects().length) return false;
         const box = node.getBoundingClientRect();
-        return box.right > window.innerWidth + 1 || box.left < -1;
+        const past = box.right > window.innerWidth + 1 || box.left < -1;
+        const cut = node.scrollWidth > node.clientWidth + 1 || node.scrollHeight > node.clientHeight + 1;
+        return past || cut;
       }).length;
       return {
         title: title ? title.textContent.trim() : "",
@@ -499,7 +506,7 @@ serial("setup and account keep their actions in the right cards", async (t) => {
     const manages = [...document.querySelectorAll("#tools-card .conn-manage")].filter((node) => node.getClientRects().length);
     const connects = [...document.querySelectorAll("#tools-card .conn-connect")].filter((node) => node.getClientRects().length);
     return {
-      manages: manages.map((node) => node.getAttribute("data-connect")),
+      manages: manages.map((node) => node.getAttribute("data-manage")),
       connects: connects.length,
       states: [...document.querySelectorAll("#tools-card .conn-state")].map((node) => node.textContent.trim()),
     };

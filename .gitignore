@@ -19,7 +19,8 @@ move/**/build/
 playwright-report/
 test-results/
 coverage/
-clips/
+# Root Remotion project only. Landing videos live in public/clips; source is remotion/clips.
+/clips/
 research/
 prototype/
 qa/

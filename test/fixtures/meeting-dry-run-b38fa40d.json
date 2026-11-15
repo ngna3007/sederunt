@@ -1,0 +1,441 @@
+{
+ "source": "Nov 11 2026 demo dry run, Meet fvc-tptp-dee, Recall bot b38fa40d-954a-4d13-979a-6e5da9943686, dpl_GDrPcotKVYB775Ntt8hnDuuBzCBh (75a69f8). Words and times from Recall's recording transcript; realtime finals split at the pauses noted in splitFinals.",
+ "botId": "b38fa40d-954a-4d13-979a-6e5da9943686",
+ "lines": [
+  {
+   "speaker": "Anh Nguyễn",
+   "participantId": "100",
+   "host": true,
+   "words": [
+    [
+     "hey",
+     17.94,
+     18.1
+    ],
+    [
+     "adam",
+     18.1,
+     18.34
+    ],
+    [
+     "can",
+     18.66,
+     18.74
+    ],
+    [
+     "you",
+     18.74,
+     18.82
+    ],
+    [
+     "hear",
+     18.82,
+     18.9
+    ],
+    [
+     "me",
+     18.98,
+     19.06
+    ]
+   ]
+  },
+  {
+   "speaker": "Adam",
+   "participantId": "2147483647",
+   "host": false,
+   "words": [
+    [
+     "yes",
+     23.76,
+     24.16
+    ],
+    [
+     "i",
+     24.16,
+     24.16
+    ],
+    [
+     "can",
+     24.16,
+     24.16
+    ],
+    [
+     "hear",
+     24.24,
+     24.32
+    ],
+    [
+     "you",
+     24.4,
+     24.48
+    ]
+   ]
+  },
+  {
+   "speaker": "Anh Nguyễn",
+   "participantId": "100",
+   "host": true,
+   "words": [
+    [
+     "heads",
+     29.22,
+     29.46
+    ],
+    [
+     "up",
+     29.54,
+     29.62
+    ],
+    [
+     "the",
+     30.18,
+     30.26
+    ],
+    [
+     "design",
+     30.34,
+     30.42
+    ],
+    [
+     "review",
+     30.5,
+     30.58
+    ],
+    [
+     "moved",
+     30.82,
+     30.98
+    ],
+    [
+     "to",
+     30.98,
+     31.06
+    ],
+    [
+     "thursday",
+     31.14,
+     31.22
+    ]
+   ]
+  },
+  {
+   "speaker": "Adam",
+   "participantId": "2147483647",
+   "host": false,
+   "words": [
+    [
+     "i",
+     34.16,
+     34.24
+    ],
+    [
+     "hear",
+     34.48,
+     34.56
+    ],
+    [
+     "you",
+     34.64,
+     34.72
+    ]
+   ]
+  },
+  {
+   "speaker": "Anh Nguyễn",
+   "participantId": "100",
+   "host": true,
+   "words": [
+    [
+     "adam",
+     41.54,
+     42.34
+    ],
+    [
+     "create",
+     42.34,
+     42.34
+    ],
+    [
+     "a",
+     42.58,
+     42.66
+    ],
+    [
+     "linear",
+     42.74,
+     42.82
+    ],
+    [
+     "issue",
+     43.06,
+     43.22
+    ],
+    [
+     "fix",
+     44.1,
+     44.18
+    ],
+    [
+     "the",
+     44.26,
+     44.34
+    ],
+    [
+     "onboarding",
+     44.58,
+     44.82
+    ],
+    [
+     "email",
+     44.98,
+     45.22
+    ],
+    [
+     "before",
+     45.46,
+     45.54
+    ],
+    [
+     "launch",
+     46.02,
+     46.1
+    ]
+   ]
+  },
+  {
+   "speaker": "Adam",
+   "participantId": "2147483647",
+   "host": false,
+   "words": [
+    [
+     "what",
+     47.12,
+     47.2
+    ],
+    [
+     "i",
+     52.72,
+     52.8
+    ],
+    [
+     "filed",
+     53.04,
+     53.12
+    ],
+    [
+     "route",
+     53.76,
+     53.92
+    ],
+    [
+     "73",
+     54.0,
+     55.12
+    ],
+    [
+     "fix",
+     55.12,
+     55.12
+    ],
+    [
+     "the",
+     55.12,
+     55.2
+    ],
+    [
+     "onboarding",
+     55.36,
+     55.6
+    ],
+    [
+     "email",
+     55.76,
+     55.84
+    ],
+    [
+     "before",
+     56.0,
+     56.08
+    ],
+    [
+     "launch",
+     56.56,
+     56.64
+    ]
+   ]
+  },
+  {
+   "speaker": "Anh Nguyễn",
+   "participantId": "100",
+   "host": true,
+   "words": [
+    [
+     "adam",
+     63.44,
+     63.6
+    ],
+    [
+     "schedule",
+     64.32,
+     64.4
+    ],
+    [
+     "a",
+     64.48,
+     64.56
+    ],
+    [
+     "launch",
+     64.8,
+     64.88
+    ],
+    [
+     "sync",
+     65.12,
+     65.28
+    ],
+    [
+     "tomorrow",
+     65.28,
+     65.36
+    ],
+    [
+     "at",
+     65.52,
+     65.6
+    ],
+    [
+     "10",
+     65.76,
+     65.84
+    ],
+    [
+     "am",
+     66.16,
+     66.32
+    ]
+   ]
+  },
+  {
+   "speaker": "Adam",
+   "participantId": "2147483647",
+   "host": false,
+   "words": [
+    [
+     "google",
+     71.12,
+     71.2
+    ],
+    [
+     "calendar",
+     71.6,
+     71.76
+    ],
+    [
+     "is",
+     71.76,
+     71.84
+    ],
+    [
+     "not",
+     71.92,
+     72.0
+    ],
+    [
+     "connected",
+     72.32,
+     72.56
+    ]
+   ]
+  },
+  {
+   "speaker": "Anh Nguyễn",
+   "participantId": "100",
+   "host": true,
+   "words": [
+    [
+     "thanks",
+     85.02,
+     85.26
+    ],
+    [
+     "adam",
+     85.26,
+     85.34
+    ]
+   ]
+  },
+  {
+   "speaker": "Adam",
+   "participantId": "2147483647",
+   "host": false,
+   "words": [
+    [
+     "you're",
+     88.76,
+     88.84
+    ],
+    [
+     "welcome",
+     88.92,
+     89.0
+    ]
+   ]
+  }
+ ],
+ "splitFinals": [
+  [
+   "Heads up.",
+   "The design review moved to Thursday."
+  ],
+  [
+   "Adam, create a linear issue.",
+   "Fix the onboarding email before launch."
+  ]
+ ],
+ "turnLog": [
+  {
+   "at": "09:14:00.205Z",
+   "answered": true,
+   "note": "Hey Adam, can you hear me? -> Yes, I can hear you."
+  },
+  {
+   "at": "09:14:11.031Z",
+   "answered": true,
+   "note": "'Heads up.' alone -> 'I hear you.' (wrong)"
+  },
+  {
+   "at": "09:14:11.754Z",
+   "answered": false,
+   "note": "'The design review moved to Thursday.' quiet, but not stored"
+  },
+  {
+   "at": "09:14:24.146Z",
+   "answered": true,
+   "awaiting": "title",
+   "note": "'Adam, create a linear issue.' -> 'What should the issue say?' then barge 'word'"
+  },
+  {
+   "at": "09:14:29.894Z",
+   "answered": true,
+   "outcomes": [
+    "filed"
+   ],
+   "note": "continuation filed ROW-73"
+  },
+  {
+   "at": "09:14:47.694Z",
+   "answered": true,
+   "outcomes": [
+    "not-connected"
+   ],
+   "note": "schedule a launch sync -> Google Calendar is not connected"
+  },
+  {
+   "at": "09:15:05.653Z",
+   "answered": true,
+   "closing": true,
+   "note": "Thanks, Adam. -> You're welcome."
+  }
+ ]
+}

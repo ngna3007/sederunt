@@ -1,4 +1,11 @@
 const truthy = (value) => /^(1|true|yes|on)$/i.test(String(value || "").trim());
+function secretsKeyBytes(value) {
+  const raw = String(value || "").trim();
+  if (/^[0-9a-fA-F]{64}$/.test(raw)) return Buffer.from(raw, "hex");
+  const normalized = raw.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+  return Buffer.from(padded, "base64");
+}
 const text = (env, name) => String(env[name] || "").trim();
 const forbiddenModes = [
   "SEDERUNT_AUTH_FAKE", "SEDERUNT_AUTH_OPEN", "SEDERUNT_ALLOW_OPEN_AUTH", "SEDERUNT_TOOLS_FAKE",
@@ -50,8 +57,8 @@ export function productionConfigIssues(env = {}, { force = false } = {}) {
       catch { issues.push("Redis REST URL: HTTPS required"); }
     }
   }
-  const sealed = Buffer.from(text(env, "MCP_SECRETS_KEY_V1"), "base64");
-  if (sealed.length !== 32) issues.push("MCP_SECRETS_KEY_V1: a base64-encoded 32-byte encryption key is required");
+  const sealed = secretsKeyBytes(text(env, "MCP_SECRETS_KEY_V1"));
+  if (sealed.length !== 32) issues.push("MCP_SECRETS_KEY_V1: a 32-byte key is required, as 64 hex characters or base64");
   return issues;
 }
 

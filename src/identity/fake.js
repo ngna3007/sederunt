@@ -207,6 +207,13 @@ export function createFakeIdentity(env = {}) {
       if (trimmed.length < 1 || trimmed.length > 120) {
         throw new IdentityError("invalid_tenant", "Tenant name must be 1 to 120 characters.");
       }
+      for (const row of store.memberships) {
+        if (row.user_id !== user.id) continue;
+        const existing = store.tenants.get(row.tenant_id);
+        if (existing && existing.kind === kind && existing.name.trim().toLowerCase() === trimmed.toLowerCase()) {
+          throw new IdentityError("duplicate_workspace", "You already have a workspace with this name.");
+        }
+      }
       const id = randomUUID();
       const createdAt = new Date().toISOString();
       store.tenants.set(id, {

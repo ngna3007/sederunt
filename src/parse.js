@@ -1,3 +1,5 @@
+import { parseScheduleUtterance } from "./meeting/schedule.js";
+
 const TRIP_READ = /what tickets are open for the trip\??/i;
 const FILE_TICKET = /file the venue ticket(?:\s+(\S+))?/i;
 const FILE_REQUEST = /^file (?:the |a |an )(.+?)[.!]?$/i;
@@ -66,6 +68,26 @@ export function parseUtterance(text) {
       statement: trimmed,
       missingFact: named ? "" : "day",
       params: { name: "review", day: named || null },
+    };
+  }
+  const scheduled = parseScheduleUtterance(trimmed);
+  if (scheduled) {
+    return {
+      type: "write",
+      tool: "calendar",
+      edit: "create",
+      statement: trimmed,
+      title: scheduled.title,
+      missingFact: scheduled.missing || "",
+      params: {
+        title: scheduled.title,
+        summary: scheduled.title,
+        start: scheduled.start || null,
+        end: scheduled.end || null,
+        startTime: scheduled.start || null,
+        endTime: scheduled.end || null,
+        timeZone: scheduled.timeZone,
+      },
     };
   }
   if (FILE_REQUEST.test(trimmed) && !FILE_TICKET.test(trimmed)) {

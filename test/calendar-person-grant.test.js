@@ -63,7 +63,7 @@ test("person grant token powers listUpcoming without env calendar tokens", async
 });
 
 test("welcome upcomingMeetings reports unavailable when person token cannot read", async () => {
-  const adapter = createCalendarAdapter({
+  const _adapter = createCalendarAdapter({
     CALENDAR_TIME_ZONE: ZONE,
   }, {
     fetch: async () => ({ ok: false, status: 500, async text() { return "nope"; } }),

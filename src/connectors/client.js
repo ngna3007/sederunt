@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Client, InMemoryTransport, SSEClientTransport, StreamableHTTPClientTransport, UnauthorizedError } from "@modelcontextprotocol/client";
 import { calendarFakeEnabled } from "../calendar/fake.js";
 import { runWithFormsContext } from "../mcp-forms/context.js";
@@ -9,8 +10,14 @@ import { guardConnectorUrl } from "./url-guard.js";
 import { pinnedFetch } from "./pinned-fetch.js";
 
 const DEFAULT_TIMEOUT_MS = 10000;
+const CONNECT_TIMEOUT_MS = 5000;
+const POOL_IDLE_MS = 5 * 60 * 1000;
+const TOOL_LIST_MS = 10 * 60 * 1000;
 const MAX_PAGES = 64;
 const MAX_HOPS = 3;
+const pools = new Map();
+const opening = new Map();
+const toolLists = new Map();
 
 /**
  * @param {{ url: string, transport?: string, auth?: { token?: string, headerName?: string }, token?: string, headerName?: string, env?: NodeJS.ProcessEnv, timeoutMs?: number, lookup?: Function, fetch?: typeof fetch }} input
@@ -67,7 +74,7 @@ export async function testConnection(input) {
     const run = async (signal) => {
       if (!preferSse) {
         try {
-          const opened = await openClient(url, auth, input, signal, "streamable_http", timeoutMs);
+          const opened = await openWithin(url, auth, input, signal, "streamable_http", Math.min(timeoutMs, CONNECT_TIMEOUT_MS));
           try {
             serverInfo = readServerInfo(opened.client);
             protocolVersion = opened.transport.protocolVersion || null;
@@ -83,7 +90,7 @@ export async function testConnection(input) {
       }
       let opened;
       try {
-        opened = await openClient(url, auth, input, signal, "sse", timeoutMs);
+        opened = await openWithin(url, auth, input, signal, "sse", Math.min(timeoutMs, CONNECT_TIMEOUT_MS));
       } catch (error) {
         upstream = rememberUpstream(error, upstream);
         throw carryUpstream(error, upstream);
@@ -136,27 +143,49 @@ export async function testConnection(input) {
  */
 export async function listTools(input) {
   const timeoutMs = positiveTimeout(input?.timeoutMs);
+  const cacheKey = typeof input?.poolKey === "string" ? input.poolKey.trim() : "";
+  const revision = String(input?.revision ?? "");
+  const clock = typeof input?.now === "function" ? input.now : Date.now;
+  if (cacheKey) {
+    const hit = toolLists.get(cacheKey);
+    if (hit && hit.revision === revision && clock() - hit.at < TOOL_LIST_MS) {
+      return hit.tools.map((tool) => ({ ...tool }));
+    }
+  }
+  let tools = [];
   if (isBuiltinGoogleForms(input)) {
-    let tools = [];
     await withTimeout(timeoutMs, async () => {
       tools = await withBuiltinClient(input, timeoutMs, ({ client }) => listPages(client, timeoutMs));
-    });
-    return tools;
-  }
-  if (useFakeCalendar(input)) {
-    let tools = [];
+    }, input?.signal);
+  } else if (useFakeCalendar(input)) {
     await withTimeout(timeoutMs, async () => {
       tools = await withCalendarClient(input, timeoutMs, ({ client }) => listPages(client, timeoutMs));
-    });
-    return tools;
+    }, input?.signal);
+  } else {
+    const tested = await testConnection(input);
+    if (!tested.ok) throw connectorError(tested.code || "protocol");
+    tools = tested.tools;
   }
-  const tested = await testConnection(input);
-  if (!tested.ok) throw connectorError(tested.code || "protocol");
-  return tested.tools;
+  if (cacheKey) toolLists.set(cacheKey, { at: Date.now(), revision, tools });
+  return tools;
+}
+
+/** Drop one cached tool list, or every list when the key is omitted. */
+export function dropCachedToolList(key) {
+  if (typeof key === "string" && key) toolLists.delete(key);
+  else toolLists.clear();
+}
+
+/** Close pooled clients. Tests call this before the fake server stops. */
+export async function resetConnectorPool() {
+  opening.clear();
+  const keys = [...pools.keys()];
+  await Promise.all(keys.map((key) => evictPool(key)));
 }
 
 export async function callTool(connector, name, args = {}, options = {}) {
   const timeoutMs = positiveTimeout(options.timeoutMs);
+  const poolKey = typeof options.poolKey === "string" ? options.poolKey.trim() : "";
   const target = {
     url: connector?.url,
     preset: connector?.preset || options.preset,
@@ -174,7 +203,7 @@ export async function callTool(connector, name, args = {}, options = {}) {
           name,
           arguments: args && typeof args === "object" ? args : {},
         }, { timeout: timeoutMs }));
-      });
+      }, options.signal);
       return describedCall(result);
     }
     if (useFakeCalendar(target)) {
@@ -184,35 +213,47 @@ export async function callTool(connector, name, args = {}, options = {}) {
           name,
           arguments: args && typeof args === "object" ? args : {},
         }, { timeout: timeoutMs }));
-      });
+      }, options.signal);
       return describedCall(result);
     }
     const url = await guardConnectorUrl(connector?.url, guardOptions({ ...connector, ...options, preset: target.preset }));
     const auth = authFrom({ ...connector, ...options, token: connector?.token || "" });
+    const authKey = authFingerprint(connector?.token || options.token || "", auth);
     let result = null;
     await withTimeout(timeoutMs, async (signal) => {
       const kinds = options.transport === "sse" ? ["sse"] : ["streamable_http", "sse"];
       let last;
       let upstream = "";
       for (const kind of kinds) {
+        let opened = null;
         try {
-          const opened = await openClient(url, auth, { ...options, env: options.env, preset: target.preset }, signal, kind, timeoutMs);
-          try {
-            result = await opened.client.callTool({ name, arguments: args && typeof args === "object" ? args : {} }, { timeout: timeoutMs });
-            return;
-          } finally {
-            await opened.client.close().catch(() => {});
-          }
+          opened = await acquireClient({
+            poolKey,
+            url,
+            auth,
+            authKey,
+            input: { ...options, env: options.env, preset: target.preset },
+            signal,
+            kind,
+            timeoutMs,
+          });
+          result = await opened.client.callTool({ name, arguments: args && typeof args === "object" ? args : {} }, { timeout: timeoutMs });
+          if (opened.entry) touchPool(opened.entry);
+          else await opened.client.close().catch(() => {});
+          return;
         } catch (error) {
+          if (opened?.entry) await evictEntry(opened.entry);
+          else if (opened?.client) await opened.client.close().catch(() => {});
           last = error;
           upstream = rememberUpstream(error, upstream);
           if (classify(error) !== "protocol" || kind === "sse") throw carryUpstream(error, upstream);
         }
       }
       throw carryUpstream(last, upstream);
-    });
+    }, options.signal);
     return describedCall(result);
   } catch (error) {
+    if (poolKey) await evictPool(poolKey);
     const code = classify(error);
     const message = failureMessage(code, error);
     return {
@@ -396,22 +437,109 @@ function toolText(result) {
   return blocks.map((block) => (typeof block?.text === "string" ? block.text : "")).filter(Boolean).join("\n");
 }
 
-async function withTimeout(timeoutMs, run) {
+async function withTimeout(timeoutMs, run, externalSignal) {
   const controller = new AbortController();
   let timer;
+  let onAbort;
   const expired = new Promise((_, reject) => {
     timer = setTimeout(() => {
       controller.abort();
       reject(connectorError("timeout"));
     }, timeoutMs);
   });
+  const cancelled = new Promise((_, reject) => {
+    if (!externalSignal) return;
+    const fail = () => {
+      controller.abort();
+      reject(connectorError("timeout"));
+    };
+    if (externalSignal.aborted) fail();
+    else {
+      onAbort = fail;
+      externalSignal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
   const work = run(controller.signal);
   work.catch(() => {});
+  expired.catch(() => {});
+  cancelled.catch(() => {});
   try {
-    await Promise.race([work, expired]);
+    await Promise.race([work, expired, cancelled]);
   } finally {
     clearTimeout(timer);
+    if (externalSignal && onAbort) externalSignal.removeEventListener("abort", onAbort);
   }
+}
+
+function authFingerprint(token, auth) {
+  const header = auth?.requestInit?.headers ? JSON.stringify(auth.requestInit.headers) : "authorization";
+  return createHash("sha256").update(`${header}\n${token}`).digest("hex");
+}
+
+async function acquireClient({ poolKey, url, auth, authKey, input, signal, kind, timeoutMs }) {
+  const connectMs = Math.min(timeoutMs, CONNECT_TIMEOUT_MS);
+  if (!poolKey) {
+    const opened = await openWithin(url, auth, input, signal, kind, connectMs);
+    return { client: opened.client, entry: null };
+  }
+  const existing = pools.get(poolKey);
+  if (existing && existing.url === url.href && existing.kind === kind && existing.authKey === authKey && !existing.dead) {
+    touchPool(existing);
+    return { client: existing.client, entry: existing };
+  }
+  if (existing) await evictPool(poolKey);
+  const pendingKey = `${poolKey}:${kind}`;
+  let pending = opening.get(pendingKey);
+  if (!pending) {
+    pending = openWithin(url, auth, input, signal, kind, connectMs).then((opened) => {
+      const entry = {
+        key: poolKey,
+        client: opened.client,
+        url: url.href,
+        kind,
+        authKey,
+        timer: null,
+        dead: false,
+      };
+      pools.set(poolKey, entry);
+      touchPool(entry);
+      return { client: opened.client, entry };
+    }).finally(() => {
+      if (opening.get(pendingKey) === pending) opening.delete(pendingKey);
+    });
+    opening.set(pendingKey, pending);
+  }
+  return pending;
+}
+
+async function openWithin(url, auth, input, signal, kind, connectMs) {
+  let opened;
+  await withTimeout(connectMs, async (connectSignal) => {
+    opened = await openClient(url, auth, input, connectSignal, kind, connectMs);
+  }, signal);
+  return opened;
+}
+
+function touchPool(entry) {
+  if (!entry || entry.dead || pools.get(entry.key) !== entry) return;
+  if (entry.timer) clearTimeout(entry.timer);
+  entry.timer = setTimeout(() => {
+    evictPool(entry.key).catch(() => {});
+  }, POOL_IDLE_MS);
+  entry.timer.unref?.();
+}
+
+async function evictPool(key) {
+  const entry = pools.get(key);
+  if (entry) await evictEntry(entry);
+}
+
+async function evictEntry(entry) {
+  if (!entry || entry.dead) return;
+  entry.dead = true;
+  if (pools.get(entry.key) === entry) pools.delete(entry.key);
+  if (entry.timer) clearTimeout(entry.timer);
+  await entry.client.close().catch(() => {});
 }
 
 function guardedFetch(input, timeoutSignal) {

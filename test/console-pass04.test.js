@@ -7,6 +7,7 @@ import { logAction, logFailure } from "../src/activity.js";
 import { undoPrompt } from "../src/activity-feed.js";
 import { sealSession, sessionCookie } from "../src/console-auth.js";
 import { ROOM_COLUMNS, renderConsolePage } from "../src/console-page.js";
+import { consolePageSource } from "./console-source.js";
 import { rankDecisions } from "../src/room-match.js";
 import { createApp } from "../src/server.js";
 import { createSession } from "../src/session.js";
@@ -14,7 +15,7 @@ import { createSession } from "../src/session.js";
 const SECRET = "pass04-secret";
 
 test("missing room copy is a card and the shell stays hidden", () => {
-  const page = readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
+  const page = consolePageSource();
   const css = readFileSync(new URL("../src/console.css", import.meta.url), "utf8");
   assert.match(page, /id="room-missing-link"[^>]*>[\s\S]*Back to rooms</);
   assert.doesNotMatch(page, /Back to Rooms/);
@@ -24,6 +25,16 @@ test("missing room copy is a card and the shell stays hidden", () => {
   assert.match(block, /body\.room-missing \.underline-tabs/);
   assert.match(block, /body\.room-missing \.room-settings/);
   assert.match(block, /#room-missing \.empty-title \{\s*color: var\(--foreground\)/);
+});
+
+test("a later rooms shell keeps rows that are already on screen", () => {
+  const page = renderConsolePage({ signedIn: true });
+  assert.match(page, /var keepRooms = shell && state && state\.rooms && state\.rooms\.length > 0/);
+  assert.match(page, /if \(hasRows\) \{\s*if \(empty\) empty\.hidden = true;/);
+  assert.match(page, /listed\.setAttribute\("aria-busy", "true"\)/);
+  assert.match(page, /emptyLine\.textContent = "Loading\.\.\."/);
+  assert.match(page, /listedBusy\.removeAttribute\("aria-busy"\)/);
+  assert.match(page, /shellTries <= 2 \? 200 : shellTries === 3 \? 500 : 1500/);
 });
 
 test("focus rings and a skip link are in the console", () => {
@@ -40,7 +51,7 @@ test("focus rings and a skip link are in the console", () => {
 });
 
 test("a narrow decision row keeps only the clashing badge", () => {
-  const page = readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
+  const page = consolePageSource();
   const css = readFileSync(new URL("../src/console.css", import.meta.url), "utf8");
   assert.match(page, /badge-inline/);
   assert.match(page, /badge\.textContent = clashing \? "Clashing" : ""/);
@@ -104,7 +115,7 @@ test("undo confirm names the inverse change", () => {
     changes: [{ field: "assignee", to: "Mina" }],
   }, "UTC", "UTC");
   assert.equal(clear.ask, "Clear the assignee on ROW-131?");
-  const page = readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
+  const page = consolePageSource();
   assert.match(page, /function confirmUndo/);
   assert.match(page, /Undo change/);
   assert.match(page, /textContent = "Undone"/);
@@ -113,7 +124,7 @@ test("undo confirm names the inverse change", () => {
 });
 
 test("room status describes the meeting and failures are a separate chip", () => {
-  const page = readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
+  const page = consolePageSource();
   const css = readFileSync(new URL("../src/console.css", import.meta.url), "utf8");
   assert.match(page, /function meetingWord/);
   assert.match(page, /No recording/);
@@ -150,7 +161,7 @@ test("a clash answer leads with one sentence and keeps room cite labels", () => 
   assert.match(result.lead, /^Two decisions disagree: the booth opens at nine and badge pickup stays at the north entrance \(rowan, \d{1,2}:\d{2} [AP]M\) vs ten so setup is not rushed \(tomas, \d{1,2}:\d{2} [AP]M\)\.$/);
   assert.equal(result.clash[0].speaker, "rowan");
   assert.match(result.clash[0].clock, /^\d{1,2}:\d{2} [AP]M$/);
-  const page = readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
+  const page = consolePageSource();
   assert.match(page, /relativeWhen\(cite\.spokenAt\) \|\| whenLabel\(cite\.spokenAt\)/);
   assert.match(page, /Open room/);
   assert.match(page, /more decisions/);
@@ -158,8 +169,8 @@ test("a clash answer leads with one sentence and keeps room cite labels", () => 
 });
 
 test("list columns share a grid and cap avatar stacks", () => {
-  assert.deepEqual(ROOM_COLUMNS, ["Room", "Platform", "Speakers", "Status", "Started", ""]);
-  const page = readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
+  assert.deepEqual(ROOM_COLUMNS, ["Room", "Platform", "Speakers", "Status", "Started", "Length", ""]);
+  const page = consolePageSource();
   const css = readFileSync(new URL("../src/console.css", import.meta.url), "utf8");
   assert.match(page, /people\.slice\(0, 2\)/);
   assert.match(page, /whenText: ident\.when \? \(relativeWhen\(ident\.when\) \|\| ""\) : ""/);
@@ -342,7 +353,7 @@ test("home and rooms columns line up, and the pass 04 fixes hold in the browser"
 
   for (const width of [1920, 1024]) {
     await page.setViewportSize({ width, height: 900 });
-    // Home only previews a few rooms and hides the explorer head; measure columns on Rooms.
+    // Home hides the explorer head, so column alignment is measured on Rooms.
     for (const path of ["/console/rooms"]) {
       await page.goto(`http://127.0.0.1:${port}${path}`, { waitUntil: "networkidle" });
       await page.waitForSelector("#room-list a.room", { timeout: 45000 });
@@ -418,10 +429,13 @@ test("home and rooms columns line up, and the pass 04 fixes hold in the browser"
   const homePreview = await page.evaluate(() => ({
     count: document.querySelectorAll("#room-list a.room").length,
     headHidden: !!document.querySelector("#rooms .explorer-head")?.hidden,
+    titles: [...document.querySelectorAll("#room-list a.room strong")].map((node) => node.textContent || ""),
     allRooms: !!document.getElementById("home-all-rooms") && !document.getElementById("home-all-rooms").hidden,
   }));
-  assert.ok(homePreview.count >= 2 && homePreview.count <= 3, JSON.stringify(homePreview));
+  assert.equal(homePreview.count, 5, JSON.stringify(homePreview));
   assert.equal(homePreview.headHidden, true);
+  assert.deepEqual(homePreview.titles, ["Booth planning", "Launch review", "#ops", "Infra sync", "Quiet room"]);
+  assert.equal(homePreview.allRooms, false);
 
   await page.goto(`http://127.0.0.1:${port}/console/rooms`, { waitUntil: "networkidle" });
   await page.waitForSelector("#room-list a.room", { timeout: 45000 });
@@ -442,9 +456,11 @@ test("home and rooms columns line up, and the pass 04 fixes hold in the browser"
       card: card ? getComputedStyle(card).backgroundColor : "",
     };
   });
-  assert.ok(rooms.rows.length >= 2);
+  assert.equal(rooms.rows.length, 5);
+  assert.equal(rooms.rows[0].title, "Booth planning");
+  assert.deepEqual(rooms.rows.map((row) => row.title), ["Booth planning", "Launch review", "#ops", "Infra sync", "Quiet room"]);
   assert.ok(rooms.rows.every((row) => row.status !== "Failed"), JSON.stringify(rooms.rows));
-  assert.ok(rooms.rows.some((row) => row.status === "Ended"));
+  assert.ok(rooms.rows.some((row) => row.status === "Done"));
   assert.ok(rooms.rows.some((row) => row.status === "No recording"));
   assert.ok(rooms.rows.some((row) => row.status === "Channel"));
   assert.ok(rooms.rows.some((row) => row.chip === "1 failed action"));

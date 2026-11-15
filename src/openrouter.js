@@ -153,6 +153,7 @@ export async function openRouterComplete(input = {}) {
   const tried = [];
   for (const model of models) {
     tried.push(model);
+    const bound = boundSignal(input.signal, roundMs(input.timeoutMs, 10000));
     try {
       const response = await fetchImpl(CHAT_URL, {
         method: "POST",
@@ -163,6 +164,7 @@ export async function openRouterComplete(input = {}) {
           "X-Title": "Sederunt",
         },
         body: JSON.stringify(completionBody(model, messages, { maxTokens: input.maxTokens })),
+        signal: bound.signal,
       });
       if (!response?.ok) {
         dropBody(response);
@@ -175,7 +177,10 @@ export async function openRouterComplete(input = {}) {
       if (!text) continue;
       return { text, used: true, model, tried };
     } catch {
+      if (input.signal?.aborted) return { text: "", used: false, model, tried };
       continue;
+    } finally {
+      bound.cancel();
     }
   }
   return { text: "", used: false, model: tried.at(-1) || models[0], tried };
@@ -198,24 +203,50 @@ export async function openRouterComplete(input = {}) {
  */
 export async function openRouterStream(input = {}) {
   const env = input.env ?? process.env;
-  const { key, models, enabled } = openRouterConfig(env);
+  const configured = openRouterConfig(env);
+  const key = configured.key;
+  const enabled = configured.enabled;
+  const models = Array.isArray(input.models) && input.models.length
+    ? input.models.filter((model) => typeof model === "string" && model.trim())
+    : configured.models;
   if (!enabled) return { text: "", used: false, model: models[0], error: "no-key", tried: [] };
   const fetchImpl = input.fetchImpl || fetch;
   const messages = [];
   if (typeof input.system === "string" && input.system.trim()) messages.push({ role: "system", content: input.system.trim() });
   for (const turn of input.messages ?? []) {
-    if (!turn || typeof turn.content !== "string" || !turn.content.trim()) continue;
+    if (!turn || typeof turn !== "object") continue;
+    if (turn.role === "tool" && typeof turn.content === "string") {
+      messages.push({ role: "tool", tool_call_id: String(turn.tool_call_id || ""), content: turn.content });
+      continue;
+    }
+    if (turn.role === "assistant" && Array.isArray(turn.tool_calls)) {
+      messages.push({
+        role: "assistant",
+        content: typeof turn.content === "string" ? turn.content : null,
+        tool_calls: turn.tool_calls,
+      });
+      continue;
+    }
+    if (typeof turn.content !== "string" || !turn.content.trim()) continue;
     messages.push({ role: turn.role === "assistant" ? "assistant" : "user", content: turn.content.trim() });
   }
   if (!messages.length) return { text: "", used: false, model: models[0], error: "empty", tried: [] };
 
+  const tools = Array.isArray(input.tools) ? input.tools : [];
   const tried = [];
   let lastError = "unavailable";
+  const bound = boundSignal(input.signal, roundMs(input.timeoutMs, 60000));
+  try {
   for (const model of models) {
     tried.push(model);
     let text = "";
+    const toolDeltas = [];
     try {
       const body = completionBody(model, messages, { stream: true, maxTokens: input.maxTokens });
+      if (tools.length) {
+        body.tools = tools;
+        body.tool_choice = "auto";
+      }
       const response = await fetchImpl(CHAT_URL, {
         method: "POST",
         headers: {
@@ -226,7 +257,7 @@ export async function openRouterStream(input = {}) {
           "X-Title": "Sederunt",
         },
         body: JSON.stringify(body),
-        signal: input.signal,
+        signal: bound.signal,
       });
       if (!response?.ok || !response.body) {
         lastError = `http-${response?.status ?? 0}`;
@@ -246,7 +277,11 @@ export async function openRouterStream(input = {}) {
           lastError = "stream-error";
           return;
         }
-        const delta = choiceText(event?.choices?.[0]);
+        const choice = event?.choices?.[0];
+        if (absorbToolDelta(toolDeltas, choice?.delta?.tool_calls) && typeof input.onActivity === "function") {
+          await input.onActivity();
+        }
+        const delta = choiceText(choice);
         if (!delta) return;
         text += delta;
         // Leading padding from a reasoning model is not an answer and must not be shown.
@@ -278,18 +313,266 @@ export async function openRouterStream(input = {}) {
         buffer += decoder.decode();
         await consume(buffer, true);
       }
-      if (streamError && !text.trim()) continue;
+      if (streamError && !text.trim() && !toolDeltas.length) continue;
+      const toolCalls = finishToolDeltas(toolDeltas);
       const trimmed = text.trim();
-      if (!trimmed) {
+      if (!trimmed && !toolCalls.length) {
         lastError = "empty";
         continue;
       }
-      return { text: trimmed, used: true, model, tried };
+      return { text: trimmed, toolCalls, used: true, model, tried };
     } catch {
-      if (text.trim()) return { text: text.trim(), used: true, model, error: "network", tried };
+      const toolCalls = finishToolDeltas(toolDeltas);
+      if (input.signal?.aborted || bound.signal.aborted) {
+        if (text.trim() || toolCalls.length) return { text: text.trim(), toolCalls, used: true, model, error: "aborted", tried };
+        if (input.signal?.aborted) return { text: "", toolCalls: [], used: false, model, error: "aborted", tried };
+        lastError = "aborted";
+        break;
+      }
+      if (text.trim() || toolCalls.length) return { text: text.trim(), toolCalls, used: true, model, error: "network", tried };
       lastError = "network";
       continue;
     }
   }
   return { text: "", used: false, model: tried.at(-1) || models[0], error: lastError, tried };
+  } finally {
+    bound.cancel();
+  }
+}
+
+function roundMs(value, fallback) {
+  const number = Number(value);
+  if (Number.isFinite(number) && number > 0) return number;
+  return fallback;
+}
+
+function boundSignal(external, ms) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  timer.unref?.();
+  const signal = external ? AbortSignal.any([external, controller.signal]) : controller.signal;
+  return {
+    signal,
+    cancel() { clearTimeout(timer); },
+  };
+}
+
+const SPEECH_URL = "https://openrouter.ai/api/v1/audio/speech";
+const DEFAULT_TTS_MODEL = "mistralai/voxtral-mini-tts-2603";
+const DEFAULT_TTS_VOICE = "en_paul_neutral";
+
+function absorbToolDelta(calls, deltas) {
+  if (!Array.isArray(deltas) || !deltas.length) return false;
+  for (const part of deltas) {
+    const index = Number.isInteger(part?.index) ? part.index : calls.length;
+    if (!calls[index]) calls[index] = { id: "", name: "", arguments: "" };
+    if (typeof part.id === "string" && part.id) calls[index].id = part.id;
+    const fn = part.function || {};
+    if (typeof fn.name === "string") calls[index].name += fn.name;
+    if (typeof fn.arguments === "string") calls[index].arguments += fn.arguments;
+  }
+  return true;
+}
+
+function finishToolDeltas(calls) {
+  return readToolCalls({
+    tool_calls: calls.filter(Boolean).map((call) => ({
+      id: call.id,
+      function: { name: call.name, arguments: call.arguments },
+    })),
+  });
+}
+
+function readToolCalls(message) {
+  const raw = message?.tool_calls;
+  if (!Array.isArray(raw)) return [];
+  const calls = [];
+  for (const call of raw) {
+    const name = call?.function?.name || call?.name;
+    if (typeof name !== "string" || !name.trim()) continue;
+    let args = call?.function?.arguments ?? call?.arguments ?? {};
+    if (typeof args === "string") {
+      try { args = JSON.parse(args); } catch { args = null; }
+    }
+    if (!args || typeof args !== "object" || Array.isArray(args)) args = {};
+    calls.push({
+      id: typeof call.id === "string" && call.id ? call.id : `call_${calls.length}`,
+      name: name.trim(),
+      arguments: args,
+    });
+    if (calls.length >= 3) break;
+  }
+  return calls;
+}
+
+/**
+ * One chat turn that may include tool calls. Tries each model. Never throws.
+ * An empty answer with no tool call is not a success, so the next model runs.
+ *
+ * @param {{
+ *   env?: NodeJS.ProcessEnv,
+ *   messages?: Array<Record<string, unknown>>,
+ *   tools?: Array<Record<string, unknown>>,
+ *   models?: string[],
+ *   fetchImpl?: typeof fetch,
+ *   maxTokens?: number,
+ * }} [input]
+ */
+export async function openRouterTurn(input = {}) {
+  const env = input.env ?? process.env;
+  const { key, models: configured, enabled } = openRouterConfig(env);
+  const models = Array.isArray(input.models) && input.models.length ? input.models : configured;
+  const modelName = models[0] || configured[0] || "";
+  if (!enabled) return { text: "", toolCalls: [], used: false, model: modelName, tried: [] };
+  const messages = Array.isArray(input.messages) ? input.messages : [];
+  if (!messages.length) return { text: "", toolCalls: [], used: false, model: modelName, tried: [] };
+  const fetchImpl = input.fetchImpl || fetch;
+  const tools = Array.isArray(input.tools) ? input.tools : [];
+  const tried = [];
+  for (const model of models) {
+    tried.push(model);
+    try {
+      const body = completionBody(model, messages, { maxTokens: input.maxTokens ?? 800 });
+      if (tools.length) {
+        body.tools = tools;
+        body.tool_choice = "auto";
+      }
+      const response = await fetchImpl(CHAT_URL, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${key}`,
+          "content-type": "application/json",
+          "HTTP-Referer": "https://sederunt.app",
+          "X-Title": "Sederunt",
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(4000),
+      });
+      if (!response?.ok) {
+        dropBody(response);
+        continue;
+      }
+      const payload = typeof response.json === "function" ? await response.json() : null;
+      const message = payload?.choices?.[0]?.message;
+      const text = textFromContent(message?.content).trim();
+      const toolCalls = readToolCalls(message);
+      if (!text && !toolCalls.length) continue;
+      return { text, toolCalls, used: true, model, tried };
+    } catch {
+      continue;
+    }
+  }
+  return { text: "", toolCalls: [], used: false, model: tried.at(-1) || modelName, tried };
+}
+
+function speechChoices(env) {
+  const pinnedModel = typeof env.OPENROUTER_TTS_MODEL === "string" ? env.OPENROUTER_TTS_MODEL.trim() : "";
+  const pinnedVoice = typeof env.OPENROUTER_TTS_VOICE === "string" ? env.OPENROUTER_TTS_VOICE.trim() : "";
+  const primary = { model: pinnedModel || DEFAULT_TTS_MODEL, voice: pinnedVoice || DEFAULT_TTS_VOICE };
+  const attempts = [primary];
+  if (primary.model !== DEFAULT_TTS_MODEL || primary.voice !== DEFAULT_TTS_VOICE) {
+    attempts.push({ model: DEFAULT_TTS_MODEL, voice: DEFAULT_TTS_VOICE });
+  }
+  return attempts;
+}
+
+function readerOf(body) {
+  if (body && typeof body.getReader === "function") return body.getReader();
+  if (body && typeof body[Symbol.asyncIterator] === "function") {
+    const iterator = body[Symbol.asyncIterator]();
+    return {
+      async read() {
+        const next = await iterator.next();
+        return next.done ? { done: true } : { done: false, value: next.value };
+      },
+    };
+  }
+  return null;
+}
+
+/**
+ * Pipe mp3 bytes. The pinned voice is tried first. If the first byte is not
+ * here within firstByteMs, the next attempt is the Voxtral fallback.
+ * The key is not returned. Never throws.
+ *
+ * @param {{ env?: NodeJS.ProcessEnv, text?: string, fetchImpl?: typeof fetch, signal?: AbortSignal, firstByteMs?: number }} [input]
+ */
+export async function openRouterSpeechStream(input = {}) {
+  const env = input.env ?? process.env;
+  const { key, enabled } = openRouterConfig(env);
+  const text = String(input.text ?? "").trim();
+  const attempts = speechChoices(env);
+  const firstByteMs = Number(input.firstByteMs) > 0 ? Number(input.firstByteMs) : 3000;
+  if (!enabled || !text) return { used: false, model: attempts[0].model, chunks: null };
+  const fetchImpl = input.fetchImpl || fetch;
+  for (const attempt of attempts) {
+    if (input.signal?.aborted) break;
+    const controller = new AbortController();
+    const signal = input.signal ? AbortSignal.any([input.signal, controller.signal]) : controller.signal;
+    const abortTimer = setTimeout(() => controller.abort(), firstByteMs);
+    abortTimer.unref?.();
+    try {
+      const response = await fetchImpl(SPEECH_URL, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${key}`,
+          "content-type": "application/json",
+          "HTTP-Referer": "https://sederunt.app",
+          "X-Title": "Sederunt",
+        },
+        body: JSON.stringify({
+          model: attempt.model,
+          input: text,
+          voice: attempt.voice,
+          response_format: "mp3",
+        }),
+        signal,
+      });
+      if (!response?.ok || !response.body) {
+        clearTimeout(abortTimer);
+        dropBody(response);
+        continue;
+      }
+      const reader = readerOf(response.body);
+      if (!reader) {
+        clearTimeout(abortTimer);
+        continue;
+      }
+      let waitTimer;
+      const first = await Promise.race([
+        reader.read(),
+        new Promise((resolve) => {
+          waitTimer = setTimeout(() => resolve({ timeout: true }), firstByteMs);
+          waitTimer.unref?.();
+        }),
+      ]);
+      clearTimeout(abortTimer);
+      clearTimeout(waitTimer);
+      const bytes = first && !first.timeout && !first.done ? Buffer.from(first.value || []) : null;
+      if (!bytes?.length || bytes[0] === 0x7b) {
+        controller.abort();
+        continue;
+      }
+      return {
+        used: true,
+        model: attempt.model,
+        chunks() {
+          return readRest(bytes, reader);
+        },
+      };
+    } catch {
+      clearTimeout(abortTimer);
+      if (input.signal?.aborted) break;
+    }
+  }
+  return { used: false, model: attempts.at(-1)?.model || attempts[0].model, chunks: null };
+}
+
+async function* readRest(first, reader) {
+  yield first;
+  while (true) {
+    const next = await reader.read();
+    if (next.done) break;
+    if (next.value) yield Buffer.from(next.value);
+  }
 }

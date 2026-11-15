@@ -37,7 +37,10 @@ export function addressesHearing(text, hearing) {
   const raw = String(text ?? "");
   const heard = normalizeHearing(hearing);
   const tokens = raw.split(/\s+/).map(letters).filter(Boolean);
-  if (tokens.some((token) => addressNames(heard).has(token))) return true;
+  const names = addressNames(heard);
+  if (tokens.some((token) => names.has(token))) return true;
+  // Streaming speech often splits a name: "hey ad am can you hear me".
+  if (splitName(tokens, names)) return true;
   return heard.triggers.some((trigger) => triggerMatches(raw, tokens, trigger));
 }
 
@@ -136,6 +139,19 @@ function addressLabels(hearing) {
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function splitName(tokens, names) {
+  for (let start = 0; start < tokens.length; start += 1) {
+    let built = "";
+    for (let index = start; index < tokens.length && index < start + 4; index += 1) {
+      const part = tokens[index];
+      if (!part || part.length > 3) break;
+      built += part;
+      if (index > start && names.has(built)) return true;
+    }
+  }
+  return false;
 }
 
 function addressNames(heard) {

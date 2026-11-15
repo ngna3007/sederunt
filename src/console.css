@@ -630,6 +630,11 @@ button.account:hover, button.account.open { background: var(--sidebar-accent); }
   background: var(--background);
 }
 #home, #onboard { flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; }
+#overview { min-width: 0; max-width: 100%; overflow: visible; }
+#overview .settings-card { overflow: visible; }
+#overview .card-help,
+#overview #hearing-help,
+#members-card .card-help { white-space: normal; overflow-wrap: anywhere; }
 #read-error { flex: none; width: 100%; margin: 0 0 16px; }
 #read-error.state-info { background: var(--muted); border-color: var(--border); }
 body.is-reading #home-empty, body.is-reading .explorer, body.is-reading #room-empty { display: none !important; }
@@ -1838,6 +1843,10 @@ a.welcome-go:hover { background: var(--primary-hover); color: var(--primary-fore
 
 #join-ready.off { color: var(--muted-foreground); }
 #meet-form, #channel-door { display: flex; flex-direction: column; gap: 8px; }
+#meet-form label { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
+.join-trigger-hint { color: var(--muted-foreground); font-size: var(--text-sm); font-weight: var(--weight-regular); }
+#join-trigger { min-height: 4.5rem; }
+#join-ready[hidden] { display: none; }
 #join-submit, #channel-connectors { width: 100%; }
 
 @media (min-width: 768px) {
@@ -4339,7 +4348,7 @@ button.room:focus-visible {
 
 :root {
   --list-gap: 16px;
-  --cols-rooms: minmax(0, 1fr) max-content 72px max-content max-content 32px;
+  --cols-rooms: minmax(0, 1fr) max-content 72px max-content max-content max-content 32px;
   --cols-decisions: minmax(0, 1.6fr) minmax(10rem, 14rem) max-content 32px;
   --cols-people: minmax(8rem, 1.1fr) minmax(0, 1.6fr) 8.5rem 9rem 32px;
   --cols-history: 24px minmax(0, 1fr) 9rem 12rem 6.5rem;
@@ -4400,10 +4409,12 @@ body.is-reading #rooms .explorer { display: none !important; }
   min-width: 0;
   overflow: visible;
 }
-#rooms .when {
+#rooms .when,
+#rooms .length {
   overflow: visible;
   text-overflow: clip;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 #record-table.record-board {
@@ -4550,10 +4561,10 @@ body.is-reading #rooms .explorer { display: none !important; }
   padding: 0 !important;
   width: auto !important;
   min-height: 64px;
-  height: 64px;
+  height: auto;
   box-sizing: border-box;
 }
-.settings-card .connectors > .status-head { height: 40px; min-height: 40px; }
+.settings-card .connectors > .status-head { height: auto; min-height: 40px; }
 
 @media (min-width: 701px) {
   #rooms .row-view,
@@ -4565,6 +4576,7 @@ body.is-reading #rooms .explorer { display: none !important; }
   #rooms a.room > .where,
   #rooms button.room > .where,
   #rooms .when,
+  #rooms .length,
   #rooms .avatar-stack,
   #rooms .status-cell,
   #record-list .row-view,
@@ -4607,8 +4619,8 @@ body.is-reading #rooms .explorer { display: none !important; }
   #rooms #room-list > a.room,
   #rooms #room-list > button.room:not(.decision-row) {
     display: grid !important;
-    grid-template-columns: minmax(0, 1fr) max-content !important;
-    grid-template-areas: "title status" "speakers started" !important;
+    grid-template-columns: minmax(0, 1fr) max-content max-content !important;
+    grid-template-areas: "title status status" "speakers length started" !important;
     height: auto !important;
     min-height: 0 !important;
     max-height: none !important;
@@ -4636,6 +4648,12 @@ body.is-reading #rooms .explorer { display: none !important; }
     justify-self: end;
     width: max-content;
     max-width: 100%;
+  }
+  #rooms a.room > .length,
+  #rooms button.room > .length {
+    grid-area: length;
+    justify-self: end;
+    white-space: nowrap;
   }
   #rooms a.room > .when,
   #rooms button.room > .when {
@@ -5668,6 +5686,12 @@ button.row-edit {
 .mcp-manage-dialog .panel-body { overscroll-behavior: contain; }
 .mcp-manage-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .mcp-manage-dialog .mcp-url, .mcp-manage-dialog .meta { margin: 0; }
+.tool-manage-account { margin: 0; color: var(--muted-foreground); font-size: var(--text-sm); line-height: 1.45; }
+.tool-manage-does { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.tool-manage-does li { margin: 0; font-size: var(--text-sm); line-height: 1.45; }
+.tool-manage-ask { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.tool-manage-ask .mcp-tool-name, .tool-manage-ask .mcp-tool-desc { margin: 0; }
+#tool-manage-dialog .conn-state { margin: 0; }
 .mcp-manage-dialog .wait-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .mcp-tool-group { display: flex; flex-direction: column; gap: 10px; }
 .mcp-tool-group h3 { margin: 4px 0 0; }
@@ -5770,6 +5794,24 @@ body.ob-page {
 .ob-page .ob-primary { border: 1px solid transparent; background: var(--primary); color: var(--primary-foreground); }
 .ob-page .ob-primary:active { background: var(--primary-active); }
 .ob-page .ob-primary:hover { background: var(--primary-hover); }
+.ob-card.is-continuing { cursor: progress; }
+.ob-card.is-continuing .ob-body,
+.ob-card.is-continuing .ob-foot-left,
+.ob-card.is-continuing .ob-primary:not([aria-busy="true"]) { pointer-events: none; }
+.ob-page .ob-primary[aria-busy="true"] { cursor: progress; }
+.ob-page .ob-primary[aria-busy="true"]::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: ob-spin 0.7s linear infinite;
+}
+@keyframes ob-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .ob-page .ob-primary[aria-busy="true"]::before { animation: none; border-right-color: currentColor; }
+}
 .ob-page .ob-btn, .ob-page .ob-dark { border: 1px solid var(--border); background: var(--card); color: var(--foreground); }
 .ob-page .ob-btn:hover, .ob-page .ob-dark:hover { background: var(--muted); }
 .ob-page .ob-link { border: 1px solid transparent; background: transparent; color: var(--muted-foreground); padding: 0 8px; margin-left: -8px; }
@@ -6562,4 +6604,37 @@ body.room-open .room-right .kv dt { padding-right: 12px; }
   #chat .chat-turn, #chat .chat-you { max-width: 100%; }
   #chat-empty.chat-hello { margin: 12px 0 0; justify-content: flex-start; text-align: left; }
   #chat .suggests { justify-content: flex-start; }
+}
+
+#invite-dialog .invite-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+}
+#invite-dialog .invite-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+#invite-dialog .invite-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+}
+#invite-dialog .invite-list li:first-child { border-top: 0; }
+#invite-dialog .invite-list span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+#invite-dialog .invite-error { margin: 0; color: var(--danger-text); }
+#invite-dialog .invite-share { display: flex; gap: 8px; align-items: center; }
+#invite-dialog .invite-share input { flex: 1; min-width: 0; }
+#invite-dialog .invite-domain { display: flex; align-items: flex-start; gap: 8px; }
+#invite-dialog #invite-dialog-sent { display: grid; gap: 8px; }
+#invite-dialog #invite-dialog-sent[hidden] { display: none; }
+#invite-dialog #invite-dialog-send[aria-busy="true"] { cursor: progress; }
+@media (max-width: 640px) {
+  #invite-dialog .invite-add { grid-template-columns: minmax(0, 1fr) auto; }
+  #invite-dialog #invite-email { grid-column: 1 / -1; }
 }

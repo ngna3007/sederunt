@@ -281,7 +281,7 @@ test("a saved meeting guest survives a new isolate and stays on its tenant", asy
     const setup = await call(port, "GET", "/console/setup", { cookie: ownerCookie });
     assert.equal(setup.status, 200, setup.location || setup.raw.slice(0, 180));
     assert.equal(hearingName(setup.raw), "Adam");
-    assert.equal(hearingTriggers(setup.raw), "");
+    assert.equal(hearingTriggers(setup.raw), "Adam");
     const open = await call(port, "GET", "/api/console", { cookie: ownerCookie });
     assert.equal(open.status, 200);
     assert.equal(open.json.hearing.name, "Adam");
@@ -311,7 +311,7 @@ test("a saved meeting guest survives a new isolate and stays on its tenant", asy
     const personalPage = await call(port, "GET", "/console/setup", { cookie: personalCookie });
     assert.equal(personalPage.status, 200);
     assert.equal(hearingName(personalPage.raw), "Adam");
-    assert.equal(hearingTriggers(personalPage.raw), "");
+    assert.equal(hearingTriggers(personalPage.raw), "Adam");
     const personalPayload = await call(port, "GET", "/api/console", { cookie: personalCookie });
     assert.equal(personalPayload.json.hearing.name, "Adam");
     assert.deepEqual(personalPayload.json.hearing.triggers, []);
@@ -381,7 +381,7 @@ test("bot settings survive a new isolate and rename the unsaved meeting guest", 
     assert.equal(bot.json.name, "Mai");
     const setup = await call(port, "GET", "/console/setup", { cookie: ownerCookie });
     assert.equal(hearingName(setup.raw), "Mai");
-    assert.equal(hearingTriggers(setup.raw), "");
+    assert.equal(hearingTriggers(setup.raw), "Mai");
     const payload = await call(port, "GET", "/api/console", { cookie: ownerCookie });
     assert.equal(payload.json.hearing.name, "Mai");
     assert.deepEqual(payload.json.hearing.triggers, []);
@@ -619,7 +619,7 @@ test("oauth hearing does not fall back to local or a company guest when spaces f
     assert.equal(memory.remembered.length, 0);
     const page = await call(port, "GET", "/console/setup", { cookie: ownerCookie });
     assert.equal(hearingName(page.raw), "Adam");
-    assert.equal(hearingTriggers(page.raw), "");
+    assert.equal(hearingTriggers(page.raw), "Adam");
     assert.equal(page.raw.includes("Piper"), false);
     assert.equal(page.raw.includes("Quinn"), false);
     const payload = await call(port, "GET", "/api/console", { cookie: ownerCookie });

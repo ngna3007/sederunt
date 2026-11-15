@@ -226,6 +226,31 @@ test("ending a meeting writes the room outcome and skips a decision that already
   assert.equal(memory.calls.filter((call) => call.kind === "decision").length, 0);
 });
 
+test("ending a meeting keeps a voice tool that was still running", async () => {
+  const session = createSession();
+  session.rooms.push({ id: "booth", memberIds: ["mina"] });
+  session.decisions.push({
+    id: "decision-9",
+    roomId: "booth",
+    text: "The booth opens at nine.",
+    blobId: "already-kept",
+    account: "company",
+    deleted: false,
+  });
+  session.voiceFollowups = [
+    { roomId: "other", name: "notes__search", ask: "ignore", status: "pending", result: "" },
+    { roomId: "booth", name: "linear__create_issue", ask: "File the booth ticket", status: "pending", result: "" },
+    { roomId: "booth", name: "notes__search", ask: "launch", status: "finished", result: "Thursday" },
+  ];
+  const memory = countingMemory();
+  await endMeeting(session, { memory }, "booth");
+  const items = memory.calls.filter((call) => call.kind === "action-item").map((call) => call.text);
+  assert.equal(items.some((text) => text.includes("ignore")), false);
+  assert.equal(items.some((text) => text.includes("Follow up after the call. linear__create_issue: File the booth ticket was still running.")), true);
+  assert.equal(items.some((text) => text.includes("Follow up after the call. notes__search: launch. Thursday")), true);
+  assert.equal(items.some((text) => /\bDone\b/.test(text)), false);
+});
+
 test("src does not read the public GraphQL or fullnode endpoints", async () => {
   const files = await walk(new URL("../src/", import.meta.url));
   const banned = ["graphql.mainnet.sui.io", "fullnode.mainnet.sui.io"];

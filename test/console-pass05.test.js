@@ -7,18 +7,19 @@ import { logAction, logFailure } from "../src/activity.js";
 import { sealSession, sessionCookie } from "../src/console-auth.js";
 import { createApp } from "../src/server.js";
 import { createSession } from "../src/session.js";
+import { consolePageSource } from "./console-source.js";
 
 const SECRET = "pass05-secret";
 
 test("meeting words separate live, ended, channel, and silence", () => {
-  const page = readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
+  const page = consolePageSource();
   const word = page.slice(page.indexOf("function meetingWord"), page.indexOf("function failedActions"));
-  assert.match(word, /word: "Live"/);
+  assert.match(word, /word: "In call"/);
   assert.match(word, /word: "Channel"/);
-  assert.match(word, /word: "Ended"/);
+  assert.match(word, /word: "Done"/);
   assert.match(word, /word: "No recording"/);
   assert.match(word, /decisionsFor\(room\.id\)/);
-  assert.doesNotMatch(word, /Failed|Done/);
+  assert.doesNotMatch(word, /Failed/);
   assert.match(page, /countText \+ \" · \"|person\.count === 1 \? \"1 decision\"/);
   const css = readFileSync(new URL("../src/console.css", import.meta.url), "utf8");
   const block = css.slice(css.lastIndexOf("Fix pass 05"));
@@ -60,6 +61,8 @@ test("meeting words separate live, ended, channel, and silence", () => {
   assert.match(page, /changes did not go through/);
   assert.doesNotMatch(page, /No room yet\./);
   assert.match(page, /No rooms yet\./);
+  assert.match(page, /emptyLine\.textContent = "Loading\.\.\."/);
+  assert.doesNotMatch(page, /Reading memory/);
   assert.match(page, /Home could not be loaded/);
   assert.match(page, /Try again/);
   assert.doesNotMatch(page, /Couldn't load your workspace/);
@@ -279,7 +282,7 @@ test("list columns share a gap and history rows stay compact", async (t) => {
     for (const surface of surfaces) {
       await page.goto(`http://127.0.0.1:${port}${surface.path}`, { waitUntil: "networkidle" });
       await page.waitForSelector(surface.row, { timeout: 45000 });
-      const measured = await page.evaluate(({ table, row, head, history }) => {
+      const measured = await page.evaluate(({ table, row, head, history: _history }) => {
         const root = document.querySelector(table);
         const rows = [...document.querySelectorAll(row)].filter((node) => node.getClientRects().length);
         const headRow = document.querySelector(head);
@@ -319,6 +322,7 @@ test("list columns share a gap and history rows stay compact", async (t) => {
           const box = item.getBoundingClientRect();
           return box.width > 0 && (box.right > window.innerWidth + 1 || box.left < -1);
         }).length;
+        const rowCut = rows.filter((item) => item.scrollWidth > item.clientWidth + 1 || item.scrollHeight > item.clientHeight + 1).length;
         const clips = [...document.querySelectorAll("#history-list .entity-id, #history-list .label-pill")].filter((node) => {
           const box = node.getBoundingClientRect();
           const line = node.closest(".activity-row");
@@ -340,13 +344,18 @@ test("list columns share a gap and history rows stay compact", async (t) => {
           actions,
           headShown,
           rowClip,
+          rowCut,
         };
       }, surface);
       assert.equal(measured.overflow, false, `${surface.path} ${width} overflows`);
       assert.equal(measured.rowClip, 0, `${surface.path} ${width} clips a row`);
       const uniqueHeights = [...new Set(measured.heights)];
-      if (!measured.stacked) {
+      if (!measured.stacked && surface.path !== "/console/setup") {
         assert.deepEqual(uniqueHeights, [measured.heights[0]], `${surface.path} ${width} heights ${measured.heights.join(",")}`);
+      }
+      if (surface.path === "/console/setup") {
+        assert.ok(measured.heights.every((height) => height >= 64), `${surface.path} ${width} heights ${measured.heights.join(",")}`);
+        assert.equal(measured.rowCut, 0, `${surface.path} ${width} cuts a tool row`);
       }
       if (surface.history && width >= 1024) {
         assert.ok(measured.heights.every((height) => height >= 44 && height <= 48), `history ${width} heights ${measured.heights.join(",")}`);
@@ -448,12 +457,12 @@ test("list columns share a gap and history rows stay compact", async (t) => {
     chip: row.querySelector(".fail-chip")?.textContent || "",
   })));
   const byTitle = Object.fromEntries(status.map((row) => [row.title, row]));
-  assert.equal(byTitle["Booth planning"].status, "Ended");
+  assert.equal(byTitle["Booth planning"].status, "Done");
   assert.equal(byTitle["#ops"].status, "Channel");
   assert.equal(byTitle["Quiet room"].status, "No recording");
-  assert.equal(byTitle["Infra sync"].status, "Ended");
+  assert.equal(byTitle["Infra sync"].status, "Done");
   assert.equal(byTitle["Booth planning"].chip, "1 failed action");
-  assert.ok(status.every((row) => row.status !== "Failed" && row.status !== "Done"));
+  assert.ok(status.every((row) => row.status !== "Failed"));
 
   for (const width of [1920, 1097, 1024, 768, 640, 390]) {
     await page.setViewportSize({ width, height: 900 });
@@ -506,7 +515,7 @@ test("list columns share a gap and history rows stay compact", async (t) => {
     const names = [...document.querySelectorAll("#file-transcript .utter-name")];
     const dots = [...document.querySelectorAll("#file-transcript .speaker-dot")];
     const segs = [...document.querySelectorAll("#tl-speakers .tl-seg")];
-    const banned = new Set(bannedList);
+    const _banned = new Set(bannedList);
     return {
       ink,
       names: names.map((node) => ({ text: node.textContent, color: getComputedStyle(node).color, clipped: node.scrollWidth > node.clientWidth + 1 })),

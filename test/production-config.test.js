@@ -14,6 +14,7 @@ test("production requires stable auth, durable stores and recovery without requi
   assert.deepEqual(productionConfigIssues({}), []);
   assert.ok(productionConfigIssues({}, { force: true }).length >= 7);
   assert.doesNotThrow(() => assertProductionConfig(configured()));
+  assert.doesNotThrow(() => assertProductionConfig({ ...configured(), MCP_SECRETS_KEY_V1: randomBytes(32).toString("hex") }));
   for (const field of ["SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SECRET_KEY", "SEDERUNT_SESSION_SECRET", "SEDERUNT_RECOVERY_SECRET", "SEDERUNT_PUBLIC_ORIGIN", "REDIS_URL", "MCP_SECRETS_KEY_V1"]) {
     const env = configured(); delete env[field];
     assert.ok(productionConfigIssues(env).some((issue) => issue.includes(field === "SUPABASE_SECRET_KEY" ? "SUPABASE_SECRET_KEY" : field)));

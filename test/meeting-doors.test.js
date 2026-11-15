@@ -1,0 +1,33 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { renderConsolePage } from "../src/console-page.js";
+
+test("add to a meeting and new room are different dialogs", () => {
+  const html = renderConsolePage({ meeting: true, hearing: { name: "Adam", triggers: [] } });
+  const joinAt = html.indexOf('id="join-dialog"');
+  const roomAt = html.indexOf('id="create-dialog"');
+  const nextAt = html.indexOf('id="workspace-dialog"');
+  assert.ok(joinAt > 0 && roomAt > joinAt && nextAt > roomAt);
+  const join = html.slice(joinAt, roomAt);
+  const room = html.slice(roomAt, nextAt);
+  assert.match(join, /id="join-title">Add to a meeting/);
+  assert.match(join, /Join a call that is happening now/);
+  assert.match(join, /id="meet-link"/);
+  assert.match(join, />Join now</);
+  assert.doesNotMatch(join, /id="pick-channel"/);
+  assert.doesNotMatch(join, /id="join-trigger"/);
+  assert.match(room, /id="create-title">New room/);
+  assert.match(room, /id="pick-channel"/);
+  assert.match(room, /id="join-trigger"[^>]*>Adam<\/textarea>/);
+  assert.match(room, /The room appears once Sederunt is in the call/);
+  assert.doesNotMatch(room, /id="meet-link"/);
+  assert.match(html, /function openLiveJoin/);
+  assert.match(html, /openDialog\("join-dialog"\)/);
+  const submitAt = html.indexOf('getElementById("meet-form").addEventListener("submit"');
+  const saveAt = html.indexOf("function saveJoinTrigger", submitAt);
+  assert.ok(submitAt > 0 && saveAt > submitAt);
+  const submitBody = html.slice(submitAt, saveAt);
+  assert.match(submitBody, /\/api\/join/);
+  assert.doesNotMatch(submitBody, /saveJoinTrigger/);
+  assert.match(html, /getElementById\("join-trigger"\);\s*if \(joinTriggerBox\) joinTriggerBox\.addEventListener\("blur"/);
+});

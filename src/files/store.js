@@ -143,6 +143,27 @@ export function createFileStore({ clock = () => new Date() } = {}) {
     bindExternal({ provider, externalChannelId, channelId }) {
       bindings.set(`${provider}:${externalChannelId}`, channelId);
     },
+    /**
+     * One live binding per external channel, never moved to another tenant.
+     * Creates the tenant's shared Files channel when it does not exist yet.
+     */
+    bindSlackChannel({ tenantId, teamId, externalChannelId, channelId, name }) {
+      const key = `slack:${externalChannelId}`;
+      const bound = bindings.get(key);
+      if (bound) {
+        const channel = channels.get(bound) || null;
+        return channel && channel.tenantId === tenantId ? channel : null;
+      }
+      if (!tenantId || !teamId || !externalChannelId || !channelId) return null;
+      let channel = channels.get(channelId);
+      if (!channel) {
+        channel = { id: channelId, tenantId, name: name || "Workspace", visibility: "tenant" };
+        channels.set(channelId, channel);
+      }
+      if (channel.tenantId !== tenantId) return null;
+      bindings.set(key, channelId);
+      return channel;
+    },
     channelByExternal(provider, externalChannelId) {
       const id = bindings.get(`${provider}:${externalChannelId}`);
       return id ? channels.get(id) || null : null;

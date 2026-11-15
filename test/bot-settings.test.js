@@ -88,7 +88,6 @@ function oauthCookie(role) {
     accessExp: Date.now() + 3_600_000,
     tenantId: TENANT,
     onboarded: true,
-    provider: "google",
   }, SECRET);
   return `${CONSOLE_COOKIE}=${encodeURIComponent(token)}`;
 }

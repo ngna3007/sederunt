@@ -102,6 +102,31 @@ test("an unverified read is not kept, and fresh reads again after a verified one
   assert.equal(calls, 3);
 });
 
+test("several memories are verified in one batch and a missing one stays unknown", async () => {
+  const session = sessionWith("blob-1", "blob-2", "blob-3");
+  const batches = [];
+  const tatum = {
+    async getObject() {
+      throw new Error("a single read was used");
+    },
+    async getObjects(requests) {
+      batches.push(requests.map((request) => request.hints.blobId));
+      return requests.map((request) => (
+        request.hints.blobId === "blob-2"
+          ? { ok: false, error: new Error("Tatum read failed") }
+          : { ok: true, object: VERIFIED(request.hints.blobId) }
+      ));
+    },
+  };
+  const report = await warmProofs(session, tatum);
+  assert.equal(report.verified, 2);
+  assert.equal(report.failed, 1);
+  assert.deepEqual(batches, [["blob-1", "blob-2", "blob-3"]]);
+  const board = await readProofs(session, companyBoard(session, "mina"), tatum, { timeoutMs: 20 });
+  assert.deepEqual(board.decisions.map((row) => row.proofStatus), ["verified", "unknown", "verified"]);
+  assert.equal(batches.length, 1);
+});
+
 test("warmProofs reads company memories one at a time and fills the cache", async () => {
   const session = sessionWith("blob-1", "blob-2", "blob-3");
   session.decisions.push({ id: "p1", account: "personal", kind: "decision", text: "Private.", blobId: "blob-private", inviteMemberIds: [], contradicts: [], fileNames: [] });
@@ -162,6 +187,26 @@ test("the console board answers fast with a pending proof and /api/proof finishe
   } finally {
     app.close();
   }
+});
+
+test("start-up proof warm does not rebuild the unbound company index", async () => {
+  let indexed = 0;
+  const app = createApp({
+    session: sessionWith("blob-1"),
+    companyLoaded: true,
+    env: { SEDERUNT_MEMBER: "mina", SEDERUNT_WARM_PROOFS: "1" },
+    deps: {
+      tatum: { async getObject(_target, hints) { return VERIFIED(hints.blobId); } },
+      memory: {
+        async index() { indexed += 1; return []; },
+        async recall() { indexed += 1; return []; },
+        async remember() { return { blobId: null }; },
+      },
+    },
+  });
+  const report = await app.proofWarm;
+  assert.equal(report.verified, 1);
+  assert.equal(indexed, 0);
 });
 
 test("with the flag, the server warms the proofs at start", async () => {

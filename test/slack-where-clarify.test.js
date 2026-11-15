@@ -80,7 +80,7 @@ test("mentionedFile picks the longest listed name the reply text names", () => {
 });
 
 test("answerSlackQuestion pins a file named in the reply when attach is null", async () => {
-  const fetchImpl = async (url, init = {}) => {
+  const fetchImpl = async (url, _init = {}) => {
     if (String(url).includes("openrouter.ai")) {
       return {
         ok: true,

@@ -1,13 +1,14 @@
 {
   "functions": {
     "src/server.js": {
+      "maxDuration": 60,
       "includeFiles": "{public/**,src/**}"
     }
   },
   "crons": [
     {
       "path": "/api/recovery/drain",
-      "schedule": "*/5 * * * *"
+      "schedule": "17 8 * * *"
     }
   ]
 }

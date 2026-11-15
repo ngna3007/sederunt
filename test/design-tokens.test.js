@@ -67,10 +67,18 @@ test("every var(--token) used in console.css is defined", () => {
   const defined = new Set(Object.keys(TOKENS));
   // Custom properties set by a rule or inline from markup (per-element values, not design tokens).
   for (const m of css.matchAll(/(--[a-z0-9-]+)\s*:/g)) defined.add(m[1]);
-  for (const f of readdirSync(src).filter((f) => f.endsWith(".js"))) {
-    for (const m of readFileSync(new URL(f, src), "utf8").matchAll(/(--[a-z0-9-]+)\s*:/g)) defined.add(m[1]);
-    for (const m of readFileSync(new URL(f, src), "utf8").matchAll(/setProperty\("(--[a-z0-9-]+)"/g)) defined.add(m[1]);
+  function walk(dir) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const child = new URL(entry.name + (entry.isDirectory() ? "/" : ""), dir);
+      if (entry.isDirectory()) walk(child);
+      else if (entry.name.endsWith(".js")) {
+        const text = readFileSync(child, "utf8");
+        for (const m of text.matchAll(/(--[a-z0-9-]+)\s*:/g)) defined.add(m[1]);
+        for (const m of text.matchAll(/setProperty\("(--[a-z0-9-]+)"/g)) defined.add(m[1]);
+      }
+    }
   }
+  walk(src);
   const missing = [...new Set([...outside.matchAll(/var\((--[a-z0-9-]+)/g)].map((m) => m[1]))].filter((v) => !defined.has(v));
   assert.deepEqual(missing, []);
 });

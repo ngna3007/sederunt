@@ -11,6 +11,8 @@ import { callTool } from "./client.js";
 const SECRET_FIELD = /token|secret|password|authorization|api[_-]?key|cookie|bearer/i;
 const RAW_ID = /^(?:U[A-Z0-9_]{4,}|0x[0-9a-fA-F]{6,}|[0-9a-f]{16,})$/;
 const TEXT_CAP = 8000;
+const TOOL_LIST_MS = 10 * 60 * 1000;
+const exposedCache = new Map();
 
 /**
  * @param {string} name
@@ -31,9 +33,40 @@ export function splitExposedName(name) {
  * @param {{ list: Function } | null | undefined} store
  * @param {string} tenantId
  */
-export async function listExposedTools(store, tenantId) {
+export async function listExposedTools(store, tenantId, options = {}) {
   if (!store || !tenantId) return [];
   const connectors = await store.list(tenantId);
+  const fingerprint = exposedFingerprint(connectors);
+  const clock = typeof options.now === "function" ? options.now : Date.now;
+  const hit = exposedCache.get(tenantId);
+  if (hit && hit.fingerprint === fingerprint && clock() - hit.at < TOOL_LIST_MS) return hit.tools;
+  const tools = shapeExposedTools(connectors);
+  exposedCache.set(tenantId, { at: Date.now(), fingerprint, tools });
+  return tools;
+}
+
+/** Drop one tenant's tool list, or every list when the id is omitted. */
+export function dropExposedTools(tenantId) {
+  if (tenantId) exposedCache.delete(tenantId);
+  else exposedCache.clear();
+}
+
+function exposedFingerprint(connectors) {
+  return JSON.stringify((connectors || []).map((connector) => ({
+    id: connector?.id || "",
+    slug: connector?.slug || "",
+    status: connector?.status || "",
+    enabled: connector?.enabled !== false,
+    tools: (connector?.tools || []).map((tool) => ({
+      name: tool?.name || "",
+      enabled: tool?.enabled === true,
+      changed: tool?.changed === true,
+      description: String(tool?.description || ""),
+    })),
+  })));
+}
+
+function shapeExposedTools(connectors) {
   const tools = [];
   for (const connector of connectors) {
     if (!connector || connector.status !== "connected" || connector.enabled === false) continue;
@@ -43,6 +76,7 @@ export async function listExposedTools(store, tenantId) {
         name: `${connector.slug}__${tool.name}`,
         description: String(tool.description || ""),
         inputSchema: tool.inputSchema && typeof tool.inputSchema === "object" ? tool.inputSchema : { type: "object" },
+        actionClass: typeof tool.actionClass === "string" ? tool.actionClass : "",
       });
     }
   }
@@ -72,7 +106,11 @@ export async function callCustomTool(input) {
   if (!connector || connector.status !== "connected" || connector.enabled === false || !tool || tool.enabled !== true || tool.changed === true) {
     return unavailable(name);
   }
-  const preference = preferenceFor(tool, connector.slug, input.session);
+  const preference = input.runNow === true && tool.actionClass !== "delete"
+    ? "do"
+    : (input.runNow === true && (input.confirmed === true || input.meta?.confirmed === true)
+      ? "do"
+      : preferenceFor(tool, connector.slug, input.session));
   const confirmId = confirmIdFrom(input);
   let confirmedId = "";
   if (confirmId && tool.actionClass !== "read") {
@@ -91,6 +129,10 @@ export async function callCustomTool(input) {
   const summary = argumentSummary(input.args);
   if (!decision.allowed) {
     const actionId = hold(input.session, name);
+    const heldAction = (input.session?.actions || []).find((row) => row?.id === actionId);
+    if (heldAction && !(heldAction.revision >= 1) && typeof input.persistHold === "function") {
+      await input.persistHold(heldAction);
+    }
     safeLog(() => logRequest(input.session, activityInput({
       id: actionId,
       verb: "call",
@@ -107,6 +149,26 @@ export async function callCustomTool(input) {
       actionClass: tool.actionClass,
       text: `Needs confirmation before ${name} runs.`,
     };
+  }
+  if (typeof connector.invoke === "function") {
+    try {
+      const invoked = await connector.invoke(tool.name, input.args || {});
+      const row = invoked && typeof invoked === "object" ? invoked : { text: String(invoked ?? "") };
+      return {
+        ok: row.ok !== false,
+        held: false,
+        needsConfirmation: false,
+        text: String(row.text || row.title || row.summary || "").slice(0, TEXT_CAP),
+        tool: name,
+        ...(row.id || row.identifier ? { id: row.id || row.identifier } : {}),
+        ...(row.title || row.summary ? { title: row.title || row.summary } : {}),
+        ...(row.url || row.link ? { url: row.url || row.link } : {}),
+        ...(row.structuredContent ? { structuredContent: row.structuredContent } : row),
+      };
+    } catch (error) {
+      const detail = String(error instanceof Error ? error.message : error || "The tool call failed.").slice(0, 240);
+      return failed(name, detail || "The tool call failed.", "invoke");
+    }
   }
   const calendarPreset = connector.preset === "google-calendar";
   const fakeCalendar = calendarPreset && calendarFakeEnabled(input.env);
@@ -158,7 +220,14 @@ export async function callCustomTool(input) {
     forms: input.forms,
     calendarMcp: input.calendarMcp,
     origin: input.origin,
-  }, tool.name, cleanArgs(input.args), { env: input.env, timeoutMs: 10000, fetch: input.fetch, calendarMcp: input.calendarMcp });
+  }, tool.name, cleanArgs(input.args), {
+    env: input.env,
+    timeoutMs: toolTimeout(input.timeoutMs),
+    fetch: input.fetch,
+    calendarMcp: input.calendarMcp,
+    signal: input.signal,
+    poolKey: poolKeyFor(tenantId, connector),
+  });
   let bearer = token;
   let called = await invoke(bearer);
   if (!fakeForms && !fakeCalendar && connector.authType === "google_oauth" && unauthorizedTool(called)) {
@@ -224,10 +293,25 @@ export async function resolveMcpSpace(gate, identity, store) {
 function preferenceFor(tool, slug, session) {
   if (tool.actionClass === "read") return "do";
   if (tool.actionClass === "delete") return "ask";
+  const prefs = session?.preferences || [];
   const key = `mcp:${slug}:${tool.name}`;
-  const live = (session?.preferences || []).filter((pref) => pref?.tool === key && !pref.replacedBy);
-  if (!live.length) return "ask";
-  return resolvePreference(session.preferences, key, null);
+  const mcpLive = prefs.filter((pref) => pref?.tool === key && !pref.replacedBy);
+  if (mcpLive.length) return resolvePreference(prefs, key, null);
+  const consoleKey = consoleToolKey(slug);
+  const consoleLive = consoleKey
+    ? prefs.filter((pref) => pref?.tool === consoleKey && !pref.replacedBy)
+    : [];
+  if (consoleLive.length) return resolvePreference(prefs, consoleKey, null);
+  return "ask";
+}
+
+function consoleToolKey(slug) {
+  const name = String(slug || "").toLowerCase();
+  if (name === "linear" || name.startsWith("linear-")) return "linear";
+  if (name === "slack" || name.startsWith("slack-")) return "slack";
+  if (name === "calendar" || name === "google-calendar" || name.startsWith("calendar-")) return "calendar";
+  if (name === "forms" || name === "google-forms" || name.startsWith("forms-")) return "forms";
+  return "";
 }
 
 function confirmIdFrom(input) {
@@ -338,8 +422,27 @@ function redactToolText(text, ...tokens) {
 function hold(session, toolName) {
   if (!session) return "mcp-hold-1";
   session.actions = Array.isArray(session.actions) ? session.actions : [];
+  const staged = session.actions.find((row) => row
+    && row.state === "paused"
+    && row.roomId
+    && row.memberId
+    && (row.tool === toolName || row.callName === toolName));
+  if (staged) return staged.id;
   const id = `mcp-hold-${session.actions.length + 1}`;
-  session.actions.push({ id, tool: toolName, preference: "ask" });
+  session.actions.push({
+    id,
+    tool: toolName,
+    callName: toolName,
+    preference: "ask",
+    state: "paused",
+    roomId: "",
+    memberId: "",
+    statement: "",
+    params: {},
+    inviteMemberIds: [],
+    connectorId: null,
+    missingFact: "",
+  });
   return id;
 }
 
@@ -370,6 +473,18 @@ function failed(name, text, code) {
     text,
     code: code || "",
   };
+}
+
+function poolKeyFor(tenantId, connector) {
+  const id = connector?.id || connector?.slug || "";
+  if (!tenantId || !id) return "";
+  return `${tenantId}:${id}`;
+}
+
+function toolTimeout(value) {
+  const number = Number(value);
+  if (Number.isFinite(number) && number > 0) return number;
+  return 10000;
 }
 
 function cleanArgs(args) {

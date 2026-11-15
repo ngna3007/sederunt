@@ -7,6 +7,7 @@ import { openSession } from "../src/console-auth.js";
 import { createIdentity } from "../src/identity/client.js";
 import { createApp, defaultDeps } from "../src/server.js";
 import { upcomingMeetings } from "../src/console-flow.js";
+import { renderWelcomePage } from "../src/console-welcome.js";
 
 const SECRET = "session-secret";
 const WIDTHS = [1920, 1097, 768, 390];
@@ -35,6 +36,7 @@ function call(port, method, path, { body, headers, cookie } = {}) {
         status: res.statusCode,
         location: res.headers.location || "",
         cookie: res.headers["set-cookie"],
+        cache: String(res.headers["cache-control"] || ""),
         raw: Buffer.concat(chunks).toString("utf8"),
       }));
     });
@@ -226,11 +228,21 @@ test("fake auth onboarding stays on localhost", async (t) => {
         const chat = await call(port, "GET", "/console/welcome?step=chat", { cookie: header(jar) });
         assert.equal(chat.status, 200);
         assert.match(chat.raw, /Step 3 of 4/);
-        assert.match(chat.raw, /Where should Sederunt post\?/);
+        assert.match(chat.raw, /Connect Slack/);
+        assert.match(chat.raw, /One allow adds the Sederunt bot/);
+        assert.match(chat.raw, /Continuing…/);
+        assert.match(chat.raw, /Opening Slack…/);
+        assert.match(chat.raw, /sederunt-slack-wait/);
+        assert.doesNotMatch(chat.raw, /Where should Sederunt post\?/);
+        assert.doesNotMatch(chat.raw, /invite @Sederunt into a channel/);
+        const declined = await call(port, "GET", "/console/welcome?step=chat&slack=declined", { cookie: header(jar) });
+        assert.match(declined.raw, /Slack setup was cancelled/);
         for (const id of ["chat-slack", "chat-teams", "chat-gchat", "chat-discord", "chat-email"]) assert.match(chat.raw, new RegExp(`id="${id}"`));
         assert.match(chat.raw, /Coming soon/);
         assert.match(chat.raw, /id="ob-skip"[^>]*>Not now</);
         assert.match(chat.raw, /href="\/console\/welcome\?step=calendar"[^>]*id="ob-back"/);
+        assert.doesNotMatch(chat.raw, /docs\.slack\.dev/);
+        assert.doesNotMatch(chat.raw, /id="slack-connect"[^>]*data-docs=/);
         const laterChat = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=chat&choice=later" });
         assert.equal(laterChat.location, "/console/welcome?step=team");
 
@@ -282,6 +294,9 @@ test("fake auth onboarding stays on localhost", async (t) => {
         assert.match(home.raw, /1 of 4 done/);
         assert.match(home.raw, /id="home-connect-tools">Connect tools</);
         assert.match(home.raw, /id="people-invite"/);
+        assert.match(home.raw, /id="invite-dialog"/);
+        assert.match(home.raw, /id="checklist-invite"/);
+        assert.doesNotMatch(home.raw, /\/console\/welcome\?step=team(?:&amp;|&)mode=manage/);
         assert.match(home.raw, /id="members-card"/);
         assert.match(home.raw, /<input type="hidden" name="from" value="switcher">/);
         assert.doesNotMatch(home.raw, /id="space-kind"/);
@@ -382,7 +397,7 @@ test("fake auth onboarding stays on localhost", async (t) => {
 
         const second = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=create&from=switcher&name=Side+Project" });
         assert.equal(second.status, 302);
-        assert.equal(second.location, "/console/welcome?step=team&mode=manage");
+        assert.equal(second.location, "/console?invite=1");
         absorb(jar, second.cookie);
         const ada = sessionOf(jar);
         const tenants = await identity.myTenants(ada.accessToken);
@@ -520,7 +535,7 @@ async function browserPath(chromium) {
   }
 }
 
-test("welcome shows the slack channel name, not a channel id", async () => {
+test("welcome shows the Slack bot as connected without a post channel", async () => {
   async function chatPage(label) {
     const env = {
       SEDERUNT_AUTH_FAKE: "1",
@@ -551,7 +566,7 @@ test("welcome shows the slack channel name, not a channel id", async () => {
       const connected = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=chat&choice=connect" });
       assert.equal(connected.status, 302);
       absorb(jar, connected.cookie);
-      return await call(port, "GET", "/console/welcome?step=chat", { cookie: header(jar) });
+      return await call(port, "GET", "/console/welcome?step=chat&slack=connected", { cookie: header(jar) });
     } finally {
       app.close();
     }
@@ -559,13 +574,35 @@ test("welcome shows the slack channel name, not a channel id", async () => {
   const named = await chatPage("sederunt-demo");
   assert.equal(named.status, 200);
   assert.match(named.raw, /id="slack-status">[\s\S]*?Connected/);
-  assert.match(named.raw, /Posts to #sederunt-demo/);
-  assert.doesNotMatch(named.raw, /#C0DEMO/);
+  assert.match(named.raw, /Slack is connected/);
+  assert.doesNotMatch(named.raw, /id="ob-notice"/);
+  assert.match(named.raw, /Bot connected/);
+  assert.match(named.raw, /Add @Sederunt to a channel in Slack when you want it there/);
+  assert.doesNotMatch(named.raw, /Posts to #|Where should Sederunt post|#C0DEMO|#sederunt-demo/);
   const blank = await chatPage("");
   assert.equal(blank.status, 200);
   assert.match(blank.raw, /id="slack-status">[\s\S]*?Connected/);
-  assert.match(blank.raw, /Recaps, decisions and action items/);
+  assert.match(blank.raw, /Bot connected/);
   assert.doesNotMatch(blank.raw, /#C0DEMO|Posts to #/);
+});
+
+test("a second workspace with the same name is refused", async () => {
+  await withServer({
+    SEDERUNT_AUTH_FAKE: "1",
+    SEDERUNT_SESSION_SECRET: SECRET,
+    SEDERUNT_MEMBER: "Mina",
+  }, async (port) => {
+    const jar = {};
+    await followProvider(port, jar, "google", "/console");
+    const created = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=create&name=Northline" });
+    assert.equal(created.status, 302);
+    absorb(jar, created.cookie);
+    const again = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=create&name=northline" });
+    assert.equal(again.status, 400);
+    assert.match(again.raw, /You already have a workspace with this name/);
+    const home = await call(port, "GET", "/console", { cookie: header(jar) });
+    assert.equal((home.raw.match(/role="menuitemradio"/g) || []).length, 1);
+  });
 });
 
 test("onboarding screens fit at desktop and phone widths", { timeout: 180000 }, async (t) => {
@@ -782,6 +819,81 @@ test("onboarding screens fit at desktop and phone widths", { timeout: 180000 }, 
   assert.deepEqual(outbound, []);
 });
 
+test("invite from Home stays in a dialog", async () => {
+  const env = { SEDERUNT_AUTH_FAKE: "1", SEDERUNT_SESSION_SECRET: SECRET };
+  await withServer(env, async (port) => {
+    const jar = {};
+    await followProvider(port, jar, "google", "/console");
+    const created = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=create&name=Northwind" });
+    absorb(jar, created.cookie);
+    const people = await call(port, "GET", "/console/people", { cookie: header(jar) });
+    assert.equal(people.status, 200);
+    assert.match(people.raw, /<button[^>]*id="people-invite"[^>]*data-invite/);
+    assert.match(people.raw, /function openInvite/);
+    assert.match(people.raw, /function prefetchInvite/);
+    assert.match(people.raw, /Getting the link/);
+    assert.doesNotMatch(people.raw, /\/console\/welcome\?step=team(?:&amp;|&)mode=manage/);
+    const sheet = await call(port, "GET", "/api/console/invites", { cookie: header(jar), headers: { accept: "application/json" } });
+    assert.equal(sheet.status, 200, sheet.raw);
+    const opened = JSON.parse(sheet.raw);
+    assert.equal(opened.ok, true);
+    assert.equal(opened.workspaceName, "Northwind");
+    assert.match(opened.link, /\/console\/join\/[A-Za-z0-9_-]{16,}/);
+    const sent = await call(port, "POST", "/api/console/invites", {
+      cookie: header(jar),
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ emails: ["grace@example.com"], roles: ["admin"] }),
+    });
+    assert.equal(sent.status, 200, sent.raw);
+    const made = JSON.parse(sent.raw);
+    assert.equal(made.ok, true);
+    assert.equal(made.invites[0].email, "grace@example.com");
+    assert.equal(made.invites[0].role, "admin");
+    assert.match(made.invites[0].href, /\/console\/invite\//);
+    const self = await call(port, "POST", "/api/console/invites", {
+      cookie: header(jar),
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ emails: ["ada@example.com"], roles: ["member"] }),
+    });
+    assert.equal(self.status, 400);
+    assert.match(self.raw, /Remove your own address/);
+  });
+});
+
+test("a console page reads the workspace list once", async () => {
+  const env = { SEDERUNT_AUTH_FAKE: "1", SEDERUNT_SESSION_SECRET: SECRET };
+  const identity = createIdentity({ ...env, SEDERUNT_AUTH_FAKE_GITHUB: "1" });
+  const original = identity.myTenants.bind(identity);
+  let calls = 0;
+  identity.myTenants = async (token) => {
+    calls += 1;
+    return original(token);
+  };
+  const app = createApp({ companyLoaded: true, env, identity });
+  const port = await listen(app);
+  try {
+    const jar = {};
+    await followProvider(port, jar, "google", "/console");
+    const created = await call(port, "POST", "/console/welcome", { cookie: header(jar), body: "action=create&name=Northwind" });
+    absorb(jar, created.cookie);
+    calls = 0;
+    const home = await call(port, "GET", "/console", { cookie: header(jar) });
+    assert.equal(home.status, 200, home.raw.slice(0, 300));
+    assert.equal(calls, 1);
+    calls = 0;
+    const people = await call(port, "GET", "/console/people", { cookie: header(jar) });
+    assert.equal(people.status, 200);
+    assert.equal(calls, 1);
+    const style = await call(port, "GET", "/console.css");
+    assert.equal(style.status, 200);
+    assert.match(style.cache, /public, max-age=3600/);
+    const again = await call(port, "GET", "/console.css");
+    assert.equal(again.raw, style.raw);
+  } finally {
+    app.close();
+  }
+});
+
 test("upcoming meetings show start times when the calendar lists them", async () => {
   const now = Date.now();
   const iso = (minutes) => new Date(now + minutes * 60_000).toISOString();
@@ -822,4 +934,13 @@ test("the fake calendar's seeded meetings come through with their start times", 
   assert.ok(sync, "tomorrow's seeded meeting is listed");
   assert.equal(sync.when, "Tomorrow");
   assert.match(sync.time, /^10:00\s?AM$/);
+});
+
+test("Connect Slack opens the install page in a new tab and does not open Slack docs", () => {
+  const install = renderWelcomePage({ step: "chat", slackInstall: true });
+  assert.match(install, /id="slack-connect"[^>]*formtarget="_blank"/);
+  assert.doesNotMatch(install, /docs\.slack\.dev/);
+  const plain = renderWelcomePage({ step: "chat" });
+  assert.doesNotMatch(plain, /id="slack-connect"[^>]*formtarget=/);
+  assert.doesNotMatch(plain, /docs\.slack\.dev/);
 });

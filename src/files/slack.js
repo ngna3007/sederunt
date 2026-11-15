@@ -1,3 +1,16 @@
+import { workspaceChannelId } from "./session.js";
+
+/**
+ * Bind a public Slack channel the bot is in to the tenant's shared Files
+ * channel (the same space Console Files shows every workspace member).
+ * Idempotent; returns the Sederunt channel, or null when the external channel
+ * is already bound elsewhere or the store cannot bind.
+ */
+export async function bindSlackChannel(runtime, { tenantId, teamId, externalChannelId, name = "" }) {
+  if (!runtime?.store?.bindSlackChannel || !tenantId || !teamId || !externalChannelId) return null;
+  return runtime.store.bindSlackChannel({ tenantId, teamId, externalChannelId, channelId: workspaceChannelId(tenantId), name });
+}
+
 /**
  * Slack file_share and message_deleted, using the same delivery the server
  * already parsed. A channel that is not bound is skipped, not invented.
@@ -17,6 +30,15 @@ export async function ingestSlackFile(runtime, input) {
     });
     ownerGuestId = guest.id;
     await runtime.store.linkExternalUser({ provider: "slack", externalUserId: input.slackUserId || guest.id, guestId: guest.id });
+  }
+  // A Slack retry or a later message_changed carries the same file: keep one row.
+  if (actorUserId && input.slackFileId && typeof runtime.store.listVisible === "function") {
+    // One database view read when the store offers a snapshot.
+    const source = typeof runtime.store.snapshot === "function" ? await runtime.store.snapshot(actorUserId) : runtime.store;
+    const own = typeof source.listOwnInFlight === "function" ? await source.listOwnInFlight(actorUserId) : [];
+    const seen = [...await source.listVisible(actorUserId), ...own]
+      .find((file) => file.slackFileId === input.slackFileId && file.channelId === channel.id && file.status !== "failed");
+    if (seen) return { skipped: false, duplicate: true, file: seen };
   }
   const bytes = Buffer.isBuffer(input.bytes) || input.bytes instanceof Uint8Array
     ? input.bytes

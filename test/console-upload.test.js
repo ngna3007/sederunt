@@ -110,7 +110,7 @@ function json(body, status = 200) {
 
 test("download uses the file's folderId when the adapter default differs", async () => {
   const seen = [];
-  const fetchImpl = async (url, init = {}) => {
+  const fetchImpl = async (url, _init = {}) => {
     const href = String(url);
     seen.push(href);
     if (href.includes("/buckets/folder-from-file") && !href.includes("/files")) {

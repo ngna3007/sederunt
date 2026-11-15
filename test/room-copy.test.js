@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-const src = readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
+import { consolePageSource } from "./console-source.js";
+const src = consolePageSource();
 test("relative dates read naturally mid-sentence", () => {
   assert.match(src, /function whenInSentence/);
   assert.match(src, /function countWords/);

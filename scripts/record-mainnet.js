@@ -1,6 +1,7 @@
+/** Seed a few Walrus memories on mainnet. Keys come from env or COMPANY_ENV_FILE. */
 import { readFileSync } from "node:fs";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
-import { rememberCompany, rememberPersonal } from "./memory/company.js";
+import { rememberCompany, rememberPersonal } from "../src/memory/company.js";
 
 if (process.env.COMPANY_ENV_FILE) {
   const text = readFileSync(process.env.COMPANY_ENV_FILE, "utf8");
@@ -67,7 +68,7 @@ try {
   report.personalError = error instanceof Error ? error.message : "personal remember failed";
 }
 
-const late = await import("./domain/stamp.js");
+const late = await import("../src/domain/stamp.js");
 report.lateCheckpoint = late.acceptCheckpoint({ checkpoint: 120, knowableAtCheckpoint: 100 });
 
 console.log(JSON.stringify(report, null, 2));

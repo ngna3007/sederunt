@@ -52,7 +52,7 @@ test("prior asks skip the friendly failure and tool protocol, and keep real answ
     ask({ id: "stopped-partial", status: "stopped", text: "The booth opens" }),
     ask({ id: "live", status: "streaming", text: "" }),
     ask({ id: "live-fail", status: "streaming", text: ASK_UNAVAILABLE }),
-    ask({ id: "no-id", id: "" }),
+    ask({ id: "" }),
   ];
   for (const row of samples) {
     const kept = priorAsksForThread([row]);

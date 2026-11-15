@@ -59,6 +59,19 @@ export async function welcomeLocation(req, env, identity) {
 }
 
 /**
+ * Home redirect from a space view already loaded for this request.
+ * A failed load stays on Home.
+ *
+ * @param {{ error?: string, items?: Array<{ kind?: string }> } | null | undefined} spaces
+ */
+export function welcomePath(spaces) {
+  if (!spaces || spaces.error) return "";
+  const items = Array.isArray(spaces.items) ? spaces.items : [];
+  if (items.some((row) => row && row.kind && row.kind !== "personal")) return "";
+  return "/console/welcome";
+}
+
+/**
  * @param {{
  *   req: import("node:http").IncomingMessage,
  *   res: import("node:http").ServerResponse,
@@ -102,7 +115,11 @@ export async function handleWelcome(ctx) {
       return;
     }
     if (asked === "calendar" || asked === "chat" || asked === "team") {
-      await renderStep(ctx, session, active, asked, { manage, asked: url.searchParams.get("asked") === "1" });
+      await renderStep(ctx, session, active, asked, {
+        manage,
+        asked: url.searchParams.get("asked") === "1",
+        slack: url.searchParams.get("slack") || "",
+      });
       return;
     }
     redirect(res, "/console");
@@ -147,13 +164,35 @@ function one(value) {
   return Array.isArray(value) ? String(value[value.length - 1] || "") : String(value || "");
 }
 
+async function workspaceNameTaken(identity, accessToken, name, exceptId = "") {
+  const rows = typeof identity.myTenants === "function" ? await identity.myTenants(accessToken) : [];
+  const wanted = String(name || "").trim().toLowerCase();
+  return (Array.isArray(rows) ? rows : []).find((row) => row?.id !== exceptId
+    && row?.kind !== "personal"
+    && String(row?.name || "").trim().toLowerCase() === wanted) || null;
+}
+
+function slackWelcomeNotice(result) {
+  return {
+    partial: "Slack did not grant all required permissions. Connect again and approve the requested scopes.",
+    failed: "Slack could not be connected. Try again.",
+    forbidden: "Only a workspace owner or admin can connect Slack.",
+    conflict: "That Slack workspace is already connected to another Sederunt workspace.",
+    "different-team": "This workspace already has a different Slack connection. Use Change Slack workspace to replace it.",
+    stale: "The Slack connection changed while setup was open. Reload and try again.",
+    expired: "This Slack setup link expired or was already used. Start again.",
+    declined: "Slack setup was cancelled.",
+    unsupported: "Choose an individual Slack workspace. Organization-wide installations are not supported.",
+  }[result] || "Slack could not be connected. Try again.";
+}
+
 function many(value) {
   if (Array.isArray(value)) return value.map((item) => String(item ?? ""));
   return value === undefined ? [] : [String(value)];
 }
 
 function sendWelcome(ctx, status, state, headers = {}) {
-  ctx.send(ctx.res, status, "text/html; charset=utf-8", renderWelcomePage({ fakeTools: fakeToolsOn(ctx.env), ...state }), headers);
+  ctx.send(ctx.res, status, "text/html; charset=utf-8", renderWelcomePage({ fakeTools: fakeToolsOn(ctx.env), slackInstall: ctx.slackInstall === true, ...state }), headers);
 }
 
 async function renderWorkspaceStep(ctx, session, extra) {
@@ -180,6 +219,10 @@ async function renderWorkspaceStep(ctx, session, extra) {
 
 async function renderStep(ctx, session, active, step, extra = {}) {
   const { identity, env } = ctx;
+  if (step !== "calendar" && step !== "chat") {
+    await sendTeamStep(ctx, session, active, extra);
+    return;
+  }
   let user = null;
   try {
     user = await identity.getUser(session.accessToken);
@@ -229,8 +272,12 @@ async function renderStep(ctx, session, active, step, extra = {}) {
       conflictOwner = claim.conflictOwner || "";
     }
     const noticeParts = [];
-    if (extra.asked || (!slackLinked && prefs.slack === "connect")) {
-      noticeParts.push("Slack connects for the whole workspace in Setup → Tools. Your choice is saved, so Home will remind you.");
+    const slackResult = String(extra.slack || "");
+    if (slackResult && slackResult !== "connected") noticeParts.push(slackWelcomeNotice(slackResult));
+    else if (!slackLinked && (extra.asked || prefs.slack === "connect")) {
+      noticeParts.push(ctx.slackInstall
+        ? "Allow Slack in the other tab. This page updates when you come back."
+        : "Slack connects for the whole workspace in Setup → Tools. Your choice is saved, so Home will remind you.");
     }
     if (conflictOwner) {
       noticeParts.push("This Slack workspace is already linked to another Sederunt workspace.");
@@ -244,11 +291,15 @@ async function renderStep(ctx, session, active, step, extra = {}) {
         channel: slackLinked
           ? (slackTeamName || await slackChannelLabel(ctx, ctx.slackChannel || (doors.slack ? "" : "sederunt")))
           : "",
-        asked: !slackLinked && prefs.slack === "connect",
+        asked: !slackLinked && (prefs.slack === "connect" || extra.asked === true),
       },
     });
     return;
   }
+}
+
+async function sendTeamStep(ctx, session, active, extra = {}) {
+  const { identity, env } = ctx;
   const canManage = active.role === "owner" || active.role === "admin";
   if (!canManage) {
     sendWelcome(ctx, 200, {
@@ -259,23 +310,7 @@ async function renderStep(ctx, session, active, step, extra = {}) {
     });
     return;
   }
-  let link = "";
-  let allowedDomain = "";
-  if (typeof identity.workspaceJoinLink === "function") {
-    try {
-      link = `${requestOrigin(ctx.req, env)}/console/join/${await identity.workspaceJoinLink(session.accessToken, active.id)}`;
-    } catch {
-      link = "";
-    }
-  }
-  if (typeof identity.workspaceStats === "function") {
-    try {
-      allowedDomain = (await identity.workspaceStats(session.accessToken, active.id)).allowedDomain || "";
-    } catch {
-      allowedDomain = "";
-    }
-  }
-  const domain = workDomain(session.email);
+  const sheet = await loadInviteSheet(identity, session, active, ctx.req, env);
   sendWelcome(ctx, extra.status || 200, {
     step: "team",
     manage: extra.manage,
@@ -283,12 +318,32 @@ async function renderStep(ctx, session, active, step, extra = {}) {
     inviteError: extra.inviteError || "",
     team: {
       workspaceName: active.name,
-      domain,
-      domainOn: Boolean(domain && allowedDomain === domain),
-      link,
+      domain: sheet.domain,
+      domainOn: sheet.domainOn,
+      link: sheet.link,
       invites: extra.invites || [],
     },
   });
+}
+
+async function loadInviteSheet(identity, session, active, req, env) {
+  const origin = requestOrigin(req, env);
+  const [linkToken, stats] = await Promise.all([
+    typeof identity.workspaceJoinLink === "function"
+      ? identity.workspaceJoinLink(session.accessToken, active.id).catch(() => "")
+      : Promise.resolve(""),
+    typeof identity.workspaceStats === "function"
+      ? identity.workspaceStats(session.accessToken, active.id).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+  const domain = workDomain(session.email);
+  const allowedDomain = stats?.allowedDomain || "";
+  return {
+    workspaceName: active.name || "",
+    link: linkToken ? `${origin}/console/join/${linkToken}` : "",
+    domain,
+    domainOn: Boolean(domain && allowedDomain === domain),
+  };
 }
 
 const FAKE_MEETINGS = [
@@ -397,6 +452,11 @@ async function renameWorkspace(ctx, session, active, body) {
     return;
   }
   if (named.name !== active.name) {
+    const taken = await workspaceNameTaken(identity, session.accessToken, named.name, active.id);
+    if (taken) {
+      await renderWorkspaceStep(ctx, session, { status: 400, name: named.name, error: "You already have a workspace with this name.", renaming: active });
+      return;
+    }
     if (typeof identity.renameTenant !== "function") {
       await renderWorkspaceStep(ctx, session, { status: 400, name: named.name, error: "This workspace could not be renamed.", renaming: active });
       return;
@@ -437,6 +497,12 @@ async function createWorkspace(ctx, session, body) {
     return;
   }
   try {
+    const taken = await workspaceNameTaken(identity, session.accessToken, named.name);
+    if (taken) {
+      const error = new Error("You already have a workspace with this name.");
+      error.code = "duplicate_workspace";
+      throw error;
+    }
     const tenantId = await identity.createTenant(session.accessToken, "company", named.name);
     try {
       await identity.updateUser(session.accessToken, { sederunt_onboarded: true });
@@ -456,7 +522,7 @@ async function createWorkspace(ctx, session, body) {
     }
     const cookie = resealOAuth(req, env, session, { onboarded: true, tenantId });
     const from = one(body.from);
-    redirect(res, from === "switcher" ? "/console/welcome?step=team&mode=manage" : "/console/welcome?step=calendar", { "set-cookie": cookie });
+    redirect(res, from === "switcher" ? "/console?invite=1" : "/console/welcome?step=calendar", { "set-cookie": cookie });
   } catch (error) {
     await renderWorkspaceStep(ctx, session, {
       status: 400,
@@ -560,8 +626,33 @@ async function chooseTool(ctx, session, active, tool, body) {
 }
 
 async function sendInvites(ctx, session, active, body, skip, manage) {
-  const { req, res, redirect, identity, env } = ctx;
+  const { res, redirect } = ctx;
   const done = manage ? "/console/people" : "/console";
+  const result = await collectInvites(ctx, session, active, body, skip);
+  if (result.inviteError || result.error) {
+    await renderStep(ctx, session, active, "team", {
+      status: 400,
+      manage,
+      inviteError: result.inviteError,
+      error: result.error,
+      invites: result.wanted,
+    });
+    return;
+  }
+  if (result.redirect) {
+    redirect(res, done);
+    return;
+  }
+  sendWelcome(ctx, 200, {
+    step: "sent",
+    manage,
+    error: result.partial,
+    sent: { workspaceName: active.name, invites: result.made },
+  });
+}
+
+async function collectInvites(ctx, session, active, body, skip) {
+  const { identity } = ctx;
   const emails = many(body.emails);
   const roles = many(body.roles);
   const wanted = [];
@@ -569,7 +660,7 @@ async function sendInvites(ctx, session, active, body, skip, manage) {
   let inviteError = "";
   if (!skip) {
     emails.forEach((value, index) => {
-      if (!value.trim()) return;
+      if (!String(value).trim()) return;
       const parsed = parseInviteEmails(value);
       if (parsed.error) {
         inviteError = inviteError || parsed.error;
@@ -586,15 +677,12 @@ async function sendInvites(ctx, session, active, body, skip, manage) {
     if (wanted.some((row) => row.email === String(session.email || "").toLowerCase())) {
       inviteError = "You're already in this workspace. Remove your own address.";
     }
-    if (inviteError) {
-      await renderStep(ctx, session, active, "team", { status: 400, manage, inviteError, invites: wanted });
-      return;
-    }
+    if (inviteError) return { inviteError, wanted };
   }
   try {
     const domain = workDomain(session.email);
     if (body.domain_present && domain && typeof identity.setAllowedDomain === "function") {
-      const on = body.domain_join === "on" || body.domain_join === "true";
+      const on = body.domain_join === "on" || body.domain_join === "true" || body.domain_join === true;
       const stats = typeof identity.workspaceStats === "function"
         ? await identity.workspaceStats(session.accessToken, active.id).catch(() => null)
         : null;
@@ -602,14 +690,10 @@ async function sendInvites(ctx, session, active, body, skip, manage) {
       if (on !== was) await identity.setAllowedDomain(session.accessToken, active.id, on ? domain : null);
     }
   } catch (error) {
-    await renderStep(ctx, session, active, "team", { status: 400, manage, error: identityMessage(error), invites: wanted });
-    return;
+    return { error: identityMessage(error), wanted };
   }
-  if (skip || wanted.length === 0) {
-    redirect(res, done);
-    return;
-  }
-  const origin = requestOrigin(req, env);
+  if (skip || wanted.length === 0) return { redirect: true, wanted, made: [] };
+  const origin = requestOrigin(ctx.req, ctx.env);
   const made = [];
   const failed = [];
   for (const row of wanted) {
@@ -621,15 +705,71 @@ async function sendInvites(ctx, session, active, body, skip, manage) {
     }
   }
   if (!made.length) {
-    await renderStep(ctx, session, active, "team", { status: 400, manage, inviteError: failed[0] || "Those invites could not be created.", invites: wanted });
+    return { inviteError: failed[0] || "Those invites could not be created.", wanted };
+  }
+  return { made, wanted, partial: failed.length ? `Not invited: ${failed.join("; ")}` : "" };
+}
+
+/**
+ * Invite sheet and invite create for the console dialog.
+ * Onboarding still uses the welcome page.
+ *
+ * @param {{
+ *   req: import("node:http").IncomingMessage,
+ *   res: import("node:http").ServerResponse,
+ *   env: NodeJS.ProcessEnv | Record<string, string | undefined>,
+ *   identity: object | null,
+ *   send: Function,
+ *   readJson: Function,
+ * }} ctx
+ */
+export async function handleConsoleInvites(ctx) {
+  const { req, res, send, identity, env } = ctx;
+  const json = (status, body) => send(res, status, "application/json; charset=utf-8", JSON.stringify(body));
+  const session = oauthSession(req, env);
+  if (!identity || !session) {
+    json(401, { ok: false, error: "Sign in again." });
     return;
   }
-  sendWelcome(ctx, 200, {
-    step: "sent",
-    manage,
-    error: failed.length ? `Not invited: ${failed.join("; ")}` : "",
-    sent: { workspaceName: active.name, invites: made },
-  });
+  if (req.method !== "GET" && req.method !== "POST") {
+    json(405, { ok: false, error: "That action is not available." });
+    return;
+  }
+  let spaces = null;
+  try {
+    spaces = await loadSpaceView(identity, session);
+  } catch {
+    spaces = null;
+  }
+  const active = spaces?.activeId && spaces.activeKind !== "personal"
+    ? { id: spaces.activeId, name: spaces.activeName, role: spaces.activeRole }
+    : null;
+  if (!active) {
+    json(409, { ok: false, error: "Create a workspace before inviting people." });
+    return;
+  }
+  if (active.role !== "owner" && active.role !== "admin") {
+    json(403, { ok: false, error: "Only an owner or admin can invite people to this workspace." });
+    return;
+  }
+  if (req.method === "GET") {
+    const sheet = await loadInviteSheet(identity, session, active, req, env);
+    json(200, { ok: true, ...sheet });
+    return;
+  }
+  let body = {};
+  try {
+    body = await ctx.readJson(req);
+  } catch {
+    json(400, { ok: false, error: "That could not be saved. Try again." });
+    return;
+  }
+  const result = await collectInvites({ ...ctx, req, env, identity }, session, active, body, false);
+  if (result.inviteError || result.error) {
+    json(400, { ok: false, error: result.inviteError || result.error });
+    return;
+  }
+  json(200, { ok: true, invites: result.made || [], error: result.partial || "" });
 }
 
 /**
@@ -686,11 +826,13 @@ export async function handleJoinLink(ctx) {
  * @param {{ activeId?: string, activeRole?: string } | null} spaces
  * @param {{ connected?: { calendar?: boolean, slack?: boolean }, prefs?: Record<string, string> } | null} toolAsk
  */
-export async function loadChecklist(identity, session, spaces, toolAsk) {
+export async function loadChecklist(identity, session, spaces, toolAsk, knownStats = undefined) {
   if (!identity || session?.kind !== "oauth" || !spaces?.activeId) return null;
   const admin = spaces.activeRole === "owner" || spaces.activeRole === "admin";
   let team = false;
-  if (typeof identity.workspaceStats === "function") {
+  if (knownStats !== undefined) {
+    team = Boolean(knownStats && (knownStats.members > 1 || knownStats.openInvites > 0));
+  } else if (typeof identity.workspaceStats === "function") {
     try {
       const stats = await identity.workspaceStats(session.accessToken, spaces.activeId);
       team = stats.members > 1 || stats.openInvites > 0;

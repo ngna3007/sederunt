@@ -3,15 +3,18 @@ import { createHash } from "node:crypto";
 import { lookupByEmail } from "./slack/match.js";
 import { createDeletionStore, createLocalDeletionStore, withDeletionOverlay, filterDeletedDecisions, deletionMatches } from "./memory/deletions.js";
 import { drainDeletions } from "./memory/deletion-worker.js";
+import { drainMemoryRetries, withRateLimitRetry } from "./memory/retry.js";
 import { scopeAskStore } from "./ask/context.js";
 import { createParticipantBindings } from "./participant-bindings.js";
 import { consolePrincipal } from "./console-principal.js";
-import { canReadRecord, readPrincipalId, readableSession } from "./domain/read-access.js";
+import { canReadInSession, canReadOpenedMeeting, canReadRecord, meetingRoomReaders, readPrincipalId, readableSession } from "./domain/read-access.js";
 import { createServer } from "node:http";
 import { readRequestBytes } from "./http-body.js";
+import { send, redirect } from "./http/send.js";
+import { handleStaticRoutes } from "./http/static.js";
+import { dispatch } from "./http/dispatch.js";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { extname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { redact } from "./domain/redact.js";
 import { handleCalendarEvent } from "./calendar/route.js";
@@ -24,8 +27,16 @@ import { CALENDAR_SCOPES, calendarPresentedConnected, calendarTimeZone, createCa
 import { createConsoleAdapter } from "./console/upload.js";
 import { createLinearClient } from "./linear/mcp.js";
 import { loadLinearToken } from "./linear/token.js";
+import { createLinearInstallationStore } from "./linear/installations.js";
+import { handleLinearOAuth, linearClientMetadata, tenantLinearClient } from "./linear/oauth.js";
 import { renderCameraPage } from "./meeting/camera.js";
-import { createMeetingAdapter, mediaFromBot, meetingDoorReady, meetingEnded, recallBotUrl, recallTranscriptDelivery, verifyRecallRequest } from "./meeting/recall.js";
+import { handleMeetingAgent, keptAfterCue } from "./meeting/agent-http.js";
+import { isBareKeepCue } from "./meeting/voice-write.js";
+import { loadSpikeShapes, measureSpeechProbe, pushSpikeShape, readSpikeShapes, saveSpikeShape, spikeAuthorized, spikeEnabled, transcriptEventShape } from "./meeting/spike.js";
+import { bindAgentSeat, bindMeetingEar, finishAgentSeat, rememberAgentMember, rememberAgentSeat, rememberAgentSpeaker, rememberKeepCue, rememberMeetingHost, rememberMeetingPerson, redisConfigured, sharedRedisCommand, takeKeepCue, validMeetingEar } from "./meeting/seat.js";
+import { createMeetingAdapter, mediaFromBot, meetingCallUpdate, meetingDoorReady, meetingEnded, recallBotUrl, recallParticipantChange, recallTranscriptDelivery, transcriptLines, verifyRecallRequest } from "./meeting/recall.js";
+import { claimMeetingEvent, claimMeetingEventLocal, meetingEventKey, releaseMeetingEvent, releaseMeetingEventLocal } from "./meeting/events.js";
+import { keepRoomTranscript, rememberMeetingLine } from "./meeting/speech-gate.js";
 import { createMeetingFollowups, parseFollowupValue } from "./meeting/followups.js";
 import { createSupabaseFollowupStore } from "./meeting/followup-store.js";
 import { acceptMeetingEnd, buildMeetingFollowupInput, followupInteractionFields, validateFollowupEdit } from "./meeting/live-followups.js";
@@ -61,15 +72,17 @@ import { createBotPreferenceStore } from "./bot/preferences-supabase.js";
 import { assignEffectiveHearing, effectiveHearing, saveMeetingGuest } from "./bot/meeting-guest.js";
 import { authorizeBotWrite, canEditBot, handleBotSettings, hearingTenantFor, readBot } from "./console/bot-settings.js";
 import { handleToolPref, loadAccountProfile, loadToolAsk } from "./console-account.js";
-import { handleInvite, handleJoinLink, handleSpaceSwitch, handleWelcome, loadChecklist, loadSpaceView, welcomeLocation } from "./console-flow.js";
+import { handleConsoleInvites, handleInvite, handleJoinLink, handleSpaceSwitch, handleWelcome, loadChecklist, loadSpaceView, welcomePath } from "./console-flow.js";
 import { roleLabel } from "./identity/onboarding.js";
-import { renderLanding } from "./landing.js";
+
 import { handleFileRequest } from "./files/routes.js";
 import { createFileRuntime } from "./files/runtime.js";
 import { createFileStore } from "./files/store.js";
 import { createSupabaseFileStore } from "./files/supabase-store.js";
 import { createSessionFiles } from "./files/session.js";
-import { hideDeletedSlackMessages, ingestSlackFile } from "./files/slack.js";
+import { bindSlackChannel, hideDeletedSlackMessages, ingestSlackFile } from "./files/slack.js";
+import { createSlackIdentityStore, createSlackMemberResolver, slackChannelBindable, slackReadPrincipal } from "./slack/identity-link.js";
+import { accessibleMeetings, isMeetingQuestion, meetingDigestRows } from "./slack/meeting-digest.js";
 import { loadCompanyEnv, loadLocalEnv } from "./local-env.js";
 import { looksLikeOpenQuestion } from "./parse.js";
 import { createSession } from "./session.js";
@@ -78,7 +91,7 @@ import { ASK_UNAVAILABLE, askSpendsQuota, humanAskText, runAsk } from "./ask/run
 import { openRouterConfig } from "./openrouter.js";
 import { answerSlackQuestion, claimSlackAsk, findReplyFile, invitedFileRows, postSlackReply, prepareSlackCaption, slackChannelMembers, slackFileBytes } from "./slack/reply.js";
 import { slackBotUserIds, slackDelivery, slackEventHasFiles, verifySlackRequest } from "./slack/sign.js";
-import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, searchPublishedActivity, undoRecorded, warmProofs } from "./typed-path.js";
+import { companyBoard, downloadFile, endMeeting, handleUtterance, hydrateSlackChannels, noteMeetingCall, noteMeetingLines, personalBoard, readProofs, rebuildCompanyIndex, replayFailure, roomLedger, saveHearing, roomPublicActivity, searchPublishedActivity, undoRecorded, warmProofs, absorbActivityRows } from "./typed-path.js";
 import { wireCalls } from "./tatum/client.js";
 import { createTenantBind, requiresDurableBind } from "./tenant-bind.js";
 import { createAdminStore } from "./admin-store.js";
@@ -214,6 +227,7 @@ export function defaultDeps(options = {}) {
         linearCalls.push("create");
         return { identifier: "", id: "" };
       },
+      connected: false,
       async assignIssue() {
         linearCalls.push("assign");
         return { identifier: "", id: "" };
@@ -302,7 +316,7 @@ function liveLinear(stub, loadToken = loadLinearToken, config = {}) {
  * Calendar adapter for the signed-in person on a tenant. OAuth console uses
  * person_google_grants; local/env demos keep the process calendar adapter.
  */
-async function calendarForRequest(workspace, { companyId = "", personId = "", req } = {}) {
+async function calendarForRequest(workspace, { companyId = "", personId = "", req: _req } = {}) {
   const env = workspace.env;
   const grants = workspace.googleGrants;
   const tenantId = typeof companyId === "string" ? companyId.trim() : "";
@@ -354,6 +368,30 @@ async function calendarForRequest(workspace, { companyId = "", personId = "", re
   return { adapter: workspace.deps.calendar, personGrant: false, tenantId, personId: person, connected: calendarPresentedConnected(env) };
 }
 
+const CALENDAR_GRANT_CACHE_MS = 5 * 60 * 1000;
+
+/**
+ * The person's Google Calendar grant, as the voice path checks it. A granted
+ * answer is kept for five minutes in this process, so the page render's short
+ * wait does not print "Connect your calendar" when the grant read is slow. A
+ * missing grant is not kept: connecting shows on the next load.
+ */
+export async function personCalendarGranted(workspace, tenantId, person) {
+  const grants = workspace.googleGrants;
+  const key = `${tenantId}:${person}`;
+  workspace.calendarGrantCache ??= new Map();
+  const cached = workspace.calendarGrantCache.get(key);
+  if (cached && cached.until > Date.now()) return true;
+  const ok = await grants.granted(person, { tenantId, scopes: CALENDAR_SCOPES }) === true;
+  if (ok) {
+    if (workspace.calendarGrantCache.size >= 1000) workspace.calendarGrantCache.clear();
+    workspace.calendarGrantCache.set(key, { until: Date.now() + CALENDAR_GRANT_CACHE_MS });
+  } else {
+    workspace.calendarGrantCache.delete(key);
+  }
+  return ok;
+}
+
 async function doorsForRequest(workspace, { companyId = "", personId = "", req } = {}) {
   const env = workspace.env;
   const doors = doorReport(env, workspace.linearReady === true);
@@ -362,8 +400,7 @@ async function doorsForRequest(workspace, { companyId = "", personId = "", req }
   const grants = workspace.googleGrants;
   if (tenantId && person && grants && typeof grants.granted === "function") {
     try {
-      const ok = await grants.granted(person, { tenantId, scopes: CALENDAR_SCOPES });
-      doors.calendar = ok === true;
+      doors.calendar = await personCalendarGranted(workspace, tenantId, person);
     } catch {
       doors.calendar = false;
     }
@@ -386,6 +423,13 @@ async function doorsForRequest(workspace, { companyId = "", personId = "", req }
           slackConfigured: doors.slack === true,
         }, activeId);
       doors.slack = claim.linked === true;
+    }
+  }
+  if (tenantId && workspace.linearInstallations?.get) {
+    try {
+      if (await workspace.linearInstallations.get(tenantId)) doors.linear = true;
+    } catch {
+      // A storage miss keeps the process door. It does not turn Linear off.
     }
   }
   return doors;
@@ -527,6 +571,19 @@ function followupStillDue(row, now) {
   return !(row.data.nextAttemptAt > now);
 }
 
+// Room media bounds: a Recall bot read, a cold index wait, and how long saves stay alive.
+const RECALL_READ_MS = 8000;
+const MEDIA_INDEX_WAIT_MS = 12_000;
+const SAVE_KEEP_MS = 55_000;
+const MEDIA_KEEP_BUDGET_MS = 50_000;
+const MEDIA_STEP_MS = 8_000;
+// A media save already made is not made again for a week (per content fingerprint).
+// Room activity mirrored in Redis so a just-finished meeting shows its rows
+// on any instance, without waiting for a Walrus Memory search.
+const ROOM_ACTIVITY_TTL_S = 14 * 24 * 3600;
+const ROOM_ACTIVITY_CAP = 100;
+const ROOM_ACTIVITY_WAIT_MS = 1500;
+
 export function createApp(options = {}) {
   const session = options.session ?? createSession();
   const env = options.env ?? process.env;
@@ -555,6 +612,9 @@ export function createApp(options = {}) {
   }
   const companies = options.companies && typeof options.companies === "object" ? options.companies : null;
   const sessions = new Map();
+  if (options.sessions instanceof Map) {
+    for (const [key, value] of options.sessions) sessions.set(key, value);
+  }
   const loads = new Map();
   const workspace = {
     env,
@@ -566,6 +626,8 @@ export function createApp(options = {}) {
     memwalClient: options.memwal || null,
     tenantBind: options.tenantBind || createTenantBind(env, { fetchImpl: options.fetch || globalThis.fetch }),
     slackInstallations: options.slackInstallations || createInstallationStore(env, { fetch: options.fetch }),
+    linearInstallations: options.linearInstallations || createLinearInstallationStore(env, { fetch: options.fetch }),
+    linearProfiles: new Map(),
     companyLoaded: loadedCompany(options, deps, env, companies),
     linearReady: options.linearReady === true || (options.env ? false : linearReady()),
     recall: options.recall || null,
@@ -574,13 +636,15 @@ export function createApp(options = {}) {
     ask: options.askStore || createAskStore(env),
     openrouterFetch: options.openrouterFetch || null,
     participantBindings: options.participantBindings || createParticipantBindings(env, { fetchImpl: options.fetch || globalThis.fetch }),
+    memberships: options.memberships || null,
+    meetingVoice: options.meetingVoice && typeof options.meetingVoice === "object" ? options.meetingVoice : undefined,
+    now: options.now,
   };
   if (proofWarmOn(env) && workspace.companyLoaded && deps.tatum) {
-    // Read the company proofs once at start so the first room load is
-    // already verified. Sequential, through the reader's shared throttle.
-    workspace.warm = Promise.resolve()
-      .then(() => prepareWorkspace(workspace, ""))
-      .then((current) => warmProofs(current, deps.tatum))
+    // Verify proofs already on this process. Rebuilding the unbound company
+    // index here searches the shared namespace, drops every tenant document,
+    // and competes with the signed-in load.
+    workspace.warm = warmProofs(workspace.session, deps.tatum)
       .then((report) => {
         if (typeof deps.log === "function") deps.log({ kind: "proof-warm", ...report });
         return report;
@@ -593,6 +657,17 @@ export function createApp(options = {}) {
   workspace.calendarMcp = createFakeCalendarMcp();
   workspace.calendarSave = typeof options.calendarSave === "function" ? options.calendarSave : null;
   workspace.fetchImpl = options.fetch || globalThis.fetch;
+  workspace.recallReadMs = Number(options.recallReadMs) > 0 ? Number(options.recallReadMs) : RECALL_READ_MS;
+  workspace.mediaIndexWaitMs = Number(options.mediaIndexWaitMs) > 0 ? Number(options.mediaIndexWaitMs) : MEDIA_INDEX_WAIT_MS;
+  // The media route hands roomMedia a copy of the workspace; these must be
+  // shared objects, or each request starts with an empty cache.
+  workspace.mediaCache = new Map();
+  workspace.mediaFlight = new Map();
+  workspace.mediaRoomsSaved = new Set();
+  workspace.mediaRoomQueue = { tail: Promise.resolve() };
+  if (Array.isArray(options.agentSeats)) {
+    for (const seat of options.agentSeats) rememberAgentSeat(workspace, seat);
+  }
   async function mcpCallContext(req) {
     const gate = guardConsole(req, env);
     const tenantId = await resolveMcpSpace(gate, identity, workspace.deps.connectors);
@@ -621,6 +696,13 @@ export function createApp(options = {}) {
     : ((isDirectRun() || process.env.VERCEL) ? createSupabaseFollowupStore(env, { fetchImpl: options.fetch || globalThis.fetch }) : null);
   workspace.followupStore = followupStore;
   workspace.slackMatches = options.slackMatches || null;
+  // Slack user -> verified member of the tenant that owns the team (users.info email).
+  workspace.slackMembers = createSlackMemberResolver({
+    store: Object.prototype.hasOwnProperty.call(options, "slackIdentities")
+      ? options.slackIdentities
+      : createSlackIdentityStore(env, { fetchImpl: options.fetch || globalThis.fetch }),
+  });
+  workspace.slackBound = new Map();
   workspace.followups = options.followups && typeof options.followups.enqueue === "function"
     ? options.followups
     : (followupStore ? liveFollowups(workspace, followupStore) : null);
@@ -646,6 +728,8 @@ export function createApp(options = {}) {
       },
     });
     if (filesRuntime?.kick) await filesRuntime.kick();
+    const retried = kickMemoryRetries(workspace);
+    if (retried) result.memoryRetries = await retried;
     if (workspace.followups && workspace.followupStore) {
       // Drain leaves an exhausted failure where it is, so the oldest page must not hide a later tenant.
       const now = Date.now();
@@ -704,57 +788,13 @@ export function createApp(options = {}) {
       send(res, 200, "application/json", JSON.stringify(await recover(limit)));
       return;
     }
-    if (await handleAdmin(req, res, url, { send, redirect })) return;
     if (identity) rememberRefreshCookie(res, await refreshOAuthSession(req, identity, env));
-    if (filesRuntime && await handleFileRequest(req, res, url, filesRuntime, { send })) return;
-    if (await handleNodeForms(req, res, { forms: workspace.forms, env, url })) return;
-    if (req.method === "GET" && url.pathname.startsWith("/media/")) {
-      if (await sendMedia(res, url.pathname)) return;
-      send(res, 404, "text/plain; charset=utf-8", "Not found");
-      return;
-    }
-    if (req.method === "GET" && url.pathname.startsWith("/clips/")) {
-      if (await sendClip(req, res, url.pathname)) return;
-      send(res, 404, "text/plain; charset=utf-8", "Not found");
-      return;
-    }
-    if (req.method === "GET" && (url.pathname === "/favicon.ico" || url.pathname === "/favicon.svg")) {
-      const icon = await readFile(resolve("public/favicon.svg"));
-      res.writeHead(200, { "content-type": "image/svg+xml", "cache-control": "no-store" });
-      res.end(icon);
-      return;
-    }
-    if (req.method === "GET" && url.pathname.startsWith("/models/")) {
-      const name = url.pathname.slice("/models/".length);
-      if (!/^CEREBRIUM_[A-Za-z0-9_]+\.glb$/.test(name)) {
-        send(res, 404, "text/plain; charset=utf-8", "Not found");
-        return;
-      }
-      const file = resolve("public/models", name);
-      send(res, 200, "model/gltf-binary", await readFile(file));
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/hold.js") {
-      send(res, 200, "text/javascript; charset=utf-8", await readFile(new URL("./hold.js", import.meta.url), "utf8"));
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/") {
-      send(res, 200, "text/html; charset=utf-8", renderLanding());
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/console.css") {
-      send(res, 200, "text/css; charset=utf-8", await readFile(new URL("./console.css", import.meta.url), "utf8"));
-      return;
-    }
-    if (req.method === "GET" && (url.pathname === "/fonts/Geist-Variable.woff2" || url.pathname === "/fonts/GeistMono-Variable.woff2")) {
-      const file = url.pathname.endsWith("GeistMono-Variable.woff2")
-        ? "geist-mono/GeistMono-Variable.woff2"
-        : "geist-sans/Geist-Variable.woff2";
-      const bytes = await readFile(resolve("node_modules/geist/dist/fonts", file));
-      res.writeHead(200, { "content-type": "font/woff2", "cache-control": "public, max-age=86400" });
-      res.end(bytes);
-      return;
-    }
+    if (await dispatch([
+      ["admin", () => handleAdmin(req, res, url, { send, redirect })],
+      ["files", () => filesRuntime ? handleFileRequest(req, res, url, filesRuntime, { send }) : false],
+      ["forms", () => handleNodeForms(req, res, { forms: workspace.forms, env, url })],
+      ["static", () => handleStaticRoutes(req, res, url)],
+    ], req, res, url)) return;
     if (url.pathname === "/console/auth" || url.pathname.startsWith("/console/auth/")) {
       await handleAuthRoute({ req, res, url, env, identity, send, redirect, googleGrants: workspace.googleGrants, calendarSave: workspace.calendarSave, fetchImpl: options.fetch || globalThis.fetch });
       return;
@@ -763,6 +803,30 @@ export function createApp(options = {}) {
       env,
       installations: workspace.slackInstallations,
       fetchImpl: options.slackOAuthFetch || options.fetch || globalThis.fetch,
+      activeTenant: async (request) => {
+        const gate = guardConsole(request, env);
+        if (!identity || gate.session?.kind !== "oauth") return { unauthorized: true };
+        const view = await loadSpaceView(identity, gate.session);
+        return { userId: String(gate.session.userId || ""), tenantId: view?.activeId || "", role: view?.activeRole || "" };
+      },
+      roleIn: async (request, tenantId) => {
+        const gate = guardConsole(request, env);
+        if (!identity || gate.session?.kind !== "oauth") return "";
+        try {
+          const tenants = await identity.myTenants(gate.session.accessToken);
+          const hit = (tenants || []).find((item) => item?.id === tenantId);
+          return hit?.role || "";
+        } catch {
+          return "";
+        }
+      },
+    })) {
+      return;
+    }
+    if (await handleLinearOAuth(req, res, url, {
+      env,
+      installations: workspace.linearInstallations,
+      fetchImpl: options.linearOAuthFetch || options.fetch || globalThis.fetch,
       activeTenant: async (request) => {
         const gate = guardConsole(request, env);
         if (!identity || gate.session?.kind !== "oauth") return { unauthorized: true };
@@ -893,6 +957,7 @@ export function createApp(options = {}) {
       return;
     }
     if (req.method === "GET" && /^\/console\/rooms\/[^/]+\/media$/.test(url.pathname)) {
+      const mediaStartedAt = Date.now();
       const gate = guardConsole(req, env);
       if (gate.required && !gate.session) {
         send(res, 401, "application/json; charset=utf-8", JSON.stringify({ error: "Sign in." }));
@@ -901,14 +966,45 @@ export function createApp(options = {}) {
       const id = decodeURIComponent(url.pathname.slice("/console/rooms/".length, -"/media".length));
       const resolved = await resolveCompanyId(workspace, req, url.searchParams.get("company") || "");
       if (resolved.denied || resolved.unauthorized) { sendCompanyDenied(res, send, resolved); return; }
-      const current = await prepareWorkspace(workspace, resolved.companyId);
+      // A cold instance rebuilds the company index from Walrus Memory first. Wait a
+      // bounded time; past it the page asks again instead of the request dying at 60 s.
+      const current = await prepareWorkspace(workspace, resolved.companyId, false, workspace.mediaIndexWaitMs || MEDIA_INDEX_WAIT_MS);
+      if (workspace.companyLoaded && !current.readReport) {
+        send(res, 503, "application/json; charset=utf-8", JSON.stringify({ state: "loading", retryMs: 2000 }), { "retry-after": "2" });
+        return;
+      }
+      const hearingTenant = (typeof resolved.companyId === "string" && resolved.companyId.trim()) || "local";
+      // Preparing the room reads the guest again. A failed follow-up read keeps the recording closed.
+      try {
+        await withinMs(readBot(workspace.botPreferences, hearingTenant), MEDIA_STEP_MS);
+      } catch {
+        const denied = new Error("The hearing record could not be read.");
+        denied.status = 503;
+        throw denied;
+      }
       const principal = await consolePrincipal(workspace, req, resolved.companyId);
       const roomDecisions = (current.decisions || []).filter((row) => row.roomId === id && !row.deleted);
-      if (!roomDecisions.length || !roomDecisions.every((row) => canReadRecord(principal, row))) {
+      const opened = (current.rooms || []).find((item) => item.id === id);
+      if (roomDecisions.length) {
+        const readers = meetingRoomReaders(current);
+        if (!roomDecisions.every((row) => canReadInSession(principal, row, readers))) {
+          send(res, 404, "application/json; charset=utf-8", JSON.stringify({ error: "That room is not available." }));
+          return;
+        }
+      } else if (!canReadOpenedMeeting(principal, opened)) {
         send(res, 404, "application/json; charset=utf-8", JSON.stringify({ error: "That room is not available." }));
         return;
       }
-      const body = await roomMedia({ ...workspace, session: current }, id);
+      // Background saves stop before the 60 s function limit counted from the
+      // request start (b38fa40d timed out: a 55 s keep began ~20 s in).
+      const media = await withinOrNull(roomMedia({ ...workspace, session: current, mediaTenantId: resolved.companyId, sessionReady: true, keepUntil: mediaStartedAt + MEDIA_KEEP_BUDGET_MS }, id), MEDIA_STEP_MS * 2);
+      if (!media) {
+        send(res, 503, "application/json; charset=utf-8", JSON.stringify({ state: "loading", retryMs: 15000 }), { "retry-after": "15" });
+        return;
+      }
+      // Activity rows for this room from the Redis mirror, so a meeting that just
+      // ended shows what Adam did even when this instance's index predates it.
+      const body = { ...media, activity: await within(roomActivityFor(workspace, current, resolved.companyId, id), MEDIA_STEP_MS, []) };
       const secret = typeof env.RECALL_API_KEY === "string" ? env.RECALL_API_KEY : "";
       const raw = secret.length >= 12 ? JSON.stringify(body).split(secret).join("") : JSON.stringify(body);
       send(res, 200, "application/json; charset=utf-8", raw);
@@ -935,26 +1031,7 @@ export function createApp(options = {}) {
       send(res, 200, "application/json; charset=utf-8", JSON.stringify({ id, name }));
       return;
     }
-    if (req.method === "GET" && (url.pathname === "/console/activity.js" || url.pathname === "/console/activity-feed.js")) {
-      const source = await readFile(resolve("src/activity-feed.js"));
-      send(res, 200, "text/javascript; charset=utf-8", source);
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/console/room-match.js") {
-      const source = await readFile(resolve("src/room-match.js"));
-      send(res, 200, "text/javascript; charset=utf-8", source);
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/console/bot-identity.js") {
-      const source = await readFile(resolve("src/bot/identity.js"));
-      send(res, 200, "text/javascript; charset=utf-8", source);
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/console/bot-card.js") {
-      const source = await readFile(resolve("src/console/bot-card.js"));
-      send(res, 200, "text/javascript; charset=utf-8", source);
-      return;
-    }
+
     if (url.pathname === "/api/bot") {
       await handleBotSettings({
         req, res, url, env, identity, send, readJson, store: workspace.botPreferences,
@@ -1015,16 +1092,21 @@ export function createApp(options = {}) {
       return;
     }
     if ((req.method === "GET" || req.method === "POST") && url.pathname === "/console/welcome") {
-      const resolved = await resolveCompanyId(workspace, req, "");
+      const [resolved, personSpace] = await Promise.all([
+        resolveCompanyId(workspace, req, ""),
+        resolvePersonTenantId(workspace, req, ""),
+      ]);
       if (resolved.denied || resolved.unauthorized) {
         sendCompanyDenied(res, send, resolved);
         return;
       }
-      const personSpace = await resolvePersonTenantId(workspace, req, "");
       const companyId = resolved.companyId;
       const personId = String(guardConsole(req, env).session?.userId || "").trim();
-      const calendar = await calendarForRequest(workspace, { companyId: personSpace.tenantId || companyId, personId, req });
-      const doors = await doorsForRequest(workspace, { companyId: personSpace.tenantId || companyId, personId, req });
+      const grantTenant = personSpace.tenantId || companyId;
+      const [calendar, doors] = await Promise.all([
+        calendarForRequest(workspace, { companyId: grantTenant, personId, req }),
+        doorsForRequest(workspace, { companyId: grantTenant, personId, req }),
+      ]);
       await handleWelcome({
         req, res, url, env, identity, send, redirect,
         readPosted: readPostedAll,
@@ -1112,13 +1194,6 @@ export function createApp(options = {}) {
         redirect(res, `/console/sign-in?next=${next}${reason}`);
         return;
       }
-      if (req.method === "GET" && url.pathname === "/console") {
-        const welcome = await welcomeLocation(req, env, identity);
-        if (welcome) {
-          redirect(res, welcome);
-          return;
-        }
-      }
       const doors = doorReport(env, workspace.linearReady === true);
       const roomPath = /^\/console\/rooms\/([^/]+)$/.exec(url.pathname);
       const consolePage = url.pathname === "/console"
@@ -1144,51 +1219,59 @@ export function createApp(options = {}) {
       }
       const oauth = identity && gate.session?.kind === "oauth";
       const spaces = oauth ? await loadSpaceView(identity, gate.session) : null;
-      const connectedDoors = oauth ? doorReport(env, workspace.linearReady === true) : null;
-      // Slack "connected" for Home/checklist: verified tenant ownership, not env token doors alone.
-      // Fake-tools demo keeps door+metadata behavior via toolsConnected inside loadToolAsk.
-      if (connectedDoors && workspace.tenantBind && env.SEDERUNT_TOOLS_FAKE !== "1") {
-        if (!spaces?.activeId) {
-          connectedDoors.slack = false;
-        } else {
-          const claim = slackOAuthConfigured(env)
-            ? await slackConnection(workspace, spaces.activeId)
-            : await slackClaimState({
-              tenantBind: workspace.tenantBind,
-              slack: workspace.deps.slack,
-              channelId: workspace.deps.app?.slackChannel || "",
-              slackConfigured: connectedDoors.slack === true,
-            }, spaces.activeId);
-          connectedDoors.slack = claim.linked === true;
+      if (url.pathname === "/console") {
+        const welcome = welcomePath(spaces);
+        if (welcome) {
+          redirect(res, welcome);
+          return;
         }
       }
-      // Calendar is the current person's Google grant on the active tenant, not deployment tokens.
-      if (connectedDoors) {
-        const personSpace = await resolvePersonTenantId(workspace, req, "");
-        const granted = await doorsForRequest(workspace, {
-          companyId: personSpace.tenantId || spaces?.activeId || "",
-          personId: String(gate.session?.userId || "").trim(),
-        });
-        connectedDoors.calendar = granted.calendar === true;
-      }
-      const accountProfile = oauth ? await loadAccountProfile(identity, gate.session, spaces) : null;
-      const toolAsk = oauth ? await loadToolAsk(identity, gate.session, connectedDoors || {}, env) : null;
-      const checklist = oauth && url.pathname === "/console" ? await loadChecklist(identity, gate.session, spaces, toolAsk) : null;
-      const hearingView = await hearingTenantFor({ req, env, identity });
-      const botTenant = hearingView.tenantId;
-      const botView = await readBot(workspace.botPreferences, botTenant);
-      const hearingCompany = hearingView.spaces?.activeId && hearingView.spaces.activeKind !== "personal"
-        ? hearingView.spaces.activeId
-        : "";
+      const connectedDoors = oauth ? doorReport(env, workspace.linearReady === true) : null;
+      const personId = String(gate.session?.userId || "").trim();
+      const botTenant = oauth ? (spaces?.activeId || "") : "local";
+      const hearingCompany = spaces?.activeId && spaces.activeKind !== "personal" ? spaces.activeId : "";
       const hearingSession = sessionFor(workspace, hearingCompany);
-      if (botTenant) await assignEffectiveHearing(workspace, hearingSession, botTenant);
-      const hearing = await effectiveHearing(workspace, botTenant, hearingSession);
+      const warmUser = oauth && gate.session?.accessToken && typeof identity.getUser === "function"
+        ? identity.getUser(gate.session.accessToken).catch(() => null)
+        : null;
+      const knownStats = oauth && url.pathname === "/console" && spaces?.activeId && typeof identity.workspaceStats === "function"
+        ? identity.workspaceStats(gate.session.accessToken, spaces.activeId).catch(() => null)
+        : Promise.resolve(undefined);
+      const [slackClaim, calendarOn, accountProfile, botView, hearing, stats, linearGrant] = await Promise.all([
+        within(pageSlack(workspace, env, spaces, connectedDoors), PAGE_DOOR_WAIT_MS, {
+          linked: connectedDoors?.slack === true,
+          teamName: "",
+        }),
+        connectedDoors
+          ? within(calendarGranted(workspace, spaces?.activeId || "", personId), PAGE_DOOR_WAIT_MS, false)
+          : Promise.resolve(false),
+        oauth ? loadAccountProfile(identity, gate.session, spaces) : Promise.resolve(null),
+        readBot(workspace.botPreferences, botTenant),
+        within(
+          botTenant
+            ? assignEffectiveHearing(workspace, hearingSession, botTenant)
+            : effectiveHearing(workspace, botTenant, hearingSession),
+          PAGE_DOOR_WAIT_MS,
+          null,
+        ),
+        Promise.all([knownStats, warmUser]).then(([rows]) => rows),
+        within(pageLinear(workspace, spaces?.activeId || ""), PAGE_DOOR_WAIT_MS, null),
+      ]);
+      if (connectedDoors && linearGrant) connectedDoors.linear = true;
+      if (connectedDoors && workspace.tenantBind && env.SEDERUNT_TOOLS_FAKE !== "1") {
+        connectedDoors.slack = slackClaim.linked === true;
+      }
+      if (connectedDoors) connectedDoors.calendar = calendarOn === true;
+      const toolAsk = oauth ? await loadToolAsk(identity, gate.session, connectedDoors || {}, env) : null;
+      const checklist = oauth && url.pathname === "/console"
+        ? await loadChecklist(identity, gate.session, spaces, toolAsk, stats)
+        : null;
       const bot = {
         ...botView,
         canEdit: canEditBot({
           signedIn: Boolean(gate.session),
-          oauth: hearingView.oauth,
-          role: hearingView.role,
+          oauth,
+          role: oauth ? (spaces?.activeRole || "") : "",
           authRequired: gate.required,
         }),
       };
@@ -1202,15 +1285,19 @@ export function createApp(options = {}) {
               ? "Set RECALL_WEBHOOK_SECRET to the Recall workspace verification secret, then restart."
               : "Check that SEDERUNT_PUBLIC_ORIGIN is a public https address, then restart.",
         calendarConnected: (connectedDoors || doors).calendar === true,
-        linearConnected: doors.linear === true,
+        linearConnected: (connectedDoors || doors).linear === true,
+        linearInstall: linearInstallReady(env, identity, workspace.linearInstallations),
+        linearResult: url.searchParams.get("linear") || "",
+        linearWorkspace: linearGrant?.workspaceName
+          || ((connectedDoors || doors).linear === true ? String(env.LINEAR_WORKSPACE || "").trim() : ""),
         slackConnected: (connectedDoors || doors).slack === true,
         slackReady: slackOAuthConfigured(env) && spaces?.activeId
-          ? Boolean(env.SLACK_SIGNING_SECRET && await tenantSlackClient(workspace, spaces.activeId).channelReady(await tenantSlackClient(workspace, spaces.activeId).defaultChannel()))
+          ? Boolean(env.SLACK_SIGNING_SECRET && (connectedDoors || doors).slack === true)
           : Boolean(env.SLACK_SIGNING_SECRET && env.SLACK_BOT_TOKEN),
         slackInstall: slackOAuthConfigured(env) && Boolean(identity),
         slackResult: url.searchParams.get("slack") || "",
         slackWorkspace: slackOAuthConfigured(env) && spaces?.activeId && (connectedDoors || doors).slack === true
-          ? (await slackConnection(workspace, spaces.activeId)).teamName || ""
+          ? (slackClaim.teamName || "")
           : "",
         signedIn: Boolean(gate.session),
         signInOff: !consoleSecret(env) && !identity,
@@ -1228,11 +1315,97 @@ export function createApp(options = {}) {
         toolAsk,
         bot,
         hearing,
+        section: consoleSection(url.pathname),
       }));
       return;
     }
     if (req.method === "GET" && url.pathname === "/meeting") {
-      send(res, 200, "text/html; charset=utf-8", renderCameraPage(url.searchParams.get("name") || ""));
+      const spike = url.searchParams.get("spike") === "1" && spikeEnabled(env);
+      send(res, 200, "text/html; charset=utf-8", renderCameraPage(url.searchParams.get("name") || "", { spike }));
+      return;
+    }
+    if (url.pathname.startsWith("/api/meeting/agent/")) {
+      if (url.pathname === "/api/meeting/agent/log") kickMemoryRetries(workspace);
+      const handled = await handleMeetingAgent({
+        req,
+        res,
+        url,
+        env,
+        workspace,
+        sessionFor: (tenantId) => sessionFor(workspace, tenantId),
+        depsFor: (tenantId) => ({
+          ...depsFor(workspace, tenantId),
+          // With sign-in on, in-call calendar writes use only the speaker's own
+          // Google grant in this tenant, never the process-wide calendar.
+          ...(identityConfigured(env) ? {
+            calendarForPerson: async (personId) => {
+              const opened = await calendarForRequest(workspace, { companyId: tenantId, personId });
+              return opened.personGrant ? opened.adapter : null;
+            },
+          } : {}),
+        }),
+        headerValue,
+        readJson,
+        send,
+        now: workspace.now,
+      });
+      if (handled) return;
+    }
+    if (url.pathname === "/api/meeting/spike/tts" || url.pathname === "/api/meeting/spike/transcript") {
+      if (!spikeEnabled(env)) {
+        send(res, 404, "text/plain; charset=utf-8", "");
+        return;
+      }
+      const ear = headerValue(req.headers["x-meeting-ear"]);
+      if (req.method === "POST" && url.pathname === "/api/meeting/spike/transcript") {
+        if (!validMeetingEar(ear)) {
+          send(res, 401, "text/plain; charset=utf-8", "");
+          return;
+        }
+        let message = null;
+        try {
+          const raw = await readBody(req);
+          if (raw.length > 60000) {
+            send(res, 413, "text/plain; charset=utf-8", "");
+            return;
+          }
+          message = raw.trim() ? JSON.parse(raw) : {};
+        } catch {
+          send(res, 400, "text/plain; charset=utf-8", "");
+          return;
+        }
+        const shape = transcriptEventShape(message, Date.now());
+        pushSpikeShape(workspace, ear, shape);
+        await saveSpikeShape(env, workspace.fetchImpl, ear, shape);
+        send(res, 204, "text/plain; charset=utf-8", "");
+        return;
+      }
+      if (!spikeAuthorized(env, headerValue(req.headers["x-sederunt-spike"]))) {
+        send(res, 404, "text/plain; charset=utf-8", "");
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/meeting/spike/transcript") {
+        if (!validMeetingEar(ear)) {
+          send(res, 401, "text/plain; charset=utf-8", "");
+          return;
+        }
+        const local = readSpikeShapes(workspace, ear);
+        const remote = local.length ? [] : await loadSpikeShapes(env, workspace.fetchImpl, ear);
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify({ events: local.length ? local : remote }));
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/meeting/spike/tts") {
+        const { key } = openRouterConfig(env);
+        const report = await measureSpeechProbe({ fetchImpl: workspace.fetchImpl, key });
+        const body = JSON.stringify(report);
+        if (key && body.includes(key)) {
+          send(res, 500, "application/json; charset=utf-8", JSON.stringify({ error: "redacted" }));
+          return;
+        }
+        send(res, 200, "application/json; charset=utf-8", body);
+        return;
+      }
+      send(res, 404, "text/plain; charset=utf-8", "");
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/hearing") {
@@ -1295,6 +1468,10 @@ export function createApp(options = {}) {
       res.end();
       return;
     }
+    if ((req.method === "GET" || req.method === "POST") && url.pathname === "/api/console/invites") {
+      await handleConsoleInvites({ req, res, env, identity, send, readJson });
+      return;
+    }
     if (req.method === "GET" && url.pathname === "/api/console") {
       const gate = guardConsole(req, env);
       if (gate.required && !gate.session) {
@@ -1308,15 +1485,26 @@ export function createApp(options = {}) {
       }
       const companyId = resolved.companyId;
       const hearingTenant = await hearingTenantId(workspace, req);
-      const current = await prepareWorkspace(workspace, companyId, false, 2000, hearingTenant);
+      const personId = String(gate.session?.userId || "").trim();
+      const meetingsPromise = within(
+        calendarMeetings(workspace, { companyId, personId, req }),
+        BOARD_SIDE_WAIT_MS,
+        [],
+      );
+      const current = await prepareWorkspace(workspace, companyId, false, BOARD_INDEX_WAIT_MS, hearingTenant);
+      // A ready index can wait briefly for the calendar. A cold index must not.
+      const meetings = current.readReport ? await meetingsPromise : await within(meetingsPromise, 150, []);
       const workspaceKind = url.searchParams.get("workspace") || "";
       const memberId = consoleBoardMember(gate.session, env, workspaceKind, url.searchParams.get("member") || "");
+      const stamped = workspace.botPreferences?.durable === true && current.hearing?.tenantId === hearingTenant
+        ? current.hearing
+        : null;
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(await consolePayload(
         workspace,
         current,
         memberId,
         workspaceKind,
-        { req, companyId },
+        { req, companyId, hearing: stamped, hearingTenant, meetings, meetingsKnown: true },
       )));
       return;
     }
@@ -1396,6 +1584,7 @@ export function createApp(options = {}) {
       const work = (async () => {
         let botId = "";
         let startedAt = "";
+        let sentBy = "";
         let status = "not-configured";
         if (deps.meeting?.join) {
           try {
@@ -1407,6 +1596,19 @@ export function createApp(options = {}) {
             const sent = await deps.meeting.join({ url: meetingUrl, name: guest, botName: bot.name });
             botId = typeof sent?.id === "string" ? sent.id : "";
             startedAt = typeof sent?.startedAt === "string" ? sent.startedAt : (typeof sent?.started_at === "string" ? sent.started_at : "");
+            if (botId && typeof sent?.ear === "string") {
+              const joiner = guardConsole(req, env).session;
+              sentBy = joiner?.kind === "oauth" ? String(joiner.userId || joiner.memberId || "").trim() : "";
+              await bindMeetingEar(workspace, sent.ear, botId, env, workspace.fetchImpl).catch(() => {});
+              await bindAgentSeat(workspace, {
+                ear: sent.ear,
+                botId,
+                tenantId: joinCompanyId || "",
+                roomId: botId,
+                botName: guest,
+                userId: sentBy,
+              }, env, workspace.fetchImpl).catch(() => {});
+            }
             if (!botId) {
               status = "failed";
             } else if (joinCompanyId && workspace.tenantBind) {
@@ -1435,6 +1637,7 @@ export function createApp(options = {}) {
             } else {
               status = "sent";
             }
+            if (status === "sent" && !startedAt) startedAt = new Date().toISOString();
           } catch (error) {
             const message = error instanceof Error ? error.message : "";
             status = message === "Meeting join is not configured" ? "not-configured" : "failed";
@@ -1448,7 +1651,12 @@ export function createApp(options = {}) {
               const current = await prepareWorkspace(workspace, joinCompanyId || "", false, 0, hearingTenant);
               await handleUtterance({
                 session: current,
-                openedRoom: { platform, id: botId, ...(startedAt ? { startedAt } : {}) },
+                openedRoom: {
+                  platform,
+                  id: botId,
+                  ...(startedAt ? { startedAt } : {}),
+                  ...(sentBy ? { memberIds: [sentBy] } : {}),
+                },
               }, depsFor(workspace, joinCompanyId || ""));
             } catch {
               // The door already sent the bot. A missed record does not change that word.
@@ -1479,65 +1687,202 @@ export function createApp(options = {}) {
         headers: req.headers,
         payload: raw,
       });
-      if (accepted) {
-        try {
-          const payload = JSON.parse(raw || "{}");
-          const delivery = recallTranscriptDelivery(payload);
-          if (delivery) {
-            const botId = typeof delivery.room?.id === "string" ? delivery.room.id : "";
-            const companyId = await resolveBoundTenant(workspace, { botId });
-            // Race: join bound after Recall fires — ask provider to retry; never ingest unbound.
-            if (!companyId && identityConfigured(env) && requiresDurableBind(env)) {
-              send(res, 503, "text/plain; charset=utf-8", "bind-pending");
-              return;
-            }
-            // Unbound production memory fails closed (empty tenant + no allowUnscoped).
-            const current = await prepareWorkspace(workspace, companyId);
-            const participant = payload?.data?.data?.participant || payload?.data?.participant;
-            // Display names and unverified mailbox claims never establish attendance identity.
-            if (participant?.email_verified === true && typeof participant.email === "string" && delivery.memberId) {
-              try {
-                await workspace.participantBindings.record({ tenantId: companyId, roomId: delivery.room.id, memberId: delivery.memberId, email: participant.email });
-              } catch (error) {
-                // A changed mailbox is permanent. An outage must be retried, so the words are not acknowledged yet.
-                if (error?.code !== "participant-identity") {
-                  send(res, 503, "text/plain; charset=utf-8", "participant-pending");
-                  return;
-                }
-              }
-            }
-            await handleUtterance({ ...delivery, session: current }, depsFor(workspace, companyId));
-            if (companyId && workspace.followups && workspace.followupStore) {
-              const outcomes = await workspace.followupStore.list(companyId, { kind: "outcome", meetingId: delivery.room.id, limit: 1 });
-              if (outcomes.length) await persistMeetingFollowups(workspace, companyId, delivery.room.id);
-            }
-          }
-          const ended = meetingEnded(payload);
-          if (ended?.roomId) {
-            const companyId = await resolveBoundTenant(workspace, { botId: ended.roomId });
-            if (!companyId && identityConfigured(env) && requiresDurableBind(env)) {
-              send(res, 503, "text/plain; charset=utf-8", "bind-pending");
-              return;
-            }
-            if (companyId && !workspace.followups) { const error = new Error("Finalization unavailable"); error.code = "followup-persist"; throw error; }
-            if (companyId && workspace.followups) await persistMeetingFollowups(workspace, companyId, ended.roomId);
-            const current = await prepareWorkspace(workspace, companyId);
-            try {
-              await endMeeting(current, depsFor(workspace, companyId), ended.roomId);
-            } catch {
-              // The finalization job is already saved. Memory minutes can be retried.
-            }
-          }
-        } catch (error) {
-          if (error?.code === "followup-persist") {
-            send(res, 503, "text/plain; charset=utf-8", "finalization-pending");
+      if (!accepted) {
+        send(res, 401, "text/plain; charset=utf-8", "rejected");
+        return;
+      }
+      let recallWork = null;
+      try {
+        const payload = JSON.parse(raw || "{}");
+        const person = recallParticipantChange(payload);
+        const delivery = recallTranscriptDelivery(payload);
+        const progress = meetingCallUpdate(payload);
+        const ended = meetingEnded(payload);
+        let transcriptCompany = "";
+        let ownedTranscript = false;
+        let eventKey = "";
+        if (delivery) {
+          const botId = typeof delivery.room?.id === "string" ? delivery.room.id : "";
+          transcriptCompany = await resolveBoundTenant(workspace, { botId });
+          // Race: join bound after Recall fires — ask provider to retry; never ingest unbound.
+          if (!transcriptCompany && identityConfigured(env) && requiresDurableBind(env)) {
+            send(res, 503, "text/plain; charset=utf-8", "bind-pending");
             return;
           }
-          // A signed callback is still accepted when the transcript has no words.
+          const participant = payload?.data?.data?.participant || payload?.data?.participant;
+          // Display names and unverified mailbox claims never establish attendance identity.
+          if (!delivery.partial && participant?.email_verified === true && typeof participant.email === "string" && delivery.memberId) {
+            try {
+              await workspace.participantBindings.record({ tenantId: transcriptCompany, roomId: delivery.room.id, memberId: delivery.memberId, email: participant.email });
+            } catch (error) {
+              // A changed mailbox is permanent. An outage must be retried, so the words are not acknowledged yet.
+              if (error?.code !== "participant-identity") {
+                send(res, 503, "text/plain; charset=utf-8", "participant-pending");
+                return;
+              }
+            }
+          }
+          eventKey = meetingEventKey(botId, delivery, headerValue(req.headers["webhook-id"]));
+          ownedTranscript = claimMeetingEventLocal(sessionFor(workspace, transcriptCompany), eventKey);
+        }
+        let progressCompany = "";
+        const progressOpen = Boolean(progress?.roomId && progress.call !== "done" && progress.call !== "call_ended");
+        if (progressOpen) {
+          progressCompany = await resolveBoundTenant(workspace, { botId: progress.roomId });
+          if (!progressCompany && identityConfigured(env) && requiresDurableBind(env)) {
+            send(res, 503, "text/plain; charset=utf-8", "bind-pending");
+            return;
+          }
+        }
+        let endedCompany = "";
+        if (ended?.roomId) {
+          endedCompany = await resolveBoundTenant(workspace, { botId: ended.roomId });
+          if (!endedCompany && identityConfigured(env) && requiresDurableBind(env)) {
+            send(res, 503, "text/plain; charset=utf-8", "bind-pending");
+            return;
+          }
+          if (endedCompany && !workspace.followups) { const error = new Error("Finalization unavailable"); error.code = "followup-persist"; throw error; }
+          if (endedCompany && workspace.followups) await persistMeetingFollowups(workspace, endedCompany, ended.roomId);
+        }
+        // Signature and tenant checks are done. The index and the saved line
+        // follow the ack. waitUntil keeps that work alive on Vercel.
+        // A throw before the save releases the claim so a retry can still record.
+        // Facts a Walrus 429 queued earlier are written while the meeting runs.
+        kickMemoryRetries(workspace);
+        recallWork = (async () => {
+          const tasks = [];
+          if (person) {
+            tasks.push(rememberMeetingPerson(workspace, person.botId, person, env, workspace.fetchImpl).catch(() => {}));
+          }
+          if (delivery && ownedTranscript) {
+            tasks.push((async () => {
+              const botId = typeof delivery.room?.id === "string" ? delivery.room.id : "";
+              const companyId = transcriptCompany;
+              let current = sessionFor(workspace, companyId);
+              const claimedSession = current;
+              let won = false;
+              let saved = false;
+              try {
+                won = eventKey
+                  ? await claimMeetingEvent(env, eventKey, workspace.fetchImpl)
+                  : true;
+                if (!won) return;
+                const participant = payload?.data?.data?.participant || payload?.data?.participant;
+                const speakerName = typeof participant?.name === "string" ? participant.name : "";
+                const heardDelivery = speakerName ? { ...delivery, speakerName } : delivery;
+                if (!delivery.partial && botId && delivery.memberId) {
+                  await rememberAgentMember(workspace, botId, {
+                    participantId: delivery.memberId,
+                    name: speakerName,
+                    memberId: delivery.memberId,
+                  }, env, workspace.fetchImpl).catch(() => {});
+                  if (speakerName) {
+                    await rememberAgentSpeaker(workspace, botId, delivery.memberId, speakerName, env, workspace.fetchImpl).catch(() => {});
+                  }
+                }
+                if (!delivery.partial && botId) {
+                  rememberMeetingLine(current, botId, { speaker: speakerName || "Someone", text: delivery.text });
+                }
+                if (delivery.partial) {
+                  saved = true;
+                  return;
+                }
+                if (participant?.is_host === true && botId && delivery.memberId) {
+                  // The signed webhook names the host; an in-call Calendar create may use it.
+                  await rememberMeetingHost(workspace, botId, delivery.memberId, env, workspace.fetchImpl).catch(() => {});
+                }
+                // Recall can split "Heads up, <fact>" into two finals. The cue alone is not
+                // stored; the speaker's next line is kept as the heads-up fact.
+                const bareCue = Boolean(botId && delivery.memberId) && isBareKeepCue(delivery.text);
+                let lineDelivery = heardDelivery;
+                if (bareCue) {
+                  await rememberKeepCue(workspace, botId, "line", delivery.memberId, env, workspace.fetchImpl).catch(() => {});
+                } else if (botId && delivery.memberId
+                  && await takeKeepCue(workspace, botId, "line", delivery.memberId, env, workspace.fetchImpl).catch(() => false)
+                  && keptAfterCue(delivery.text)) {
+                  lineDelivery = { ...heardDelivery, text: `Heads up, ${delivery.text}` };
+                }
+                if (!bareCue) {
+                  if (!current.readReport?.ok) current = await prepareWorkspace(workspace, companyId);
+                  await handleUtterance({ ...lineDelivery, session: current }, depsFor(workspace, companyId));
+                }
+                saved = true;
+                if (delivery.room?.id) {
+                  await noteMeetingCall(current, depsFor(workspace, companyId), delivery.room.id, "in_call_recording").catch(() => {});
+                  keepRoomTranscript(current, delivery.room.id, { speaker: speakerName || "Someone", text: delivery.text });
+                }
+                if (companyId && workspace.followups && workspace.followupStore) {
+                  const outcomes = await workspace.followupStore.list(companyId, { kind: "outcome", meetingId: delivery.room.id, limit: 1 });
+                  if (outcomes.length) await persistMeetingFollowups(workspace, companyId, delivery.room.id);
+                }
+              } catch (error) {
+                if (won && !saved) {
+                  releaseMeetingEventLocal(claimedSession, eventKey);
+                  await releaseMeetingEvent(env, eventKey, workspace.fetchImpl);
+                }
+                throw error;
+              }
+            })());
+          }
+          if (progressOpen) {
+            tasks.push((async () => {
+              const progressSession = await prepareWorkspace(workspace, progressCompany);
+              await noteMeetingCall(progressSession, depsFor(workspace, progressCompany), progress.roomId, progress.call).catch(() => {});
+            })());
+          }
+          if (ended?.roomId) {
+            tasks.push((async () => {
+              await finishAgentSeat(workspace, ended.roomId, env, workspace.fetchImpl).catch(() => {});
+              const current = await prepareWorkspace(workspace, endedCompany);
+              const endedCall = progress?.roomId === ended.roomId && progress.call ? progress.call : "done";
+              await noteMeetingCall(current, depsFor(workspace, endedCompany), ended.roomId, endedCall).catch(() => {});
+              try {
+                await endMeeting(current, depsFor(workspace, endedCompany), ended.roomId);
+              } catch {
+                // The finalization job is already saved. Memory minutes can be retried.
+              }
+            })());
+          }
+          await Promise.all(tasks);
+        })();
+      } catch (error) {
+        if (error?.code === "followup-persist") {
+          send(res, 503, "text/plain; charset=utf-8", "finalization-pending");
+          return;
+        }
+        // A signed callback is still accepted when the transcript has no words.
+      }
+      if (env.VERCEL) {
+        let held = false;
+        if (recallWork) {
+          try {
+            const ctx = globalThis[Symbol.for("@vercel/request-context")]?.get?.();
+            if (typeof ctx?.waitUntil === "function") {
+              const { waitUntil } = await import("@vercel/functions");
+              if (typeof waitUntil === "function") {
+                waitUntil(recallWork);
+                held = true;
+              }
+            }
+          } catch {
+            // Outside a Vercel request the import cannot hold the invocation.
+          }
+        }
+        send(res, 204, "text/plain; charset=utf-8", "");
+        if (recallWork && !held) recallWork.catch(() => {});
+        scheduleRecovery();
+        return;
+      }
+      try {
+        if (recallWork) await recallWork;
+      } catch (error) {
+        if (error?.code === "followup-persist") {
+          send(res, 503, "text/plain; charset=utf-8", "finalization-pending");
+          return;
         }
       }
-      send(res, accepted ? 204 : 401, "text/plain; charset=utf-8", accepted ? "" : "rejected");
-      if (accepted) scheduleRecovery();
+      send(res, 204, "text/plain; charset=utf-8", "");
+      scheduleRecovery();
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/slack/interactivity") {
@@ -1628,7 +1973,9 @@ export function createApp(options = {}) {
       const companyId = resolved.companyId;
       const hearingTenant = await hearingTenantId(workspace, req);
       const current = await prepareWorkspace(workspace, companyId, false, 0, hearingTenant);
-      const result = await handleUtterance({ ...delivery, session: current }, depsFor(workspace, companyId));
+      const utterance = { ...delivery, session: current };
+      if (caller?.kind === "oauth") utterance.principal = await consolePrincipal(workspace, req, companyId);
+      const result = await handleUtterance(utterance, depsFor(workspace, companyId));
       send(res, 200, "application/json; charset=utf-8", JSON.stringify(result));
       return;
     }
@@ -1747,6 +2094,24 @@ export function createApp(options = {}) {
         SLACK_BOT_TOKEN: slackToken,
         SLACK_BOT_USER_ID: slackRoute.botUserId || (slackRoute.source === "install" ? "" : env.SLACK_BOT_USER_ID),
       };
+      // The bot was added to a channel: bind it to this tenant's Files space now,
+      // so the first file posted there reaches Walrus. Other joins are ignored.
+      if (event.type === "member_joined_channel") {
+        const joined = typeof event.user === "string" ? event.user.trim().toUpperCase() : "";
+        const isBot = Boolean(joined) && slackBotUserIds(parsed, slackEnv).some((id) => id.toUpperCase() === joined);
+        let bound = null;
+        if (isBot && companyId) {
+          try {
+            bound = await bindSlackChannelOnce(workspace, filesRuntime, {
+              tenantId: companyId, teamId: slackTeam, channel: slackChannel, token: slackToken, fetchImpl: deps.slack?.fetch,
+            });
+          } catch {
+            bound = null;
+          }
+        }
+        send(res, 200, "application/json; charset=utf-8", JSON.stringify({ slack: bound ? "bound" : "ignored" }));
+        return;
+      }
       const subtype = typeof event.subtype === "string" ? event.subtype : "";
       const changedFiles = subtype === "message_changed" && slackEventHasFiles(event);
       const noise = subtype
@@ -1785,10 +2150,18 @@ export function createApp(options = {}) {
         // A DM, or a channel @mention, recalls. Other channel lines are stored.
         const question = delivery.ask === true;
         const huddle = delivery.room?.kind === "huddle" || delivery.room?.source === "slack-huddle";
-        let storedFile = null;
+        const hasFiles = (Array.isArray(delivery.files) && delivery.files.length > 0) || Boolean(delivery.file);
+        // The Slack person as a verified member of this tenant, when their Slack email says so.
+        const asker = (question || hasFiles) && delivery.intent !== "delete" && !huddle
+          ? await slackAskerLink(workspace, filesRuntime, { tenantId: companyId, teamId: slackTeam, slackUserId: delivery.memberId, token: slackToken, fetchImpl: deps.slack?.fetch })
+          : null;
+        // The Meet-room view answers only in a one-to-one DM: a channel or group DM
+        // reply is read by everyone there, so it keeps the Slack-id-only view.
+        const principal = question && !slackOneToOne(event) ? null : slackReadPrincipal(asker);
         let incoming = [];
         let storedFiles = [];
         let downloadFailed = false;
+        let ingestedFiles = 0;
         if (!question && delivery.intent !== "delete" && !huddle) {
           const channel = delivery.room?.askChannel || "";
           const people = await slackPeople(slackEnv, deps, channel, options.deps?.slack);
@@ -1813,6 +2186,16 @@ export function createApp(options = {}) {
             replyHttp(200, "application/json; charset=utf-8", JSON.stringify({ body: "not-invited" }));
             return;
           }
+          // First keep in a channel the bot is in binds it (member_joined_channel may not be subscribed).
+          if (filesRuntime && hasFiles) {
+            try {
+              await withinMs(bindSlackChannelOnce(workspace, filesRuntime, {
+                tenantId: companyId, teamId: slackTeam, channel, token: slackToken, fetchImpl: deps.slack?.fetch,
+              }), 4_000);
+            } catch {
+              // Unbound: the file is still kept by name and resent from Slack.
+            }
+          }
           delivery.participants = memberIds;
           delivery.room.memberIds = memberIds;
           incoming = Array.isArray(delivery.files) && delivery.files.length
@@ -1833,8 +2216,8 @@ export function createApp(options = {}) {
             storedFiles.push({ ...loaded, id: slackFileId });
             if (filesRuntime) {
               try {
-                await withinMs(ingestSlackFile(filesRuntime, {
-                  externalWorkspaceId: slackScopeId(parsed.team_id),
+                const ingested = await withinMs(ingestSlackFile(filesRuntime, {
+                  externalWorkspaceId: slackScopeId(parsed.team_id) || slackTeam,
                   externalChannelId: channel,
                   slackUserId: delivery.memberId,
                   slackName: delivery.memberId,
@@ -1844,14 +2227,17 @@ export function createApp(options = {}) {
                   bytes: loaded.bytes,
                   externalMessageId: delivery.deliveryId,
                 }), 4_000);
+                if (ingested && ingested.skipped === false) ingestedFiles += 1;
+                if (typeof deps.log === "function") deps.log({ kind: "slack-file-ingest", skipped: ingested?.skipped !== false, reason: ingested?.reason || "" });
               } catch {
                 // The Slack reply still goes out. A stashed upload retries from the worker.
               }
             }
           }
           if (incoming.length && !storedFiles.length) downloadFailed = true;
+          // Durable uploads are queued; run the worker now so the Walrus copy exists before anyone asks.
+          if (ingestedFiles) await settleFileJobs(filesRuntime);
           if (storedFiles.length) {
-            storedFile = storedFiles[0];
             delivery.file = storedFiles[0];
             delivery.files = storedFiles;
           }
@@ -1865,6 +2251,7 @@ export function createApp(options = {}) {
         const result = await handleUtterance({
           ...delivery,
           intent,
+          ...(question && principal ? { readPrincipal: principal } : {}),
           session: current,
         }, doorDeps);
         // "Kept <file>" when this utterance recorded a new decision with files,
@@ -1917,9 +2304,29 @@ export function createApp(options = {}) {
             }
           }
         }
-        if (question && result?.body && !repeat && result.allow !== "not-invited" && result.allow !== "missing-member") {
+        // A linked asker's question about a meeting ("the Meet we just had") reads their own
+        // recent meetings. Only in a 1:1 DM (principal is null elsewhere).
+        const meetingRows = question && principal && !repeat && isMeetingQuestion(delivery.text)
+          ? (await withinOrNull(slackMeetingMemories(workspace, current, companyId, principal).catch(() => null), 6_000)) || []
+          : [];
+        if (question && !repeat && result?.allow === "not-invited" && !meetingRows.length && slackToken) {
+          // Never silent, never a hint of what is kept or where.
           const channel = delivery.room?.askChannel || (typeof event.channel === "string" ? event.channel : "");
-          const answer = await answerSlackQuestion(result.visible, delivery.text, {
+          const claimId = delivery.deliveryId || (typeof event.ts === "string" ? event.ts : "");
+          if (channel && await claimSlackAsk(env, claimId, deps.slack?.fetch || deps.fetch)) {
+            await postSlackReply({
+              token: slackToken,
+              fetchImpl: deps.slack?.fetch,
+              channel,
+              text: SLACK_NOT_SHARED,
+              thread: typeof event.thread_ts === "string" ? event.thread_ts : "",
+              username: botName,
+            });
+          }
+        }
+        if (question && result?.body && !repeat && (result.allow !== "not-invited" || meetingRows.length) && result.allow !== "missing-member") {
+          const channel = delivery.room?.askChannel || (typeof event.channel === "string" ? event.channel : "");
+          const answer = await answerSlackQuestion(result.allow === "not-invited" ? [] : result.visible, delivery.text, {
             env,
             fetchImpl: deps.slack?.fetch || deps.fetch,
             botName,
@@ -1928,6 +2335,7 @@ export function createApp(options = {}) {
             channel,
             excludeTs: typeof event.ts === "string" ? event.ts : "",
             memberId: delivery.memberId,
+            meetings: meetingRows,
             // MemWal.recall(query) ranks memories before the model reads them.
             recall: doorDeps.memory?.recall
               ? async (query) => doorDeps.memory.recall(query)
@@ -1940,7 +2348,7 @@ export function createApp(options = {}) {
           // fails) so "District 7 floor brief" pins northline-d7-floor-brief.txt
           // instead of a leftover floor-plan.txt.
           const catalog = [
-            ...invitedFileRows(current.decisions, delivery.memberId),
+            ...(principal ? readableFileRows(current, principal) : invitedFileRows(current.decisions, delivery.memberId)),
             ...(Array.isArray(result.visible) ? result.visible : []),
           ];
           const named = findReplyFile(catalog, delivery.text);
@@ -1950,7 +2358,8 @@ export function createApp(options = {}) {
           }
           answer.text = prepareSlackCaption(answer.text, answer.file);
           const hint = named?.name ? named : answer.fileMeta;
-          const bytes = answer.file ? await storedFileBytes(current, answer.file, depsFor(workspace, companyId), slackEnv, hint) : null;
+          const walrus = principal && filesRuntime ? walrusFileReader(filesRuntime, principal.memberId, companyId, deps.log) : null;
+          const bytes = answer.file ? await storedFileBytes(current, answer.file, depsFor(workspace, companyId), slackEnv, hint, { walrus }) : null;
           const reply = {
             channel,
             text: answer.text,
@@ -2051,7 +2460,8 @@ export function createApp(options = {}) {
       if (resolved.denied || resolved.unauthorized) { sendCompanyDenied(res, send, resolved); return; }
       const current = await prepareWorkspace(workspace, resolved.companyId);
       const principal = await consolePrincipal(workspace, req, resolved.companyId);
-      if (!current.decisions.some((row) => row.objectId === id && canReadRecord(principal, row))) {
+      const readers = meetingRoomReaders(current);
+      if (!current.decisions.some((row) => row.objectId === id && canReadInSession(principal, row, readers))) {
         send(res, 404, "text/plain; charset=utf-8", "Not found"); return;
       }
       try {
@@ -2313,9 +2723,8 @@ if (isDirectRun() || process.env.VERCEL) {
 }
 if (isDirectRun() && !process.env.VERCEL && publicServer) {
   publicServer.listen(port, "127.0.0.1", () => {
-    console.log(`Sederunt typed path http://127.0.0.1:${port}`);
-    console.log('POST /api/typed {"text":"..."}');
-    console.log("A Linear create waits until that tool's preference allows it.");
+    console.log(`Sederunt http://127.0.0.1:${port}`);
+    console.log(`Console http://127.0.0.1:${port}/console`);
   });
 }
 
@@ -2328,7 +2737,7 @@ function loadedCompany(options, deps, env, companies) {
   return Boolean(env.COMPANY_MEMWAL_KEY);
 }
 
-function displayActor(env) {
+function _displayActor(env) {
   const name = typeof env.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
   return name || "Someone";
 }
@@ -2485,7 +2894,7 @@ async function handleAsk(workspace, req, res, url) {
           fetchImpl: workspace.openrouterFetch || undefined,
           botName: bot?.name || "",
           // withMemWal ask path: MemWal.recall(query) before generate.
-          recall: doorDeps.memory?.recall ? async (query) => (await doorDeps.memory.recall(query)).filter((hit) => canReadRecord(principal, hit.decision))
+          recall: doorDeps.memory?.recall ? async (query) => (await doorDeps.memory.recall(query)).filter((hit) => canReadInSession(principal, hit.decision, meetingRoomReaders(current)))
             .map((hit) => ({ ...hit, decision: { ...hit.decision, inviteMemberIds: [memberId] } })) : undefined,
           // The signed-in board member, not a client-supplied id and not only SEDERUNT_MEMBER.
           retrieval: () => chatReply(workspace, { text: question, workspace: scope, company: companyId }, principal),
@@ -2828,20 +3237,85 @@ function depsFor(workspace, companyId, unfiltered = false) {
   const deletionDeps = { deletions: workspace.deletions, deletionTenantId, actionClaims: workspace.actionClaims,
     actionClaimTenantId: tenantId || "00000000-0000-4000-8000-000000000001", requireActionClaims: identityConfigured(workspace.env) };
   const filtered = (memory) => memory && workspace.deletions && !unfiltered ? withDeletionOverlay(memory, workspace.deletions, deletionTenantId) : memory;
-  const slackScoped = slackOAuthConfigured(workspace.env || {})
-    ? { slack: tenantSlackClient(workspace, tenantId), app: { ...(workspace.deps.app || {}), slackChannel: "" } }
-    : {};
-  if (workspace.companies) {
-    return { ...workspace.deps, ...slackScoped, ...deletionDeps, memory: filtered(workspace.companies[id]), tenantId };
-  }
-  const memory = bindMemoryTenant(
+  const slackOn = slackOAuthConfigured(workspace.env || {});
+  const appBase = slackOn ? { ...(workspace.deps.app || {}), slackChannel: "" } : workspace.deps.app;
+  const slackScoped = slackOn ? { slack: tenantSlackClient(workspace, tenantId) } : {};
+  const linearScoped = linearDeps(workspace, tenantId, appBase);
+  if (tenantId) deletionDeps.mirrorActivity = (event) => mirrorRoomActivity(workspace, tenantId, event);
+  const memory = retryingMemory(workspace, tenantId, rawMemoryFor(workspace, companyId));
+  return { ...workspace.deps, ...slackScoped, ...linearScoped, ...deletionDeps, memory: filtered(memory), tenantId };
+}
+
+/** The tenant-bound Walrus Memory client, without retries or deletion overlay. */
+function rawMemoryFor(workspace, companyId) {
+  const id = companyKey(workspace, companyId);
+  if (workspace.companies) return workspace.companies[id];
+  return bindMemoryTenant(
     workspace.deps.memory,
-    tenantId,
+    id === "company" ? "" : id,
     workspace.env,
     workspace.memwalClient,
     workspace.deps.tatum,
   );
-  return { ...workspace.deps, ...slackScoped, ...deletionDeps, memory: filtered(memory), tenantId };
+}
+
+/** A 429 backs off and retries; a fact still refused is queued in Redis. */
+function retryingMemory(workspace, tenantId, memory) {
+  const env = workspace.env || {};
+  const fetchImpl = workspace.fetchImpl || globalThis.fetch;
+  return withRateLimitRetry(memory, {
+    tenantId,
+    redis: redisConfigured(env) ? (command) => sharedRedisCommand(env, fetchImpl, command) : null,
+    log: typeof workspace.deps?.log === "function" ? workspace.deps.log : undefined,
+    ...(workspace.memoryRetry || {}),
+  });
+}
+
+/** Write facts a 429 queued. At most one drain per instance every 20 s. */
+export function kickMemoryRetries(workspace) {
+  const env = workspace.env || {};
+  if (!redisConfigured(env)) return null;
+  const now = Date.now();
+  if (workspace.memoryRetryAt && now - workspace.memoryRetryAt < 20_000) return null;
+  workspace.memoryRetryAt = now;
+  const fetchImpl = workspace.fetchImpl || globalThis.fetch;
+  const work = drainMemoryRetries({
+    redis: (command) => sharedRedisCommand(env, fetchImpl, command),
+    memoryFor: (tenantId) => rawMemoryFor(workspace, tenantId),
+    log: typeof workspace.deps?.log === "function" ? workspace.deps.log : undefined,
+  }).catch(() => ({ drained: 0 }));
+  if (env.VERCEL) import("@vercel/functions").then(({ waitUntil }) => waitUntil(work)).catch(() => {});
+  return work;
+}
+
+function linearDeps(workspace, tenantId, app) {
+  if (!tenantId || !workspace.linearInstallations?.open) return { app };
+  const proxied = new Proxy(app || {}, {
+    get(target, prop, receiver) {
+      const profile = workspace.linearProfiles?.get(tenantId);
+      if (prop === "linearWorkspace" && profile?.workspaceKey) return profile.workspaceKey;
+      if (prop === "linearTeam" && profile?.teamKey) return profile.teamKey;
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+  return { app: proxied, linear: tenantLinearClient(workspace, tenantId) };
+}
+
+function linearInstallReady(env, identity, installations) {
+  if (!identity || !linearClientMetadata(env) || !sessionSecret(env)) return false;
+  const local = env.NODE_ENV !== "production" && !env.VERCEL_ENV && env.SEDERUNT_AUTH_FAKE === "1";
+  if (local) return true;
+  return installations?.durable === true && installations?.encrypted === true;
+}
+
+async function pageLinear(workspace, tenantId) {
+  const id = String(tenantId || "").trim();
+  if (!id || !workspace.linearInstallations?.get) return null;
+  try {
+    return await workspace.linearInstallations.get(id);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -2975,6 +3449,51 @@ async function currentBot(workspace, req) {
 }
 
 const BOARD_PROOF_WAIT_MS = 400;
+const BOARD_INDEX_WAIT_MS = 80;
+const BOARD_SIDE_WAIT_MS = 1200;
+const PAGE_DOOR_WAIT_MS = 400;
+
+function consoleSection(pathname) {
+  if (pathname === "/console" || pathname === "/console/") return "home";
+  if (pathname === "/console/rooms") return "rooms";
+  if (pathname === "/console/history") return "history";
+  if (pathname === "/console/decisions") return "record";
+  if (pathname === "/console/chat") return "chat";
+  if (pathname === "/console/people") return "people";
+  if (pathname === "/console/files") return "files";
+  if (pathname === "/console/account") return "account";
+  if (pathname === "/console/status" || pathname === "/console/setup") return "connectors";
+  if (pathname === "/console/connectors") return "mcp";
+  return "";
+}
+
+/**
+ * @template T
+ * @param {Promise<T>} work
+ * @param {number} ms
+ * @param {T} fallback
+ */
+function within(work, ms, fallback) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(fallback);
+    }, ms);
+    Promise.resolve(work).then((value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    }, () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(fallback);
+    });
+  });
+}
 
 /**
  * Warm the proof cache at start when a real Tatum key is set, unless
@@ -2997,13 +3516,17 @@ async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0,
     ? ((typeof companyId === "string" && companyId.trim()) || "local")
     : (typeof hearingTenant === "string" ? hearingTenant.trim() : "");
   const applyHearing = async () => {
-    await assignEffectiveHearing(workspace, current, tenant);
+    await within(assignEffectiveHearing(workspace, current, tenant), BOARD_SIDE_WAIT_MS, null);
     if (workspace.deletions) {
       const deletionTenant = depsFor(workspace, companyId).deletionTenantId;
       let visible;
       try {
-        visible = await filterDeletedDecisions(workspace.deletions, deletionTenant, current.decisions);
-      } catch {
+        visible = await Promise.race([
+          filterDeletedDecisions(workspace.deletions, deletionTenant, current.decisions),
+          new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error("slow"), { timeout: true })), BOARD_SIDE_WAIT_MS)),
+        ]);
+      } catch (error) {
+        if (error?.timeout) return;
         const denied = new Error("The deletion record could not be read.");
         denied.status = 503;
         throw denied;
@@ -3012,8 +3535,17 @@ async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0,
       for (const decision of current.decisions) if (!allowed.has(decision)) decision.deleted = true;
       const hiddenSources = new Set(current.decisions.filter((row) => row.deleted).map((row) => row.sourceDeliveryId).filter(Boolean));
       let intents;
-      try { intents = await workspace.deletions.list(deletionTenant); }
-      catch { const error = new Error("The deletion record could not be read."); error.status = 503; throw error; }
+      try {
+        intents = await Promise.race([
+          workspace.deletions.list(deletionTenant),
+          new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error("slow"), { timeout: true })), BOARD_SIDE_WAIT_MS)),
+        ]);
+      } catch (error) {
+        if (error?.timeout) return;
+        const denied = new Error("The deletion record could not be read.");
+        denied.status = 503;
+        throw denied;
+      }
       current.actions = current.actions.filter((row) => !hiddenSources.has(row.deliveryId)
         && !intents.some((intent) => deletionMatches(intent, { tenantId: deletionTenant, roomId: row.roomId, sourceIds: [row.deliveryId].filter(Boolean), decisionIds: [row.id].filter(Boolean) })));
       current.activity = current.activity.filter((row) => !intents.some((intent) => deletionMatches(intent, {
@@ -3050,10 +3582,28 @@ async function prepareWorkspace(workspace, companyId, retry = false, waitMs = 0,
     await applyHearing();
     return current;
   }
+  const holdIndex = workspace.env?.VERCEL
+    ? import("@vercel/functions").catch(() => null)
+    : null;
+  let waitTimer;
   await Promise.race([
     pending,
-    new Promise((resolve) => setTimeout(resolve, waitMs)),
+    new Promise((resolve) => { waitTimer = setTimeout(resolve, waitMs); }),
   ]);
+  clearTimeout(waitTimer);
+  if (!current.readReport) {
+    // Home paints from the shell. Hearing waits until the index has rows.
+    // The shell returns before the search finishes. waitUntil keeps that
+    // search alive on this server so the next poll can use it.
+    pending.then(() => applyHearing(), () => {}).catch(() => {});
+    if (holdIndex) {
+      const loaded = await holdIndex;
+      if (typeof loaded?.waitUntil === "function") {
+        try { loaded.waitUntil(pending); } catch { /* no request context */ }
+      }
+    }
+    return current;
+  }
   await applyHearing();
   // A timed-out index can still absorb a legacy guest after this returns.
   // Re-apply so a durable row stays the one typed-path addressing sees.
@@ -3094,11 +3644,39 @@ async function consolePayload(workspace, current, memberId, kind = "company", op
   const open = kind === "personal" ? "personal" : "company";
   const req = options.req;
   const companyId = typeof options.companyId === "string" ? options.companyId : "";
-  const hearing = await effectiveHearing(workspace, await hearingTenantId(workspace, req), current);
+  if (workspace.companyLoaded && !current.readReport) {
+    // The memory index is still reading. Home can paint meetings and the
+    // checklist without it; the client asks again for rooms.
+    return {
+      companyLoaded: true,
+      reading: true,
+      shell: true,
+      workspace: open,
+      read: "reading",
+      message: "",
+      doors: doorReport(workspace.env, workspace.linearReady === true),
+      preferences: { linear: "ask", calendar: "ask", slack: "ask" },
+      slack: "not-set-up",
+      decisions: [],
+      rooms: [],
+      people: [],
+      waiting: [],
+      access: [],
+      counts: { kept: 0, waiting: 0, sent: 0, failed: 0 },
+      hearing: null,
+      meetings: Array.isArray(options.meetings) ? options.meetings : [],
+    };
+  }
+  const hearing = options.hearing
+    || await within(
+      effectiveHearing(workspace, options.hearingTenant || await hearingTenantId(workspace, req), current),
+      BOARD_SIDE_WAIT_MS,
+      null,
+    );
   const gate = req ? guardConsole(req, workspace.env) : { session: null };
   const personId = String(gate.session?.userId || "").trim();
   const doors = req
-    ? await doorsForRequest(workspace, { companyId, personId, req })
+    ? await within(doorsForRequest(workspace, { companyId, personId, req }), BOARD_SIDE_WAIT_MS, doorReport(workspace.env, workspace.linearReady === true))
     : doorReport(workspace.env, workspace.linearReady === true);
   const slack = doors.slack ? "ready" : "not-set-up";
   if (!workspace.companyLoaded) {
@@ -3119,28 +3697,9 @@ async function consolePayload(workspace, current, memberId, kind = "company", op
       hearing,
     };
   }
-  if (!current.readReport) {
-    return {
-      companyLoaded: true,
-      reading: true,
-      workspace: open,
-      read: "reading",
-      message: "",
-      doors,
-      preferences: { linear: "ask", calendar: "ask", slack: "ask" },
-      slack,
-      decisions: [],
-      rooms: [],
-      people: [],
-      waiting: [],
-      access: [],
-      counts: { kept: 0, waiting: 0, sent: 0, failed: 0 },
-      hearing,
-    };
-  }
   const report = current.readReport;
   const config = appConfig(workspace.env);
-  if (open !== "personal") await hydrateSlackChannels(current, workspace.deps);
+  if (open !== "personal") await within(hydrateSlackChannels(current, workspace.deps), 400, undefined);
   const principal = req && gate.session?.kind === "oauth" ? await consolePrincipal(workspace, req, companyId, open) : memberId;
   const board = open === "personal" ? personalBoard(current, principal) : companyBoard(current, principal, { timeZone: config.timeZone, slackChannel: config.slackChannel });
   if (!report.ok) {
@@ -3182,7 +3741,9 @@ async function consolePayload(workspace, current, memberId, kind = "company", op
     access: board.access,
     counts: board.counts,
     hearing,
-    meetings: await calendarMeetings(workspace, { companyId, personId, req }),
+    meetings: options.meetingsKnown
+      ? (Array.isArray(options.meetings) ? options.meetings : [])
+      : await within(calendarMeetings(workspace, { companyId, personId, req }), BOARD_SIDE_WAIT_MS, []),
     chain: chainReport(workspace.deps?.tatum),
   };
   return payload;
@@ -3231,24 +3792,38 @@ function bindMember(env, supplied) {
   return { ok: true, memberId: bound.message.params.arguments.memberId };
 }
 
-async function persistRecordingStart(workspace, current, id, startedAt) {
-  if (!startedAt) return;
+async function persistRecordingSpan(workspace, current, id, startedAt, duration, memoryOverride) {
+  const seconds = Number.isFinite(duration) && duration > 0 ? Math.round(duration) : 0;
   const room = (current?.rooms || []).find((item) => item.id === id);
   if (!room || /slack/i.test(room.platform || "")) return;
-  if (typeof room.startedAt === "string" && room.startedAt) return;
-  room.startedAt = startedAt;
-  const memory = workspace.deps?.memory;
+  const nextStart = typeof startedAt === "string" && startedAt ? startedAt : "";
+  const hadStart = typeof room.startedAt === "string" && Boolean(room.startedAt);
+  const hadLength = Number.isFinite(room.duration) && room.duration > 0;
+  if (!hadStart && nextStart) room.startedAt = nextStart;
+  if (!hadLength && seconds) room.duration = seconds;
+  if ((hadStart || !nextStart) && (hadLength || !seconds)) return;
+  // The tenant-bound memory: an unbound production write fails closed, so the
+  // span was never saved and every cold instance asked Recall for it again.
+  const memory = memoryOverride || workspace.deps?.memory;
   if (typeof memory?.remember !== "function") return;
+  const platform = typeof room.platform === "string" ? room.platform : "";
   try {
     await memory.remember({
       account: "company",
       kind: "room",
       text: `${room.id} meeting`,
-      idempotencyKey: `${room.id}:started`,
-      room: { id: room.id, kind: "meeting", platform: room.platform || "", startedAt },
+      idempotencyKey: `${room.id}:span:${createHash("sha256").update(JSON.stringify([room.platform || "", room.call || "", room.startedAt || "", room.duration || 0]), "utf8").digest("hex").slice(0, 12)}`,
+      room: {
+        id: room.id,
+        kind: "meeting",
+        ...(platform ? { platform } : {}),
+        ...(room.call ? { call: room.call } : {}),
+        ...(room.startedAt ? { startedAt: room.startedAt } : {}),
+        ...(room.duration > 0 ? { duration: room.duration } : {}),
+      },
     });
   } catch {
-    // The start is already on the room for this process.
+    // The span is already on the room for this process.
   }
 }
 
@@ -3268,7 +3843,9 @@ async function roomMedia(workspace, id) {
     segments: [],
     events: [],
   };
-  const current = await prepareWorkspace(workspace, "", false, 2000).catch(unavailableRoomMedia);
+  const current = workspace.sessionReady && workspace.session
+    ? workspace.session
+    : await prepareWorkspace(workspace, "", false, 2000).catch(unavailableRoomMedia);
   const room = current.rooms.find((item) => item.id === id);
   const platform = typeof room?.platform === "string" ? room.platform : "";
   if (/slack/i.test(platform)) {
@@ -3290,6 +3867,147 @@ async function roomMedia(workspace, id) {
   }
 }
 
+
+/** Work that outlives the response: kept alive on Vercel, bounded, never awaited by it. */
+function keepSaving(workspace, work) {
+  const left = Number.isFinite(workspace.keepUntil) ? Math.max(0, workspace.keepUntil - Date.now()) : SAVE_KEEP_MS;
+  const bounded = Promise.race([
+    work.catch(() => {}),
+    new Promise((resolve) => { const timer = setTimeout(resolve, Math.min(SAVE_KEEP_MS, left)); timer.unref?.(); }),
+  ]);
+  workspace.mediaSaves ??= new Set();
+  workspace.mediaSaves.add(bounded);
+  bounded.finally(() => workspace.mediaSaves.delete(bounded));
+  if (workspace.env?.VERCEL) {
+    import("@vercel/functions").then(({ waitUntil }) => {
+      if (typeof waitUntil === "function") waitUntil(bounded);
+    }).catch(() => {});
+  }
+}
+
+const MEDIA_ENDED_CALLS = new Set(["done", "call_ended", "fatal", "analysis_done", "media_expired"]);
+const MEDIA_ROOM_SAVED_TTL_S = 30 * 24 * 3600;
+const MEDIA_ROOM_RETRY_TTL_S = 15 * 60;
+
+/**
+ * One background Walrus write for an ended room, at most once per room: a
+ * shared Redis claim (SET NX) stops other instances and later polls. A failed
+ * write keeps a short claim, so a room is retried at most every 15 minutes.
+ * Writes from this process run one at a time.
+ */
+function saveRoomOnce(workspace, tenant, id, collected) {
+  const deps = depsFor(workspace, tenant);
+  const memory = deps.memory;
+  if (!memory || typeof memory.remember !== "function") return;
+  const env = workspace.env || {};
+  const fetchImpl = workspace.fetchImpl || globalThis.fetch;
+  const room = Object.assign({}, ...collected.map((input) => (input?.room && typeof input.room === "object" ? input.room : {})));
+  const lines = collected.map((input) => input?.room?.lines).filter(Array.isArray).sort((a, b) => b.length - a.length)[0];
+  if (lines) room.lines = lines;
+  // Recall often ends the call before the transcript and recording span are ready.
+  // Each stage (ended, + lines, + span) is written once, so a room written at
+  // call_ended still gets its transcript later: at most three writes per room.
+  const stage = `${lines?.length ? "l" : ""}${Number(room.duration) > 0 && room.startedAt ? "s" : ""}` || "e";
+  const local = `${deps.tenantId || ""}:${id}:${stage}`;
+  workspace.mediaRoomsSaved ??= new Set();
+  if (workspace.mediaRoomsSaved.has(local)) return;
+  if (workspace.mediaRoomsSaved.size >= 5000) workspace.mediaRoomsSaved.clear();
+  workspace.mediaRoomsSaved.add(local);
+  const print = createHash("sha256").update(JSON.stringify(room), "utf8").digest("hex").slice(0, 12);
+  const input = { ...collected[collected.length - 1], account: "company", kind: "room", text: `${id} meeting`, idempotencyKey: `${id}:media:${print}`, room };
+  const key = `sederunt:media-room-saved:${deps.tenantId || "local"}:${id}:${stage}`;
+  const run = async () => {
+    const claim = await within(sharedRedisCommand(env, fetchImpl, ["SET", key, "1", "NX", "EX", String(MEDIA_ROOM_SAVED_TTL_S)]), 1500, { ok: false });
+    if (claim?.ok && claim.result && Object.prototype.hasOwnProperty.call(claim.result, "result") && claim.result.result === null) return;
+    let saved = null;
+    try {
+      saved = await memory.remember(input);
+    } catch {
+      saved = null;
+    }
+    if (!saved || saved.ok === false) {
+      if (claim?.ok) await sharedRedisCommand(env, fetchImpl, ["SET", key, "retry", "EX", String(MEDIA_ROOM_RETRY_TTL_S)]).catch(() => {});
+      else workspace.mediaRoomsSaved.delete(local);
+    }
+  };
+  workspace.mediaRoomQueue ??= { tail: Promise.resolve() };
+  const work = workspace.mediaRoomQueue.tail.then(run, run);
+  workspace.mediaRoomQueue.tail = work.catch(() => {});
+  keepSaving(workspace, work);
+}
+
+function roomActivityKey(tenantId, roomId) {
+  const room = String(roomId || "");
+  if (!tenantId || !/^[A-Za-z0-9_.:-]{1,120}$/.test(room)) return "";
+  return `sederunt:room-activity:${tenantId}:${room}`;
+}
+
+/** Append one activity row to its room's Redis mirror. Never throws. */
+export async function mirrorRoomActivity(workspace, tenantId, event) {
+  const key = roomActivityKey(tenantId, event?.origin?.roomId);
+  if (!key || typeof event?.id !== "string" || !event.id) return false;
+  let row = "";
+  try { row = JSON.stringify(event); } catch { return false; }
+  if (!row || row.length > 16_000) return false;
+  const done = await within(sharedRedisCommand(workspace.env || {}, workspace.fetchImpl || globalThis.fetch, [
+    ["RPUSH", key, row],
+    ["LTRIM", key, String(-ROOM_ACTIVITY_CAP), "-1"],
+    ["EXPIRE", key, String(ROOM_ACTIVITY_TTL_S)],
+  ]), ROOM_ACTIVITY_WAIT_MS, { ok: false });
+  return Boolean(done?.ok);
+}
+
+/**
+ * The room's activity rows as the page shows them: this instance's rows plus the
+ * Redis mirror, without anything a deletion record covers.
+ */
+async function roomActivityFor(workspace, current, companyId, roomId) {
+  const deps = depsFor(workspace, companyId);
+  const key = roomActivityKey(deps.tenantId, roomId);
+  if (key) {
+    const loaded = await within(sharedRedisCommand(workspace.env || {}, workspace.fetchImpl || globalThis.fetch, ["LRANGE", key, "0", "-1"]), ROOM_ACTIVITY_WAIT_MS, { ok: false });
+    const raw = loaded?.ok && Array.isArray(loaded.result?.result) ? loaded.result.result : [];
+    const rows = [];
+    for (const item of raw) {
+      try {
+        const row = JSON.parse(String(item));
+        if (row && typeof row.id === "string" && row.origin?.roomId === roomId) rows.push(row);
+      } catch { /* a bad row is skipped */ }
+    }
+    let fresh = rows.filter((row) => !(current.activity || []).some((known) => known.id === row.id));
+    if (fresh.length && workspace.deletions) {
+      const intents = await within(workspace.deletions.list(deps.deletionTenantId), ROOM_ACTIVITY_WAIT_MS, null);
+      // Without the deletion record nothing new is shown.
+      fresh = Array.isArray(intents)
+        ? fresh.filter((row) => !intents.some((intent) => deletionMatches(intent, {
+          tenantId: deps.deletionTenantId, roomId: row.origin?.roomId, sourceIds: [row.origin?.sourceDeliveryId].filter(Boolean), decisionIds: [],
+        })))
+        : [];
+    }
+    if (fresh.length) absorbActivityRows(current, fresh);
+  }
+  const config = deps.app || {};
+  return roomPublicActivity(current, roomId, { timeZone: config.timeZone || "", slackChannel: config.slackChannel || "" });
+}
+
+async function recallSpokenLines(workspace, url) {
+  if (typeof url !== "string" || !url.startsWith("https://")) return [];
+  const fetchImpl = workspace.fetchImpl || globalThis.fetch;
+  try {
+    const response = await fetchImpl(url, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(4000),
+      redirect: "error",
+    });
+    if (!response.ok) return [];
+    const text = await response.text();
+    if (!text || text.length > 1_500_000) return [];
+    return transcriptLines(JSON.parse(text));
+  } catch {
+    return [];
+  }
+}
+
 async function loadRoomMedia(workspace, id, current, empty) {
   let bot = null;
   const reader = workspace.recall?.readBot || workspace.deps?.recall?.readBot;
@@ -3297,8 +4015,9 @@ async function loadRoomMedia(workspace, id, current, empty) {
   try {
     if (typeof reader === "function") bot = await reader(id);
     else if (key && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
-      const response = await fetch(recallBotUrl(id), {
+      const response = await (workspace.fetchImpl || globalThis.fetch)(recallBotUrl(id), {
         headers: { authorization: `Token ${key}`, accept: "application/json" },
+        signal: AbortSignal.timeout(workspace.recallReadMs || RECALL_READ_MS),
       });
       const text = await response.text();
       if (key && text.split(key).length > 1 && text.includes("\"authorization\"")) return empty;
@@ -3309,8 +4028,41 @@ async function loadRoomMedia(workspace, id, current, empty) {
     bot = null;
   }
   const body = mediaFromBot(bot);
-  if (body.startedAt) await persistRecordingStart(workspace, current, id, body.startedAt);
+  if (!Array.isArray(body.lines) || body.lines.length === 0) {
+    if (body.transcriptUrl && body.state !== "expired") {
+      body.lines = await recallSpokenLines(workspace, body.transcriptUrl);
+    }
+  }
+  const tenant = typeof workspace.mediaTenantId === "string" ? workspace.mediaTenantId : "";
+  // These update the room in this process at once. Nothing here writes to
+  // Walrus Memory per poll: a page load polled ten old rooms, each save was a
+  // 20-45 s Walrus job, and the burst used the 180 requests/min key limit, so a
+  // live meeting's heads-up fact failed with 429 (dry run 2, Nov 11 09:41 UTC).
+  // The room's rows are collected and, once the call has ended, written as one
+  // row, once per room (a shared claim), in the background.
+  const collected = [];
+  const collecting = {
+    ...depsFor(workspace, tenant),
+    memory: { async remember(input) { collected.push(input); return { blobId: null, collected: true }; } },
+  };
+  if (body.call) {
+    await noteMeetingCall(current, collecting, id, body.call).catch(() => {});
+  }
   const room = (current.rooms || []).find((item) => item.id === id);
+  // A room this instance first heard of from a Recall webhook has no platform
+  // or start yet, and the list named it "Room" (demo take-1, Nov 11).
+  if (room && !room.platform && body.platform) room.platform = body.platform;
+  if (room && !room.startedAt && body.startedAt) room.startedAt = body.startedAt;
+  if (Array.isArray(body.lines) && body.lines.length) {
+    await noteMeetingLines(current, collecting, id, body.lines).catch(() => {});
+  } else if (Array.isArray(room?.lines) && room.lines.length) {
+    body.lines = room.lines;
+  }
+  if (body.startedAt || body.duration > 0) {
+    await persistRecordingSpan(workspace, current, id, body.startedAt, body.duration, collecting.memory);
+  }
+  const ended = MEDIA_ENDED_CALLS.has(String(body.call || room?.call || ""));
+  if (collected.length && ended) saveRoomOnce(workspace, tenant, id, collected);
   if (body.title) {
     current.roomNames ??= {};
     if (!current.roomNames[id]) current.roomNames[id] = body.title;
@@ -3417,6 +4169,114 @@ async function slackBytes(env, deps, file) {
   return null;
 }
 
+/** The work's value, or null once `ms` pass; a rejection still throws. */
+function withinOrNull(promise, ms) {
+  let timer;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((resolve) => { timer = setTimeout(() => resolve(null), ms); timer.unref?.(); }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+const SLACK_NOT_SHARED = "Sorry, I can't share that with you.";
+
+/** A one-to-one Slack DM (not a group DM, not a channel). */
+function slackOneToOne(event) {
+  const kind = typeof event?.channel_type === "string" ? event.channel_type.toLowerCase() : "";
+  if (kind) return kind === "im";
+  return typeof event?.channel === "string" && event.channel.startsWith("D");
+}
+
+/** Linked Slack asker, or null. Never throws and never waits long on Slack. */
+async function slackAskerLink(workspace, filesRuntime, { tenantId, teamId, slackUserId, token, fetchImpl }) {
+  if (!workspace.slackMembers || !tenantId || !teamId || !token || !slackUserId) return null;
+  try {
+    const link = await withinMs(workspace.slackMembers.resolve({ tenantId, teamId, slackUserId, token, fetchImpl }), 5_000);
+    // The in-memory Files store keeps its own identity map; the database one is written by the link function.
+    if (link && filesRuntime?.store && !filesRuntime.store.durable && typeof filesRuntime.store.linkExternalUser === "function") {
+      filesRuntime.store.linkExternalUser({ provider: "slack", externalUserId: slackUserId, userId: link.memberId });
+    }
+    return link;
+  } catch {
+    return null;
+  }
+}
+
+/** Bind a public Slack channel to the tenant's Files space, at most once per ten minutes per channel. */
+async function bindSlackChannelOnce(workspace, filesRuntime, { tenantId, teamId, channel, token, fetchImpl }) {
+  if (!filesRuntime?.store?.bindSlackChannel || !tenantId || !teamId || !channel || !token) return null;
+  const key = `${tenantId}|${teamId}|${channel}`;
+  const cached = workspace.slackBound?.get(key);
+  if (cached && cached.until > Date.now()) return cached.channel;
+  const allowed = await slackChannelBindable({ token, channel, fetchImpl });
+  const bound = allowed.ok
+    ? await bindSlackChannel(filesRuntime, { tenantId, teamId, externalChannelId: channel, name: allowed.name })
+    : null;
+  workspace.slackBound?.set(key, { channel: bound, until: Date.now() + (bound ? 10 * 60_000 : 60_000) });
+  return bound;
+}
+
+/** Run queued file jobs now; on Vercel the pass outlives the response through waitUntil. */
+async function settleFileJobs(filesRuntime) {
+  if (typeof filesRuntime?.kick !== "function") return;
+  const pass = Promise.resolve(filesRuntime.kick()).catch(() => {});
+  try {
+    const { waitUntil } = await import("@vercel/functions");
+    if (typeof waitUntil === "function") waitUntil(pass);
+  } catch {
+    // Local Node: the worker pass finishes on its own.
+  }
+}
+
+/**
+ * Prompt memories for the principal's most recent meetings: rooms they are a stored
+ * member of, with that room's readable decisions, activity and transcript.
+ */
+async function slackMeetingMemories(workspace, current, companyId, principal) {
+  const rooms = accessibleMeetings(current, principal, 3);
+  if (!rooms.length) return [];
+  const activity = new Map();
+  await Promise.all(rooms.map(async (room) => {
+    try {
+      activity.set(room.id, await withinOrNull(roomActivityFor(workspace, current, companyId, room.id), 3_000) || []);
+    } catch {
+      activity.set(room.id, []);
+    }
+  }));
+  const config = depsFor(workspace, companyId).app || {};
+  return meetingDigestRows(current, principal, { rooms, activity, timeZone: config.timeZone || "" });
+}
+
+/** Session rows with files the principal can read (meeting-room members included). */
+function readableFileRows(session, principal) {
+  const readers = meetingRoomReaders(session);
+  return (session?.decisions || []).filter((row) => row && row.deleted !== true && canReadInSession(principal, row, readers));
+}
+
+/**
+ * Bytes of the Files row stored from a Slack file, as that member sees it.
+ * A still-uploading row gets one bounded worker pass before giving up.
+ */
+function walrusFileReader(filesRuntime, userId, tenantId, log) {
+  return async ({ slackFileId }) => {
+    if (!userId || !slackFileId || typeof filesRuntime?.store?.listVisible !== "function") return null;
+    const find = async () => (await filesRuntime.store.listVisible(userId))
+      .find((row) => row.slackFileId === slackFileId && row.status === "active" && row.consoleFileId && (!tenantId || row.tenantId === tenantId)) || null;
+    let row = await find();
+    if (!row && typeof filesRuntime.kick === "function") {
+      await withinOrNull(filesRuntime.kick(), 20_000);
+      row = await find();
+    }
+    if (!row) {
+      if (typeof log === "function") log({ kind: "slack-file-resend", source: "slack", reason: "no-walrus-copy" });
+      return null;
+    }
+    const { bytes } = await filesRuntime.service.download(userId, row.id);
+    if (typeof log === "function") log({ kind: "slack-file-resend", source: "walrus", fileId: row.id });
+    return bytes;
+  };
+}
+
 function withinMs(promise, ms) {
   let timer;
   return Promise.race([
@@ -3429,7 +4289,7 @@ function withinMs(promise, ms) {
 
 // Console copy first; when it is missing (upload failed or timed out), the
 // bytes are fetched again from Slack by the stored Slack file id.
-export async function storedFileBytes(session, name, deps, env = {}, hint = null) {
+export async function storedFileBytes(session, name, deps, env = {}, hint = null, options = {}) {
   const wanted = String(name || "").trim().toLowerCase();
   const decision = wanted
     ? (session?.decisions ?? []).find((item) =>
@@ -3442,6 +4302,15 @@ export async function storedFileBytes(session, name, deps, env = {}, hint = null
   const slackFileId = file.slackFileId || hint?.slackFileId;
   const folderId = file.folderId || hint?.folderId;
   const fileName = file.name || hint?.name || name;
+  // The Walrus copy the Files worker stored from this Slack file, read as the asker.
+  if (slackFileId && typeof options.walrus === "function") {
+    try {
+      const bytes = await options.walrus({ slackFileId, name: fileName });
+      if (bytes != null && bytes.length) return Buffer.isBuffer(bytes) || bytes instanceof Uint8Array ? Buffer.from(bytes) : String(bytes);
+    } catch {
+      // Fall through to the Console id on the decision, then Slack.
+    }
+  }
   if (consoleFileId && typeof deps.console?.download === "function") {
     try {
       const bytes = await deps.console.download({
@@ -3468,82 +4337,40 @@ function headerValue(value) {
   return typeof value === "string" ? value : "";
 }
 
-function send(res, status, type, body, extra = {}) {
-  const headers = { "content-type": type, ...extra };
-  if (type.startsWith("text/html") || type.startsWith("application/json")) headers["cache-control"] = "no-store";
-  res.writeHead(status, headers);
-  res.end(body);
+async function calendarGranted(workspace, tenantId, personId) {
+  const env = workspace.env;
+  const id = typeof tenantId === "string" ? tenantId.trim() : "";
+  const person = typeof personId === "string" ? personId.trim() : "";
+  const grants = workspace.googleGrants;
+  if (id && person && grants && typeof grants.granted === "function") {
+    try {
+      return await personCalendarGranted(workspace, id, person);
+    } catch {
+      return false;
+    }
+  }
+  if (identityConfigured(env)) return false;
+  return calendarPresentedConnected(env);
 }
 
-function redirect(res, location, extra = {}) {
-  res.writeHead(302, { location, "cache-control": "no-store", ...extra });
-  res.end();
-}
-
-const mediaRoot = resolve("public/media");
-const mediaTypes = { ".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp" };
-const clipRoot = resolve("public/clips");
-
-async function sendMedia(res, pathname) {
-  const name = pathname.slice("/media/".length);
-  const type = mediaTypes[extname(name).toLowerCase()];
-  if (!type || !/^[a-z0-9.-]+$/i.test(name)) return false;
-  const file = resolve(mediaRoot, name);
-  if (!file.startsWith(`${mediaRoot}/`)) return false;
-  try {
-    const body = await readFile(file);
-    res.writeHead(200, { "content-type": type, "cache-control": "public, max-age=3600" });
-    res.end(body);
-    return true;
-  } catch {
-    return false;
+async function pageSlack(workspace, env, spaces, connectedDoors) {
+  const claimSeparately = connectedDoors && workspace.tenantBind && env.SEDERUNT_TOOLS_FAKE !== "1";
+  if (!claimSeparately) {
+    if (slackOAuthConfigured(env) && spaces?.activeId && connectedDoors?.slack === true) {
+      const named = await slackConnection(workspace, spaces.activeId);
+      return { linked: true, teamName: named.teamName || "" };
+    }
+    return { linked: connectedDoors?.slack === true, teamName: "" };
   }
-}
-
-async function sendClip(req, res, pathname) {
-  const name = pathname.slice("/clips/".length);
-  if (extname(name).toLowerCase() !== ".mp4" || !/^[a-z0-9.-]+$/i.test(name)) return false;
-  const file = resolve(clipRoot, name);
-  if (!file.startsWith(`${clipRoot}/`)) return false;
-  let body;
-  try {
-    body = await readFile(file);
-  } catch {
-    return false;
-  }
-  const total = body.length;
-  const headers = {
-    "content-type": "video/mp4",
-    "accept-ranges": "bytes",
-    "cache-control": "public, max-age=3600",
-  };
-  const range = req.headers.range;
-  if (!range) {
-    res.writeHead(200, { ...headers, "content-length": total });
-    res.end(body);
-    return true;
-  }
-  const match = /^bytes=(\d*)-(\d*)$/.exec(range);
-  if (!match) {
-    res.writeHead(416, { "content-range": `bytes */${total}` });
-    res.end();
-    return true;
-  }
-  const start = match[1] === "" ? 0 : Number(match[1]);
-  const end = match[2] === "" ? total - 1 : Number(match[2]);
-  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || start >= total) {
-    res.writeHead(416, { "content-range": `bytes */${total}` });
-    res.end();
-    return true;
-  }
-  const last = Math.min(end, total - 1);
-  res.writeHead(206, {
-    ...headers,
-    "content-range": `bytes ${start}-${last}/${total}`,
-    "content-length": last - start + 1,
-  });
-  res.end(body.subarray(start, last + 1));
-  return true;
+  if (!spaces?.activeId) return { linked: false, teamName: "" };
+  if (slackOAuthConfigured(env)) return slackConnection(workspace, spaces.activeId);
+  const claim = await slackClaimState({
+    tenantBind: workspace.tenantBind,
+    slack: workspace.deps.slack,
+    channelId: workspace.deps.app?.slackChannel || "",
+    slackConfigured: connectedDoors.slack === true,
+  }, spaces.activeId);
+  return { linked: claim.linked === true, teamName: "" };
 }
 
 async function readBody(req) {

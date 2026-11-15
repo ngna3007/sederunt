@@ -1,4 +1,4 @@
-import { canReadRecord, readPrincipalId, readableSession } from "./domain/read-access.js";
+import { canReadInSession, canReadOpenedMeeting, canReadRecord, meetingRoomReaders, readPrincipalId, readableSession } from "./domain/read-access.js";
 import { createHash, randomBytes } from "node:crypto";
 import { displayName, logAction, logFailure, logRequest, logUndo, renderActivity, undoRefusal } from "./activity.js";
 import { formatActivitySentence, selectActivity } from "./activity-feed.js";
@@ -17,6 +17,8 @@ import { addressesHearing, isRememberThisKeep, normalizeHearing, splitAddressedK
 import { learnedKey, memoriesFor, parseLearnedUtterance, shapeAnswer } from "./memory/learn.js";
 import { draftMinutes, rememberMeetingOutcome } from "./memory/outcome.js";
 import { looksLikeOpenQuestion, parseUtterance } from "./parse.js";
+import { isDeclarativeFact, isQuietKeep, stripKeepCue } from "./meeting/voice-write.js";
+import { meetingCallRank } from "./meeting/recall.js";
 import { publicProof } from "./tatum/proof.js";
 
 const KEY_NAMES = [
@@ -75,10 +77,19 @@ function meetingRoomId(input) {
   return typeof input.room?.id === "string" ? input.room.id.trim() : "";
 }
 
-function armMeetingHearing(session, roomId) {
+function meetingSpeakerKey(input) {
+  const id = String(input?.memberId || "").trim();
+  if (id) return `id:${id}`;
+  const name = String(input?.speakerName || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  return name ? `name:${name}` : "";
+}
+
+function armMeetingHearing(session, roomId, speaker) {
   if (!roomId) return;
   const until = Date.now() + HEARING_HOLD_MS;
-  session.hearingHold = { roomId, until };
+  const hold = { roomId, until };
+  if (speaker) hold.speaker = speaker;
+  session.hearingHold = hold;
   session.hearingArmedRooms ??= new Set();
   session.hearingArmedRooms.add(roomId);
 }
@@ -91,7 +102,10 @@ function roomHearingArmed(session, roomId) {
 }
 
 function meetingRememberKeep(text, hearing) {
-  return isRememberThisKeep(text) || isRememberThisKeep(stripHearing(text, hearing));
+  return isQuietKeep(text)
+    || isQuietKeep(stripHearing(text, hearing))
+    || isRememberThisKeep(text)
+    || isRememberThisKeep(stripHearing(text, hearing));
 }
 
 export async function handleUtterance(input, deps = {}) {
@@ -133,14 +147,14 @@ export async function handleUtterance(input, deps = {}) {
       session.hearingArmedRooms.add(roomId);
     }
     if (addressedNow && !String(stripped).trim()) {
-      armMeetingHearing(session, roomId);
+      armMeetingHearing(session, roomId, meetingSpeakerKey(input));
       return silence();
     }
     // Refresh the short hold after a remember-this keep so a split
     // continuation can still enter. Other addressed lines consume it,
     // matching Slack-adjacent meeting tests and avoiding leftover holds.
     if (roomId && rememberKeep) {
-      armMeetingHearing(session, roomId);
+      armMeetingHearing(session, roomId, meetingSpeakerKey(input));
     } else if (roomId) {
       if (session.hearingHold) delete session.hearingHold;
     }
@@ -224,7 +238,12 @@ export async function handleUtterance(input, deps = {}) {
   // A Slack channel line that is not an ask is kept. Its words never turn it
   // into a recall or a read; the ask/keep split is where the message arrived.
   // Ticket commands (writes) still go through their allow first.
-  if (parsed.type === "write") return requestWrite(input, session, deps, parsed);
+  if (parsed.type === "write") {
+    if (input.door === "meeting" && input.voiceFile !== true && parsed.tool === "calendar" && parsed.edit === "create") {
+      return silence();
+    }
+    return requestWrite(input, session, deps, parsed);
+  }
   if (input.intent === "keep") {
     const note = parsed.type === "note"
       ? parsed
@@ -309,10 +328,16 @@ function enters(input) {
   // A clear remember-this keep enters on the meeting door even when STT
   // dropped Maple/Adam. Slack channel keep does not use this door.
   if (meetingRememberKeep(input.text, hearing)) return true;
+  if (input.meetingDirect === true && isDeclarativeFact(input.text)) return true;
   const roomId = meetingRoomId(input);
   if (!roomId) return false;
   const until = input.session?.hearingHold?.roomId === roomId ? input.session.hearingHold.until : 0;
-  if (typeof until === "number" && until > Date.now()) return true;
+  if (typeof until === "number" && until > Date.now()) {
+    const speaker = meetingSpeakerKey(input);
+    const holdSpeaker = input.session?.hearingHold?.speaker;
+    if (speaker && holdSpeaker && speaker !== holdSpeaker) return false;
+    return true;
+  }
   return roomHearingArmed(input.session, roomId) && meetingRememberKeep(input.text, hearing);
 }
 
@@ -475,7 +500,9 @@ async function defaultFollowupCall(connector, tool, args) {
 
 async function requestWrite(input, session, deps, parsed) {
   const invited = writerInvite(input);
-  const preference = resolvePreference(session.preferences, parsed.tool, invited.room?.id || input.room?.id);
+  const preference = input.voiceFile === true && (parsed.tool === "linear" || parsed.tool === "calendar")
+    ? "do"
+    : resolvePreference(session.preferences, parsed.tool, invited.room?.id || input.room?.id);
   if (!invited.ok) {
     if (invited.reason === "not-invited") await noteOutsideAsk(session, deps, input);
     return finish(session, {
@@ -494,7 +521,7 @@ async function requestWrite(input, session, deps, parsed) {
     tool: parsed.tool,
     preference,
     statement: redact(parsed.statement),
-    params: parsed.params,
+    params: spokenParams(input, parsed),
     missingFact: parsed.missingFact || "",
     connectorId: null,
     edit: parsed.edit,
@@ -651,14 +678,16 @@ async function callConnector(session, deps, action, auth) {
   } catch (error) {
     action.state = "outcome_unknown";
     action.connectorId = null;
-    await persistAction(deps, action);
     const message = error instanceof Error ? error.message : "";
+    noteConnectorFailure(deps, action, message, error?.rejected === true ? "rejected" : String(error?.reason || "threw"));
+    await persistAction(deps, action);
     return didNotHappen(session, deps, action, auth, message);
   }
   const issueId = connectorId(created);
   const assigning = action.edit === "assign";
   const status = itemStatus({ kind: "ticket", edit: assigning ? "update" : action.edit }, issueId);
   if (status !== "filed" && status !== "updated") {
+    noteConnectorFailure(deps, action, "", "no-id");
     action.state = "outcome_unknown";
     action.connectorId = null;
     await persistAction(deps, action);
@@ -770,7 +799,10 @@ async function runConnector(deps, action) {
       return deps.calendar.updateEventDetails({ id: action.params.eventId || action.params.id, description: action.params.description });
     }
     const tools = await deps.calendar.listTools();
-    const writeTool = (tools ?? []).find((tool) => tool.write === true && tool.name);
+    const wanted = action.edit === "create"
+      ? (tools ?? []).find((tool) => tool.name === "create_event")
+      : (tools ?? []).find((tool) => tool.write === true && tool.name);
+    const writeTool = wanted || (tools ?? []).find((tool) => tool.write === true && tool.name);
     if (!writeTool) return { id: "" };
     return deps.calendar.call(writeTool.name, action.params);
   }
@@ -795,11 +827,46 @@ async function runConnector(deps, action) {
   return deps.linear.createIssue({
     title: action.params.title,
     idempotencyKey: action.id,
-    description: issueDescription({
+    description: [issueDescription({
       origin: { roomId: action.roomId, roomName: action.roomName, at: action.offset },
       actor: { type: "person", name: action.speaker || action.memberName || "" },
-    }, deps),
+    }, deps), action.params?.heard ? `Heard: "${action.params.heard}"` : ""].filter(Boolean).join("\n\n"),
   });
+}
+
+/** A voice title answer keeps the words as heard when the title was cleaned up. */
+function spokenParams(input, parsed) {
+  const params = parsed.params;
+  if (input.voiceFile !== true || parsed.tool !== "linear" || !params || typeof params !== "object") return params;
+  const heard = redact(String(input.spokenTitle || "").replace(/\s+/g, " ").trim()).slice(0, 200);
+  const fold = (value) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  if (!heard || fold(heard) === fold(params.title)) return params;
+  return { ...params, heard };
+}
+
+/**
+ * A connector call that failed left no trace (Nov 11 2026, bot 01ccb144: the
+ * Linear save failed inside a second and nothing was logged). Log the tool and
+ * a short error with secrets and the spoken title taken out.
+ */
+function noteConnectorFailure(deps, action, message, reason) {
+  if (typeof deps?.log !== "function") return;
+  let text = String(message || "").replace(/\s+/g, " ");
+  for (const said of [action?.params?.title, action?.params?.text, action?.params?.heard, action?.statement]) {
+    if (typeof said !== "string") continue;
+    for (const form of [said.trim(), said.trim().replace(/[\s.!?,;:]+$/g, "")]) {
+      if (form.length < 3) continue;
+      text = text.replace(new RegExp(form.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), "[title]");
+    }
+  }
+  text = text
+    .replace(/bearer\s+[^\s"']+/gi, "Bearer [redacted]")
+    .replace(/(token|secret|key|authorization)(["'\s:=]+)[^\s"',}]+/gi, "$1$2[redacted]")
+    .replace(/[A-Za-z0-9_\-]{32,}/g, "[redacted]")
+    .slice(0, 240);
+  try {
+    deps.log({ kind: "connector-failed", tool: String(action?.tool || ""), edit: String(action?.edit || "create"), reason: String(reason || ""), message: text });
+  } catch {}
 }
 
 async function didNotHappen(session, deps, action, auth, message) {
@@ -869,7 +936,9 @@ async function noteActivity(session, deps, action, fields) {
   }
   const kind = fields.role === "failure" ? "failure" : (fields.role === "request" ? "request" : "action");
   const input = {
-    id: nextId(session, "activity"),
+    // A session counter restarts in every function instance, so "activity-N" from
+    // two instances named two different events (Walrus 409, Nov 11, bot ae224b81).
+    id: activityIdentity(),
     requestId: action.id,
     actor: {
       type: fields.actorKind === "sederunt" ? "sederunt" : "person",
@@ -919,7 +988,7 @@ function activityIdentity() {
   return `activity-${randomBytes(8).toString("hex")}`;
 }
 
-function actionFromEvent(event, changes) {
+function _actionFromEvent(event, changes) {
   const change = changes?.[0] || {};
   const system = event.target?.system || "linear";
   return {
@@ -940,6 +1009,49 @@ function actionFromEvent(event, changes) {
 }
 
 async function storeActivity(session, deps, event) {
+  await remember(deps, {
+    account: "company",
+    kind: "activity",
+    text: renderActivity(event),
+    idempotencyKey: event.id,
+    activity: event,
+  });
+  return event;
+}
+
+/**
+ * A completed in-call write is recorded on the session and, when present, the
+ * room activity mirror the meeting detail page reads.
+ */
+export async function recordVoiceActivity(session, deps, input = {}) {
+  if (!session || typeof session !== "object") return null;
+  const eventInput = {
+    id: input.id || `activity-${randomBytes(8).toString("hex")}`,
+    requestId: input.requestId || input.deliveryId || "",
+    actor: { type: "sederunt", name: "Sederunt", via: "MCP: meeting" },
+    verb: input.verb || "create",
+    target: {
+      system: String(input.system || "tool"),
+      type: String(input.type || "tool"),
+      id: String(input.entityId || ""),
+      title: String(input.title || ""),
+      url: String(input.url || ""),
+    },
+    tool: { name: String(input.toolName || "act"), server: "sederunt-mcp" },
+    origin: {
+      roomId: String(input.roomId || ""),
+      sourceDeliveryId: String(input.deliveryId || ""),
+      roomName: String(input.roomName || input.roomId || ""),
+      at: null,
+    },
+    outcome: "ok",
+  };
+  let event;
+  try {
+    event = logAction(session, eventInput);
+  } catch {
+    return null;
+  }
   await remember(deps, {
     account: "company",
     kind: "activity",
@@ -1234,13 +1346,8 @@ async function slackChannelFor(deps, raw) {
   const direct = slackChannelId(raw);
   if (direct) return direct;
   if (!slackName(raw)) {
-    const fixed = slackChannelId(deps.app?.slackChannel);
-    if (fixed) return fixed;
-    // Per-tenant Slack installation: the channel picked at install time.
-    if (typeof deps.slack?.defaultChannel === "function") {
-      try { return slackChannelId(await deps.slack.defaultChannel()); } catch { return ""; }
-    }
-    return "";
+    // A post with no channel stays unresolved. The install does not pick a home channel.
+    return slackChannelId(deps.app?.slackChannel);
   }
   if (typeof deps.slack?.resolveChannel !== "function") return "";
   try {
@@ -1579,15 +1686,25 @@ async function openMeetingRoom(session, deps, opened) {
     kind: "meeting",
     platform,
     botPresent: true,
+    call: "joining_call",
   };
   if (startedAt) room.startedAt = startedAt;
+  const memberIds = copyMemberIds(opened?.memberIds);
+  if (memberIds.length) room.memberIds = memberIds;
   session.rooms.push(room);
   await remember(deps, {
     account: "company",
     kind: "room",
     text: `${room.id} meeting`,
     idempotencyKey: room.id,
-    room: { id: room.id, kind: "meeting", platform, ...(startedAt ? { startedAt } : {}) },
+    room: {
+      id: room.id,
+      kind: "meeting",
+      platform,
+      call: "joining_call",
+      ...(startedAt ? { startedAt } : {}),
+      ...(memberIds.length ? { memberIds } : {}),
+    },
   });
   return finish(session, {
     status: "recorded",
@@ -1638,6 +1755,10 @@ async function storeDecision(input, session, deps, parsed) {
       preference: "ask",
     });
   }
+  if (isQuietKeep(input.text) || isQuietKeep(parsed?.text)) {
+    const cue = stripKeepCue(withoutAddress(input.text, input.session?.hearing) || parsed?.text || "");
+    if (cue) parsed = { type: "note", private: parsed?.private === true, text: cue };
+  }
   const guest = normalizeHearing(input.session?.hearing).name;
   const speaker = typeof input.memberId === "string" ? input.memberId : "";
   if (speaker === "sederunt" || speaker.toLowerCase() === guest.toLowerCase()) {
@@ -1677,7 +1798,7 @@ async function storeDecision(input, session, deps, parsed) {
   }
   const room = liveRoom(input);
   if (!room) return refusal(session, "no-room");
-  const inviteMemberIds = Array.isArray(input.participants) && input.participants.length ? input.participants : (room.memberIds || []);
+  const inviteMemberIds = meetingReaders(input, room);
   const invite = checkInvite(input.memberId, inviteMemberIds);
   if (!invite.ok) return refusal(session, invite.reason === "missing-member" ? "missing-member" : "not-invited");
   if (input.intent !== "keep" && looksLikeOpenQuestion(sentence)) {
@@ -2049,6 +2170,27 @@ async function loadSentences(session, deps) {
   }
 }
 
+/**
+ * Save a paused action the console can confirm after the process is gone.
+ * absorbAction reloads this record. The connector does not run here.
+ *
+ * @param {{ memory?: { remember?: Function } }} deps
+ * @param {object} action
+ */
+export async function rememberHeldAction(deps, action) {
+  if (!action || typeof action.id !== "string" || typeof action.roomId !== "string" || !action.roomId
+    || typeof action.memberId !== "string" || !action.memberId) return false;
+  action.state = "paused";
+  action.preference = "ask";
+  action.connectorId = null;
+  action.missingFact = "";
+  action.params = { ...(action.params || {}) };
+  action.inviteMemberIds = Array.isArray(action.inviteMemberIds) && action.inviteMemberIds.includes(action.memberId)
+    ? [...action.inviteMemberIds]
+    : [action.memberId];
+  return persistAction(deps, action);
+}
+
 async function persistAction(deps, action) {
   const revision = (action.revision || 0) + 1;
   const inviteMemberIds = Array.isArray(action.inviteMemberIds) && action.inviteMemberIds.length ? [...action.inviteMemberIds] : [action.memberId].filter(Boolean);
@@ -2284,18 +2426,88 @@ function absorbPreference(session, pref) {
   if (pref.replacedBy && !existing.replacedBy) existing.replacedBy = pref.replacedBy;
 }
 
+function copySpokenLines(lines) {
+  if (!Array.isArray(lines)) return [];
+  const out = [];
+  for (const line of lines) {
+    const text = typeof line?.text === "string" ? line.text.replace(/\s+/g, " ").trim().slice(0, 2000) : "";
+    if (!text) continue;
+    const speaker = typeof line?.speaker === "string" && line.speaker.trim() ? line.speaker.trim().slice(0, 80) : "Someone";
+    const start = Number.isFinite(line?.start) ? line.start : 0;
+    const end = Number.isFinite(line?.end) && line.end >= start ? line.end : start;
+    out.push({ speaker, text, start, end });
+    if (out.length >= 400) break;
+  }
+  return out;
+}
+
+function copyExchanges(rows) {
+  if (!Array.isArray(rows)) return [];
+  const out = [];
+  for (const row of rows) {
+    const user = typeof row?.user === "string" ? row.user.replace(/\s+/g, " ").trim().slice(0, 1000) : "";
+    const assistant = typeof row?.assistant === "string" ? row.assistant.replace(/\s+/g, " ").trim().slice(0, 500) : "";
+    if (!user && !assistant) continue;
+    out.push({ user, assistant });
+  }
+  return out.slice(-3);
+}
+
 function copyOpenedRoom(doc) {
   const room = doc?.room;
   if (!room || typeof room.id !== "string" || !room.id) return null;
-  if (room.kind !== "meeting" || !MEETING_PLATFORMS.has(room.platform)) return null;
+  if (room.kind !== "meeting") return null;
+  const platform = MEETING_PLATFORMS.has(room.platform) ? room.platform : "";
+  const call = meetingCallRank(room.call) ? room.call : "";
+  if (!platform && !call) return null;
   const startedAt = typeof room.startedAt === "string" ? room.startedAt : "";
+  const duration = Number.isFinite(room.duration) && room.duration > 0 ? Math.round(room.duration) : 0;
+  const lines = copySpokenLines(room.lines);
+  const exchanges = copyExchanges(room.exchanges);
+  const memberIds = copyMemberIds(room.memberIds);
   return {
     id: room.id,
     kind: "meeting",
-    platform: room.platform,
+    platform,
     botPresent: true,
+    ...(call ? { call } : {}),
     ...(startedAt ? { startedAt } : {}),
+    ...(duration ? { duration } : {}),
+    ...(memberIds.length ? { memberIds } : {}),
+    ...(lines.length ? { lines } : {}),
+    ...(exchanges.length ? { exchanges } : {}),
   };
+}
+
+function copyMemberIds(ids) {
+  if (!Array.isArray(ids)) return [];
+  const out = [];
+  for (const id of ids) {
+    const value = String(id || "").trim().slice(0, 80);
+    if (value && !out.includes(value)) out.push(value);
+    if (out.length >= 40) break;
+  }
+  return out;
+}
+
+function meetingReaders(input, room) {
+  const ids = [];
+  const push = (value) => {
+    const id = String(value || "").trim();
+    if (id && !ids.includes(id)) ids.push(id);
+  };
+  const participants = Array.isArray(input?.participants) ? input.participants : [];
+  const onDelivery = Array.isArray(room?.memberIds) ? room.memberIds : [];
+  const stored = (input?.session?.rooms || []).find((item) => item && item.id === room?.id);
+  const onRoom = Array.isArray(stored?.memberIds) ? stored.memberIds : [];
+  const meeting = input?.door === "meeting" || room?.kind === "meeting" || room?.source === "recall";
+  if (meeting) {
+    for (const id of onRoom) push(id);
+    for (const id of (participants.length ? participants : onDelivery)) push(id);
+    if (ids.length) return ids;
+  }
+  for (const id of (participants.length ? participants : onDelivery)) push(id);
+  return ids;
 }
 
 function absorbOpenedRoom(session, room) {
@@ -2304,10 +2516,102 @@ function absorbOpenedRoom(session, room) {
   session.rooms ??= [];
   const existing = session.rooms.find((item) => item.id === room.id);
   if (existing) {
+    if (!existing.platform && room.platform) existing.platform = room.platform;
     if (!existing.startedAt && typeof room.startedAt === "string" && room.startedAt) existing.startedAt = room.startedAt;
+    if (room.duration > 0 && !(existing.duration > 0)) existing.duration = Math.round(room.duration);
+    if (meetingCallRank(room.call) > meetingCallRank(existing.call)) existing.call = room.call;
+    if (Array.isArray(room.lines) && room.lines.length > (Array.isArray(existing.lines) ? existing.lines.length : 0)) {
+      existing.lines = room.lines;
+    }
+    if (Array.isArray(room.exchanges) && room.exchanges.length) existing.exchanges = room.exchanges.slice(-3);
+    for (const id of copyMemberIds(room.memberIds)) {
+      existing.memberIds = Array.isArray(existing.memberIds) ? existing.memberIds : [];
+      if (!existing.memberIds.includes(id)) existing.memberIds.push(id);
+    }
     return;
   }
   session.rooms.push(room);
+}
+
+/**
+ * Remember a later Recall phase for a meeting the bot already opened.
+ * An earlier phase does not replace a later one.
+ *
+ * @param {ReturnType<import("./session.js").createSession>} session
+ * @param {{ memory?: { remember?: Function }, tenantId?: string }} deps
+ * @param {string} roomId
+ * @param {string} code
+ */
+export async function noteMeetingCall(session, deps, roomId, code) {
+  const id = typeof roomId === "string" ? roomId.trim() : "";
+  if (!id || !meetingCallRank(code)) return false;
+  const current = ensureSession(session);
+  current.rooms ??= [];
+  let room = current.rooms.find((item) => item.id === id);
+  if (room && meetingCallRank(room.call) >= meetingCallRank(code)) return false;
+  if (!room) {
+    room = { id, kind: "meeting", platform: "", botPresent: true, call: code };
+    current.rooms.push(room);
+  } else {
+    room.call = code;
+  }
+  const platform = MEETING_PLATFORMS.has(room.platform) ? room.platform : "";
+  await remember(deps, {
+    account: "company",
+    kind: "room",
+    text: `${id} meeting ${code}`,
+    idempotencyKey: `${id}:call:${code}`,
+    room: {
+      id,
+      kind: "meeting",
+      ...(platform ? { platform } : {}),
+      call: code,
+      ...(typeof room.startedAt === "string" && room.startedAt ? { startedAt: room.startedAt } : {}),
+      ...(room.duration > 0 ? { duration: Math.round(room.duration) } : {}),
+    },
+  });
+  return true;
+}
+
+/**
+ * Keep the spoken lines on the meeting. A later, longer transcript replaces
+ * a shorter one. The remember text does not repeat the words.
+ *
+ * @param {ReturnType<import("./session.js").createSession>} session
+ * @param {{ memory?: { remember?: Function }, tenantId?: string }} deps
+ * @param {string} roomId
+ * @param {Array<{ speaker?: string, text?: string, start?: number, end?: number }>} lines
+ */
+export async function noteMeetingLines(session, deps, roomId, lines) {
+  const id = typeof roomId === "string" ? roomId.trim() : "";
+  const spoken = copySpokenLines(lines);
+  if (!id || !spoken.length) return false;
+  const current = ensureSession(session);
+  const room = current.rooms.find((item) => item.id === id);
+  if (!room) return false;
+  const previous = Array.isArray(room.lines) ? room.lines.length : 0;
+  if (spoken.length > previous) room.lines = spoken;
+  const platform = MEETING_PLATFORMS.has(room.platform) ? room.platform : "";
+  const call = meetingCallRank(room.call) ? room.call : "";
+  if ((!platform && !call) || previous >= spoken.length) return spoken.length > previous;
+  const exchanges = copyExchanges(room.exchanges);
+  await remember(deps, {
+    account: "company",
+    kind: "room",
+    text: `${id} meeting transcript`,
+    idempotencyKey: `${id}:transcript:${room.lines.length}`,
+    room: {
+      id,
+      kind: "meeting",
+      ...(platform ? { platform } : {}),
+      ...(call ? { call } : {}),
+      ...(typeof room.startedAt === "string" && room.startedAt ? { startedAt: room.startedAt } : {}),
+      ...(room.duration > 0 ? { duration: Math.round(room.duration) } : {}),
+      lines: room.lines,
+      ...(exchanges.length ? { exchanges } : {}),
+    },
+  });
+  return true;
 }
 
 function copyAccess(doc) {
@@ -2377,7 +2681,8 @@ async function answerRecall(input, session, deps) {
   const candidates = session.decisions.filter((decision) =>
     !decision.deleted && (!roomId || decision.roomId === roomId) && keptInWorkspace(decision, scope));
   const principal = input.readPrincipal || memberId;
-  const visible = candidates.filter((decision) => canReadRecord(principal, decision));
+  const readers = meetingRoomReaders(session);
+  const visible = candidates.filter((decision) => canReadInSession(principal, decision, readers));
   if (visible.length === 0) {
     const reason = candidates.length === 0 ? "there are no notes yet" : "not-invited";
     if (reason === "not-invited") await noteOutsideAsk(session, deps, input, candidates);
@@ -2386,10 +2691,25 @@ async function answerRecall(input, session, deps) {
   await loadSentences(session, deps);
   const proofs = new Map();
   let failed = false;
-  for (const decision of visible) {
-    if (!decision.blobId || !deps.tatum?.getObject) continue;
+  const proving = visible.filter((decision) => decision.blobId && deps.tatum?.getObject);
+  let batched = null;
+  if (proving.length > 1 && typeof deps.tatum.getObjects === "function") {
     try {
-      const object = await deps.tatum.getObject(decision.blobId);
+      const results = await deps.tatum.getObjects(proving.map((decision) => ({
+        id: proofTarget(decision),
+        hints: proofHints(decision),
+      })));
+      batched = new Map(proving.map((decision, index) => [decision.id, results?.[index] || { ok: false }]));
+    } catch {
+      batched = new Map(proving.map((decision) => [decision.id, { ok: false }]));
+    }
+  }
+  for (const decision of proving) {
+    try {
+      const object = batched
+        ? (batched.get(decision.id)?.ok ? batched.get(decision.id).object : null)
+        : await deps.tatum.getObject(decision.blobId);
+      if (!object) throw new Error("Tatum read failed");
       const text = typeof object?.text === "string" && object.text.trim() ? object.text : decision.text;
       proofs.set(decision.id, {
         failed: false,
@@ -2409,7 +2729,8 @@ async function answerRecall(input, session, deps) {
 
 function renderVisible(session, memberId, roomId, proofs, failed = false, scope = "", question = "") {
   const preference = resolvePreference(session.preferences, "linear", roomId);
-  const statuses = clashStatuses(session.decisions.filter((decision) => keptInWorkspace(decision, scope) && canReadRecord(memberId, decision)));
+  const readers = meetingRoomReaders(session);
+  const statuses = clashStatuses(session.decisions.filter((decision) => keptInWorkspace(decision, scope) && canReadInSession(memberId, decision, readers)));
   const statusOf = new Map(statuses.map((row) => [row.id, row.status]));
   const lines = [];
   const visible = [];
@@ -2421,7 +2742,7 @@ function renderVisible(session, memberId, roomId, proofs, failed = false, scope 
   for (const decision of session.decisions) {
     if (decision.deleted || !keptInWorkspace(decision, scope)) continue;
     if (roomId && decision.roomId !== roomId) continue;
-    if (!canReadRecord(memberId, decision)) continue;
+    if (!canReadInSession(memberId, decision, readers)) continue;
     const proof = proofs?.get(decision.id);
     if (proof?.failed) {
       lines.push("unknown");
@@ -2508,6 +2829,8 @@ function refusal(session, reason) {
  * A console confirm names the action and the member. It does not send a room.
  * The room is the one stored on the action. The invite is the decision's,
  * or the member who asked when the action has no decision.
+ * A meeting hold can also be confirmed by the signed-in person bound to that
+ * room's Recall participant, or by a console user named on the hold.
  */
 function confirmInvite(input, session, action) {
   if (isHuddle(input.room)) return { ok: false, reason: "not-invited" };
@@ -2520,7 +2843,23 @@ function confirmInvite(input, session, action) {
   const inviteMemberIds = decision
     ? decision.inviteMemberIds
     : (typeof action.memberId === "string" && action.memberId.trim() ? [action.memberId] : []);
-  return checkInvite(input.memberId, inviteMemberIds);
+  const direct = checkInvite(input.memberId, inviteMemberIds);
+  if (direct.ok || decision) return direct;
+  const held = Array.isArray(action.inviteMemberIds) && action.inviteMemberIds.length
+    ? action.inviteMemberIds
+    : inviteMemberIds;
+  const identities = Array.isArray(input.principal?.identities) ? input.principal.identities : [];
+  const meeting = action.source === "Google Meet";
+  const bound = meeting && identities.some((identity) =>
+    typeof identity?.roomId === "string"
+    && identity.roomId === roomId
+    && checkInvite(identity.memberId, held).ok);
+  if (bound) return { ok: true, reason: "invited" };
+  const principalId = typeof input.principal?.memberId === "string" ? input.principal.memberId.trim() : "";
+  if (meeting && principalId && principalId === String(input.memberId || "").trim() && checkInvite(principalId, held).ok) {
+    return { ok: true, reason: "invited" };
+  }
+  return direct;
 }
 
 function writerInvite(input) {
@@ -2591,14 +2930,42 @@ function snapshot(input, room) {
   return ids;
 }
 
+/**
+ * The memory idempotency key. A room record is written by more than one isolate,
+ * each from its own copy of the room, so the same key can carry different content
+ * (Walrus answers 409). The content fingerprint keeps a true retry on one key and
+ * gives a different room snapshot its own key.
+ */
+const FINGERPRINTED = { room: "room", activity: "activity" };
+
+export function memoryKey(document) {
+  const base = String(document.idempotencyKey || document.text || "");
+  // Room snapshots and activity rows are written in the background by more than
+  // one instance. Decisions, action revisions and other records keep their plain
+  // key: a second copy with other content is refused on purpose. For an action,
+  // "<id>:action:<revision>" is the guard that stops two instances from writing
+  // different states (say "sending" and "dismissed") as the same revision.
+  const field = FINGERPRINTED[document.kind];
+  const payload = field ? document[field] : null;
+  if (!payload || typeof payload !== "object") return byteTrim(base, 255);
+  let body = "";
+  try { body = JSON.stringify(payload); } catch { body = ""; }
+  const print = createHash("sha256").update(`${document.text || ""}\n${body}`, "utf8").digest("hex").slice(0, 12);
+  return `${byteTrim(base, 242)}:${print}`;
+}
+
 async function remember(deps, document) {
+  if (document?.kind === "activity" && document.activity && typeof deps?.mirrorActivity === "function") {
+    // A room-scoped copy any instance can read at once; Walrus search lags.
+    try { await deps.mirrorActivity(document.activity); } catch { /* the Walrus write below still runs */ }
+  }
   if (!deps.memory?.remember) return { blobId: null };
   try {
     const saved = await deps.memory.remember({
       account: document.account,
       kind: document.kind,
       text: document.text,
-      idempotencyKey: byteTrim(document.idempotencyKey || document.text, 255),
+      idempotencyKey: memoryKey(document),
       private: document.account === "personal",
       decision: document.decision,
       preference: document.preference,
@@ -2768,7 +3135,9 @@ export async function rebuildCompanyIndex(session, deps = {}) {
   if (!Array.isArray(docs)) return { ok: false, empty: false };
   try {
     applyIndexedDocuments(current, docs, false);
-    if (deps.memory.index && deps.memory.recall) {
+    // A successful index already searched this mark. One more recall is only
+    // the fallback when that search came back empty.
+    if (docs.length === 0 && deps.memory.index && deps.memory.recall) {
       try {
         const full = await deps.memory.recall();
         if (Array.isArray(full)) applyIndexedDocuments(current, full, false);
@@ -2809,6 +3178,12 @@ export async function readProofs(session, board, tatum, options = {}) {
       // The tip is optional. Each proof still reads on its own.
     }
   }
+  const sources = [];
+  for (const row of rows) {
+    const source = byId.get(row.id);
+    if (typeof source?.blobId === "string" && source.blobId && typeof tatum?.getObject === "function") sources.push(source);
+  }
+  const reads = proofReads(tatum, sources, { fresh });
   await Promise.all(rows.map(async (row) => {
     const source = byId.get(row.id);
     const blobId = typeof source?.blobId === "string" ? source.blobId : "";
@@ -2820,7 +3195,7 @@ export async function readProofs(session, board, tatum, options = {}) {
     }
     let object;
     try {
-      object = await settleWithin(lookupProof(tatum, source, { fresh }), timeoutMs);
+      object = await settleWithin(reads.get(blobId), timeoutMs);
     } catch {
       row.checkpoint = null;
       row.proofStatus = "unknown";
@@ -2888,19 +3263,90 @@ function proofCache(tatum) {
   return cache;
 }
 
+function proofTarget(source) {
+  const blobId = source?.blobId;
+  return typeof source?.objectId === "string" && /^0x[0-9a-fA-F]{64}$/.test(source.objectId) ? source.objectId : blobId;
+}
+
+function proofHints(source) {
+  return {
+    blobId: source.blobId,
+    owner: source?.blobOwner,
+    digest: source?.digest,
+    checkpoint: source?.checkpoint,
+  };
+}
+
+// Several memories share one BatchGetObjects and one BatchGetTransactions.
+// One memory stays on GetObject. A reader without getObjects stays one call
+// per memory. A verified result is cached per blob. A failure is not.
+function proofReads(tatum, sources, { fresh = false } = {}) {
+  const out = new Map();
+  if (!tatum || typeof tatum !== "object") return out;
+  const cache = proofCache(tatum);
+  const todo = [];
+  for (const source of sources) {
+    const blobId = source?.blobId;
+    if (!blobId || out.has(blobId) || todo.some((item) => item.blobId === blobId)) continue;
+    if (!fresh && cache.settled.has(blobId)) {
+      out.set(blobId, Promise.resolve(cache.settled.get(blobId)));
+      continue;
+    }
+    if (cache.running.has(blobId)) {
+      out.set(blobId, cache.running.get(blobId));
+      continue;
+    }
+    todo.push(source);
+  }
+  if (todo.length > 1 && typeof tatum?.getObjects === "function") {
+    const slots = new Map();
+    for (const source of todo) {
+      let resolve;
+      let reject;
+      const promise = new Promise((ok, fail) => {
+        resolve = ok;
+        reject = fail;
+      });
+      slots.set(source.blobId, { resolve, reject });
+      const running = promise.then((object) => {
+        cache.running.delete(source.blobId);
+        if (object?.proof?.status === "verified") cache.settled.set(source.blobId, object);
+        else cache.settled.delete(source.blobId);
+        return object;
+      }, (error) => {
+        cache.running.delete(source.blobId);
+        throw error;
+      });
+      cache.running.set(source.blobId, running);
+      out.set(source.blobId, running);
+    }
+    Promise.resolve()
+      .then(() => tatum.getObjects(todo.map((source) => ({ id: proofTarget(source), hints: proofHints(source) }))))
+      .then((results) => {
+        todo.forEach((source, index) => {
+          const result = results?.[index];
+          if (result?.ok && result.object) slots.get(source.blobId).resolve(result.object);
+          else {
+            const error = result?.error instanceof Error ? result.error : new Error("Tatum read failed");
+            slots.get(source.blobId).reject(error);
+          }
+        });
+      }, (error) => {
+        for (const slot of slots.values()) slot.reject(error);
+      });
+    return out;
+  }
+  for (const source of todo) out.set(source.blobId, lookupProof(tatum, source, { fresh }));
+  return out;
+}
+
 function lookupProof(tatum, source, { fresh = false } = {}) {
   const blobId = source.blobId;
   const cache = proofCache(tatum);
   if (!fresh && cache.settled.has(blobId)) return Promise.resolve(cache.settled.get(blobId));
   if (cache.running.has(blobId)) return cache.running.get(blobId);
-  const target = typeof source?.objectId === "string" && /^0x[0-9a-fA-F]{64}$/.test(source.objectId) ? source.objectId : blobId;
   const running = Promise.resolve()
-    .then(() => tatum.getObject(target, {
-      blobId,
-      owner: source?.blobOwner,
-      digest: source?.digest,
-      checkpoint: source?.checkpoint,
-    }))
+    .then(() => tatum.getObject(proofTarget(source), proofHints(source)))
     .then((object) => {
       cache.running.delete(blobId);
       if (object?.proof?.status === "verified") cache.settled.set(blobId, object);
@@ -2915,10 +3361,11 @@ function lookupProof(tatum, source, { fresh = false } = {}) {
 }
 
 /**
- * Read the chain proof for every company memory with a blob, one at a time,
- * so the first room load finds them already verified. Runs in the background
- * and goes through the reader's shared throttle; a failure is left for the
- * page to retry.
+ * Read the chain proof for every company memory with a blob, so the first
+ * room load finds them already verified. Several memories share one batch.
+ * One memory, or a reader without batch reads, stays one call at a time.
+ * Runs in the background through the reader's shared throttle. A failure is
+ * left for the page to retry.
  *
  * @param {{ decisions?: any[] }} session
  * @param {{ getObject?: Function }} tatum
@@ -2928,10 +3375,12 @@ export async function warmProofs(session, tatum) {
   const started = Date.now();
   const out = { verified: 0, failed: 0, ms: 0 };
   if (typeof tatum?.getObject !== "function") return out;
-  for (const decision of session?.decisions ?? []) {
-    if (!decision || decision.deleted || decision.account === "personal" || typeof decision.blobId !== "string" || !decision.blobId) continue;
+  const decisions = (session?.decisions ?? []).filter((decision) => decision && !decision.deleted && decision.account !== "personal" && typeof decision.blobId === "string" && decision.blobId);
+  const batched = decisions.length > 1 && typeof tatum.getObjects === "function";
+  const reads = batched ? proofReads(tatum, decisions, {}) : null;
+  for (const decision of decisions) {
     try {
-      const object = await lookupProof(tatum, decision);
+      const object = await (reads ? reads.get(decision.blobId) : lookupProof(tatum, decision));
       if (object?.proof?.status === "verified") {
         out.verified += 1;
         decision.proofStatus = "verified";
@@ -2942,6 +3391,23 @@ export async function warmProofs(session, tatum) {
   }
   out.ms = Date.now() - started;
   return out;
+}
+
+function voiceFollowupItems(session, roomId) {
+  const rows = Array.isArray(session?.voiceFollowups) ? session.voiceFollowups : [];
+  const items = [];
+  for (const row of rows) {
+    if (!row || row.roomId !== roomId) continue;
+    const name = String(row.name || "tool").replace(/\s+/g, " ").trim();
+    const ask = String(row.ask || "").replace(/\s+/g, " ").trim();
+    const subject = ask ? `${name}: ${ask}` : name;
+    const result = String(row.result || "").replace(/\s+/g, " ").trim();
+    const text = row.status === "pending" || !result
+      ? `Follow up after the call. ${subject} was still running.`
+      : `Follow up after the call. ${subject}. ${result}`;
+    items.push({ text: text.slice(0, 400), owner: "", due: "" });
+  }
+  return items;
 }
 
 function settleWithin(promise, ms) {
@@ -2962,7 +3428,8 @@ function settleWithin(promise, ms) {
 
 /**
  * Write minutes and action items when a meeting ends. Decisions already stored
- * are left alone. An unknown room writes nothing.
+ * are left alone. A voice tool that ran past its budget is one of the action
+ * items. An unknown room writes nothing.
  */
 export async function endMeeting(session, deps, roomId) {
   const current = ensureSession(session);
@@ -2972,7 +3439,8 @@ export async function endMeeting(session, deps, roomId) {
   const decisions = (current.decisions ?? []).filter((item) => item.roomId === id && !item.deleted);
   const actionItems = (current.actions ?? [])
     .filter((item) => item.roomId === id)
-    .map((item) => ({ text: item.statement, owner: item.memberId || item.speaker || "", due: "" }));
+    .map((item) => ({ text: item.statement, owner: item.memberId || item.speaker || "", due: "" }))
+    .concat(voiceFollowupItems(current, id));
   const visibleSources = new Set(decisions.map((decision) => decision.id));
   const memories = (current.learned ?? []).filter((record) => record.roomId === id && record.sourceDecisionId && visibleSources.has(record.sourceDecisionId));
   const minutes = draftMinutes({ room, decisions, memories });
@@ -2995,13 +3463,29 @@ export async function endMeeting(session, deps, roomId) {
  * @param {ReturnType<import("./session.js").createSession>} session
  * @param {string} [memberId]
  */
+/**
+ * The people heard in a room's transcript, first heard first. Recall names the
+ * bot itself "Unknown"; that is not a speaker the console lists.
+ */
+export function lineSpeakers(lines) {
+  const names = [];
+  for (const line of Array.isArray(lines) ? lines : []) {
+    const name = typeof line?.speaker === "string" ? line.speaker.trim().slice(0, 80) : "";
+    if (!name || /^(unknown|someone)$/i.test(name) || names.includes(name)) continue;
+    names.push(name);
+    if (names.length >= 12) break;
+  }
+  return names;
+}
+
 export function companyBoard(session, memberId, options = {}) {
+  const readers = meetingRoomReaders(session);
   if (typeof memberId === "object") session = readableSession(session, memberId);
   const member = typeof memberId === "object" ? memberId : readPrincipalId(memberId);
   const visible = [];
   for (const decision of session?.decisions ?? []) {
     if (decision.deleted || decision.account === "personal" || decision.kind === "note") continue;
-    if (!readPrincipalId(member) || !canReadRecord(member, decision)) continue;
+    if (!readPrincipalId(member) || !canReadInSession(member, decision, readers)) continue;
     visible.push(decision);
   }
   const statuses = new Map(clashStatuses(visible).map((row) => [row.id, row.status]));
@@ -3056,6 +3540,11 @@ export function companyBoard(session, memberId, options = {}) {
     if (typeof opened.name === "string" && opened.name) room.name = opened.name;
     if (typeof opened.channel === "string" && opened.channel) room.channel = opened.channel;
     if (typeof opened.startedAt === "string" && opened.startedAt) room.startedAt = opened.startedAt;
+    if (Number.isFinite(opened.duration) && opened.duration > 0) room.duration = Math.round(opened.duration);
+    if (meetingCallRank(opened.call)) room.call = opened.call;
+    // Names heard in the transcript only for a room this person can open.
+    const speakers = room.count > 0 || canReadOpenedMeeting(member, opened) ? lineSpeakers(opened.lines) : [];
+    if (speakers.length) room.speakers = speakers;
     if (typeof opened.calendarEventId === "string" && opened.calendarEventId.trim()) {
       room.calendarEventId = opened.calendarEventId.trim();
     }
@@ -3068,9 +3557,33 @@ export function companyBoard(session, memberId, options = {}) {
   const waiting = [];
   let sent = 0;
   for (const action of session?.actions ?? []) {
-    if (!roomIds.has(action.roomId)) continue;
+    const meetingHold = action?.source === "Google Meet" && action?.state === "paused"
+      && typeof action.id === "string" && action.id && typeof action.roomId === "string" && action.roomId;
+    if (!meetingHold && !roomIds.has(action.roomId)) continue;
     if (action.state === "closed") {
       sent += 1;
+      continue;
+    }
+    if (meetingHold) {
+      const invite = action.inviteMemberIds?.length ? action.inviteMemberIds : [action.memberId];
+      if (!readPrincipalId(member) || !canReadInSession(member, { ...action, inviteMemberIds: invite }, readers)) continue;
+      const tool = action.tool === "linear" || action.tool === "calendar" ? action.tool : "";
+      waiting.push({
+        id: action.id,
+        roomId: action.roomId,
+        tool,
+        statement: redact(action.statement || ""),
+      });
+      if (!rooms.some((item) => item.id === action.roomId)) {
+        const setting = liveRoomSetting(session?.roomSettings, action.roomId);
+        rooms.push({
+          id: action.roomId,
+          count: 0,
+          ask: true,
+          voice: setting?.voice || "plain",
+          raiseClash: setting?.raiseClash === true,
+        });
+      }
       continue;
     }
     if (action.state !== "waiting" || typeof action.id !== "string" || !action.id) continue;
@@ -3086,7 +3599,7 @@ export function companyBoard(session, memberId, options = {}) {
   for (const action of session?.actions ?? []) {
     if (action.state !== "closed" || action.tool !== "linear" || typeof action.connectorId !== "string" || !action.connectorId) continue;
     const invite = action.inviteMemberIds?.length ? action.inviteMemberIds : [action.memberId];
-    if (!readPrincipalId(member) || !canReadRecord(member, { ...action, inviteMemberIds: invite })) continue;
+    if (!readPrincipalId(member) || !canReadInSession(member, { ...action, inviteMemberIds: invite }, readers)) continue;
     tickets.push({
       actionId: action.id,
       connectorId: action.connectorId,
@@ -3175,6 +3688,16 @@ function publishedUndo(row, now = Date.now()) {
  */
 export function searchPublishedActivity(session, rooms, query = {}, options = {}) {
   return selectActivity(publicActivity(session, rooms, options), query);
+}
+
+/** Rows from the room activity mirror, merged like indexed rows. */
+export function absorbActivityRows(session, rows) {
+  for (const row of rows || []) absorbActivity(session, row);
+}
+
+/** One room's published activity rows. */
+export function roomPublicActivity(session, roomId, options = {}) {
+  return publicActivity(session, [{ id: roomId }], options).filter((row) => row.origin?.roomId === roomId);
 }
 
 function absorbActivity(session, activity) {

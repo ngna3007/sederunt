@@ -1,6 +1,7 @@
 # Sederunt
 
-Company meeting memory for the Total Recall hackathon.
+Sederunt is the assistant that remembers what your team agreed.
+Team memory lives on Walrus. Slack chats, files, and meetings all feed that same record — a meeting is one source, not the whole product.
 One Node process, `node src/server.js`, records a note, reads Linear, and files a ticket only after an allow.
 Status, allow, clash, and the checkpoint stamp live in `src/domain/`.
 

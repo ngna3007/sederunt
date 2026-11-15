@@ -42,7 +42,7 @@ function cookieFor({ userId = "user-a", tenantId = A } = {}) {
   const token = sealSession({
     kind: "oauth", provider: "google", memberId: userId, userId, name: "Ada", email: "ada@example.test",
     exp: Date.now() + 3_600_000, accessToken: `access-${userId}`, refreshToken: "r",
-    accessExp: Date.now() + 3_600_000, tenantId, onboarded: true, provider: "google",
+    accessExp: Date.now() + 3_600_000, tenantId, onboarded: true,
   }, SECRET);
   return `${CONSOLE_COOKIE}=${encodeURIComponent(token)}`;
 }
@@ -146,7 +146,9 @@ test("install start: owner -> Slack authorize with scopes/state/redirect; member
   assert.equal(authorize.origin + authorize.pathname, "https://slack.com/oauth/v2/authorize");
   assert.equal(authorize.searchParams.get("client_id"), "111.222");
   assert.equal(authorize.searchParams.get("redirect_uri"), "https://sederunt.example/console/slack/callback");
-  for (const scope of SLACK_REQUIRED_SCOPES) assert.ok(authorize.searchParams.get("scope").split(",").includes(scope));
+  const requested = authorize.searchParams.get("scope").split(",");
+  for (const scope of SLACK_REQUIRED_SCOPES) assert.ok(requested.includes(scope));
+  assert.equal(requested.includes("incoming-webhook"), false);
   assert.ok(state && state.length >= 24);
   assert.match(String(start.headers["set-cookie"]), new RegExp(`^${SLACK_STATE_COOKIE}=.*HttpOnly.*Path=/console/slack`));
   const member = await call(port, "GET", "/console/slack/install?next=/console/setup", null, { cookie: cookieFor({ userId: "user-m" }) });

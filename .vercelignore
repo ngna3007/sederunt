@@ -11,6 +11,7 @@ research/
 prototype/
 # Root Remotion project only. A bare clips/ also drops public/clips (landing videos).
 /clips/
+/remotion/
 qa/
 openspec/
 coverage/

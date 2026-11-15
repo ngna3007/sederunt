@@ -322,6 +322,22 @@ const CONSOLE_DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
  * @param {string|number|Date|null|undefined} value
  * @param {{ now?: number|string|Date, timeZone?: string, time?: boolean, part?: "full"|"clock"|"day" }} [options]
  */
+/**
+ * Recording length as `00:00:30`. Zero and a missing length stay blank.
+ *
+ * @param {unknown} seconds
+ */
+export function recordingLength(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  const total = Math.min(Math.round(value), 99 * 3600 + 59 * 60 + 59);
+  const hours = Math.floor(total / 3600);
+  const mins = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  const pad = (part) => String(part).padStart(2, "0");
+  return `${pad(hours)}:${pad(mins)}:${pad(secs)}`;
+}
+
 export function formatConsoleWhen(value, options = {}) {
   if (value == null || value === "") return "";
   const timeZone = options.timeZone || undefined;

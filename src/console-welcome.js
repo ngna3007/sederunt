@@ -6,7 +6,7 @@ import { sederuntMark, FAVICON_LINK } from "./sederunt-mark.js";
  * First-run welcome: four short steps, then Home.
  *   1 Create your workspace (required)
  *   2 Connect your calendar
- *   3 Where should Sederunt post?
+ *   3 Connect Slack
  *   4 Invite your team
  * Steps 2-4 can be skipped. The team step is also the "Invite people" page.
  */
@@ -14,7 +14,6 @@ import { sederuntMark, FAVICON_LINK } from "./sederunt-mark.js";
 export const WELCOME_STEPS = ["workspace", "calendar", "chat", "team"];
 
 export const CALENDAR_DOCS = "https://developers.google.com/workspace/calendar/api/guides/configure-mcp-server";
-export const SLACK_DOCS = "https://docs.slack.dev/ai/slack-mcp-server";
 
 /**
  * @param {{
@@ -172,34 +171,38 @@ function calendarStep(state) {
 function chatStep(state) {
   const chat = state.chat || {};
   const slack = chat.slack === true;
-  const rawChannel = String(chat.channel || "").replace(/^#/, "");
-  const channel = /^[CDGW][A-Z0-9]{2,}$/.test(rawChannel) ? "" : rawChannel;
+  const waiting = !slack && state.slackInstall === true && chat.asked === true;
   const status = slack
     ? `<span class="ob-status ok" id="slack-status">${check()}Connected</span>`
-    : `<span class="ob-status" id="slack-status">${chat.asked ? "Finish in Setup" : "Not connected"}</span>`;
+    : `<span class="ob-status" id="slack-status">${waiting ? "Allow in the other tab" : chat.asked ? "Finish in Setup" : "Not connected"}</span>`;
   const soon = [
     ["teams", "Microsoft Teams"],
     ["gchat", "Google Chat"],
     ["discord", "Discord"],
     ["email", "Email digest"],
   ];
+  const hint = slack
+    ? `<p class="ob-hint">Add @Sederunt to a channel in Slack when you want it there.</p>`
+    : "";
   return {
-    title: "Where should Sederunt post?",
-    sub: "Decisions and action items go to your team's chat after each meeting.",
+    title: slack ? "Slack is connected" : "Connect Slack",
+    sub: slack
+      ? "Continue. You can add the bot to a channel later."
+      : "One allow adds the Sederunt bot to your Slack workspace.",
     body: `<input type="hidden" name="action" value="chat">
       <ul class="ob-list" id="chat-options">
         <li class="ob-row${slack ? " on" : ""}" id="chat-slack">
           <span class="ob-logo">${brandLogo("slack-icon", 20)}</span>
-          <span class="ob-row-main"><span class="ob-row-title">Slack</span><span class="ob-row-meta">${slack && channel ? `Posts to #${escapeText(channel)}` : "Recaps, decisions and action items"}</span></span>
+          <span class="ob-row-main"><span class="ob-row-title">Slack</span><span class="ob-row-meta">${slack ? "Bot connected" : "Allow once, then you are done on this page"}</span></span>
           ${status}
         </li>
       </ul>
       <p class="ob-soon-line" id="chat-soon"><span class="ob-soon">Coming soon</span> ${soon.map(([id, label]) => `<span id="chat-${id}">${label}</span>`).join(", ")}</p>
-      <p class="ob-hint">You can change this any time in Setup.</p>`,
+      ${hint}`,
     left: `${backLink("/console/welcome?step=calendar")}${slack ? "" : `<button class="ob-link" type="submit" name="choice" value="later" id="ob-skip" formnovalidate>Not now</button>`}`,
     right: slack
       ? `<button class="ob-primary" type="submit" name="choice" value="continue" id="ob-continue">Continue</button>`
-      : `<button class="ob-primary" type="submit" name="choice" value="connect" id="slack-connect" data-docs="${escapeAttr(state.fakeTools ? "" : SLACK_DOCS)}">Connect Slack</button>`,
+      : `<button class="ob-primary" type="submit" name="choice" value="connect" id="slack-connect"${state.slackInstall === true && state.fakeTools !== true ? ' formtarget="_blank"' : ""}>Connect Slack</button>`,
   };
 }
 
@@ -319,6 +322,40 @@ function linkIcon() {
 
 const WELCOME_SCRIPT = `
 (function () {
+  var slackConnect = document.getElementById("slack-connect");
+  var slackStatus = document.getElementById("slack-status");
+  var slackWait = "sederunt-slack-wait";
+  if (slackConnect) {
+    slackConnect.addEventListener("click", function () {
+      try { sessionStorage.setItem(slackWait, "1"); } catch (error) {}
+    });
+  }
+  var card = document.getElementById("ob-card");
+  if (card && card.tagName === "FORM") {
+    card.addEventListener("submit", function (event) {
+      var button = event.submitter;
+      if (!button) return;
+      if (card.classList.contains("is-continuing")) {
+        event.preventDefault();
+        return;
+      }
+      card.classList.add("is-continuing");
+      button.setAttribute("aria-busy", "true");
+      button.textContent = button.getAttribute("formtarget") === "_blank" ? "Opening Slack…" : "Continuing…";
+    });
+  }
+  var slackDone = slackStatus && slackStatus.textContent.indexOf("Connected") !== -1;
+  if (slackDone) {
+    try { sessionStorage.removeItem(slackWait); } catch (error) {}
+  } else if (slackStatus) {
+    try {
+      if (sessionStorage.getItem(slackWait) === "1") {
+        document.addEventListener("visibilitychange", function () {
+          if (document.visibilityState === "visible") location.reload();
+        });
+      }
+    } catch (error) {}
+  }
   document.querySelectorAll("[data-copy]").forEach(function (button) {
     button.addEventListener("click", function () {
       var input = document.getElementById(button.getAttribute("data-copy"));
@@ -334,11 +371,6 @@ const WELCOME_SCRIPT = `
       }
       if (input) { input.select(); }
     });
-  });
-  document.querySelectorAll("[data-docs]").forEach(function (button) {
-    var docs = button.getAttribute("data-docs");
-    if (!docs) return;
-    button.addEventListener("click", function () { window.open(docs, "_blank", "noopener"); });
   });
   var name = document.getElementById("workspace-name");
   if (name) {

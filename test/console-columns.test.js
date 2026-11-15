@@ -5,6 +5,7 @@ import { once } from "node:events";
 import test from "node:test";
 import { sealSession, sessionCookie } from "../src/console-auth.js";
 import { DECISION_COLUMNS, PEOPLE_COLUMNS, ROOM_COLUMNS, renderConsolePage } from "../src/console-page.js";
+import { consolePageSource } from "./console-source.js";
 import { renderSignInPage } from "../src/console-sign-in.js";
 import { createApp } from "../src/server.js";
 import { createSession } from "../src/session.js";
@@ -234,7 +235,7 @@ test("table headers and cells share an x at 1920, 1024, 768, and 640", async (t)
 
 test("pass 02 keeps room, status, and list layout inside the viewport", () => {
   const css = readFileSync(new URL("../src/console.css", import.meta.url), "utf8");
-  const page = readFileSync(new URL("../src/console-page.js", import.meta.url), "utf8");
+  const page = consolePageSource();
   const block = css.slice(css.lastIndexOf("Fix pass 02"));
   assert.ok(block.length > 200, "fix pass 02 block is present");
   assert.match(block, /#home, #onboard \{ scrollbar-gutter: auto; \}/);
