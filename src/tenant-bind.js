@@ -80,7 +80,7 @@ export function createTenantBind(env = process.env, options = {}) {
       const url = String(env.REDIS_URL || env.KV_URL || "").trim();
       if (!url) throw new Error("tenant-bind redis not configured");
       const { createClient } = await import("redis");
-      const client = createClient({ url, socket: { connectTimeout: 3000 } });
+      const client = createClient({ url, socket: { connectTimeout: 3000, reconnectStrategy: false } });
       client.on("error", () => {});
       await client.connect();
       try {
@@ -125,7 +125,7 @@ export function createTenantBind(env = process.env, options = {}) {
       if (!url) return "error";
       try {
         const { createClient } = await import("redis");
-        const client = createClient({ url, socket: { connectTimeout: 3000 } });
+        const client = createClient({ url, socket: { connectTimeout: 3000, reconnectStrategy: false } });
         client.on("error", () => {});
         await client.connect();
         try {
@@ -164,7 +164,7 @@ export function createTenantBind(env = process.env, options = {}) {
       if (!url) return false;
       try {
         const { createClient } = await import("redis");
-        const client = createClient({ url, socket: { connectTimeout: 3000 } });
+        const client = createClient({ url, socket: { connectTimeout: 3000, reconnectStrategy: false } });
         client.on("error", () => {});
         await client.connect();
         try {
@@ -220,7 +220,7 @@ export function createTenantBind(env = process.env, options = {}) {
       if (!url) return false;
       try {
         const { createClient } = await import("redis");
-        const client = createClient({ url, socket: { connectTimeout: 3000 } });
+        const client = createClient({ url, socket: { connectTimeout: 3000, reconnectStrategy: false } });
         client.on("error", () => {});
         await client.connect();
         try {
