@@ -20,7 +20,7 @@ export function directRequest(text) {
   // Kept inline: the meeting page runs this function from its source.
   var command = /^(schedule|reschedule|book|file|add|log|open|send|set|move|invite|assign|update|draft|find|look up|show|list)\b(.*)$/i.exec(folded);
   if (!command) return false;
-  if (/^\s*[:\-]/.test(value.slice(command[1].length))) return false;
+  if (/^\s*[:-]/.test(value.slice(command[1].length))) return false;
   var next = command[2].trim().split(" ").slice(0, 3).join(" ");
   return !/\b(is|are|was|were|isn't|aren't|wasn't|weren't|has|have|had|went|goes|looks|seems|shows|says|said|got|came|works|worked|will|would|did|does)\b/.test(next);
 }

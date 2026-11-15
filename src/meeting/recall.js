@@ -121,7 +121,7 @@ export function createMeetingAdapter(env = process.env, options = {}) {
       }
       const text = await response.text();
       if (!response.ok) throw new Error("Meeting join failed");
-      let id = "";
+      let id;
       try {
         const parsed = JSON.parse(text);
         id = typeof parsed.id === "string" ? parsed.id : "";

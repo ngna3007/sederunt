@@ -77,7 +77,7 @@ export function createSupabaseBotPreferenceStore({ url, key, fetchImpl }) {
     } catch {
       throw storeError();
     }
-    let text = "";
+    let text;
     try {
       text = await response.text();
     } catch {

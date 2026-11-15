@@ -121,7 +121,7 @@ test("fake auth onboarding stays on localhost", async (t) => {
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.href : String(input?.url || input);
-    let host = "";
+    let host;
     try {
       host = new URL(raw).hostname;
     } catch {
@@ -642,7 +642,7 @@ test("onboarding screens fit at desktop and phone widths", { timeout: 180000 }, 
   });
   await page.route("**/*", async (route) => {
     const url = route.request().url();
-    let host = "";
+    let host;
     try {
       host = new URL(url).hostname;
     } catch {

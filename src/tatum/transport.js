@@ -70,7 +70,7 @@ export function createNativeGrpcTransport(options = {}) {
         defTrailer.resolve(result.trailers);
       };
       void (async () => {
-        let cacheKey = "";
+        let cacheKey;
         try {
           cacheKey = `${method.name}:${Buffer.from(method.I.toBinary(input, opt.binaryOptions)).toString("base64")}`;
         } catch (error) {

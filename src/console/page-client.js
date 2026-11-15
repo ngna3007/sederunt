@@ -2,6 +2,7 @@
 export function renderConsoleClient(boot) {
   return `
 import { formatActivitySentence, formatConsoleWhen, groupActivity, recordingLength, relativeTime, selectActivity, undoPrompt, zoneShortName } from "/console/activity.js";
+import { renderConsoleProof } from "/console/receipt.js";
 import { wireBotCard } from "/console/bot-card.js";
 import { compareRoomsNewestFirst, mergeRoomLists, rankDecisions } from "/console/room-match.js";
 wireBotCard();
@@ -3340,6 +3341,13 @@ if (sessionWhen && sessionWhen.dataset.at) {
         value.textContent = pair[1];
         facts.append(term, value);
       });
+      var receipt = renderConsoleProof(decision);
+      if (receipt) {
+        var receiptLine = document.createElement("p");
+        receiptLine.className = "proof-receipt";
+        receiptLine.textContent = receipt;
+        facts.append(receiptLine);
+      }
     }
     if (links) {
       links.replaceChildren();

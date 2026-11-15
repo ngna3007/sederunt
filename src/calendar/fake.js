@@ -276,7 +276,7 @@ function weekdayOf(iso, timeZone) {
 }
 
 function zoneOffset(timeZone, date) {
-  let label = "";
+  let label;
   try {
     label = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "longOffset" }).format(date);
   } catch {

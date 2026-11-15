@@ -13,7 +13,7 @@ const TOOLS = ["calendar", "linear", "slack"];
  */
 export async function loadAccountProfile(identity, session, spaces) {
   if (!identity || session?.kind !== "oauth") return null;
-  let profile = null;
+  let profile;
   try {
     profile = await identity.profile(session.accessToken);
   } catch {
@@ -44,7 +44,7 @@ export async function loadAccountProfile(identity, session, spaces) {
  */
 export async function loadToolAsk(identity, session, connected = {}, env = {}) {
   if (!identity || session?.kind !== "oauth") return null;
-  let prefs = {};
+  let prefs;
   let user = null;
   try {
     user = await identity.getUser(session.accessToken);
@@ -132,7 +132,7 @@ export async function handleToolPref(ctx) {
     send(res, 401, "application/json; charset=utf-8", JSON.stringify({ ok: false, error: "Sign in again." }));
     return;
   }
-  let body = {};
+  let body;
   try {
     body = await ctx.readPosted(req);
   } catch {

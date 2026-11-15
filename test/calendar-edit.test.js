@@ -86,7 +86,7 @@ function blockOutbound() {
   const outbound = [];
   globalThis.fetch = async (input, init) => {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.href : String(input?.url || input);
-    let host = "";
+    let host;
     try {
       host = new URL(raw).hostname;
     } catch {
@@ -283,7 +283,7 @@ test("console edit dialog, ask, and layout", { timeout: 180000 }, async (t) => {
   });
   await page.route("**/*", async (route) => {
     const url = route.request().url();
-    let host = "";
+    let host;
     try { host = new URL(url).hostname; } catch { host = ""; }
     const local = !host || host === "127.0.0.1" || host === "localhost" || host === "::1" || url.startsWith("data:") || url.startsWith("blob:");
     if (!local) {
@@ -508,7 +508,7 @@ test("console edit dialog, ask, and layout", { timeout: 180000 }, async (t) => {
   offPage.on("pageerror", (error) => errors.push(String(error)));
   await offPage.route("**/*", async (route) => {
     const url = route.request().url();
-    let host = "";
+    let host;
     try { host = new URL(url).hostname; } catch { host = ""; }
     const local = !host || host === "127.0.0.1" || host === "localhost" || host === "::1" || url.startsWith("data:") || url.startsWith("blob:");
     if (!local) {

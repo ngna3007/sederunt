@@ -400,7 +400,7 @@ export function redactStructured(value, ...tokens) {
   for (const token of tokens) {
     if (token) cleaned = cleaned.split(token).join("");
   }
-  cleaned = cleaned.replace(/\bya29\.[A-Za-z0-9._\-]+/g, "");
+  cleaned = cleaned.replace(/\bya29\.[A-Za-z0-9._-]+/g, "");
   cleaned = cleaned.replace(/\bBearer\s+/gi, "");
   if (cleaned === raw) return value;
   try {

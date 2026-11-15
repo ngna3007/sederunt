@@ -1,6 +1,7 @@
 import { openRouterComplete, openRouterConfig } from "../openrouter.js";
 import { buildSlackAskPrompt } from "../bot/persona.js";
 import { checkInvite } from "../domain/invite.js";
+import { formatMemoryReceipt } from "../domain/receipt.js";
 
 const STOP = new Set(["what", "about", "that", "this", "with", "from", "your", "have", "does", "file", "when", "where", "who", "why", "how", "was", "decided", "the", "and", "for"]);
 
@@ -184,13 +185,13 @@ export function slackAnswer(visible, question) {
   if (file) {
     const row = rows.find((item) => rowHasFile(item, file)) ?? rows[0];
     const fact = String(row?.text ?? "").trim();
-    if (!fact) return { text: slackFileCaption(file), file };
+    if (!fact) return { text: withReceipt(slackFileCaption(file), row), file };
     const text = fact.toLowerCase().includes(file.toLowerCase()) ? fact : `${fact}\n${file}`;
-    return { text, file };
+    return { text: withReceipt(text, row), file };
   }
   if (rows.length === 0) return { text: "Nothing is stored that you can read.", file: "" };
   return {
-    text: rows.map((row) => plainFact(row.text, row.connectorId)).join("\n"),
+    text: rows.map((row) => withReceipt(plainFact(row.text, row.connectorId), row)).join("\n"),
     file: "",
   };
 }
@@ -300,7 +301,7 @@ export async function answerSlackQuestion(visible, question, options = {}) {
   const attached = picked?.name || listedFile(memories, reply.attach) || mentionedFile(memories, reply.text);
   if (!reply.text && !attached) return fallback();
   return {
-    text: prepareSlackCaption(reply.text, attached),
+    text: appendCitedReceipts(prepareSlackCaption(reply.text, attached), memories),
     file: attached,
     fileMeta: picked && picked.name === attached ? picked : fileMeta(catalog, attached),
     source: "openrouter",
@@ -546,6 +547,38 @@ function plainFact(text, connectorId) {
   const sentence = String(text ?? "").trim();
   const issue = typeof connectorId === "string" ? connectorId.trim() : "";
   return issue ? `Decided: ${sentence} (${issue})` : sentence;
+}
+
+/** Append a real Walrus blob id and Sui receipt. A blank receipt adds nothing. */
+function withReceipt(text, row) {
+  const receipt = formatMemoryReceipt(row);
+  if (!receipt) return text;
+  return `${text}\n${receipt}`;
+}
+
+/**
+ * Model answers quote a memory in their own words. A receipt is added only
+ * when that answer still contains the stored sentence and the row already
+ * has a blob id and a transaction digest.
+ *
+ * @param {string} text
+ * @param {Array<{ text?: unknown, blobId?: unknown, digest?: unknown, proof?: { blobId?: unknown, digest?: unknown } }>} memories
+ */
+export function appendCitedReceipts(text, memories) {
+  const body = String(text ?? "");
+  const hay = body.toLowerCase();
+  const lines = [];
+  const seen = new Set();
+  for (const row of memories ?? []) {
+    const sentence = String(row?.text ?? "").trim();
+    if (sentence.length < 8 || !hay.includes(sentence.toLowerCase())) continue;
+    const receipt = formatMemoryReceipt(row);
+    if (!receipt || seen.has(receipt)) continue;
+    seen.add(receipt);
+    lines.push(receipt);
+  }
+  if (lines.length === 0) return body;
+  return `${body}\n${lines.join("\n")}`;
 }
 
 function questionWords(question) {

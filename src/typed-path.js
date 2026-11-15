@@ -373,7 +373,7 @@ async function answerRead(input, session, deps, parsed) {
   const preference = resolvePreference(session.preferences, parsed.tool, input.room?.id);
   const auth = authorize({ action: "read", tool: parsed.tool, preference });
   if (parsed.tool === "calendar") {
-    let data = { unavailable: true, events: [] };
+    let data;
     try {
       data = await deps.calendar.readDay(parsed.day);
     } catch {
@@ -862,7 +862,7 @@ function noteConnectorFailure(deps, action, message, reason) {
   text = text
     .replace(/bearer\s+[^\s"']+/gi, "Bearer [redacted]")
     .replace(/(token|secret|key|authorization)(["'\s:=]+)[^\s"',}]+/gi, "$1$2[redacted]")
-    .replace(/[A-Za-z0-9_\-]{32,}/g, "[redacted]")
+    .replace(/[A-Za-z0-9_-]{32,}/g, "[redacted]")
     .slice(0, 240);
   try {
     deps.log({ kind: "connector-failed", tool: String(action?.tool || ""), edit: String(action?.edit || "create"), reason: String(reason || ""), message: text });
@@ -2115,7 +2115,7 @@ function stampOf(input) {
 async function loadIndex(session, deps) {
   if (session.decisions.length > 0) return;
   if (!deps.memory?.index) return;
-  let docs = [];
+  let docs;
   try {
     docs = await deps.memory.index();
   } catch {
@@ -2133,7 +2133,7 @@ async function loadSentences(session, deps) {
     tool: "memory",
     outcome: "recall",
   });
-  let docs = [];
+  let docs;
   try {
     docs = await deps.memory.recall();
   } catch {
@@ -2948,7 +2948,7 @@ export function memoryKey(document) {
   const field = FINGERPRINTED[document.kind];
   const payload = field ? document[field] : null;
   if (!payload || typeof payload !== "object") return byteTrim(base, 255);
-  let body = "";
+  let body;
   try { body = JSON.stringify(payload); } catch { body = ""; }
   const print = createHash("sha256").update(`${document.text || ""}\n${body}`, "utf8").digest("hex").slice(0, 12);
   return `${byteTrim(base, 242)}:${print}`;

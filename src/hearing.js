@@ -7,7 +7,7 @@ export const DEFAULT_HEARING_NAME = "Maple";
  */
 export const DEFAULT_HEARING_ALIASES = ["Adam", "Maple"];
 
-const NAME = /^[\p{L}\p{N}][\p{L}\p{N} '\-]{0,39}$/u;
+const NAME = /^[\p{L}\p{N}][\p{L}\p{N} '-]{0,39}$/u;
 
 /**
  * The name shown in the meeting, and the extra words or sentences that address the guest.

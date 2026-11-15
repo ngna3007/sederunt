@@ -31,6 +31,7 @@ import { meetingContext, rememberMeetingExchange } from "./speech-gate.js";
 import { voiceModels } from "./voice-models.js";
 import { directRequest, refreshMeetingFloor } from "./voice.js";
 import { handleMcpRequest } from "../mcp.js";
+import { isAlreadyStored } from "../memory/retry.js";
 import { handleUtterance, recordVoiceActivity, rememberHeldAction } from "../typed-path.js";
 import {
   actionChatLine,
@@ -195,7 +196,7 @@ export async function handleMeetingAgent(input) {
   }
   if (path === "/api/meeting/agent/cancel") {
     // A superseded turn names itself, so a late cancel never stops the turn after it.
-    let named = "";
+    let named;
     try {
       const sent = await readJson(req);
       named = String(sent?.turn_id || "").trim().slice(0, 80);
@@ -1407,7 +1408,7 @@ export function calendarDayLink(startTime, timeZone) {
   if (!day) {
     const ms = Date.parse(value);
     if (!Number.isFinite(ms)) return "";
-    let stamp = "";
+    let stamp;
     try {
       stamp = new Intl.DateTimeFormat("en-CA", { timeZone: timeZone || "UTC", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ms));
     } catch {
@@ -1587,7 +1588,7 @@ async function fileVoiceLinear(input, name, args, memberId) {
       };
     },
   }) : linear;
-  let result = null;
+  let result;
   try {
     result = await handleUtterance({
       text: `file the ${title}`,
@@ -1631,7 +1632,7 @@ const UNCONFIRMED_LINE = "Linear did not confirm the issue, so please check Line
  * run side by side, and are kept alive after the reply. The Linear call is still
  * claimed once and carries its idempotency key.
  */
-function deferredMemory(input, deps) {
+export function deferredMemory(input, deps) {
   const memory = deps?.memory;
   const pending = [];
   if (!memory || typeof memory.remember !== "function") return { deps, keep() {}, pending };
@@ -1639,13 +1640,22 @@ function deferredMemory(input, deps) {
   const track = (work, kindName) => {
     const started = Date.now();
     const settled = Promise.resolve().then(work).then(
-      () => noteDeferred(log, kindName, Date.now() - started, true),
+      (value) => noteDeferred(log, kindName, Date.now() - started, true, undefined, value),
       (error) => noteDeferred(log, kindName, Date.now() - started, false, error),
     );
     pending.push(settled);
   };
   const remember = (document) => {
-    track(() => memory.remember(document), String(document?.kind || ""));
+    const kindName = String(document?.kind || "");
+    track(async () => {
+      try {
+        return await memory.remember(document);
+      } catch (error) {
+        // The key was already stored. Do not fail the turn, requeue, or write again.
+        if (kindName === "activity" && isAlreadyStored(error)) return { alreadyStored: true };
+        throw error;
+      }
+    }, kindName);
     return Promise.resolve({ blobId: null, deferred: true });
   };
   const attachConnector = (...rest) => {
@@ -1696,8 +1706,9 @@ async function settleOrKeep(input, work, kindName) {
 
 const SLOW = Symbol("slow");
 
-function noteDeferred(log, kindName, ms, ok, error) {
+function noteDeferred(log, kindName, ms, ok, error, value) {
   const row = { kind: ok ? "memory-deferred" : "memory-remember-error", kindName, ms: Math.round(ms), deferred: true };
+  if (ok && value?.alreadyStored === true) row.alreadyStored = true;
   if (!ok) row.message = String(error instanceof Error ? error.message : error || "").slice(0, 240);
   try { log(row); } catch {}
 }
@@ -1733,7 +1744,7 @@ async function boundWorkspaceMember(input, participantId) {
   const roomId = typeof input.seat?.roomId === "string" ? input.seat.roomId : "";
   const participant = String(participantId || "");
   if (!bindings || typeof bindings.forRoom !== "function" || !tenantId || !roomId || !participant) return "";
-  let rows = [];
+  let rows;
   try {
     rows = await bindings.forRoom(tenantId, roomId);
   } catch {

@@ -313,7 +313,7 @@ async function calendarForRequest(workspace, { companyId = "", personId = "", re
     if (!tenantId || !person || !grants || typeof grants.openAccess !== "function") {
       return unavailable;
     }
-    let granted = false;
+    let granted;
     try {
       granted = await grants.granted(person, { tenantId, scopes: CALENDAR_SCOPES }) === true;
     } catch {
@@ -428,7 +428,7 @@ export function doorReport(env = process.env, linearReady = false) {
 }
 
 function meetingPlatform(url) {
-  let host = "";
+  let host;
   try {
     host = new URL(url).hostname.toLowerCase();
   } catch {
@@ -797,7 +797,7 @@ export function createApp(options = {}) {
 
 function saveCalendarEnv(env) {
   const file = resolve(".local/calendar-oauth.env");
-  let text = "";
+  let text;
   try {
     text = readFileSync(file, "utf8");
   } catch {
@@ -1511,7 +1511,7 @@ async function resolvePersonTenantId(workspace, req, explicit = "") {
     if (asked) return { tenantId: "", denied: true, unauthorized: false };
     return { tenantId: "", denied: false, unauthorized: false };
   }
-  let tenants = [];
+  let tenants;
   try {
     tenants = await workspace.identity.myTenants(gate.session.accessToken);
   } catch {
@@ -1558,7 +1558,7 @@ async function resolveCompanyId(workspace, req, explicit = "") {
     if (asked) return { companyId: "", denied: true, unauthorized: false };
     return { companyId: "", denied: false, unauthorized: false };
   }
-  let tenants = [];
+  let tenants;
   try {
     tenants = await workspace.identity.myTenants(gate.session.accessToken);
   } catch {
@@ -2090,7 +2090,7 @@ function saveRoomOnce(workspace, tenant, id, collected) {
   const run = async () => {
     const claim = await within(sharedRedisCommand(env, fetchImpl, ["SET", key, "1", "NX", "EX", String(MEDIA_ROOM_SAVED_TTL_S)]), 1500, { ok: false });
     if (claim?.ok && claim.result && Object.prototype.hasOwnProperty.call(claim.result, "result") && claim.result.result === null) return;
-    let saved = null;
+    let saved;
     try {
       saved = await memory.remember(input);
     } catch {
@@ -2117,7 +2117,7 @@ function roomActivityKey(tenantId, roomId) {
 export async function mirrorRoomActivity(workspace, tenantId, event) {
   const key = roomActivityKey(tenantId, event?.origin?.roomId);
   if (!key || typeof event?.id !== "string" || !event.id) return false;
-  let row = "";
+  let row;
   try { row = JSON.stringify(event); } catch { return false; }
   if (!row || row.length > 16_000) return false;
   const done = await within(sharedRedisCommand(workspace.env || {}, workspace.fetchImpl || globalThis.fetch, [

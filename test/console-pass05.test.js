@@ -20,7 +20,7 @@ test("meeting words separate live, ended, channel, and silence", () => {
   assert.match(word, /word: "No recording"/);
   assert.match(word, /decisionsFor\(room\.id\)/);
   assert.doesNotMatch(word, /Failed/);
-  assert.match(page, /countText \+ \" · \"|person\.count === 1 \? \"1 decision\"/);
+  assert.match(page, /countText \+ " · "|person\.count === 1 \? "1 decision"/);
   const css = readFileSync(new URL("../src/console.css", import.meta.url), "utf8");
   const block = css.slice(css.lastIndexOf("Fix pass 05"));
   assert.match(block, /--cols-history: 24px minmax\(0, 1fr\) max-content minmax\(6\.5rem, 10rem\) max-content/);

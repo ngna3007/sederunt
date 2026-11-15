@@ -80,7 +80,7 @@ export async function lookupByEmail({ email, token, fetchImpl, sleep = (ms) => n
       body: new URLSearchParams({ email: normalized }).toString(),
     });
     const status = Number(response?.status || 0);
-    let body = {};
+    let body;
     try {
       body = typeof response?.json === "function" ? await response.json() : {};
     } catch {
