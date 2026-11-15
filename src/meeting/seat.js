@@ -462,7 +462,7 @@ function peopleFromHash(result) {
 function applyPersonField(row, participantId, raw) {
   const id = String(participantId || "").trim().slice(0, 40);
   if (!row || !id) return;
-  let name = "";
+  let name;
   let present = true;
   let host = false;
   try {
@@ -637,7 +637,7 @@ function cleanAwaiting(value) {
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(key) || AWAITING_BLOCKED_ARGS.has(key)) continue;
       if (item == null || ["string", "number", "boolean"].includes(typeof item) || typeof item === "object") args[key] = item;
     }
-    let body = "";
+    let body;
     try { body = JSON.stringify(args); } catch { body = ""; }
     if (body && body.length <= 4000) row.args = args;
   }

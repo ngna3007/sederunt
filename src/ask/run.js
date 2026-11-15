@@ -116,7 +116,7 @@ export function groundedAskAnswer(question, rows) {
   const stripKeep = (line) => {
     const cleaned = String(line)
       .replace(/^.*?please keep:\s*/i, "")
-      .replace(/^Northline decision\s*[—\-]\s*/i, "")
+      .replace(/^Northline decision\s*[—-]\s*/i, "")
       .trim();
     return cleaned || line;
   };

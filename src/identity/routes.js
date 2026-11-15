@@ -59,7 +59,7 @@ async function startProvider(ctx, provider) {
     send(res, 404, "text/plain; charset=utf-8", "Not found");
     return;
   }
-  let enabled = false;
+  let enabled;
   try {
     enabled = await identity.providerEnabled(provider);
   } catch {
@@ -111,7 +111,7 @@ async function fakeConsent(ctx, provider) {
     }), { "set-cookie": clearOAuthCookie(req) });
     return;
   }
-  let enabled = false;
+  let enabled;
   try {
     enabled = await identity.providerEnabled(provider);
   } catch {
@@ -121,7 +121,7 @@ async function fakeConsent(ctx, provider) {
     send(res, 200, "text/html; charset=utf-8", await page(ctx, { notice: providerNotice(provider) }));
     return;
   }
-  let code = "";
+  let code;
   try {
     code = identity.issueConsentCode({
       provider,

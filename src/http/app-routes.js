@@ -761,7 +761,7 @@ export function createAppRouteTable(ctx) {
             send(res, 401, "text/plain; charset=utf-8", "");
             return;
           }
-          let message = null;
+          let message;
           try {
             const raw = await readBody(req);
             if (raw.length > 60000) {
@@ -821,7 +821,7 @@ export function createAppRouteTable(ctx) {
           send(res, authz.status, "application/json; charset=utf-8", JSON.stringify({ ok: false, error }));
           return;
         }
-        let body = {};
+        let body;
         try {
           body = await readJson(req);
         } catch {

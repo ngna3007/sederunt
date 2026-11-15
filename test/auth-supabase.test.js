@@ -90,7 +90,7 @@ test("supabase sign-in stays on localhost", async (t) => {
   globalThis.fetch = async (input, init) => {
     fetchCalls += 1;
     const raw = typeof input === "string" ? input : input instanceof URL ? input.href : String(input?.url || input);
-    let host = "";
+    let host;
     try {
       host = new URL(raw).hostname;
     } catch {

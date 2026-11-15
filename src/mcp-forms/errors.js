@@ -20,7 +20,7 @@ export class FormsToolError extends Error {
 export function redactFormsText(value, token = "") {
   let text = String(value ?? "");
   if (token) text = text.split(token).join("");
-  text = text.replace(/\bya29\.[A-Za-z0-9._\-]+/g, "");
+  text = text.replace(/\bya29\.[A-Za-z0-9._-]+/g, "");
   text = text.replace(/\bBearer\s+\S+/gi, "");
   text = redact(text);
   return text.replace(/\s+/g, " ").trim();

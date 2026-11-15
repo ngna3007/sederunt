@@ -87,7 +87,7 @@ export async function hearingTenantFor({ req, env, identity } = {}) {
   if (!req) return { oauth: false, tenantId: "local", role: "", spaces: null };
   const gate = guardConsole(req, env);
   if (gate.session?.kind === "oauth") {
-    let spaces = null;
+    let spaces;
     try {
       spaces = identity ? await loadSpaceView(identity, gate.session) : null;
     } catch {
@@ -144,7 +144,7 @@ export async function handleBotSettings(ctx) {
       send(res, authz.status, "application/json; charset=utf-8", JSON.stringify({ ok: false, error }));
       return;
     }
-    let body = {};
+    let body;
     try {
       body = await ctx.readJson(req);
     } catch {

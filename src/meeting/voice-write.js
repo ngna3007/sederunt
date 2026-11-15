@@ -504,7 +504,7 @@ export function actionChatLine(input = {}) {
   const result = input.result && typeof input.result === "object" ? input.result : {};
   const title = sanitizeChat(args.title || args.summary || args.name || resultTitle(result));
   const link = resultLink({ ...result, issueId: result.issueId || result.identifier || result.id }, { linearWorkspace: input.linearWorkspace });
-  let body = "";
+  let body;
   if (isLinearCreateTool(toolName) && !isCalendarCreateTool(toolName)) {
     const id = issueKey(resultId(result, "issue") || result.issueId);
     if (id && title) body = `Filed ${id}: ${title}`;
@@ -533,10 +533,10 @@ export function formatChatWhen(start, timeZone, _now) {
   const ms = Date.parse(String(start || ""));
   if (!Number.isFinite(ms)) return "";
   const date = new Date(ms);
-  let weekday = "";
-  let hour = "";
-  let minute = "";
-  let abbrev = "";
+  let weekday;
+  let hour;
+  let minute;
+  let abbrev;
   try {
     const parts = new Intl.DateTimeFormat("en-US", {
       timeZone: zone,
@@ -574,7 +574,7 @@ function safeHttps(value) {
 function sanitizeChat(value) {
   return String(value || "")
     .replace(ROLE_MARK, " ")
-    .replace(/[`*_#<>\[\]()]/g, " ")
+    .replace(/[`*_#<>[\]()]/g, " ")
     .replace(/[\r\n]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()

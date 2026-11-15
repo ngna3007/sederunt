@@ -355,7 +355,7 @@ export function formatConsoleWhen(value, options = {}) {
   let year;
   let month;
   let day;
-  let weekday = "";
+  let weekday;
   let clock = "";
   if (dateOnly) {
     year = Number(dateOnly[1]);

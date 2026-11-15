@@ -249,7 +249,7 @@ export function rankDecisions(question, decisions, rooms) {
   const rows = (decisions || []).filter((decision) => String(decision.text || "").trim());
   if (!rows.length) return { answer: "Nothing is stored that you can read.", detail: "", cites: [] };
   const named = roomsMatching(question, rooms);
-  let picked = rows;
+  let picked;
   if (named.length) {
     const ids = new Set(named);
     picked = rows.filter((decision) => ids.has(decision.roomId || ""));

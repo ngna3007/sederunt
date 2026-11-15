@@ -39,7 +39,7 @@ function blockOutbound() {
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.href : String(input?.url || input);
-    let host = "";
+    let host;
     try { host = new URL(raw).hostname; } catch { host = ""; }
     if (host && host !== "127.0.0.1" && host !== "localhost" && host !== "::1") {
       throw new Error(`blocked outbound fetch to ${host}`);
@@ -122,7 +122,7 @@ test("notify off toast says saved without notifying guests", { timeout: 180000 }
   });
   const page = await browser.newPage();
   await page.route("**/*", async (route) => {
-    let host = "";
+    let host;
     try { host = new URL(route.request().url()).hostname; } catch { host = ""; }
     if (host && host !== "127.0.0.1" && host !== "localhost" && host !== "::1") {
       await route.abort();

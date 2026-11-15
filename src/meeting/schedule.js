@@ -52,7 +52,7 @@ export function parseScheduleUtterance(text, options = {}) {
   let value = String(text || "").replace(/\s+/g, " ").trim();
   if (!value) return null;
   value = value.replace(LEAD, "");
-  let body = "";
+  let body;
   const booked = BOOK_VERB.exec(value);
   const scheduled = SCHEDULE_VERB.exec(value);
   if (scheduled) body = value.slice(scheduled[0].length).trim();

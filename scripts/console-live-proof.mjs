@@ -72,7 +72,7 @@ async function main() {
   const fetchImpl = async (url, init) => {
     const href = String(url);
     const method = String(init?.method || "GET").toUpperCase();
-    let path = "";
+    let path;
     try {
       path = new URL(href).pathname;
     } catch {

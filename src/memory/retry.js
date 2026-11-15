@@ -21,6 +21,20 @@ export function isRateLimited(error) {
   return /\(429\)|rate limit exceeded|too many requests/i.test(text);
 }
 
+/**
+ * True when Walrus Memory refused the write because this idempotency key
+ * was already stored. Sign-in, Slack install, and admin-preview 409s do
+ * not name an idempotency key, so they stay failures.
+ *
+ * @param {unknown} error
+ */
+export function isAlreadyStored(error) {
+  const text = error instanceof Error ? error.message : String(error ?? "");
+  const status = Number(error && typeof error === "object" ? error.status : NaN);
+  if (status !== 409 && !/\(409\)/.test(text)) return false;
+  return /idempotency|already stored/i.test(text);
+}
+
 /** The wait the refusal asked for, in ms (0 when it named none). */
 export function retryAfterMs(error) {
   const text = error instanceof Error ? error.message : String(error || "");
@@ -67,7 +81,7 @@ export function withRateLimitRetry(memory, options = {}) {
   wrapped.rateLimitRetry = true;
   wrapped.remember = async (input) => {
     const started = Date.now();
-    let lastError = null;
+    let lastError;
     for (let attempt = 0; ; attempt += 1) {
       try {
         return await memory.remember(input);

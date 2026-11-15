@@ -220,7 +220,7 @@ test("connector page flow and layout", { timeout: 180000 }, async (t) => {
     }
   });
   await page.route("**/*", async (route) => {
-    let host = "";
+    let host;
     try { host = new URL(route.request().url()).hostname; } catch { host = ""; }
     if (host && host !== "127.0.0.1" && host !== "localhost" && host !== "::1") {
       await route.abort();

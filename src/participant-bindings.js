@@ -6,7 +6,7 @@ export function createParticipantBindings(env = {}, { fetchImpl = globalThis.fet
     const response = await fetchImpl(`${base}/rest/v1/rpc/${name}`, { method: "POST", redirect: "error",
       signal: AbortSignal.timeout(10000), headers: { apikey: key, authorization: `Bearer ${key}`, "content-type": "application/json" }, body: JSON.stringify(body) });
     if (!response.ok) {
-      let message = "";
+      let message;
       try { message = String((await response.json())?.message || ""); } catch { message = ""; }
       const error = new Error("Participant identity could not be checked.");
       // The database refuses to overwrite a verified mailbox. Every other failure can be retried.

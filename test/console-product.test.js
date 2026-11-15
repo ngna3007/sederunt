@@ -104,7 +104,7 @@ function post(port, path, body, headers = {}) {
       res.on("data", (chunk) => chunks.push(chunk));
       res.on("end", () => {
         const raw = Buffer.concat(chunks).toString("utf8");
-        let parsed = null;
+        let parsed;
         try {
           parsed = JSON.parse(raw);
         } catch {

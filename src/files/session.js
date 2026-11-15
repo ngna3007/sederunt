@@ -75,11 +75,11 @@ export function createSessionFiles(options) {
     /** @returns {Promise<{ userId: string, name: string, tenantId: string, channels: Array<{ id: string, name: string }> } | null>} */
     async viewer(req) {
       const gate = guard(req, env);
-      let userId = "";
-      let name = "";
-      let tenantId = "";
-      let workspaceName = "";
-      let role = "";
+      let userId;
+      let name;
+      let tenantId;
+      let workspaceName;
+      let role;
       if (!gate.required) {
         userId = "local-owner";
         name = String(env.SEDERUNT_MEMBER || "You");

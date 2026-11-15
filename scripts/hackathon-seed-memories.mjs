@@ -155,7 +155,7 @@ async function keptBlobs() {
   for (const memory of DEMO_MEMORIES) {
     const result = await memwal.recall({ query: memory.text, topK: 5, namespace: "sederunt" });
     for (const hit of result?.results ?? []) {
-      let text = "";
+      let text;
       try {
         text = JSON.parse(hit.text)?.text ?? "";
       } catch {

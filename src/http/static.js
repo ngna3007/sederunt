@@ -128,6 +128,7 @@ export async function handleStaticRoutes(req, res, url) {
     "/console/room-match.js": "src/room-match.js",
     "/console/bot-identity.js": "src/bot/identity.js",
     "/console/bot-card.js": "src/console/bot-card.js",
+    "/console/receipt.js": "src/domain/receipt.js",
   };
   if (consoleScripts[path]) {
     send(res, 200, "text/javascript; charset=utf-8", await readFile(resolve(consoleScripts[path])));

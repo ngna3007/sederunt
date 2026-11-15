@@ -99,7 +99,7 @@ export async function handleWelcome(ctx) {
     send(res, 405, "text/plain; charset=utf-8", "Method not allowed");
     return;
   }
-  let tenants = [];
+  let tenants;
   try {
     tenants = sortSpaces(await identity.myTenants(session.accessToken));
   } catch (error) {
@@ -125,7 +125,7 @@ export async function handleWelcome(ctx) {
     redirect(res, "/console");
     return;
   }
-  let body = {};
+  let body;
   try {
     body = await ctx.readPosted(req);
   } catch {
@@ -223,7 +223,7 @@ async function renderStep(ctx, session, active, step, extra = {}) {
     await sendTeamStep(ctx, session, active, extra);
     return;
   }
-  let user = null;
+  let user;
   try {
     user = await identity.getUser(session.accessToken);
   } catch {
@@ -735,7 +735,7 @@ export async function handleConsoleInvites(ctx) {
     json(405, { ok: false, error: "That action is not available." });
     return;
   }
-  let spaces = null;
+  let spaces;
   try {
     spaces = await loadSpaceView(identity, session);
   } catch {
@@ -757,7 +757,7 @@ export async function handleConsoleInvites(ctx) {
     json(200, { ok: true, ...sheet });
     return;
   }
-  let body = {};
+  let body;
   try {
     body = await ctx.readJson(req);
   } catch {
@@ -986,7 +986,7 @@ export async function handleSpaceSwitch(ctx) {
     redirect(res, `/console/sign-in?next=${encodeURIComponent("/console")}`);
     return;
   }
-  let body = {};
+  let body;
   try {
     body = await ctx.readPosted(req);
   } catch {

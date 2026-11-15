@@ -110,6 +110,25 @@ test("retries exhausted surface as a rate limit and a missing key never calls", 
   assert.equal(bare.sui, null);
 });
 
+test("a gateway call that never returns hits the timeout and does not keep the key", async () => {
+  const client = createTatumClient({
+    apiKey: KEY,
+    timeoutMs: 40,
+    retries: 0,
+    rps: 1000,
+    exchange: () => new Promise(() => {}),
+  });
+  const started = Date.now();
+  await assert.rejects(() => client.getObject(OBJECT_ID), (error) => {
+    assert.equal(error.code, "DEADLINE_EXCEEDED");
+    assert.equal(String(error.message).includes(KEY), false);
+    return true;
+  });
+  assert.ok(Date.now() - started < 2000);
+  assert.equal(JSON.stringify(client.log).includes(KEY), false);
+  assert.equal(client.log.some((entry) => entry.outcome === "error"), true);
+});
+
 test("the key is removed from errors and never written to the log", async () => {
   const client = createTatumClient({
     apiKey: KEY,

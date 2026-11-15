@@ -98,6 +98,40 @@ node --env-file=.env src/server.js
 
 Start with the [Google sign-in setup](docs/auth-setup.md), [connector guide](docs/connectors.md), and [Walrus Files design](docs/design/walrus-files.md). Never commit `.env`, tokens, private keys, or `.local/`. A production deployment also needs the required database migrations, durable stores, and recovery configuration described in the [release report](docs/reports/2026-11-09-product-reliability.md).
 
+## Walrus + Tatum integration
+
+Sederunt is the assistant that remembers what you agreed. Team memory is stored on Walrus. Meetings are one source alongside Slack chats and files.
+
+```mermaid
+flowchart LR
+  slack[Slack chats and files]
+  calls[Meetings]
+  write["src/memory/company.js"]
+  walrus[Walrus Memory]
+  show[Console and Slack answers]
+  tatum["src/tatum/client.js"]
+  chain[Sui mainnet]
+  slack --> write
+  calls --> write
+  write --> walrus
+  walrus --> show
+  show --> tatum
+  tatum --> chain
+```
+
+Walrus Memory writes and reads:
+
+- Decisions, announcements, files, private memory, and workspace namespaces go through [`src/memory/company.js`](src/memory/company.js) (`rememberCompany`, `recallCompany`, `indexCompany`) to the Walrus Memory relayer.
+- An in-call activity write is deferred in [`src/meeting/agent-http.js`](src/meeting/agent-http.js) (`deferredMemory`) so the spoken reply is not blocked on the store. A Walrus 409 for an activity idempotency key that was already stored is an idempotent success: [`isAlreadyStored`](src/memory/retry.js) in [`src/memory/retry.js`](src/memory/retry.js).
+- Idempotency keys for those documents are built by `memoryKey` in [`src/typed-path.js`](src/typed-path.js).
+
+Tatum Sui RPC is the only chain read. The client is native gRPC (`application/grpc`) to `https://sui-mainnet-grpc.gateway.tatum.io`, with the API key from the environment, a timeout, and retries with backoff. There is no public-fullnode fallback.
+
+- Gateway client: [`src/tatum/transport.js`](src/tatum/transport.js) and [`src/tatum/client.js`](src/tatum/client.js) (`createTatumClient`).
+- Blob object, certifying transaction, and checkpoint: [`src/tatum/get-object.js`](src/tatum/get-object.js), [`src/tatum/proof.js`](src/tatum/proof.js), and [`src/memory/locate.js`](src/memory/locate.js).
+
+When a remembered item already has a Walrus blob id and a Sui transaction digest, the console proof ([`src/domain/receipt.js`](src/domain/receipt.js), drawn by [`src/console/page-client.js`](src/console/page-client.js)) and the Slack answer ([`src/slack/reply.js`](src/slack/reply.js)) show those values and a Suiscan link. Missing ids are left blank.
+
 ## Test
 
 ```sh

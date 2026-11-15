@@ -485,7 +485,7 @@ async function openBrowser(t) {
   t.after(async () => { await browser.close(); });
   const page = await browser.newPage();
   await page.route("**/*", async (route) => {
-    let host = "";
+    let host;
     try { host = new URL(route.request().url()).hostname; } catch { host = ""; }
     if (host && host !== "127.0.0.1" && host !== "localhost" && host !== "::1") {
       await route.abort();

@@ -598,7 +598,7 @@ function voiceToolAllowList(env, tenantTools) {
  */
 export async function meetingTools(input) {
   const tenantId = String(input.context?.tenantId || input.deps?.tenantId || "");
-  let extra = [];
+  let extra;
   try {
     const list = input.listTools || (await import("../connectors/expose.js")).listExposedTools;
     extra = await list(input.deps?.connectors, tenantId);
@@ -721,7 +721,7 @@ export function wrapToolResult(result, source) {
   if (data.held === true) body.held = true;
   else if (data.held === false) body.held = false;
   body.data = data;
-  let encoded = "";
+  let encoded;
   try { encoded = JSON.stringify(body); } catch { encoded = ""; }
   if (encoded.length > TOOL_RESULT_CHARS) {
     if (body.source === "recall") {

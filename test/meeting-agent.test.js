@@ -57,15 +57,19 @@ function toolCallStream(name, args, id = "call_1") {
 
 function silentHang(signal) {
   return {
-    async *[Symbol.asyncIterator]() {
-      await new Promise((resolve, reject) => {
-        const fail = () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
-        if (signal?.aborted) {
-          fail();
-          return;
-        }
-        signal?.addEventListener("abort", fail, { once: true });
-      });
+    [Symbol.asyncIterator]() {
+      return {
+        next() {
+          return new Promise((resolve, reject) => {
+            const fail = () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+            if (signal?.aborted) {
+              fail();
+              return;
+            }
+            signal?.addEventListener("abort", fail, { once: true });
+          });
+        },
+      };
     },
   };
 }

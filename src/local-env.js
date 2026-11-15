@@ -21,7 +21,7 @@ export function loadCompanyEnv(env = process.env, read = readLocalFile) {
 
 function fillEnv(env, read, files) {
   for (const name of files) {
-    let text = "";
+    let text;
     try {
       text = read(name);
     } catch {

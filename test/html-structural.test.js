@@ -57,7 +57,8 @@ test("renderConsolePage keeps the rail, skip link, and in-page client script", (
   assert.match(html, /id="history-list"/);
   assert.match(html, /<script type="module">/);
   assert.match(html, /import \{ formatActivitySentence/);
-  assert.equal(sha256(html), "e934bdab6a745f5e05aee9cbd67a9be45394083e3d6c5c353288d23f7d03fd5e");
+  assert.match(html, /import \{ renderConsoleProof \} from "\/console\/receipt\.js"/);
+  assert.equal(sha256(html), "1a00f7b5db2d056c806259ba87a89c376ac7f152e145ffd8226251d55f1fceaf");
 });
 
 test("GET / serves the landing HTML; /console redirects when sign-in is on", async () => {

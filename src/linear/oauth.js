@@ -127,7 +127,7 @@ export async function freshLinearAccess(installations, tenantId, env, fetchImpl 
   }
   const metadata = linearClientMetadata(env);
   if (!metadata) throw Object.assign(new Error("Linear needs to be connected again."), { reason: "failed" });
-  let body = null;
+  let body;
   try {
     const response = await fetchImpl(LINEAR_TOKEN_URL, {
       method: "POST",
@@ -325,7 +325,7 @@ export async function handleLinearOAuth(req, res, url, ctx) {
     redirect(withResult(next, "declined"), clear);
     return true;
   }
-  let tokenBody = null;
+  let tokenBody;
   try {
     const response = await (ctx.fetchImpl || fetch)(LINEAR_TOKEN_URL, {
       method: "POST",

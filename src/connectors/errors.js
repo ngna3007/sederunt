@@ -117,8 +117,8 @@ function contentText(result) {
 function clipUpstream(text) {
   let out = String(text || "");
   out = out.replace(HEADER_LINE, " ");
-  out = out.replace(/\bya29\.[A-Za-z0-9._\-]+/g, "");
-  out = out.replace(/\b1\/\/[A-Za-z0-9._\-]+/g, "");
+  out = out.replace(/\bya29\.[A-Za-z0-9._-]+/g, "");
+  out = out.replace(/\b1\/\/[A-Za-z0-9._-]+/g, "");
   out = redact(out);
   out = out.replace(/\s+/g, " ").trim();
   if (!out || !/[A-Za-z0-9]/.test(out)) return "";
