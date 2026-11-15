@@ -9,9 +9,7 @@ import {
   cancelsAnswer,
   concreteTitle,
   draftedLine,
-  filedVoiceLine,
   holdStatusLine,
-  isEchoLine,
   isTitleQuestion,
   inlineIssueTitle,
   agentToolBudgetMs,
@@ -46,7 +44,6 @@ import {
   filedConfirmation,
   isArgQuestion,
   isCalendarCreateTool,
-  isDestructiveTool,
   isLinearCreateTool,
   isBareKeepCue,
   isQuietKeep,
@@ -745,7 +742,7 @@ async function streamTurn(req, res, env, workspace, sessionFor, depsFor, seat, b
   await finish(abort.signal.aborted ? { aborted: true } : {});
 }
 
-function spokenEcho(bag, botId) {
+function _spokenEcho(bag, botId) {
   const now = Date.now();
   const list = (bag.echo.get(botId) || []).filter((row) => now - row.at < 15000);
   bag.echo.set(botId, list);
@@ -1326,7 +1323,7 @@ function recallForRoom(result) {
   };
 }
 
-function filesWithoutApproval(name) {
+function _filesWithoutApproval(name) {
   return name === "act" || name === "linear__create_issue";
 }
 

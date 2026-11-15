@@ -133,7 +133,7 @@ test("a spiked page logs the transcript shape and the speech probe stays on the 
       OPENROUTER_API_KEY: KEY,
     },
     deps: { memory: null },
-    fetch: async (url, init) => {
+    fetch: async (url, _init) => {
       calls.push(String(url));
       if (String(url).includes("/audio/speech")) {
         return { ok: true, status: 200, body: audioBody([Uint8Array.of(9)]) };

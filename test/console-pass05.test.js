@@ -281,7 +281,7 @@ test("list columns share a gap and history rows stay compact", async (t) => {
     for (const surface of surfaces) {
       await page.goto(`http://127.0.0.1:${port}${surface.path}`, { waitUntil: "networkidle" });
       await page.waitForSelector(surface.row, { timeout: 45000 });
-      const measured = await page.evaluate(({ table, row, head, history }) => {
+      const measured = await page.evaluate(({ table, row, head, history: _history }) => {
         const root = document.querySelector(table);
         const rows = [...document.querySelectorAll(row)].filter((node) => node.getClientRects().length);
         const headRow = document.querySelector(head);
@@ -514,7 +514,7 @@ test("list columns share a gap and history rows stay compact", async (t) => {
     const names = [...document.querySelectorAll("#file-transcript .utter-name")];
     const dots = [...document.querySelectorAll("#file-transcript .speaker-dot")];
     const segs = [...document.querySelectorAll("#tl-speakers .tl-seg")];
-    const banned = new Set(bannedList);
+    const _banned = new Set(bannedList);
     return {
       ink,
       names: names.map((node) => ({ text: node.textContent, color: getComputedStyle(node).color, clipped: node.scrollWidth > node.clientWidth + 1 })),

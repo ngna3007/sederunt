@@ -315,7 +315,7 @@ function liveLinear(stub, loadToken = loadLinearToken, config = {}) {
  * Calendar adapter for the signed-in person on a tenant. OAuth console uses
  * person_google_grants; local/env demos keep the process calendar adapter.
  */
-async function calendarForRequest(workspace, { companyId = "", personId = "", req } = {}) {
+async function calendarForRequest(workspace, { companyId = "", personId = "", req: _req } = {}) {
   const env = workspace.env;
   const grants = workspace.googleGrants;
   const tenantId = typeof companyId === "string" ? companyId.trim() : "";
@@ -2221,7 +2221,6 @@ export function createApp(options = {}) {
         // The Meet-room view answers only in a one-to-one DM: a channel or group DM
         // reply is read by everyone there, so it keeps the Slack-id-only view.
         const principal = question && !slackOneToOne(event) ? null : slackReadPrincipal(asker);
-        let storedFile = null;
         let incoming = [];
         let storedFiles = [];
         let downloadFailed = false;
@@ -2302,7 +2301,6 @@ export function createApp(options = {}) {
           // Durable uploads are queued; run the worker now so the Walrus copy exists before anyone asks.
           if (ingestedFiles) await settleFileJobs(filesRuntime);
           if (storedFiles.length) {
-            storedFile = storedFiles[0];
             delivery.file = storedFiles[0];
             delivery.files = storedFiles;
           }
@@ -2802,7 +2800,7 @@ function loadedCompany(options, deps, env, companies) {
   return Boolean(env.COMPANY_MEMWAL_KEY);
 }
 
-function displayActor(env) {
+function _displayActor(env) {
   const name = typeof env.SEDERUNT_MEMBER === "string" ? env.SEDERUNT_MEMBER.trim() : "";
   return name || "Someone";
 }

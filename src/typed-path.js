@@ -988,7 +988,7 @@ function activityIdentity() {
   return `activity-${randomBytes(8).toString("hex")}`;
 }
 
-function actionFromEvent(event, changes) {
+function _actionFromEvent(event, changes) {
   const change = changes?.[0] || {};
   const system = event.target?.system || "linear";
   return {

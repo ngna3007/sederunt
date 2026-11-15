@@ -423,7 +423,7 @@ test("model NOTHING with no recalled keeps still returns NOTHING and spends a qu
     question: "What's the launch gate for November?",
     visible: [],
     env: { OPENROUTER_API_KEY: "test-key" },
-    fetchImpl: async (_url, init) => {
+    fetchImpl: async (_url, _init) => {
       const encoder = new TextEncoder();
       const body = new ReadableStream({
         start(controller) {

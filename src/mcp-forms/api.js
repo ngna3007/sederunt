@@ -254,7 +254,7 @@ export function createFormsService(options = {}) {
       const pageSize = validatePageSize(input?.pageSize);
       const pageToken = validatePageToken(input?.pageToken);
       if (fake) {
-        const record = requireFake(formId);
+        requireFake(formId);
         const page = store.listResponses(formId, pageSize, pageToken);
         if (page.invalid) throw formsError("invalid-argument: That page token is not valid.");
         const result = {

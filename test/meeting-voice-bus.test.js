@@ -188,7 +188,7 @@ test("the agent page does not poll for a clip", { timeout: 30000 }, async (t) =>
     args: ["--no-sandbox", "--disable-dev-shm-usage", "--autoplay-policy=no-user-gesture-required"],
   });
   let releaseStop = () => {};
-  const stopGate = new Promise((resolve) => { releaseStop = resolve; });
+  const _stopGate = new Promise((resolve) => { releaseStop = resolve; });
   t.after(async () => {
     releaseStop();
     await browser.close();

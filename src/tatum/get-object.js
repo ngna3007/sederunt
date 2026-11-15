@@ -138,7 +138,7 @@ async function resolveTarget(id, locate, client, hints) {
     found = locate
       ? await locate(id, hints)
       : await locateMemory(id, { tatum: client, owner: hints.owner, objectId: hints.objectId });
-  } catch (error) {
+  } catch {
     const wrapped = new Error("Tatum read failed");
     wrapped.code = "grpc";
     throw wrapped;

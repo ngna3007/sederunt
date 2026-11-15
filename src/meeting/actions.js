@@ -260,7 +260,7 @@ export async function runApprovedAction(item, ports = {}) {
       const link = updated?.link || updated?.htmlLink || "";
       if (!updated?.id && !updated?.eventId) return { ok: false, submitted: true, next: "Check Google Calendar for the update before trying again." };
       return { ok: true, connectorId: updated.id || updated.eventId, link, text: updated?.text || "Updated the calendar event.", next: "" };
-    } catch (error) {
+    } catch {
       return { ok: false, submitted: true, link: "", text: "", next: "Check Google Calendar for the update before trying again." };
     }
   }

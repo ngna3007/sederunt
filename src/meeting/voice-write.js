@@ -528,7 +528,7 @@ export function actionChatLine(input = {}) {
   return body.slice(0, MEET_CHAT_MAX);
 }
 
-export function formatChatWhen(start, timeZone, now) {
+export function formatChatWhen(start, timeZone, _now) {
   const zone = String(timeZone || "Asia/Ho_Chi_Minh");
   const ms = Date.parse(String(start || ""));
   if (!Number.isFinite(ms)) return "";

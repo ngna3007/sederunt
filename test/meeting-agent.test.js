@@ -1144,7 +1144,7 @@ test("the console user who sent the bot approves the voice hold without a partic
   });
   noteAgentMember({ meetingVoice }, "bot-hold", { participantId: "7", name: "Priya", memberId: "7" });
   const port = await listen(app);
-  const board = async () => {
+  const _board = async () => {
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const response = await call(port, "GET", `/api/console?company=${TENANT_C}`, { headers: { cookie } });
       assert.equal(response.status, 200);

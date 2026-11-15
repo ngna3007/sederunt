@@ -32,6 +32,7 @@ function syntax() {
   });
   for (const file of [...walk("src"), ...walk("scripts")]) run(process.execPath, ["--check", file], { stdio: "ignore" });
   console.log("Syntax checks passed.");
+  run("npm", ["run", "lint"]);
 }
 async function integration() {
   if (!process.argv.includes("--confirm")) throw new Error("Pass --confirm to create and remove dedicated disposable Docker services.");
@@ -47,7 +48,7 @@ async function integration() {
     if (!/^\d+$/.test(port)) throw new Error("Disposable Redis port is unavailable.");
     const redisUrl = `redis://127.0.0.1:${port}`;
     const env = { ...process.env, ADMIN_TEST_POSTGRES_CONTAINER: database, DELETION_TEST_POSTGRES_CONTAINER: database,
-      FOLLOWUP_TEST_POSTGRES_CONTAINER: database, PARTICIPANT_TEST_POSTGRES_CONTAINER: database, ACTION_CLAIMS_TEST_POSTGRES_CONTAINER: database, ACTION_CLAIMS_TEST_POSTGRES_CONTAINER: database,
+      FOLLOWUP_TEST_POSTGRES_CONTAINER: database, PARTICIPANT_TEST_POSTGRES_CONTAINER: database, ACTION_CLAIMS_TEST_POSTGRES_CONTAINER: database,
       ADMIN_TEST_REDIS_URL: redisUrl, ASK_TEST_REDIS_URL: redisUrl, FILES_TEST_INTEGRATION: "1" };
     run(process.execPath, ["--test", "--test-concurrency=1", "test/admin-database.test.js", "test/ask-scope.test.js",
       "test/files-database.test.js", "test/memory-deletion-database.test.js", "test/meeting-followups-database.test.js",

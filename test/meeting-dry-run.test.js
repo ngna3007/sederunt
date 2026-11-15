@@ -23,7 +23,7 @@ const EAR = "5c".repeat(24);
 const TENANT = "33333333-3333-4333-8333-333333333333";
 const BOT = RUN.botId;
 const HOST = RUN.lines[0];
-const NOW = new Date("2026-11-11T09:14:40.000Z");
+const _NOW = new Date("2026-11-11T09:14:40.000Z");
 
 function chatStream(text) {
   const payload = `data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\ndata: [DONE]\n\n`;
@@ -391,10 +391,10 @@ test("dry run: Recall's participant events carry the host flag", () => {
 
 test("dry run: the split Linear request asks with a held question and files once from the rest of the line", async () => {
   const issues = [];
-  let rounds = 0;
+  let _rounds = 0;
   const ctx = await boot({
     model: async (_url, init) => {
-      rounds += 1;
+      _rounds += 1;
       const payload = JSON.parse(init.body);
       if ((payload.messages || []).some((message) => message.role === "tool")) return { ok: true, status: 200, body: chatStream("Okay.") };
       return { ok: true, status: 200, body: toolCallStream("act", {}) };

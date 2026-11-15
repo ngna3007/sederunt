@@ -15,7 +15,7 @@ function fakeRestServer() {
     if (href.includes("/pipeline") || href.includes("/multi-exec")) {
       const commands = JSON.parse(String(init.body || "[]"));
       const rows = commands.map((command) => {
-        const [op, key, value, nx, exFlag, exVal] = command;
+        const [op, key, value, nx, _exFlag, exVal] = command;
         if (op === "SET" && nx === "NX") {
           if (store.has(key)) return { result: null };
           store.set(key, { value, exp: Number(exVal) || 0 });
@@ -127,7 +127,7 @@ test("REST SET NX rejects unexpected non-null result (strict protocol)", async (
     UPSTASH_REDIS_REST_URL: "https://example-upstash.local",
     UPSTASH_REDIS_REST_TOKEN: "token-test",
   };
-  const fetchImpl = async (url, init = {}) => {
+  const fetchImpl = async (url, _init = {}) => {
     if (String(url).includes("/get/")) {
       return { ok: true, status: 200, async json() { return { result: null }; } };
     }
