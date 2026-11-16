@@ -130,7 +130,7 @@ Tatum Sui RPC is the only chain read. The client is native gRPC (`application/gr
 - Gateway client: [`src/tatum/transport.js`](src/tatum/transport.js) and [`src/tatum/client.js`](src/tatum/client.js) (`createTatumClient`).
 - Blob object, certifying transaction, and checkpoint: [`src/tatum/get-object.js`](src/tatum/get-object.js), [`src/tatum/proof.js`](src/tatum/proof.js), and [`src/memory/locate.js`](src/memory/locate.js).
 
-When a remembered item already has a Walrus blob id and a Sui transaction digest, the console proof ([`src/domain/receipt.js`](src/domain/receipt.js), drawn by [`src/console/page-client.js`](src/console/page-client.js)) and the Slack answer ([`src/slack/reply.js`](src/slack/reply.js)) show those values and a Suiscan link. Missing ids are left blank.
+A Slack recall builds each answer row in `visibleRow` ([`src/typed-path.js`](src/typed-path.js)). The row keeps the decision's Walrus blob id. Its transaction digest is the certifying transaction from the Tatum proof (`proof.digest`), or the digest already stored on the decision when the chain read did not return one. The Sui object digest is not shown as a transaction. [`formatMemoryReceipt`](src/domain/receipt.js) then prints the blob id, that digest, and a Suiscan link in the console ([`src/console/page-client.js`](src/console/page-client.js)) and in the Slack answer ([`src/slack/reply.js`](src/slack/reply.js)). A row missing either id stays blank.
 
 ## Test
 
