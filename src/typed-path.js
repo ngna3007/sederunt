@@ -2716,6 +2716,10 @@ async function answerRecall(input, session, deps) {
         text: redact(text),
         checkpoint: object?.checkpoint ?? null,
         objectId: typeof object?.objectId === "string" ? object.objectId : null,
+        // The certifying transaction lives on proof.digest. object.digest is
+        // the Sui object digest and is not an explorer transaction.
+        digest: chainId(object?.proof?.digest),
+        blobId: chainId(object?.proof?.blobId) || chainId(decision.blobId),
       });
       if (object?.proof?.status) decision.proofStatus = object.proof.status;
       if (object?.proof?.status === "verified" && typeof object.objectId === "string" && object.objectId) decision.objectId = object.objectId;
@@ -2746,7 +2750,7 @@ function renderVisible(session, memberId, roomId, proofs, failed = false, scope 
     const proof = proofs?.get(decision.id);
     if (proof?.failed) {
       lines.push("unknown");
-      visible.push(visibleRow(decision, "", "unknown", false));
+      visible.push(visibleRow(decision, "", "unknown", false, proof));
       sawUnknown = true;
       lastStatus = "unknown";
       lastId = decision.id;
@@ -2756,7 +2760,7 @@ function renderVisible(session, memberId, roomId, proofs, failed = false, scope 
     const status = statusOf.get(decision.id) || "recorded";
     if (proof?.objectId && decision.objectId === proof.objectId) objectLink = `/object/${encodeURIComponent(proof.objectId)}`;
     lines.push(text, status);
-    visible.push(visibleRow(decision, text, status, true));
+    visible.push(visibleRow(decision, text, status, true, proof));
     if (text) session.lastSpoken = text;
     if (decision.connectorId) lines.push(decision.connectorId);
     if (proof?.checkpoint != null) lines.push(`checkpoint ${proof.checkpoint}`);
@@ -2797,13 +2801,13 @@ function renderVisible(session, memberId, roomId, proofs, failed = false, scope 
   });
 }
 
-function visibleRow(decision, text, status, known) {
+function visibleRow(decision, text, status, known, proof) {
   const names = known
     ? (Array.isArray(decision.fileNames) ? decision.fileNames : [])
       .map((item) => (typeof item?.name === "string" ? item.name.trim() : ""))
       .filter(Boolean)
     : [];
-  return {
+  const row = {
     id: decision.id,
     text: redact(text || ""),
     status,
@@ -2811,6 +2815,19 @@ function visibleRow(decision, text, status, known) {
     fileNames: names,
     connectorId: known && decision.connectorId ? decision.connectorId : null,
   };
+  if (!known) return row;
+  const blobId = chainId(decision.blobId) || chainId(proof?.blobId);
+  // A chain read's certifying transaction wins. A digest already stored on
+  // the decision is used when the read did not return one. An object digest
+  // is never copied here.
+  const digest = chainId(proof?.digest) || chainId(decision.digest);
+  if (blobId) row.blobId = blobId;
+  if (digest) row.digest = digest;
+  return row;
+}
+
+function chainId(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
 function refusal(session, reason) {
